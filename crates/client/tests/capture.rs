@@ -88,6 +88,136 @@ fn body(app: &App) -> Option<String> {
 fn run_for(app: &mut App, seconds: f32) -> Result<()> {
     wait::run_one_for(app, Duration::from_secs_f32(seconds), step)
 }
+fn draw_view(
+    app: &mut App,
+    gpu: &Headless,
+    renderer: &mut UiRenderer,
+    size: (u32, u32),
+    view: &wgpu::TextureView,
+    encoder: &mut wgpu::CommandEncoder,
+) -> Result<()> {
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    ensure!(
+        app.render_scene(&mut RenderContext {
+            device: &gpu.device,
+            queue: &gpu.queue,
+            encoder,
+            target: view,
+            format,
+            size,
+            ui_renderer: renderer
+        })?,
+        "App did not render a session camera"
+    );
+    app.ui.update(0);
+    let ui = app.ui();
+    renderer.render(
+        &gpu.device,
+        &gpu.queue,
+        encoder,
+        view,
+        format,
+        size,
+        ui.scale(),
+        &ui.core.pack,
+        &ui.draw(),
+        None,
+    );
+    Ok(())
+}
+
+/// Synchronized offscreen frames, without image copies/encoding. A diagnostic,
+/// not interactive FPS: the GPU wait deliberately serializes every frame.
+fn measure(
+    app: &mut App,
+    gpu: &Headless,
+    renderer: &mut UiRenderer,
+    size: (u32, u32),
+    count: usize,
+    yaw_per_frame: f32,
+) -> Result<serde_json::Value> {
+    ensure!(
+        (30..=240).contains(&count),
+        "measure needs 30 to 240 frames"
+    );
+    ensure!(
+        yaw_per_frame.is_finite() && yaw_per_frame.abs() <= 0.05,
+        "invalid measurement yaw step"
+    );
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bounded offscreen measurement"),
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let mut update = Vec::new();
+    let mut record = Vec::new();
+    let mut total = Vec::new();
+    let mut passes = std::collections::BTreeMap::<&str, Vec<f64>>::new();
+    let mut previous = Instant::now();
+    app.time_gpu_passes(true);
+    let result = (|| {
+        for i in 0..count + 20 {
+            let start = Instant::now();
+            if yaw_per_frame != 0. {
+                app.ui.core.request(UiAction::Game(GameAction::Look {
+                    yaw: yaw_per_frame,
+                    pitch: 0.,
+                }));
+            }
+            step(app, start.duration_since(previous))?;
+            previous = start;
+            let updated = Instant::now();
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            draw_view(app, gpu, renderer, size, &view, &mut encoder)?;
+            gpu.queue.submit([encoder.finish()]);
+            let recorded = Instant::now();
+            support::gpu::wait(&gpu.device, "offscreen measured frame")?;
+            if i >= 20 {
+                let ms = |d: Duration| d.as_secs_f64() * 1000.;
+                update.push(ms(updated - start));
+                record.push(ms(recorded - updated));
+                total.push(ms(start.elapsed()));
+                for &(name, time) in app.gpu_pass_times() {
+                    passes.entry(name).or_default().push(f64::from(time));
+                }
+            }
+        }
+        let stats = |mut samples: Vec<f64>| {
+            samples.sort_by(f64::total_cmp);
+            if samples.is_empty() {
+                return serde_json::Value::Null;
+            }
+            serde_json::json!({
+                "p50_ms": samples[samples.len()/2],
+                "p95_ms": samples[(samples.len()*95/100).min(samples.len()-1)],
+                "samples": samples.len(),
+            })
+        };
+        let passes: std::collections::BTreeMap<_, _> = passes
+            .into_iter()
+            .map(|(name, samples)| (name, stats(samples)))
+            .collect();
+        Ok(serde_json::json!({
+            "update": stats(update), "record_and_submit": stats(record),
+            "synchronized_frame": stats(total), "gpu_passes": passes,
+            "render": app.render_stats(),
+            "yaw_per_frame": yaw_per_frame,
+        }))
+    })();
+    app.time_gpu_passes(false);
+    result
+}
+
 fn capture(
     app: &mut App,
     gpu: &Headless,
@@ -112,32 +242,7 @@ fn capture(
     });
     let view = texture.create_view(&Default::default());
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    ensure!(
-        app.render_scene(&mut RenderContext {
-            device: &gpu.device,
-            queue: &gpu.queue,
-            encoder: &mut encoder,
-            target: &view,
-            format,
-            size,
-            ui_renderer: renderer
-        })?,
-        "App did not render a session camera"
-    );
-    app.ui.update(0);
-    let ui = app.ui();
-    renderer.render(
-        &gpu.device,
-        &gpu.queue,
-        &mut encoder,
-        &view,
-        format,
-        size,
-        ui.scale(),
-        &ui.core.pack,
-        &ui.draw(),
-        None,
-    );
+    draw_view(app, gpu, renderer, size, &view, &mut encoder)?;
     let row = (size.0 * 4).div_ceil(256) * 256;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("hud readback"),
@@ -202,6 +307,7 @@ fn control(name: &str) -> Result<HeldControl> {
 
 /// The steps of a spec, one JSON object each: {"command": name, "args": [..]}, {"wait": seconds}, {"until": "landed"},
 /// {"hold": control, "down": bool}, {"look": {"yaw": radians, "pitch": radians}}, {"third_person": true}, {"use_tool": slot},
+/// {"measure": 120} records bounded synchronized frame timings without image readback.
 /// {"panel": {"control": id, "lists": {id: row}}} (a press or pick in the open Add-On panel), {"report": true} (prints every body's place and health), {"shot": name}, {"burst": {"name": n, "count": c, "every_ms": ms}} (steps the game `every_ms` and captures `count` times).
 fn play(
     app: &mut App,
@@ -231,6 +337,13 @@ fn play(
             pump(app)?;
         } else if let Some(seconds) = step.get("wait").and_then(|v| v.as_f64()) {
             run_for(app, seconds as f32)?;
+        } else if step.get("until").and_then(|v| v.as_str()) == Some("alive") {
+            until(app, "the deployed player alive", |a| {
+                a.network_view().is_some_and(|v| {
+                    v.poses.contains_key(&v.owner)
+                        && v.vitals.get(&v.owner).is_some_and(|life| life.alive)
+                })
+            })?;
         } else if step.get("until").and_then(|v| v.as_str()) == Some("landed") {
             until(app, "the player standing", |a| {
                 a.local_motion().is_some_and(|(p, _)| {
@@ -266,7 +379,18 @@ fn play(
         } else if let Some(name) = step.get("shot").and_then(|v| v.as_str()) {
             let path = out.join(format!("{name}.png"));
             save(&path, &capture(app, gpu, renderer, size)?, size)?;
+            if let Some(stats) = app.render_stats() {
+                println!("CAPTURE render {name} {}", serde_json::to_string(&stats)?);
+            }
             written.push(path.display().to_string());
+        } else if let Some(measurement) = step.get("measure") {
+            let count = measurement
+                .as_u64()
+                .or_else(|| measurement["frames"].as_u64())
+                .context("measure needs a frame count")?;
+            let yaw = measurement["yaw_per_frame"].as_f64().unwrap_or(0.) as f32;
+            let report = measure(app, gpu, renderer, size, usize::try_from(count)?, yaw)?;
+            println!("CAPTURE measure {}", serde_json::to_string(&report)?);
         } else if let Some(burst) = step.get("burst") {
             let name = burst
                 .get("name")
@@ -278,6 +402,12 @@ fn play(
                 step_game(app, every)?;
                 let path = out.join(format!("{name}-{n:02}.png"));
                 save(&path, &capture(app, gpu, renderer, size)?, size)?;
+                if let Some(stats) = app.render_stats() {
+                    println!(
+                        "CAPTURE render {name}-{n:02} {}",
+                        serde_json::to_string(&stats)?
+                    );
+                }
                 written.push(path.display().to_string());
             }
         } else if let Some(panel) = step.get("panel") {
@@ -310,6 +440,31 @@ fn play(
                 drop: None,
             });
             pump(app)?;
+        } else if let Some(expected) = step.get("expect_player") {
+            let view = app
+                .network_view()
+                .context("expected player without a session")?;
+            let pose = view
+                .poses
+                .get(&view.owner)
+                .context("expected player without a body")?;
+            ensure!(
+                view.vitals.get(&view.owner).is_some_and(|v| v.alive),
+                "expected a living player at capture viewpoint; feet {:?}",
+                pose.player.feet
+            );
+            let feet: [f32; 3] = serde_json::from_value(expected["feet"].clone())?;
+            let within = expected["within"].as_f64().unwrap_or(2.0) as f32;
+            ensure!(
+                within.is_finite() && within > 0. && feet.iter().all(|v| v.is_finite()),
+                "invalid expected viewpoint"
+            );
+            ensure!(
+                glam::Vec3::from(feet).distance(glam::Vec3::from(pose.player.feet)) <= within,
+                "capture viewpoint {:?} differs from expected {:?} by more than {within}",
+                pose.player.feet,
+                feet
+            );
         } else if step.get("report").is_some() {
             if let Some(view) = app.network_view() {
                 for (id, pose) in &view.poses {
