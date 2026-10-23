@@ -57,3 +57,12 @@ exploration's candidate discovery is the next bounded investigation. The run
 passes with objective progress, two assault wins, reset and zero bot failures.
 Log/trace: private `explore-budget-rounds.*`. This is diagnostic evidence, not
 another navigation correction.
+
+## Integration
+
+The full gate on `3bb82aff0a83` passes all 539 test binaries with zero retries
+and both performance budgets (`.bri-gate/logs/3bb82aff0a83.log`). All five Windows
+checks and Linux wheel CI pass. PR295 merged as `39c6c2558384e3c51b83993150d3b5c52c03c2ed`;
+the candidate is confirmed an ancestor of origin/main. Remote and local passage
+branches are deleted. The unrelated owned-item successor and local work remain
+preserved; the remaining navigation outliers above are still open.
