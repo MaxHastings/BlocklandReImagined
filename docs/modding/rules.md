@@ -1388,6 +1388,11 @@ Scripts cannot read files, open sockets or run `eval`.
 
 ## Map volumes
 
+`map_region_at(x, y, z)` queries the map's authored plane partition, returning `#{ number, properties }` or `()` if there
+is no authored partition/region. `properties` contains package-owned text; the engine assigns no meaning to its values.
+This read-only query uses the same region numbers as the map's atmosphere and sound partition. It does not infer a room
+from a volume, reverb preset or visible geometry. See [Region policy inputs](maps.md).
+
 A map can hold named boxes the rules look up by point, such as the places a
 radio call names or the zones a voice channel covers. The engine gives them
 no meaning of its own: a scene node of kind `volume` carries `half` (half

@@ -35,7 +35,7 @@ pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, 
 pub use interop::{Emitted, Nested};
 pub use movers::MoverInfo;
 use view::{Of, view_in};
-pub use volumes::VolumeInfo;
+pub use volumes::{RegionInfo, VolumeInfo};
 
 /// Operation budgets per kind of call.
 #[derive(Debug, Clone, Copy)]
@@ -254,6 +254,11 @@ pub trait World {
     /// first and then in map order.
     fn volumes_at(&self, _at: [f32; 3]) -> Vec<VolumeInfo> {
         Vec::new()
+    }
+    /// The map's spatial partition and package-authored properties at a point.
+    /// None means no authored partition, not an inferred outdoor region.
+    fn map_region_at(&self, _at: [f32; 3]) -> Option<RegionInfo> {
+        None
     }
     /// Whether the minigame and trust rules let player `by` hurt `target`
     /// (`minigameCanDamage`).
@@ -3392,6 +3397,15 @@ fn register_presentation(engine: &mut Engine) {
                     .map(Dynamic::from)
                     .collect(),
             ))
+        })
+    });
+    engine.register_fn("map_region_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
+        let at = [float(&x)?, float(&y)?, float(&z)?];
+        with_world(|world, _| {
+            Ok(world
+                .map_region_at(at)
+                .as_ref()
+                .map_or(Dynamic::UNIT, volumes::region_map))
         })
     });
     // The map's volumes holding a point, highest priority first.

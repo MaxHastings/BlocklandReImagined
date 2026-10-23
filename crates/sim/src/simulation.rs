@@ -258,6 +258,7 @@ pub struct Simulation {
     /// in place of the body's box.
     body_bones: BTreeMap<bri_world::OwnerId, std::sync::Arc<bri_motor::bones::Body>>,
     map_surfaces: crate::map::MapSurfaces,
+    map_regions: Option<bri_content::regions::RegionMap>,
     /// The map colliders of static shapes (trees, props), which a plant
     /// never asks about ([`Ground::interior`]).
     map_statics: rustc_hash::FxHashSet<ColliderHandle>,
@@ -572,6 +573,7 @@ impl Simulation {
             bot_passable: Default::default(),
             body_bones: Default::default(),
             map_surfaces: Default::default(),
+            map_regions: None,
             map_statics,
             terrain: None,
             refreshes: 0,
@@ -722,6 +724,26 @@ impl Simulation {
     }
     pub fn set_map_surfaces(&mut self, surfaces: crate::map::MapSurfaces) {
         self.map_surfaces = surfaces;
+    }
+    /// Install the map's validated partition. A replacement clears the old map.
+    pub fn set_map_regions(
+        &mut self,
+        regions: Option<bri_content::regions::RegionMap>,
+    ) -> Result<()> {
+        if let Some(map) = &regions {
+            map.validate()?;
+        }
+        self.map_regions = regions;
+        Ok(())
+    }
+    /// The authored region at a finite world point, or no partition/region.
+    pub fn map_region_at(&self, at: [f32; 3]) -> Option<(u16, &bri_content::regions::Region)> {
+        if !at.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let map = self.map_regions.as_ref()?;
+        let number = map.locate(at);
+        Some((number, map.regions.get(usize::from(number))?))
     }
     /// The map collider (None for terrain) and triangle a shot contact at
     /// `position` on a face turned to `normal` struck.

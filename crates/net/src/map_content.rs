@@ -173,6 +173,7 @@ impl MapContent {
             .context("Building native simulation")?;
         simulation.attach_terrain(native.terrain, anchors)?;
         simulation.set_map_surfaces(native.surfaces);
+        simulation.set_map_regions(native.regions)?;
         simulation.set_map_waters(native.waters, native.plate, self.environments.clone());
         let spawn_points =
             bri_sim::spawn::candidates(&simulation.physics, &native.scene, &Default::default())?;

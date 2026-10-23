@@ -4,6 +4,13 @@ use super::*;
 use bri_content::scene::{MAX_VOLUMES, Volume};
 
 impl Session {
+    /// Replace the authored map partition used by package point queries.
+    pub fn set_map_regions(
+        &mut self,
+        regions: Option<bri_content::regions::RegionMap>,
+    ) -> Result<()> {
+        self.simulation.set_map_regions(regions)
+    }
     /// Install the map's volumes (from `NativeMap`), highest priority first.
     pub fn set_volumes(&mut self, volumes: Vec<Volume>) -> Result<()> {
         ensure!(volumes.len() <= MAX_VOLUMES, "Too many map volumes");

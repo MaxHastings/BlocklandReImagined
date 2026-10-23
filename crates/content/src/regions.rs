@@ -45,6 +45,10 @@ pub const MAX_MAP_SUNS: usize = 64;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Region {
+    /// Package-authored policy inputs, queried through `map_region_at`.
+    /// The engine assigns no meaning to these keys or values.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub properties: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub fog: Option<Fog>,
     /// The light actors in the region take from everywhere (linear RGB, as lit models add it).
@@ -224,6 +228,14 @@ impl RegionMap {
             "A region map has too many suns"
         );
         for r in &self.regions {
+            ensure!(
+                r.properties.len() <= 64
+                    && r.properties.iter().all(|(key, value)| !key.is_empty()
+                        && key.len() <= 64
+                        && value.len() <= 256
+                        && !key.chars().chain(value.chars()).any(char::is_control)),
+                "Invalid region policy properties"
+            );
             ensure!(
                 r.connects
                     .iter()
