@@ -266,6 +266,9 @@ fn play(
         } else if let Some(name) = step.get("shot").and_then(|v| v.as_str()) {
             let path = out.join(format!("{name}.png"));
             save(&path, &capture(app, gpu, renderer, size)?, size)?;
+            if let Some(stats) = app.render_stats() {
+                println!("CAPTURE render {name} {}", serde_json::to_string(&stats)?);
+            }
             written.push(path.display().to_string());
         } else if let Some(burst) = step.get("burst") {
             let name = burst
@@ -278,6 +281,12 @@ fn play(
                 step_game(app, every)?;
                 let path = out.join(format!("{name}-{n:02}.png"));
                 save(&path, &capture(app, gpu, renderer, size)?, size)?;
+                if let Some(stats) = app.render_stats() {
+                    println!(
+                        "CAPTURE render {name}-{n:02} {}",
+                        serde_json::to_string(&stats)?
+                    );
+                }
                 written.push(path.display().to_string());
             }
         } else if let Some(panel) = step.get("panel") {

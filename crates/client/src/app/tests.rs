@@ -2321,15 +2321,18 @@ fn scope_state_eligibility_follows_ordinary_authority_without_releasing_rmb() ->
     let weapon_file = weapon_dir.join("weapons.json");
     let mut pack: serde_json::Value = serde_json::from_slice(&std::fs::read(&weapon_file)?)?;
     pack["images"][gun]["zoom"] = json!({"fov":40.0,"on_jet":true,"jets":false,"first_person":true,"overlay":"scope","allowed_states":["Ready","Fire","WaitRelease"]});
+    // State eligibility is under test, not short timeout scheduling. Keep
+    // barred states until the explicit Ready command: a busy host/client can
+    // otherwise advance past Reload before the ordinary click reaches it.
     pack["images"][gun]["states"] = json!([
-        {"name":"Draw","ticks":64,"timeout":1},
+        {"name":"Draw"},
         {"name":"Ready","down":2},
         {"name":"Fire","ticks":2,"script":"onFire","timeout":3},
         {"name":"WaitRelease","up":1},
-        {"name":"Lower","ticks":64,"timeout":5},
+        {"name":"Lower"},
         {"name":"Hold"},
-        {"name":"Raise","ticks":64,"timeout":1},
-        {"name":"Reload","ticks":64,"timeout":1}
+        {"name":"Raise"},
+        {"name":"Reload"}
     ]);
     pack["images"][gun]["magazine"] =
         json!({"size":12,"ammo":"probe","reload_ticks":120,"reserve":0});
@@ -2492,6 +2495,7 @@ fn scope_state_eligibility_follows_ordinary_authority_without_releasing_rmb() ->
             }
         })
     };
+    command(&mut app, "ready");
     until(&mut app, "initial native Ready", |a| accepted(a, "Ready"))?;
     rmb(&mut app, true);
     until(&mut app, "Ready scope", |a| {
@@ -2590,8 +2594,10 @@ fn scope_state_eligibility_follows_ordinary_authority_without_releasing_rmb() ->
     assert!(app.view.scope_overlay.is_none());
     app.ui.core.request(UiAction::UseTool { slot });
     until(&mut app, "ordinary rifle redraw", |a| {
-        a.world_items.held_image(owner, 0) == Some(gun) && accepted(a, "Ready")
+        a.world_items.held_image(owner, 0) == Some(gun) && accepted(a, "Draw")
     })?;
+    command(&mut app, "ready");
+    until(&mut app, "redraw fixture Ready", |a| accepted(a, "Ready"))?;
     rmb(&mut app, true);
     until(&mut app, "scope before death", |a| {
         a.view.scope_overlay.is_some()
@@ -2613,6 +2619,10 @@ fn scope_state_eligibility_follows_ordinary_authority_without_releasing_rmb() ->
         a.network_view().unwrap().vitals[&owner].alive
     })?;
     app.ui.core.request(UiAction::UseTool { slot });
+    until(&mut app, "respawn rifle Draw", |a| {
+        accepted(a, "Draw") && a.world_items.held_image(owner, 0) == Some(gun)
+    })?;
+    command(&mut app, "ready");
     until(&mut app, "respawn rifle Ready", |a| {
         accepted(a, "Ready") && a.world_items.held_image(owner, 0) == Some(gun)
     })?;
