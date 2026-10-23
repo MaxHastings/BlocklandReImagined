@@ -53,6 +53,8 @@ impl MapSurface {
 
 pub struct NativeMap {
     pub scene: Scene,
+    /// The authored spatial partition, shared with presentation and package rules.
+    pub regions: Option<bri_content::regions::RegionMap>,
     /// Interior and static model collision. Terrain is streamed separately.
     pub colliders: Vec<ColliderBuilder>,
     /// Exact, unbounded terrain placements shared by collision, queries and rendering.
@@ -719,8 +721,22 @@ impl NativeMap {
         );
         let teleporters = scene.teleporters()?;
         let volumes = scene.volumes()?;
+        let regions = bundle
+            .get("regions")
+            .and_then(|regions| regions.get(&scene.id))
+            .filter(|name| !name.is_null())
+            .map(|name| -> Result<bri_content::regions::RegionMap> {
+                let name = name.as_str().context("Invalid map region filename")?;
+                let regions: bri_content::regions::RegionMap =
+                    serde_json::from_slice(&std::fs::read(native_file(root, name)?)?)
+                        .context("Reading the map's regions")?;
+                regions.validate()?;
+                Ok(regions)
+            })
+            .transpose()?;
         Ok(Self {
             scene,
+            regions,
             colliders,
             terrain,
             waters,

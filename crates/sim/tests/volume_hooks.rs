@@ -20,7 +20,11 @@ fn on_volume(e) {
     log.push(`${e.kind} ${e.player} ${e.id} ${e.properties.place}`);
     set("log", log);
 }
-fn cmd_go(p, x) { teleport(p, x, 0.2, 0.0); }
+fn cmd_go(p, x) {
+    teleport(p, x, 0.2, 0.0);
+    let r = map_region_at(x, 0.2, 0.0);
+    set("region", if r == () { "missing" } else { `${r.number}:${r.properties.kind}` });
+}
 "#;
 
 struct Root(PathBuf);
@@ -52,7 +56,10 @@ fn catalog() -> Arc<Catalog> {
         json!({
             "schema_version": 1, "script": "main.rhai", "on_volume": true,
             "commands": [{ "name": "go", "args": ["float"] }],
-            "state": { "global": { "log": { "default": [], "visible": "everyone" } } }
+            "state": { "global": {
+                "log": { "default": [], "visible": "everyone" },
+                "region": { "default": "", "visible": "everyone" }
+            } }
         })
         .to_string(),
     );
@@ -152,4 +159,48 @@ fn entering_and_leaving_a_volume_is_heard_once_each() {
     assert_eq!(g.log().len(), 1, "{:?}", g.log());
     g.go(0.0);
     assert_eq!(g.log(), vec![want, format!("leave {} pad roof", g.p)]);
+}
+
+#[test]
+fn package_region_query_tracks_both_sides_boundary_and_map_replacement() {
+    use bri_content::regions::{Region, RegionMap};
+    let mut game = Game::new();
+    game.go(1.0);
+    let observed = |game: &Game| game.s.package_state().packages["zone"].global["region"].clone();
+    assert_eq!(observed(&game), "missing");
+    game.s
+        .set_map_regions(Some(RegionMap {
+            planes: vec![[1.0, 0.0, 0.0, 0.0]],
+            front: vec![-1],
+            back: vec![-1],
+            front_region: vec![1],
+            back_region: vec![0],
+            regions: ["west", "east"]
+                .into_iter()
+                .map(|kind| Region {
+                    properties: BTreeMap::from([("kind".into(), kind.into())]),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }))
+        .unwrap();
+    for (x, expected) in [
+        (1.0, "1:east"),
+        (-1.0, "0:west"),
+        (0.0, "1:east"),
+        (-5.0, "0:west"),
+    ] {
+        game.go(x);
+        assert_eq!(observed(&game), expected);
+    }
+    assert!(
+        game.s
+            .simulation()
+            .map_region_at([f32::NAN, 0.0, 0.0])
+            .is_none()
+    );
+    game.s.set_map_regions(None).unwrap();
+    game.go(1.0);
+    assert_eq!(observed(&game), "missing");
 }

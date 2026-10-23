@@ -206,6 +206,13 @@ impl World for ScriptWorld<'_> {
             })
             .collect()
     }
+    fn map_region_at(&self, at: [f32; 3]) -> Option<bri_package_runtime::script::RegionInfo> {
+        let (number, region) = self.session.simulation.map_region_at(at)?;
+        Some(bri_package_runtime::script::RegionInfo {
+            number,
+            properties: region.properties.clone(),
+        })
+    }
     fn movers_near(&self, player: u64, reach: f32) -> Vec<String> {
         self.session.movers_near_player(player, reach)
     }

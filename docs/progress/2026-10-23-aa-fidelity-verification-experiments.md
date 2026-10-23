@@ -18,6 +18,14 @@ session or OS input was automated. There is no new production engine change.
 
 ## Observations, not completion claims
 
+The subsequent sound-correction experiment found an axis error in the original
+private audio fixture. Its claimed outdoor positive control was actually an
+indoor point. The source caller/PCM facts remain valid; the positioned audio
+verdict below is superseded until rerun with native `[source_y,source_z,-source_x]*.04`
+and independent source/assembled partition agreement. This does not affect the
+directional speed comparison, whose scalar speeds and local input axes are
+independent of map coordinates.
+
 - The installed AA2.5 directional-cap function was executed in the existing
   isolated native oracle on nine inputs. Driving the assembled soldier's actual
   tuning through the ordinary BRI motor fails six comparisons. Straight backward
