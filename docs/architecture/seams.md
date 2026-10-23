@@ -98,6 +98,7 @@ labels are retained so earlier progress notes remain traceable.
 | Brick target descriptions | `brick_targets` `description`, `TargetDef::description`: one line the wrench shows for an Add-On's target | Goal teams (v0.2.4) | branch fix/goal-teams | yes: all 2 named APIs are in the source |
 | Drop key with empty hands | `Command::DropKey`, `on_drop_key` | Capture the Flag (Slayer) | on main | yes: all 2 named APIs are in the source |
 | Dropped item names | `Drop::name`, `name_drop`, name tags over drops | Capture the Flag (Slayer) | on main | yes: all 2 named APIs are in the source |
+| Owned item lifetime renewal | `renew_drop(id, seconds)`: renew an existing package-owned pickup for 1..600 seconds without replacing its identity, motion or data; existing ownership and resource bounds apply | Root / Interdiction physical-item integration | `codex/owned-item-lifetime-20261022`, verification in progress | no: candidate only |
 | Image lights | `Image::light`, drawn at the mounted image in its paint | Capture the Flag (Slayer) | on main | yes: all 1 named APIs are in the source |
 | End-of-round report | `show_report`, `report_column`, `Notice::Report`, the client's Report window | Capture the Flag (Slayer) | on main | yes: all 3 named APIs are in the source |
 | Kept worn images | `mount_image(..., #{ keep: true })`: only the Add-On that put a worn image on changes it | Capture the Flag (Slayer) | on main | yes: all 1 named APIs are in the source |

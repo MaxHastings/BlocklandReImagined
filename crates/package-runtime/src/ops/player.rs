@@ -315,6 +315,21 @@ impl ScriptOp for DropItem {
     }
 }
 
+/// Keep an existing owned world item for this many seconds from now. A package
+/// renews its objective items while active; ordinary dropped tools still expire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RenewDrop {
+    pub drop: u64,
+    pub seconds: u32,
+}
+impl ScriptOp for RenewDrop {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "renew_drop";
+    fn bounded(&self) -> bool {
+        (1..=MAX_DROP_SECONDS).contains(&self.seconds)
+    }
+}
+
 /// Take back an item this package put in the world with `drop_item`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoveDrop {

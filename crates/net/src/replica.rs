@@ -91,7 +91,7 @@ fn validate_map_movers(states: &[bri_content::mover::MoverState]) -> Result<()> 
         states.iter().all(|s| s.alpha.is_finite()
             && (0.0..=1.0).contains(&s.alpha)
             && s.rate.is_finite()
-            && (0.0..=1.0).contains(&s.rate)
+            && (0.0..=bri_content::mover::MAX_RATE).contains(&s.rate)
             && usize::from(s.from) < bri_content::mover::MAX_KEYS
             && usize::from(s.to) < bri_content::mover::MAX_KEYS),
         "Invalid map mover state"

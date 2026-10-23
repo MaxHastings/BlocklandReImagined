@@ -303,6 +303,14 @@ impl Perform for ops::RemoveDrop {
         session.package_remove_drop(package, drop)
     }
 }
+impl Perform for ops::RenewDrop {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_check_drop(cx.package, self.drop)
+    }
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        session.package_renew_drop(cx.package, self.drop, self.seconds)
+    }
+}
 impl Perform for ops::NameDrop {
     fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
         session.package_check_drop(cx.package, self.drop)

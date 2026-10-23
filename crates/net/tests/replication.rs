@@ -1169,6 +1169,61 @@ fn contact_geometry_delta(cues: Vec<bri_sim::presentation::Cue>) -> Delta {
 }
 
 #[test]
+fn short_mover_motion_survives_checkpoint_and_delta_replication() {
+    use bri_content::mover::{MIN_SECONDS, MoverState, TICKS_PER_SECOND};
+    for seconds in [0.0, 0.001, MIN_SECONDS, 0.008, 0.01, 1.0] {
+        let mut state = MoverState::default();
+        assert!(state.go_to(10, 1, seconds));
+        let mut cp = checkpoint();
+        cp.map_movers = vec![state];
+        let cp = codec::decode(&codec::encode(&cp).unwrap()).unwrap();
+        let replica = Replica::new(cp).expect("the host's supported short motion must be accepted");
+        assert_eq!(replica.map_movers, vec![state]);
+        let mut replica = Replica::new(checkpoint()).unwrap();
+        let mut delta = contact_geometry_delta(Vec::new());
+        delta.bricks.clear();
+        delta.map_movers = Some(vec![state]);
+        let Message::Update(decoded) =
+            codec::decode(&codec::encode(&Message::Update(delta)).unwrap()).unwrap()
+        else {
+            panic!("message kind")
+        };
+        replica.update(decoded).unwrap();
+        assert_eq!(replica.map_movers, vec![state]);
+        for tick in [10.0, 10.3, 10.6, 11.0] {
+            assert_eq!(
+                replica.map_movers[0].alpha_at_f(tick),
+                state.alpha_at_f(tick)
+            );
+        }
+    }
+    // Rates beyond the host's duration floor remain invalid, including the
+    // next representable value. A rejected update must not partially apply.
+    let maximum = 1.0 / (MIN_SECONDS * TICKS_PER_SECOND);
+    for rate in [
+        -1.0,
+        f32::NAN,
+        f32::INFINITY,
+        f32::from_bits(maximum.to_bits() + 1),
+    ] {
+        let invalid = MoverState {
+            rate,
+            ..MoverState::default()
+        };
+        let mut cp = checkpoint();
+        cp.map_movers = vec![invalid];
+        assert!(Replica::new(cp).is_err());
+        let mut replica = Replica::new(checkpoint()).unwrap();
+        let mut delta = contact_geometry_delta(Vec::new());
+        delta.map_movers = Some(vec![invalid]);
+        assert!(replica.update(delta).is_err());
+        assert_eq!(replica.cursor, 0);
+        assert!(replica.map_movers.is_empty());
+        assert!(replica.world.bricks.is_empty());
+    }
+}
+
+#[test]
 fn contact_geometry_survives_reliable_codec_and_invalid_batches_reject_atomically() {
     use bri_content::effects::ContactGeometry;
     use bri_sim::presentation::{Cue, CueKind};

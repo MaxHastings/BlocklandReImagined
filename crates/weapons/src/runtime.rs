@@ -3083,6 +3083,19 @@ impl WeaponsWorld {
             .name = name;
         Ok(())
     }
+    /// Renew a world item's deadline without replacing its identity, motion,
+    /// appearance or pickup data. An abandoned renewal still has a bounded end.
+    pub fn renew_drop(&mut self, drop: u64, lifetime: u64) -> Result<()> {
+        ensure!(
+            (1..=MAX_DROP_TICKS).contains(&lifetime),
+            "Dropped item lifetime"
+        );
+        self.drops
+            .get_mut(&drop)
+            .context("No such dropped item")?
+            .expires = self.tick.saturating_add(lifetime);
+        Ok(())
+    }
     /// Delete a world drop without giving it to anyone (an Add-On used it
     /// up where it lay).
     pub fn remove_drop(&mut self, drop: u64) -> bool {
