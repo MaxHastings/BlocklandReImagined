@@ -8,6 +8,39 @@ use bri_package_runtime::rhai::Map;
 use bri_package_runtime::script::{RayTarget, World};
 use bri_weapons::ItemBounds;
 
+/// The object a taken Use click pointed at, kept to hand back on release.
+pub(super) struct HeldUse {
+    kind: String,
+    id: i64,
+    reference: String,
+    item: Option<String>,
+    distance: f64,
+}
+impl HeldUse {
+    fn of(target: &Map) -> Option<Self> {
+        let text = |key: &str| target.get(key).and_then(|v| v.clone().into_string().ok());
+        Some(Self {
+            kind: text("kind")?,
+            id: target.get("id")?.as_int().ok()?,
+            reference: text("ref")?,
+            item: text("item"),
+            distance: target.get("distance")?.as_float().ok()?,
+        })
+    }
+    /// The same `#{ kind, id, ref, distance }` the press was given.
+    fn map(self) -> Map {
+        let mut map = Map::new();
+        map.insert("kind".into(), self.kind.into());
+        map.insert("id".into(), Dynamic::from_int(self.id));
+        map.insert("ref".into(), self.reference.into());
+        if let Some(item) = self.item {
+            map.insert("item".into(), item.into());
+        }
+        map.insert("distance".into(), Dynamic::from_float(self.distance));
+        map
+    }
+}
+
 impl Session {
     /// What the Use ray meets first of the world's loose objects within
     /// `reach` of `eye`, nearer than `limit` if given: `#{ kind, id, ref,
@@ -89,12 +122,34 @@ impl Session {
         let Some(target) = self.use_object(owner, eye, direction, reach, brick_distance) else {
             return false;
         };
-        self.package_take(
+        let held = HeldUse::of(&target);
+        let taken = self.package_take(
             owner,
             |b| b.on_use_object,
             "on_use_object",
             vec![Dynamic::from_int(owner as i64), Dynamic::from_map(target)],
-        )
+        );
+        if taken && let Some(peer) = self.peers.get_mut(&owner) {
+            peer.use_held = held;
+        }
+        taken
+    }
+
+    /// The Use key coming up after a click `on_use_object` took: tell
+    /// every package that declares `on_use_release` which object it was.
+    pub(super) fn package_use_release(&mut self, owner: OwnerId) {
+        let Some(held) = self.peers.get_mut(&owner).and_then(|p| p.use_held.take()) else {
+            return;
+        };
+        self.package_take(
+            owner,
+            |b| b.on_use_release,
+            "on_use_release",
+            vec![
+                Dynamic::from_int(owner as i64),
+                Dynamic::from_map(held.map()),
+            ],
+        );
     }
 }
 

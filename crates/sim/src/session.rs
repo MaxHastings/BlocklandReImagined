@@ -914,6 +914,9 @@ struct Peer {
     /// `lastActivateTime` and `activateLevel` for the activate swing.
     last_activate: Option<u64>,
     activate_level: u32,
+    /// The loose object an `on_use_object` rule took the Use click for, held
+    /// until the key comes up (`on_use_release`).
+    use_held: Option<use_object::HeldUse>,
     /// Pending `%player.schedule(ms, "playThread", thread, sequence)` calls
     /// (chat's `root` after 50 ms a character, packages' `play_thread` with
     /// `after`), in the order they fire. They go with the body, as a
@@ -1005,6 +1008,7 @@ impl Peer {
             inspection: None,
             last_activate: None,
             activate_level: 0,
+            use_held: None,
             thread_timers: Vec::new(),
             water: Default::default(),
             look_limits: None,
@@ -2595,6 +2599,7 @@ impl Session {
                 if alive {
                     self.package_trigger(owner, 0, false);
                 }
+                self.package_use_release(owner);
                 Ok(Reply::Accepted)
             }
             Command::Suicide => {
