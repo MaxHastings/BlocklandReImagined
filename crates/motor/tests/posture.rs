@@ -192,3 +192,23 @@ fn a_prone_or_locked_body_does_not_jump_but_a_standing_one_does() {
         "and jumps again once allowed"
     );
 }
+
+#[test]
+fn a_prone_body_can_rise_to_a_crouch_that_fits_below_the_ceiling() {
+    let mut w = world(Some(1.0));
+    let mut p = Player::spawn(&mut w, 1, Vec3::new(60.0, 0.05, 0.0), soldier()).unwrap();
+    // Set up the same small floor contact the motor normally leaves.
+    p.teleport(&mut w, Vec3::new(0.0, -0.01, -8.0), 0.0)
+        .unwrap();
+    assert!(p.set_prone(&mut w, true));
+    assert!(
+        p.set_prone(&mut w, false),
+        "the crouch fits without adding head height"
+    );
+    settle(&mut w, &mut p, MoveInput::default(), 30);
+    assert!(
+        p.state().crouched && !p.state().posture.prone,
+        "a real ceiling must still prevent standing: {:?}",
+        p.state().feet
+    );
+}
