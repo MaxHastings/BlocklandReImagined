@@ -163,7 +163,7 @@ type SurfaceMaker<'a> = &'a dyn Fn(&wgpu::Instance) -> Result<wgpu::Surface<'sta
 
 /// Open a device on a new instance from `descriptor`. On DirectX 12 a tiny
 /// pipeline is built first with the compiler wgpu chose. DXC without
-/// Microsoft's dxil.dll (which the release does not ship) cannot sign DXIL
+/// Microsoft's dxil.dll cannot sign DXIL
 /// with the validator's proprietary hash, and a D3D12 runtime that does not
 /// accept the unsigned form refuses every pipeline: a black screen. When the
 /// test pipeline is refused, the GPU is opened again with FXC, whose
@@ -197,22 +197,34 @@ fn open_device(
     };
     let (chosen, mut gpu) = open(None)?;
     gpu.compiler = match dx12_compiler_check(gpu.adapter.get_info().backend, &chosen) {
-        Dx12CompilerCheck::NotDx12 => ShaderCompiler::NotDx12,
-        Dx12CompilerCheck::Fxc => ShaderCompiler::FxcRequested,
-        Dx12CompilerCheck::ProbeDxc => match probe_pipeline(&gpu.device) {
-            Ok(()) => ShaderCompiler::DxcAccepted,
+        Dx12CompilerCheck::NotDx12 => {
+            probe_pipeline(&gpu.device, &gpu.queue).map_err(anyhow::Error::msg)?;
+            ShaderCompiler::NotDx12
+        }
+        Dx12CompilerCheck::Fxc => {
+            probe_pipeline(&gpu.device, &gpu.queue).map_err(anyhow::Error::msg)?;
+            ShaderCompiler::FxcRequested
+        }
+        Dx12CompilerCheck::ProbeDxc => match probe_pipeline(&gpu.device, &gpu.queue) {
+            Ok(()) => match chosen {
+                wgpu::Dx12Compiler::Auto => ShaderCompiler::AutoAccepted,
+                _ => ShaderCompiler::DxcAccepted,
+            },
             Err(reason) => {
                 bri_console::warn(format!(
-                    "DirectX 12 refused a test shader ({reason}); reopening the GPU with FXC."
+                    "DirectX 12 pixel probe failed ({reason}); reopening the GPU with FXC."
                 ));
                 // Release the first device (and its surface) before the second.
                 drop(gpu);
                 let (_, mut gpu) = open(Some(wgpu::Dx12Compiler::Fxc))?;
-                gpu.compiler = ShaderCompiler::DxcRejected;
+                probe_pipeline(&gpu.device, &gpu.queue).map_err(anyhow::Error::msg)?;
+                gpu.compiler = ShaderCompiler::FxcFallback;
+                bri_console::echo("GPU pixel probe passed after reopening with FXC");
                 return Ok(gpu);
             }
         },
     };
+    bri_console::echo("GPU pixel probe passed (textured draw, depth and readback)");
     Ok(gpu)
 }
 
@@ -241,73 +253,33 @@ fn dx12_compiler_check(backend: wgpu::Backend, compiler: &wgpu::Dx12Compiler) ->
 enum ShaderCompiler {
     NotDx12,
     FxcRequested,
-    /// The test pipeline built: wgpu's own choice (DXC when dxcompiler.dll
-    /// loads, else FXC) works on this runtime.
+    /// Auto selection can fall back internally; DLL presence proves no choice.
+    AutoAccepted,
     DxcAccepted,
-    /// The runtime refused the test pipeline, so the GPU uses FXC.
-    DxcRejected,
+    /// The first pixel probe failed; the reopened FXC device passed.
+    FxcFallback,
 }
 
-/// Build a minimal render pipeline, which compiles a vertex and a fragment
-/// shader and hands both to the driver, and report any error the device
-/// raised doing it.
-fn probe_pipeline(device: &wgpu::Device) -> std::result::Result<(), String> {
-    let out_of_memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("shader compiler probe"),
-        source: wgpu::ShaderSource::Wgsl(
-            "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
-                 return vec4<f32>(f32(i & 1u), f32(i >> 1u), 0.0, 1.0);
-             }
-             @fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
-                .into(),
-        ),
-    });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("shader compiler probe"),
-        layout: None,
-        vertex: wgpu::VertexState {
-            module: &module,
-            entry_point: Some("vs"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: Default::default(),
-        depth_stencil: None,
-        multisample: Default::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &module,
-            entry_point: Some("fs"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::TextureFormat::Rgba8Unorm.into())],
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
-    drop(pipeline);
-    let errors = [
-        pollster::block_on(internal.pop()),
-        pollster::block_on(validation.pop()),
-        pollster::block_on(out_of_memory.pop()),
-    ];
-    match errors.into_iter().flatten().next() {
-        Some(error) => Err(error.to_string()),
-        None => Ok(()),
-    }
+/// Submit a textured draw with depth testing and validate its readback.
+fn probe_pipeline(device: &wgpu::Device, queue: &wgpu::Queue) -> std::result::Result<(), String> {
+    bri_render::device_probe::check(device, queue).map_err(|error| format!("{error:#}"))
 }
 
 fn log_adapter(adapter: &wgpu::Adapter, failures: &[String], compiler: ShaderCompiler) {
     let info = adapter.get_info();
+    let limits = adapter.limits();
+    bri_console::echo(format!(
+        "GPU capabilities: max texture {}, max buffer {}, max storage binding {}, downlevel {:?}",
+        limits.max_texture_dimension_2d,
+        limits.max_buffer_size,
+        limits.max_storage_buffer_binding_size,
+        adapter.get_downlevel_capabilities().flags,
+    ));
     bri_console::echo(format!(
         "GPU: {} ({:?}, {:?}, driver {} {})",
         info.name, info.backend, info.device_type, info.driver, info.driver_info
     ));
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
-    if let Some(line) = dx12_shader_compiler(beside.as_deref(), compiler) {
+    if let Some(line) = dx12_shader_compiler(compiler) {
         bri_console::echo(line);
     }
     if !failures.is_empty() {
@@ -319,29 +291,20 @@ fn log_adapter(adapter: &wgpu::Adapter, failures: &[String], compiler: ShaderCom
     }
 }
 
-/// Which compiler DirectX 12 shaders use, or None off DirectX 12. A Windows
-/// release ships DXC's dxcompiler.dll beside the game
-/// (tools/shader-compiler.json), which wgpu's default compiler choice loads:
-/// about 3 s for the world's shaders. Without it, or when the D3D12 runtime
-/// refuses DXC's shaders, wgpu uses the system's FXC: about 20 s, minutes
-/// on a busy CPU.
-fn dx12_shader_compiler(
-    game_folder: Option<&std::path::Path>,
-    compiler: ShaderCompiler,
-) -> Option<&'static str> {
+/// Log the requested, verified compiler policy. wgpu's Auto may choose
+/// static DXC, dynamic DXC or FXC internally; a nearby DLL does not prove
+/// which one it used.
+fn dx12_shader_compiler(compiler: ShaderCompiler) -> Option<&'static str> {
     Some(match compiler {
         ShaderCompiler::NotDx12 => return None,
         ShaderCompiler::FxcRequested => "Shader compiler: FXC (WGPU_DX12_COMPILER asked for it)",
-        ShaderCompiler::DxcRejected => {
-            "Shader compiler: FXC (DXC shaders rejected by this D3D12 runtime)"
+        ShaderCompiler::FxcFallback => {
+            "Shader compiler: FXC (initial pixel probe failed; FXC pixel probe passed)"
         }
-        ShaderCompiler::DxcAccepted => {
-            if game_folder.is_some_and(|dir| dir.join("dxcompiler.dll").is_file()) {
-                "Shader compiler: DXC (dxcompiler.dll beside the game)"
-            } else {
-                "Shader compiler: FXC (no dxcompiler.dll beside the game; the first map's shaders compile slowly)"
-            }
+        ShaderCompiler::AutoAccepted => {
+            "Shader compiler: wgpu Auto (DXC or FXC selected internally; pixel probe passed)"
         }
+        ShaderCompiler::DxcAccepted => "Shader compiler: explicit DXC (pixel probe passed)",
     })
 }
 
@@ -499,6 +462,20 @@ fn present_mode(vsync: bool, modes: &[wgpu::PresentMode]) -> Result<wgpu::Presen
         .context("The display backend does not support an unsynchronized/low-latency present mode")
 }
 
+fn surface_format(formats: &[wgpu::TextureFormat]) -> Result<wgpu::TextureFormat> {
+    // This renderer produces SDR display-space output. Do not select an HDR
+    // float/10-bit surface merely because it precedes a compatible 8-bit one.
+    [
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    ]
+    .into_iter()
+    .find(|format| formats.contains(format))
+    .context("surface exposes no supported SDR RGBA8/BGRA8 format")
+}
+
 impl Graphics {
     fn new(
         window: Arc<Window>,
@@ -524,13 +501,7 @@ impl Graphics {
         let caps = surface.get_capabilities(&adapter);
         // UiRenderer samples authored art as unorm; a non-sRGB swapchain matches
         // the existing offscreen reference output without a second gamma curve.
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .or_else(|| caps.formats.first().copied())
-            .context("surface exposes no texture formats")?;
+        let format = surface_format(&caps.formats)?;
         let device_lost = Arc::new(Mutex::new(None));
         let lost_callback = device_lost.clone();
         device.set_device_lost_callback(move |reason, message| {
@@ -560,12 +531,22 @@ impl Graphics {
                 wgpu::PresentMode::Fifo
             }),
             desired_maximum_frame_latency: 2,
-            alpha_mode: caps
-                .alpha_modes
-                .first()
-                .copied()
-                .unwrap_or(wgpu::CompositeAlphaMode::Auto),
-            view_formats: vec![],
+            alpha_mode: if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+                wgpu::CompositeAlphaMode::Opaque
+            } else {
+                caps.alpha_modes
+                    .first()
+                    .copied()
+                    .unwrap_or(wgpu::CompositeAlphaMode::Auto)
+            },
+            // GUI and world output are authored display-space bytes. A surface
+            // that exposes only sRGB still needs a compatible unorm view;
+            // rendering directly to its sRGB view would encode those twice.
+            view_formats: if format.is_srgb() {
+                vec![format.remove_srgb_suffix()]
+            } else {
+                vec![]
+            },
         };
         if size.width > 0 && size.height > 0 {
             surface.configure(&device, &config);
@@ -1150,9 +1131,11 @@ impl Runner {
         self.config.app.gpu_stopped();
         drop(lost);
         let gpu = Graphics::new(window.clone(), self.config.vsync, display, None)?;
-        self.config
-            .app
-            .gpu_ready(&gpu.device, &gpu.queue, gpu.config.format)?;
+        self.config.app.gpu_ready(
+            &gpu.device,
+            &gpu.queue,
+            gpu.config.format.remove_srgb_suffix(),
+        )?;
         self.graphics = Some(gpu);
         self.resize(window.inner_size());
         Ok(())
@@ -1206,7 +1189,11 @@ impl Runner {
         };
         drop(acquire_span);
         let acquired = Instant::now();
-        let target = surface.texture.create_view(&Default::default());
+        let format = g.config.format.remove_srgb_suffix();
+        let target = surface.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(format),
+            ..Default::default()
+        });
         let mut encoder = g
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1232,7 +1219,7 @@ impl Runner {
             queue: &g.queue,
             encoder: &mut encoder,
             target: &target,
-            format: g.config.format,
+            format,
             size: (size.width, size.height),
             ui_renderer: &mut g.renderer,
         })?;
@@ -1252,7 +1239,7 @@ impl Runner {
             &g.queue,
             &mut encoder,
             &target,
-            g.config.format,
+            format,
             (size.width, size.height),
             ui.scale(),
             &ui.core.pack,
@@ -1839,9 +1826,11 @@ impl ApplicationHandler for Runner {
                     self.config.early_gpu.take(),
                 )?;
                 crate::perf::startup::mark("GPU opened");
-                self.config
-                    .app
-                    .gpu_ready(&gpu.device, &gpu.queue, gpu.config.format)?;
+                self.config.app.gpu_ready(
+                    &gpu.device,
+                    &gpu.queue,
+                    gpu.config.format.remove_srgb_suffix(),
+                )?;
                 self.graphics = Some(gpu);
             }
             self.resize(self.window.as_ref().unwrap().inner_size());
@@ -2326,15 +2315,14 @@ mod tests {
     }
 
     #[test]
-    fn the_log_names_dxc_only_when_it_ships_beside_the_game() -> Result<()> {
-        let accepted = ShaderCompiler::DxcAccepted;
-        let directory = tempfile::tempdir()?;
-        let line = |folder| dx12_shader_compiler(folder, accepted).unwrap_or_default();
-        assert!(line(Some(directory.path())).contains("FXC"));
-        assert!(line(None).contains("FXC"));
-        std::fs::write(directory.path().join("dxcompiler.dll"), b"stand-in")?;
-        assert!(line(Some(directory.path())).contains("DXC (dxcompiler.dll"));
-        Ok(())
+    fn auto_compiler_diagnostics_do_not_guess_from_dll_presence() {
+        let line = dx12_shader_compiler(ShaderCompiler::AutoAccepted).unwrap();
+        assert!(line.contains("Auto") && line.contains("selected internally"));
+        assert!(
+            dx12_shader_compiler(ShaderCompiler::DxcAccepted)
+                .unwrap()
+                .contains("explicit DXC")
+        );
     }
 
     #[test]
@@ -2363,20 +2351,31 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_dxc_logs_fxc_even_with_dxcompiler_beside_the_game() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        std::fs::write(directory.path().join("dxcompiler.dll"), b"stand-in")?;
-        let folder = Some(directory.path());
+    fn a_fallback_logs_the_verified_fxc_device() {
         assert_eq!(
-            dx12_shader_compiler(folder, ShaderCompiler::DxcRejected),
-            Some("Shader compiler: FXC (DXC shaders rejected by this D3D12 runtime)")
+            dx12_shader_compiler(ShaderCompiler::FxcFallback),
+            Some("Shader compiler: FXC (initial pixel probe failed; FXC pixel probe passed)")
         );
         assert!(
-            dx12_shader_compiler(folder, ShaderCompiler::FxcRequested)
-                .is_some_and(|line| line.contains("FXC"))
+            dx12_shader_compiler(ShaderCompiler::FxcRequested)
+                .unwrap()
+                .contains("FXC")
         );
-        assert_eq!(dx12_shader_compiler(folder, ShaderCompiler::NotDx12), None);
-        Ok(())
+        assert_eq!(dx12_shader_compiler(ShaderCompiler::NotDx12), None);
+    }
+
+    #[test]
+    fn an_hdr_first_surface_still_uses_the_supported_sdr_view() {
+        use wgpu::TextureFormat::*;
+        assert_eq!(
+            surface_format(&[Rgba16Float, Bgra8UnormSrgb]).unwrap(),
+            Bgra8UnormSrgb
+        );
+        assert_eq!(
+            surface_format(&[Bgra8UnormSrgb, Rgba8Unorm]).unwrap(),
+            Rgba8Unorm
+        );
+        assert!(surface_format(&[Rgba16Float]).is_err());
     }
 
     /// The probe pipeline is valid WGSL and a valid pipeline: on a GPU that
@@ -2392,11 +2391,11 @@ mod tests {
         else {
             return;
         };
-        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&Default::default()))
+        let Ok((device, queue)) = pollster::block_on(adapter.request_device(&Default::default()))
         else {
             return;
         };
-        assert_eq!(probe_pipeline(&device), Ok(()));
+        assert_eq!(probe_pipeline(&device, &queue), Ok(()));
     }
 
     #[test]

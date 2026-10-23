@@ -158,6 +158,7 @@ def verify(root):
             die(f'{name} is not executable')
     print(f"Verified {len(listed)} files for package version {manifest['version']}.")
     addon_bundle.verify_defaults(repo, root / 'content', root / addon_bundle.CREDITS, without_originals)
+    content_packs.verify_menu_images(root / 'content', repo)
 
 
 def write_zip(folder, zip_path):
@@ -285,7 +286,7 @@ try:
     for source, name in docs:
         shutil.copyfile(repo / source, release / name)
     import package_guides
-    package_guides.copy_guides(repo, release)
+    package_guides.copy_guides(repo, release, version)
     if credits:
         shutil.copyfile(credits, release / addon_bundle.CREDITS)
     for name in EXECUTABLES:
@@ -300,6 +301,7 @@ try:
         packages.append({'id': mod['id'], 'version': mod['version'], 'side': mod['side'], 'dir': mod['dir']})
     (release / 'content/packages.json').write_text(
         json.dumps({'schema_version': listing['schema_version'], 'packages': packages}, indent=2) + '\n', encoding='utf-8')
+    content_packs.verify_menu_images(release / 'content', repo)
     entries = []
     for path in files_under(release):
         data = path.read_bytes()

@@ -185,7 +185,7 @@ def v20_identity(v20):
     """The v20 files the importers read, by relative path and size. Lighting
     caches (.ml) and config/ change when someone plays and are not inputs."""
     entries = []
-    for top in ('base', 'Add-Ons', 'saves'):
+    for top in ('base', 'Add-Ons', 'saves', 'screenshots'):
         for path in sorted((v20 / top).rglob('*')):
             if path.is_file() and path.suffix.lower() != '.ml':
                 entries.append(f'{path.relative_to(v20).as_posix()}:{path.stat().st_size}')
@@ -260,7 +260,7 @@ def reference_view(v20, view):
     Lookups ignore case, as Windows and Torque do."""
     listing = json.loads((REPO / REFERENCE_FILES).read_text(encoding='utf-8'))['files']
     present = {}
-    for top in ('base', 'Add-Ons', 'saves'):
+    for top in ('base', 'Add-Ons', 'saves', 'screenshots'):
         for path in (v20 / top).rglob('*'):
             if path.is_file():
                 present.setdefault(path.relative_to(v20).as_posix().lower(), path)

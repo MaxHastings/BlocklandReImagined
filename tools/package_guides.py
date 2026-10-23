@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ship creator guides, working links and vendored notices on every platform."""
+"""Ship current reader guides and notices without historical release artifacts."""
 from pathlib import Path
 import posixpath
 import re
@@ -9,11 +9,6 @@ from urllib.parse import urlsplit
 
 GUIDES = {
     'PLAYTEST.md': 'RULE-WORKSHOP-PLAYTEST.md',
-    'DESIGN.md': 'RULE-WORKSHOP-DESIGN.md',
-    'CREATOR-TEST-CARD.md': 'RULE-WORKSHOP-CREATOR-TEST-CARD.md',
-    'V0.2.2-PLAYTEST.md': 'V0.2.2-PLAYTEST.md',
-    'V0.2.3-PLAYTEST.md': 'V0.2.3-PLAYTEST.md',
-    'V0.2.3-RELEASE-NOTES.md': 'V0.2.3-RELEASE-NOTES.md',
 }
 
 PLAYER_GUIDES = (
@@ -49,25 +44,47 @@ def release_links(text: str, source: str, available: set[str]) -> str:
     return re.sub(r'\]\(([^\s)]+)\)', replace, text)
 
 
-def copy_guides(repo: Path, destination: Path) -> None:
+def copy_guides(repo: Path, destination: Path, version: str = 'development') -> None:
+    docs = destination / 'docs'
+    docs.mkdir(exist_ok=True)
+    licenses = destination / 'licenses'
+    licenses.mkdir(exist_ok=True)
     available = {p.name for p in destination.glob('*.md')} | set(GUIDES.values())
     # macOS has its own packager; all three invoke this shared document step.
     for source, filename in [('LICENSE', 'WINIT-LICENSE.txt'), ('BRI-PATCH.md', 'WINIT-PATCH.md')]:
-        (destination / filename).write_bytes((repo / 'vendor' / 'winit' / source).read_bytes())
+        (licenses / filename).write_bytes((repo / 'vendor' / 'winit' / source).read_bytes())
+        # Platform packagers may already have copied the notice at the root.
+        (destination / filename).unlink(missing_ok=True)
     for source, filename in GUIDES.items():
         text = (repo / 'docs' / 'rule-workshop' / source).read_text(encoding='utf-8')
         text = release_links(text, f'rule-workshop/{source}', available)
-        (destination / filename).write_text(text, encoding='utf-8')
+        (docs / filename).write_text(text, encoding='utf-8')
+        (destination / filename).unlink(missing_ok=True)
     # The platform packagers have already copied these player-facing pages.
     # Their repository links also need to point at the flat release layout.
-    for filename in PLAYER_GUIDES:
+    for filename in (*PLAYER_GUIDES, 'PLAYTEST-STRESS-LAB.md'):
         path = destination / filename
         if not path.is_file():
             continue
         text = path.read_text(encoding='utf-8-sig')
         text = release_links(text, filename, available)
-        path.write_text(text, encoding='utf-8')
+        (docs / filename).write_text(text, encoding='utf-8')
+        path.unlink()
+    (destination / 'README.txt').write_text(
+        f'Blockland ReImagined {version}\n\n'
+        'Windows: run Launch.cmd. Linux: run launch.sh. macOS: open BlocklandReImagined.app.\n'
+        'Keep the content folder and bundled libraries beside the game.\n\n'
+        'Instructions and controls: docs/TESTER-GUIDE.md\n'
+        'Known limitations: docs/KNOWN-ISSUES.md\n'
+        'Detailed playtest guide: docs/PLAYTEST.md\n'
+        'Creator recipes: docs/RULE-WORKSHOP-PLAYTEST.md\n'
+        'Third-party credits: CREDITS.md and licenses/\n\n'
+        'To report a problem, reproduce it, close the game and send the latest\n'
+        'session log from logs/ with the version, map and a screenshot.\n'
+        'MANIFEST.json records the packaged files for integrity verification.\n',
+        encoding='utf-8')
 
 
 if __name__ == '__main__':
-    copy_guides(Path(__file__).resolve().parent.parent, Path(sys.argv[1]))
+    copy_guides(Path(__file__).resolve().parent.parent, Path(sys.argv[1]),
+                sys.argv[2] if len(sys.argv) > 2 else 'development')

@@ -28,7 +28,24 @@ pub fn turn() -> Result<Turn> {
     // A test that failed on its turn leaves the device as good as ever.
     let mut gpu = GPU.lock().unwrap_or_else(PoisonError::into_inner);
     if gpu.is_none() {
-        *gpu = Some(Headless::new()?);
+        *gpu = Some(if std::env::var_os("BRI_TEST_SOFTWARE_GPU").is_some() {
+            let instance = wgpu::Instance::new(
+                wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
+            );
+            let adapter =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    force_fallback_adapter: true,
+                    ..Default::default()
+                }))?;
+            let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
+            Headless {
+                device,
+                queue,
+                adapter_info: adapter.get_info(),
+            }
+        } else {
+            Headless::new()?
+        });
     }
     Ok(Turn(gpu))
 }

@@ -3,6 +3,7 @@ pub mod bloom;
 mod buffer_init;
 pub mod color;
 pub mod decals;
+pub mod device_probe;
 pub mod dynamic_sprites;
 pub mod environment_choices;
 pub mod environment_planes;

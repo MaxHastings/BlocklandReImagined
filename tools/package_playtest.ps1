@@ -252,6 +252,8 @@ function Verify-PlaytestPackage([string]$Path) {
     Write-Host "Verified $($listed.Count) files for package version $($manifest.version)."
     Verify-ShaderCompiler $root
     Verify-DefaultAddOns $root
+    & $Python (Join-Path $PSScriptRoot 'content_packs.py') --verify-ui (Join-Path $root 'content') --repo $RepoRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Packaged menu image verification failed.' }
 }
 
 # Zip the release folder under its own name. Entries use forward slashes
@@ -375,8 +377,6 @@ $docInputs = @(
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.cmd'); destination = 'Launch.cmd' }
 )
 $docInputs += @{ source = (Join-Path $RepoRoot 'docs/rule-workshop/PLAYTEST.md'); destination = 'RULE-WORKSHOP-PLAYTEST.md' }
-$docInputs += @{ source = (Join-Path $RepoRoot 'docs/rule-workshop/DESIGN.md'); destination = 'RULE-WORKSHOP-DESIGN.md' }
-$docInputs += @{ source = (Join-Path $RepoRoot 'docs/rule-workshop/CREATOR-TEST-CARD.md'); destination = 'RULE-WORKSHOP-CREATOR-TEST-CARD.md' }
 if ($StressLab) { $docInputs += @{ source = (Join-Path $RepoRoot 'docs/stress-lab/PLAYTEST-STRESS-LAB.md'); destination = 'PLAYTEST-STRESS-LAB.md' } }
 # Who made the bundled originals, beside the docs.
 if ($null -ne $defaults.credits) { $docInputs += @{ source = [string]$defaults.credits; destination = 'CREDITS.md' } }
@@ -410,7 +410,7 @@ try {
     Add-ShaderCompiler $releasePath
     if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint)) { Invoke-CodeSigning $releasePath }
     foreach ($packageInput in $docInputs) { Copy-Item -LiteralPath $packageInput.source -Destination (Join-Path $releasePath $packageInput.destination) }
-    & python (Join-Path $PSScriptRoot 'package_guides.py') $releasePath
+    & python (Join-Path $PSScriptRoot 'package_guides.py') $releasePath $Version
     if ($LASTEXITCODE -ne 0) { throw 'Could not package the Rule Workshop guides.' }
     $packagedContent = Join-Path $releasePath 'content'
     [IO.Directory]::CreateDirectory($packagedContent) | Out-Null
@@ -433,6 +433,8 @@ try {
     }
     $configJson = ConvertTo-Json -InputObject $list -Depth 5
     [IO.File]::WriteAllText((Join-Path $packagedContent 'packages.json'), $configJson + "`n", [Text.UTF8Encoding]::new($false))
+    & $Python (Join-Path $PSScriptRoot 'content_packs.py') --verify-ui $packagedContent --repo $RepoRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Packaged menu image verification failed.' }
     $entries = Get-ManifestEntries $releasePath
     $manifest = [ordered]@{ schema_version = 1; version = $Version; executable = 'bri-client.exe'; content_config = 'content/packages.json'; files = $entries }
     $manifestJson = ConvertTo-Json -InputObject $manifest -Depth 10

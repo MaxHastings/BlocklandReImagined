@@ -207,7 +207,9 @@ pub fn body_pose_assets(
                 {
                     continue;
                 }
-                match read_shape(&native, file, id, false) {
+                // content.json entries are relative to the package, including
+                // their assets/ prefix, not to the index's own directory.
+                match read_shape(&dir, file, id, false) {
                     Ok(Some(asset)) => {
                         admit_animation_asset(&mut assets, asset);
                     }

@@ -46,6 +46,40 @@ pub(super) struct HeldArrival {
     pub(super) last_chat: u64,
 }
 
+/// Timings come from the loading worker, including tasks completed between
+/// UI frames. The screen receives a truthful task name, never a fake timer.
+struct MapLoadTrace {
+    progress: bri_progress::Progress,
+    task: Option<(&'static str, std::time::Instant)>,
+}
+impl MapLoadTrace {
+    fn new(progress: bri_progress::Progress) -> Self {
+        Self {
+            progress,
+            task: None,
+        }
+    }
+    fn begin(&mut self, label: &'static str) {
+        self.end();
+        self.progress.set_detail(Some(label));
+        self.task = Some((label, std::time::Instant::now()));
+    }
+    fn end(&mut self) {
+        if let Some((label, since)) = self.task.take() {
+            bri_console::echo(format!(
+                "Map preparation: {label} took {} ms",
+                since.elapsed().as_millis()
+            ));
+        }
+    }
+}
+impl Drop for MapLoadTrace {
+    fn drop(&mut self) {
+        self.end();
+        self.progress.set_detail(None);
+    }
+}
+
 impl App {
     pub(super) fn answer(&mut self, id: RequestId, result: Result<()>) {
         self.ui.apply(UiUpdate::ActionResult {
@@ -510,7 +544,9 @@ impl App {
                 bri_progress::Unit::Steps,
                 None,
             );
+            reporting.set_detail(Some("WAITING FOR CONTENT WORKER"));
             let permit = load_limit.acquire_owned().await?;
+            let preparation_progress = reporting.clone();
             let animation_avatar = avatar_catalog.clone();
             let (
                 loaded,
@@ -525,8 +561,11 @@ impl App {
                 recipe_start,
             ) = tokio::task::spawn_blocking(move || -> Result<_> {
                 let _permit = permit;
+                let mut trace = MapLoadTrace::new(preparation_progress);
+                trace.begin("LOADING WEAPONS");
                 let weapons = paths.weapon_content()?;
                 weapon_snapshot.ensure_same(&weapons)?;
+                trace.begin("LOADING ANIMATIONS");
                 let (animation_assets, body_pose_bindings) =
                     bri_net::content_identity::body_pose_assets(
                         &paths.root,
@@ -537,11 +576,13 @@ impl App {
                         &paths.item_presentation,
                         &paths.weapon_extras,
                     )?;
+                trace.begin("PREPARING ITEMS");
                 let item_physics = paths.item_physics(&weapons)?;
                 physics_snapshot.ensure_same(&item_physics)?;
                 // Package worlds grow their ground when the session is
                 // built, so a recording keeps the world as it starts, and
                 // the palette Change Map paints with.
+                trace.begin("READING WORLD");
                 let start_world = paths.start_world(&base_map, None, host_palette.as_deref())?;
                 let recipe_start = if record {
                     Some((
@@ -551,8 +592,13 @@ impl App {
                 } else {
                     None
                 };
-                let loaded = paths.map_content()?.load(start_world)?;
+                trace.begin("LOADING BRICK CATALOGS");
+                let map_content = paths.map_content()?;
+                trace.begin("PREPARING WORLD COLLISION");
+                let loaded = map_content.load(start_world)?;
+                trace.begin("LOADING MAP SURFACES");
                 let visual = load_visual_map(paths.maps.root(&base_map)?, &base_map, lighting)?;
+                trace.begin("PREPARING MAP LIGHTING");
                 let mut light_volume = LightVolumeState::start(
                     &visual.scene,
                     &light_cache,
@@ -565,7 +611,9 @@ impl App {
                 light_volume.use_prepared_volume(visual.light_volume.clone());
                 light_volume.set_light_shapes(&loaded.breakables);
                 // Every package this host loaded, hashed: what joiners must match.
+                trace.begin("VERIFYING CONTENT");
                 let identity = paths.environment()?;
+                trace.begin("PREPARING VEHICLES AND MATERIALS");
                 let vehicle_pack = paths.vehicle_pack()?;
                 let bot_kinds = paths.bot_kinds()?;
                 let meshes = Arc::new(
@@ -581,6 +629,7 @@ impl App {
                     Arc::new(crate::mirrors::shapes(&loaded.simulation.definitions));
                 let materials = paths.materials()?;
                 let palette = Arc::new(crate::world_chunks::BrickPalette::new(&materials)?);
+                trace.begin("PREPARING PLAYER COLLISION");
                 let mut mirror = bri_sim::prediction::CollisionMirror::new(
                     loaded.simulation.definitions.clone(),
                     loaded.query_colliders.clone(),
@@ -609,6 +658,7 @@ impl App {
                 let placed_emitters = loaded.scene.emitters()?;
                 let plate = loaded.plate;
                 let movers = loaded.movers.clone();
+                trace.begin("LOADING FOLIAGE AND EFFECTS");
                 let foliage = crate::foliage::PreparedFoliage::load_for_map(
                     &paths.foliage,
                     paths.maps.root(&base_map)?,

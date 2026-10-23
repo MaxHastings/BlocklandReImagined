@@ -2,7 +2,7 @@
  "schema_version": 1,
  "designated_by": "Maxwell, 2026-09-26",
  "reference_root": "E:\\Downloads\\B4v21Launcher\\versions\\Blockland v20",
- "note": "Every file the content importers may read from a v20 install, with its SHA-256. tools/regenerate_content.py copies exactly these files from a player's v20 folder into a private view and imports from that, so extra add-ons, saves, caches or changed files never change the shared base packs. Lighting caches (.ml) and the launcher's Client_v20Discord module are excluded.",
+ "note": "Every file the content importers may read from a v20 install, with its SHA-256. tools/regenerate_content.py copies exactly these files from a player's v20 folder into a private view and imports from that, so extra add-ons, saves, caches or changed files never change the shared base packs. Lighting caches (.ml) and the launcher's Client_v20Discord module are excluded. The ten named menu JPGs in screenshots/ are curated reference art; other personal screenshots remain excluded.",
  "files": [
   {
    "path": "base/client/actionMap.cs.dso",
@@ -5178,6 +5178,56 @@
    "path": "saves/Slate/Two Ships.jpg",
    "bytes": 136216,
    "sha256": "2db720b8715e533c8291111b1ade8ab8ceb637ab8e39cb8664ba434f3bddd8ab"
+  },
+  {
+   "path": "screenshots/ACMCity.jpg",
+   "bytes": 173014,
+   "sha256": "1752dfdfb7bc2107e829972eb99e55e59f6da5e06a8101997836b9da9877b978"
+  },
+  {
+   "path": "screenshots/ArtilleryAttack.jpg",
+   "bytes": 181015,
+   "sha256": "acb7173fb737cb28f1b3d6611d3739fa9f592e1a74504db91f01344093ca88b2"
+  },
+  {
+   "path": "screenshots/BLPetrol.jpg",
+   "bytes": 180885,
+   "sha256": "6a70264c45ac9ed9f8f0f48128e45b00ca336c57f511508caa857616501ce5c6"
+  },
+  {
+   "path": "screenshots/FireStation.jpg",
+   "bytes": 139981,
+   "sha256": "726016f36cb146b9f98e2aace66e7070edc3cf0080f86ab2d197e479fec87cb9"
+  },
+  {
+   "path": "screenshots/GlassElevators.jpg",
+   "bytes": 141357,
+   "sha256": "5ccb302180441dfcf4605463318ba795b5fd5a6c29b77127b81410eef0ae4c6d"
+  },
+  {
+   "path": "screenshots/IcePalace.jpg",
+   "bytes": 80015,
+   "sha256": "01a7973f8bce84b3b60a95d8823d7fabfda779ef65e6b8f48db2d1cf246c785a"
+  },
+  {
+   "path": "screenshots/Island.jpg",
+   "bytes": 260914,
+   "sha256": "7b66046e69d90bdd1f6b1a9cfc7a1facefb8a72ea08fc2afbc05d2d018e3e565"
+  },
+  {
+   "path": "screenshots/Maze.jpg",
+   "bytes": 206012,
+   "sha256": "2572ca48825b4e8d85e6ad8deafd267db02fb677dff0cd4dd8d7dda2893e899e"
+  },
+  {
+   "path": "screenshots/NightTitanic.jpg",
+   "bytes": 67075,
+   "sha256": "b418dbc82938f1c8bc07f762a26a18021f667c25c83307d626def8105f82aaac"
+  },
+  {
+   "path": "screenshots/Parthenon.jpg",
+   "bytes": 120277,
+   "sha256": "c1118cb2723eecefacd047c784d81e7225ae156366ed6fb021958a799e9ee680"
   }
  ]
 }

@@ -1784,6 +1784,10 @@ impl PlatformApp for App {
             &self.ui.core.prefs,
         ));
         let samples = self.graphics.samples;
+        bri_console::echo(format!(
+            "World renderer: format {format:?}, samples {samples}, lighting {}, soft shading {}, ambient occlusion {}",
+            self.graphics.lighting, self.graphics.soft_shading, self.graphics.ambient_occlusion,
+        ));
         let effective = self
             .graphics
             .with_lighting(self.lighting.light_volume.mode(self.graphics.lighting));

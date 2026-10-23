@@ -152,6 +152,61 @@ fn loader_checks_actual_bytes_and_current_body_cannot_select_another_models_clip
 }
 
 #[test]
+fn indexed_animation_paths_are_package_relative_and_cannot_escape() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    bri_net::testing::write_root(root.path(), &[bri_net::testing::MAP])?;
+    let dir = root.path().join("addons/indexed");
+    std::fs::create_dir_all(dir.join("assets/models"))?;
+    let shape = json!({"schema_version":1,"id":"indexed","nodes":[],"objects":[],"details":[],"meshes":[],"materials":[],
+        "animations":[{"name":"cycle","frames":1,"duration":1.25,"looping":false,"additive":false,"priority":0,"nodes":[],"objects":[],"ground_translations":[],"ground_rotations":[],"triggers":[]}]});
+    let bytes = serde_json::to_vec(&shape)?;
+    std::fs::write(dir.join("assets/models/clip.shape.json"), &bytes)?;
+    std::fs::write(root.path().join("outside.shape.json"), &bytes)?;
+    std::fs::write(
+        dir.join("assets/content.json"),
+        json!({"content":[
+            {"id":"indexed:asset/clip","file":"assets/models/clip.shape.json"},
+            {"id":"indexed:asset/escape","file":"../../outside.shape.json"}
+        ]})
+        .to_string(),
+    )?;
+    let mut packages = PackageSet::load_root(root.path())?;
+    packages.packages.push(serde_json::from_value(json!({
+        "id":"indexed","version":"1.0.0","side":"shared","dir":"addons/indexed"
+    }))?);
+    let avatar_dir = packages.role_dir(root.path(), "avatar")?;
+    let avatar: Package = serde_json::from_slice(&std::fs::read(avatar_dir.join("avatar.json"))?)?;
+    let weapons = content_identity::WeaponContent::load_with(
+        &packages.role_dir(root.path(), "weapons")?,
+        &[],
+    )?;
+    let catalog = content_identity::animation_assets(
+        root.path(),
+        &packages,
+        &avatar_dir,
+        &avatar,
+        &weapons.pack,
+        &packages.role_dir(root.path(), "item_presentation")?,
+        &[],
+    )?;
+    let loaded = catalog
+        .assets
+        .iter()
+        .find(|a| a.resource == "indexed:asset/clip")
+        .context("Package-relative indexed clip was not admitted")?;
+    assert_eq!(loaded.bytes, bytes);
+    assert_eq!(loaded.digest, bri_package::environment::hash_bytes(&bytes));
+    assert!(
+        !catalog
+            .assets
+            .iter()
+            .any(|a| a.resource == "indexed:asset/escape")
+    );
+    catalog.validate()?;
+    Ok(())
+}
+
+#[test]
 fn ambiguous_optional_image_clock_does_not_discard_stock_metadata_or_break_hosting() -> Result<()> {
     let root = tempfile::tempdir()?;
     let avatar_dir = root.path().join("avatar");

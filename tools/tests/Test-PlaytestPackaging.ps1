@@ -27,6 +27,14 @@ try {
         [IO.File]::WriteAllText((Join-Path $packageDir 'asset.bin'), "fixture-$field")
     }
     $override = [ordered]@{ schema_version = 1; packages = $packages }
+    # Invented curated art: an empty-but-present UI pack must no longer pass.
+    $picturePath = Join-Path $fixture 'content/fixture-ui_pack/picture.jpg'
+    [IO.File]::WriteAllText($picturePath, 'invented menu image')
+    $pictureHash = (Get-FileHash $picturePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $reference = @{ files = @(@{ path = 'screenshots/Reference.jpg'; bytes = (Get-Item $picturePath).Length; sha256 = $pictureHash }) }
+    [IO.File]::WriteAllText((Join-Path $fixture 'docs/vanilla-reference-files.json'), (ConvertTo-Json $reference -Depth 5))
+    $pictures = @{ images = @{ 'screenshots/reference' = @{ file = 'picture.jpg'; sha256 = $pictureHash } } }
+    [IO.File]::WriteAllText((Join-Path $fixture 'content/fixture-ui_pack/ui-pack.json'), (ConvertTo-Json $pictures -Depth 5))
     [IO.File]::WriteAllText((Join-Path $fixture 'content/packages.json'), (ConvertTo-Json $override -Depth 4))
     # The default Add-Ons every release ships (packages/default-addons.json):
     # our own as committed, and a stand-in for each bundled original that
@@ -119,8 +127,22 @@ try {
     $package = Join-Path $dist 'BlocklandReImagined-test-fixture-windows'
     if (-not (Test-Path (Join-Path $package 'Launch.cmd'))) { throw 'Expected package launcher Launch.cmd.' }
     if (Test-Path (Join-Path $package 'Launch-Playtest.cmd')) { throw 'Unexpected old launcher filename.' }
-    foreach ($doc in @('TESTER-GUIDE.md','FEATURES.md')) { if (-not (Test-Path (Join-Path $package $doc))) { throw "Expected $doc in the release folder." } }
+    foreach ($doc in @('README.txt','docs/TESTER-GUIDE.md','docs/FEATURES.md','licenses/WINIT-LICENSE.txt')) { if (-not (Test-Path (Join-Path $package $doc))) { throw "Expected $doc in the release folder." } }
+    if (@(Get-ChildItem -LiteralPath $package -Filter 'V0.*').Count -ne 0) { throw 'Historical playtest artifacts leaked into the package.' }
     & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $package
+    # Update the integrity manifest too: semantic absence must still be caught.
+    $emptyMenu = Join-Path $temp 'empty-menu'
+    Copy-Item -LiteralPath $package -Destination $emptyMenu -Recurse
+    $emptyMenuIndex = Join-Path $emptyMenu 'content/fixture-ui_pack/ui-pack.json'
+    [IO.File]::WriteAllText($emptyMenuIndex, '{"images":{}}')
+    $emptyMenuManifest = Get-Content (Join-Path $emptyMenu 'MANIFEST.json') -Raw | ConvertFrom-Json
+    $menuEntry = @($emptyMenuManifest.files | Where-Object { $_.path -eq 'content/fixture-ui_pack/ui-pack.json' })[0]
+    $menuEntry.bytes = (Get-Item $emptyMenuIndex).Length
+    $menuEntry.sha256 = (Get-FileHash $emptyMenuIndex -Algorithm SHA256).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText((Join-Path $emptyMenu 'MANIFEST.json'), (ConvertTo-Json $emptyMenuManifest -Depth 10))
+    $caught = $false
+    try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -VerifyPackage $emptyMenu } catch { $caught = $_.Exception.Message -like '*menu image verification failed*' }
+    if (-not $caught) { throw 'Verifier accepted a checksum-valid package with no menu images.' }
     if (-not (Select-String -LiteralPath (Join-Path $package 'CREDITS.md') -Pattern 'Kaje, Ephialtes' -SimpleMatch -Quiet)) { throw 'Expected the Stunt Plane credited in CREDITS.md.' }
     $shippedList = Get-Content (Join-Path $package 'content/packages.json') -Raw | ConvertFrom-Json
     # After the base game, in the list's order, on the sides the game derives.

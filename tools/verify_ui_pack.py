@@ -86,7 +86,9 @@ def main():
         raw = source_bytes(args.install, record['source'])
         assert len(raw) == record['bytes'] and digest(raw) == record['sha256'], record
     for record in pack['sources']:
-        raw = Path(record['path']).read_bytes()
+        # The importer fingerprints recovered text after read_to_string's
+        # explicit CRLF normalization, independently of checkout settings.
+        raw = Path(record['path']).read_bytes().replace(b'\r\n', b'\n')
         assert len(raw) == record['bytes'] and digest(raw) == record['sha256'], record
     outputs = {}
     for record in manifest['outputs']:

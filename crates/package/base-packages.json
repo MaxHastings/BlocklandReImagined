@@ -12,7 +12,7 @@
     { "id": "v20-item-presentation", "version": "10.0.0", "side": "shared", "dir": "item-presentation-pack-010", "role": "item_presentation" },
     { "id": "v20-vehicles", "version": "12.0.0", "side": "shared", "dir": "vehicles-pack-012", "role": "vehicles" },
     { "id": "v20-events", "version": "2.0.0", "side": "shared", "dir": "events-pack-002", "role": "events" },
-    { "id": "v20-ui", "version": "4.0.0", "side": "client", "dir": "ui-pack-004", "role": "ui_pack" },
+    { "id": "v20-ui", "version": "5.0.0", "side": "client", "dir": "ui-pack-005", "role": "ui_pack" },
     { "id": "v20-effects-runtime", "version": "5.0.0", "side": "client", "dir": "effects-runtime-pack-005", "role": "effects_runtime" },
     { "id": "v20-weather", "version": "2.0.0", "side": "client", "dir": "weather-pack-002", "role": "weather" },
     { "id": "v20-foliage", "version": "2.0.0", "side": "client", "dir": "foliage-pack-003", "role": "foliage" },

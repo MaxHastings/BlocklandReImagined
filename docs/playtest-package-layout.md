@@ -35,22 +35,30 @@ BlocklandReImagined-<version>-windows/
     <the listed native packages, recursively copied>
     addons/               bundled Add-Ons, enabled or disabled by their defaults
     stresslab/            with -StressLab only
-  PLAYTEST.md
-  KNOWN-ISSUES.md
-  TESTER-GUIDE.md         install, playing together, what to send, known limits
-  FEATURES.md             what is done, partly done and missing
-  DEDICATED-SERVER.md     headless server setup
-  RULE-WORKSHOP-*.md     creator recipes, semantics and test card
+  README.txt              current version and launch/report instructions
+  docs/                   current player guides and creator recipes
+    PLAYTEST.md
+    KNOWN-ISSUES.md
+    TESTER-GUIDE.md
+    FEATURES.md
+    DEDICATED-SERVER.md
+    RULE-WORKSHOP-PLAYTEST.md
+    PLAYTEST-STRESS-LAB.md with -StressLab only
   CREDITS.md              bundled original Add-On credits
-  WINIT-PATCH.md, WINIT-LICENSE.txt
-  dxcompiler.dll          pinned Windows shader compiler
-  licenses/              shader compiler notices
-  PLAYTEST-STRESS-LAB.md  with -StressLab only
+  dxcompiler.dll, dxil.dll pinned Windows shader compiler and validator
+  licenses/               third-party licenses and winit patch notice
   Launch.cmd
   Launch-Playtest.ps1
   MANIFEST.json
   logs/                   timestamped stdout/stderr files from each launch
 ```
+
+Historical release handoffs (for example v0.2.2 and v0.2.3) and internal
+creator design/test cards stay in the repository. They are not runtime inputs
+and do not belong in a newer player package. All platform packagers share the
+same guide layout. Packaging and verification also check that the ten curated
+original menu images are present with their approved bytes; a self-consistent
+file manifest alone cannot detect semantically missing art.
 
 Launch with `Launch.cmd`. It sets the working directory to the package
 folder, saves separate timestamped logs under `logs/`, and runs the game with

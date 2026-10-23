@@ -127,11 +127,11 @@ def check_release_guides(root, platform, stress_lab=False):
         package_guides.copy_guides(root, destination)
         for source, filename in (('LICENSE', 'WINIT-LICENSE.txt'),
                                  ('BRI-PATCH.md', 'WINIT-PATCH.md')):
-            if (destination / filename).read_bytes() != (root / 'vendor/winit' / source).read_bytes():
+            if (destination / 'licenses' / filename).read_bytes() != (root / 'vendor/winit' / source).read_bytes():
                 return [f'{platform}/{filename}: vendored notice changed']
         cache = {}
         return [f'{platform}{"+stress" if stress_lab else ""}/{error}'
-                for path in sorted(destination.glob('*.md'))
+                for path in sorted((destination / 'docs').glob('*.md'))
                 for error in check_links(path, destination, cache, online_root=root)]
 
 

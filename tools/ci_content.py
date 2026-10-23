@@ -73,6 +73,7 @@ def pack(content, out):
     missing = [d for d in dirs if not (content / d).is_dir()]
     if missing:
         fail(f'{content} is missing {", ".join(missing)}. Run python tools/bootstrap.py first.')
+    content_packs.verify_menu_images(content)
     empty = empty_environments(content)
     if empty:
         fail(f'{", ".join(empty)} has no Steam skies, grounds or waters. Run '
@@ -228,6 +229,7 @@ def fetch(content, repo, token):
     zip_path = download(repo, token, content.parent / ASSET, TAG, ASSET, missing_help)
     info = verify(zip_path)
     extract(zip_path, content)
+    content_packs.verify_menu_images(content)
     zip_path.unlink()
     dirs, _ = package_dirs(content)
     missing = [d for d in dirs if not (content / d).is_dir()]

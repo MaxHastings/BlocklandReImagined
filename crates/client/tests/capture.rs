@@ -520,8 +520,45 @@ fn capture_frames() -> Result<()> {
     let state = std::env::temp_dir().join(format!("bri-capture-state-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&state);
     std::fs::create_dir_all(&state)?;
+    if let Some(settings) = spec.get("settings_file").and_then(|s| s.as_str()) {
+        std::fs::copy(settings, state.join("settings.json"))?;
+    }
     let mut app = App::load(&content, &state, size)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
+    if let Some(quality) = spec.get("quality").and_then(|s| s.as_str()) {
+        let quality = match quality {
+            "Low" => bri_client::quality::Quality::Low,
+            "Medium" => bri_client::quality::Quality::Medium,
+            "High" => bri_client::quality::Quality::High,
+            _ => anyhow::bail!("Unknown diagnostic quality {quality}"),
+        };
+        let mut settings = app.ui.settings();
+        settings.prefs.extend(quality.prefs());
+        app.ui
+            .core
+            .request(UiAction::SaveSettings(Box::new(settings)));
+        pump(&mut app)?;
+    }
+    if let Some(name) = spec.get("menu_shot").and_then(|s| s.as_str()) {
+        let gpu = support::gpu::turn()?;
+        let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+        app.ui.update(16);
+        let pixels = gpu.render_rgba(
+            &mut renderer,
+            &app.ui.core.pack,
+            &app.ui.draw(),
+            size,
+            app.ui.scale(),
+            [0.0, 0.0, 0.0, 1.0],
+        )?;
+        image::save_buffer(
+            out.join(format!("{name}.png")),
+            &pixels,
+            size.0,
+            size.1,
+            image::ColorType::Rgba8,
+        )?;
+    }
     let wanted = spec["map"].as_str().unwrap_or("").to_lowercase();
     let maps: Vec<String> = app.ui.core.maps.iter().map(|m| m.id.clone()).collect();
     let map = maps

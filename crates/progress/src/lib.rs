@@ -114,6 +114,8 @@ pub enum Unit {
 pub struct Snapshot {
     pub stage: Stage,
     pub unit: Unit,
+    /// Current bounded task within a stage; cleared when the stage changes.
+    pub detail: Option<&'static str>,
     /// Work done in this stage, never above `total`.
     pub done: u64,
     /// Work in this stage, when known.
@@ -150,8 +152,11 @@ impl Snapshot {
             Stage::CompilingShaders => "COMPILING SHADERS",
             Stage::Spawning => "SPAWNING",
         };
+        let label = self
+            .detail
+            .map_or_else(|| label.to_owned(), |detail| format!("{label}: {detail}"));
         match (self.unit, self.total) {
-            (_, None) | (_, Some(0)) | (Unit::Steps, _) => label.into(),
+            (_, None) | (_, Some(0)) | (Unit::Steps, _) => label,
             (Unit::Bytes, Some(total)) => {
                 format!("{label}  {}", bytes_of(self.done, total))
             }
@@ -234,10 +239,18 @@ impl Progress {
         *s = Snapshot {
             stage,
             unit,
+            detail: None,
             done: 0,
             total,
             revision: s.revision + 1,
         };
+    }
+
+    /// Report the actual work within a stage without restarting its counts.
+    pub fn set_detail(&self, detail: Option<&'static str>) {
+        let mut s = self.state();
+        s.detail = detail;
+        s.revision += 1;
     }
 
     /// Learn the current stage's total once known (a frame header arrives).
@@ -330,6 +343,19 @@ mod tests {
         assert_eq!(p.snapshot().fraction(), 0.25);
         p.set_in(Stage::ReceivingWorld, 7);
         assert_eq!(p.snapshot().done, 2);
+    }
+
+    #[test]
+    fn task_details_reach_the_loading_screen_without_restarting_progress() {
+        let p = Progress::new();
+        p.begin(Stage::LoadingMap, Unit::Steps, Some(8));
+        p.set(3);
+        p.set_detail(Some("PREPARING COLLISION"));
+        assert_eq!(p.snapshot().status(), "LOADING MAP: PREPARING COLLISION");
+        assert_eq!((p.snapshot().done, p.snapshot().fraction()), (3, 0.375));
+        p.begin(Stage::StartingServer, Unit::Steps, None);
+        assert_eq!(p.snapshot().status(), "STARTING SERVER");
+        assert_eq!(p.snapshot().detail, None);
     }
 
     #[test]

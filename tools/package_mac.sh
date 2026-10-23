@@ -65,6 +65,7 @@ import hashlib, json, pathlib, sys
 root, repo = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 sys.path.insert(0, str(repo / 'tools'))
 import addon_bundle
+import content_packs
 manifest = json.loads((root / 'MANIFEST.json').read_text())
 listed = [entry['path'] for entry in manifest['files']]
 if manifest.get('schema_version') != 1 or not listed or listed != sorted(set(listed)):
@@ -82,6 +83,7 @@ if actual != listed:
     sys.exit('Release contains unlisted or missing files')
 content = root / manifest['content_config']
 addon_bundle.verify_defaults(repo, content.parent, root / addon_bundle.CREDITS, sys.argv[3] == '1')
+content_packs.verify_menu_images(content.parent, repo)
 print(f"Verified {len(listed)} files for release version {manifest['version']}.")
 PY
     codesign --verify --deep --strict "$root/BlocklandReImagined.app" || die "the app's signature does not verify"
@@ -263,7 +265,7 @@ PY
 for doc in "${docs[@]}"; do
     cp "$repo/$doc" "$release/"
 done
-python3 "$repo/tools/package_guides.py" "$release"
+python3 "$repo/tools/package_guides.py" "$release" "$version"
 credits="$(field 'print(plan["credits"])')"
 [[ -z "$credits" ]] || cp "$credits" "$release/CREDITS.md"
 # Finder metadata would change the sealed bundle after signing.

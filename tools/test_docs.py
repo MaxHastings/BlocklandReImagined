@@ -43,6 +43,18 @@ class DocumentationTests(unittest.TestCase):
                          'rule-workshop/DESIGN.md', available),
                          '[recipes](RULE-WORKSHOP-PLAYTEST.md)')
 
+    def test_release_contains_current_readme_and_organized_guides_not_old_test_cards(self):
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder)
+            (destination / 'TESTER-GUIDE.md').write_text('# Instructions\n')
+            package_guides.copy_guides(check_docs.ROOT, destination, 'v0.3.4-fix1')
+            self.assertIn('v0.3.4-fix1', (destination / 'README.txt').read_text())
+            self.assertTrue((destination / 'docs/TESTER-GUIDE.md').is_file())
+            self.assertTrue((destination / 'docs/RULE-WORKSHOP-PLAYTEST.md').is_file())
+            self.assertEqual(list(destination.glob('*.md')), [])
+            self.assertFalse(any(p.name.startswith('V0.') for p in destination.rglob('*')))
+            self.assertFalse((destination / 'docs/RULE-WORKSHOP-DESIGN.md').exists())
+
     def test_absent_platform_guide_and_history_go_online(self):
         source = '[Mac](PLAYTEST-MAC.md#where-things-are)'
         self.assertEqual(package_guides.release_links(source, 'TESTER-GUIDE.md', set()),

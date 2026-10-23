@@ -943,6 +943,7 @@ impl Gpu {
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: std::env::var_os("BRI_TEST_SOFTWARE_GPU").is_some(),
                     ..Default::default()
                 })
                 .await?;

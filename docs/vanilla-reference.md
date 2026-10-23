@@ -39,6 +39,12 @@ gameplay requirements merely because their files are present.
 
 ## Required map coverage
 
+The 2026-10-23 menu-image audit extends the curated input listing with the ten
+named JPGs in the designated reference's `screenshots/` folder. Their individual
+hashes are in `vanilla-reference-files.json`. They are menu artwork read by the
+original client, and must reach the UI importer. Arbitrary personal screenshots
+remain excluded. The earlier comparison above did not examine this folder.
+
 All these maps belong in the alpha coverage checklist. None is accepted solely
 because its mission declaration or geometry converts.
 
