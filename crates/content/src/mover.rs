@@ -27,6 +27,9 @@ pub const MAX_KEYS: usize = 16;
 pub const TICKS_PER_SECOND: f32 = 120.0;
 /// Shortest travel a mover is given, seconds: Unreal's `PhysRate` floor.
 pub const MIN_SECONDS: f32 = 0.005;
+/// Largest progress per tick produced by the supported travel-duration floor.
+/// A motion shorter than one simulation tick legitimately advances over 1.0.
+pub const MAX_RATE: f32 = 1.0 / (MIN_SECONDS * TICKS_PER_SECOND);
 
 /// One keyframe: an offset from the mover's placement.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
