@@ -1363,6 +1363,10 @@ pub struct GpuScene {
     /// The bounds of the scene's own vertices (model space for instanced
     /// scenes), whether or not it is culled by them; None when empty.
     extent: Option<(Vec3, Vec3)>,
+    /// Shader-displaced geometry retains the full instance path.
+    instance_cullable: bool,
+    /// Extents belong to this revision of the shared vertex geometry.
+    instance_bounds_revision: u64,
     /// A pooled chunk's place in its shared block (`crate::pool`); its
     /// indices are chunk-local, drawn from `first_index` at `base_vertex`.
     /// Zero for scenes with buffers of their own.
@@ -1772,9 +1776,12 @@ impl GpuScene {
             queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(vertices));
         }
         self.extent = vertex_extent(vertices);
+        self.instance_cullable = vertices.iter().all(|v| v.fx == [0.; 4]);
         self.emissive = emissive_geometry(&self.material_descriptors, vertices);
-        self.sky_revision
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.instance_bounds_revision = self
+            .sky_revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .wrapping_add(1);
         for (batch, center) in self.batches.iter_mut().zip(centers) {
             batch.center = *center;
         }
@@ -1861,6 +1868,8 @@ impl GpuScene {
             emissive: self.emissive,
             bounds: self.bounds,
             extent: self.extent,
+            instance_cullable: self.instance_cullable,
+            instance_bounds_revision: self.instance_bounds_revision,
             slot: self.slot.clone(),
             base_vertex: self.base_vertex,
             first_index: self.first_index,
@@ -2937,6 +2946,9 @@ pub struct RenderStats {
     /// Bounded scenes (chunks) drawn and skipped outside the view.
     pub scenes_drawn: u32,
     pub scenes_culled: u32,
+    /// Per-view blended/faded instances rejected before sorting/submission.
+    pub blended_draws_culled: u32,
+    pub instance_triangles_culled: u64,
     /// Indexed draws and binds across every shadow cascade.
     pub shadow_draws: u32,
     pub shadow_binds: u32,
@@ -4065,9 +4077,11 @@ impl SceneRenderer {
             self.dynamic_uv.borrow_mut().push(Arc::downgrade(&set));
             set
         });
+        let sky_revision = fresh_revision();
+        let instance_bounds_revision = sky_revision.load(std::sync::atomic::Ordering::Relaxed);
         Ok(GpuScene {
             dynamic_uv,
-            sky_revision: fresh_revision(),
+            sky_revision,
             unique: next_unique(),
             material_descriptors: data.materials.clone(),
             image_signatures: signatures,
@@ -4080,6 +4094,8 @@ impl SceneRenderer {
             emissive: emissive_geometry(&data.materials, &data.vertices),
             bounds: None,
             extent: vertex_extent(&data.vertices),
+            instance_cullable: data.vertices.iter().all(|v| v.fx == [0.; 4]),
+            instance_bounds_revision,
             slot: None,
             base_vertex: 0,
             first_index: 0,
@@ -4183,10 +4199,12 @@ impl SceneRenderer {
         (vertex_count, index_count): (usize, usize),
         emissive: bool,
     ) -> GpuScene {
+        let sky_revision = fresh_revision();
+        let instance_bounds_revision = sky_revision.load(std::sync::atomic::Ordering::Relaxed);
         GpuScene {
             dynamic_uv: None,
             emissive,
-            sky_revision: fresh_revision(),
+            sky_revision,
             unique: next_unique(),
             vertices,
             indices,
@@ -4203,6 +4221,8 @@ impl SceneRenderer {
             batches,
             bounds,
             extent: bounds,
+            instance_cullable: false,
+            instance_bounds_revision,
             vertex_count,
             index_count,
             image_count: palette.image_count,
@@ -4246,9 +4266,11 @@ impl SceneRenderer {
         // is thrown): the placeholder keeps the buffers non-empty, as upload
         // does, because wgpu panics on slicing an empty buffer.
         let (vertices, indices) = geometry_buffers(device, "shared-material posed vertices", data);
+        let sky_revision = fresh_revision();
+        let instance_bounds_revision = sky_revision.load(std::sync::atomic::Ordering::Relaxed);
         Ok(GpuScene {
             dynamic_uv: None,
-            sky_revision: fresh_revision(),
+            sky_revision,
             unique: next_unique(),
             vertices,
             indices,
@@ -4261,6 +4283,8 @@ impl SceneRenderer {
             emissive: emissive_geometry(&data.materials, &data.vertices),
             bounds: None,
             extent: vertex_extent(&data.vertices),
+            instance_cullable: data.vertices.iter().all(|v| v.fx == [0.; 4]),
+            instance_bounds_revision,
             slot: None,
             base_vertex: 0,
             first_index: 0,
@@ -6023,6 +6047,36 @@ impl SceneRenderer {
                 continue;
             }
             let all_opaque = instances.transforms.iter().all(|t| t.tint[3] == 1.);
+            // Opaque instance ranges already use one cheap draw: do not split
+            // them or rebuild/upload geometry. Blended placements are sorted
+            // separately, so reject offscreen ones before building those draws.
+            let visibility = (scene.instance_cullable
+                && scene.instance_bounds_revision
+                    == scene
+                        .sky_revision
+                        .load(std::sync::atomic::Ordering::Relaxed))
+            .then_some(())
+            .and_then(|_| {
+                let planes = view.frustum.as_ref()?;
+                let (low, high) = scene.extent?;
+                let center = (low + high) * 0.5;
+                let half = (high - low) * 0.5;
+                let needed = !all_opaque || scene.material_modes.iter().any(|m| m.0 != 0);
+                needed.then(|| {
+                    instances
+                        .transforms
+                        .iter()
+                        .map(|instance| {
+                            let transform = instance.transform;
+                            let center = transform.transform_point3(center);
+                            let half = transform.x_axis.truncate().abs() * half.x
+                                + transform.y_axis.truncate().abs() * half.y
+                                + transform.z_axis.truncate().abs() * half.z;
+                            aabb_visible(planes, (center - half, center + half))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            });
             for batch in &scene.batches {
                 let blend = scene.material_modes[batch.material].0;
                 if blend == 0 && all_opaque {
@@ -6037,6 +6091,17 @@ impl SceneRenderer {
                 } else {
                     for (i, transform) in instances.transforms.iter().enumerate() {
                         if transform.tint[3] == 0. {
+                            continue;
+                        }
+                        let mode = scene.material_modes[batch.material];
+                        if !mode.2
+                            && scene.material_descriptors[batch.material].kind
+                                != MaterialKind::Water
+                            && visibility.as_ref().is_some_and(|seen| !seen[i])
+                        {
+                            stats.blended_draws_culled += 1;
+                            stats.instance_triangles_culled +=
+                                u64::from(batch.indices.end - batch.indices.start) / 3;
                             continue;
                         }
                         order.push(Draw {
@@ -6327,6 +6392,8 @@ impl SceneRenderer {
             total.binds += stats.binds;
             total.scenes_drawn += stats.scenes_drawn;
             total.scenes_culled += stats.scenes_culled;
+            total.blended_draws_culled += stats.blended_draws_culled;
+            total.instance_triangles_culled += stats.instance_triangles_culled;
             total.triangles += stats.triangles;
             total.translucent_draws += stats.translucent_draws;
             total.batched += stats.batched;

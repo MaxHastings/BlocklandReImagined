@@ -1193,6 +1193,156 @@ fn shared_instances_match_cpu_geometry_fade_sorting_and_atomic_updates() -> Resu
             .zip(&expected_reverse)
             .all(|(a, b)| a.abs_diff(*b) <= 1)
     );
+    // Culling must use the complete transformed model extent, not its centre.
+    // The edge model has rotation/nonuniform scale and reaches into view even
+    // though its centre is outside. The other two truly offscreen copies must
+    // remain available to a second camera without rewriting instance buffers.
+    let placements = [
+        transforms[1],
+        SceneTransform {
+            transform: Mat4::from_translation(Vec3::new(10., 0., 0.3)),
+            ..transforms[0]
+        },
+        SceneTransform {
+            transform: Mat4::from_translation(Vec3::new(-10., 0., 0.3)),
+            ..transforms[0]
+        },
+        SceneTransform {
+            transform: Mat4::from_scale_rotation_translation(
+                Vec3::new(2., 0.3, 0.5),
+                glam::Quat::from_rotation_z(0.7),
+                Vec3::new(1.4, 0., 0.4),
+            ),
+            ..transforms[0]
+        },
+    ];
+    let independently_posed: Vec<_> = placements
+        .iter()
+        .map(|&t| renderer.upload(&gpu.device, &gpu.queue, &bake(t)))
+        .collect::<Result<_>>()?;
+    let sources: Vec<_> = independently_posed.iter().collect();
+    let expected = gpu.frame(&mut renderer, &sources, &camera, (64, 64))?;
+    instances.update(&gpu.queue, &placements)?;
+    let seen = gpu.frame_instances(
+        &mut renderer,
+        &[],
+        &[(&base, &instances)],
+        &camera,
+        (64, 64),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )?;
+    assert!(seen.iter().zip(&expected).all(|(a, b)| a.abs_diff(*b) <= 1));
+    assert_eq!(
+        renderer.stats().triangles,
+        2,
+        "offscreen blended copies still submitted"
+    );
+    assert_eq!(renderer.stats().blended_draws_culled, 2);
+    let side = Camera {
+        eye: [10., 0., -2., 1.],
+        view_projection: Mat4::from_translation(-Vec3::X * 10.).to_cols_array(),
+        ..Default::default()
+    };
+    let expected_side = gpu.frame(&mut renderer, &sources, &side, (64, 64))?;
+    let seen_side = gpu.frame_instances(
+        &mut renderer,
+        &[],
+        &[(&base, &instances)],
+        &side,
+        (64, 64),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )?;
+    assert!(
+        seen_side
+            .iter()
+            .zip(&expected_side)
+            .all(|(a, b)| a.abs_diff(*b) <= 1)
+    );
+    assert_ne!(seen_side, seen);
+    assert_eq!(renderer.stats().triangles, 1);
+    assert_eq!(
+        instances.len(),
+        4,
+        "other views and shadows retain every instance"
+    );
+    // A batch view shares its vertex buffer. Updating the source must not
+    // let the view's old local extent hide the newly moved geometry.
+    let mut moving = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    let shared = moving.batch_view(0)?;
+    let mut moved = data.clone();
+    let motion = SceneTransform {
+        transform: Mat4::from_translation(Vec3::new(10., 0., 0.3)),
+        ..transforms[0]
+    };
+    for v in &mut moved.vertices {
+        v.position = motion
+            .transform
+            .transform_point3(Vec3::from(v.position))
+            .to_array();
+    }
+    moved.batches[0].center = motion
+        .transform
+        .transform_point3(Vec3::from(data.batches[0].center))
+        .to_array();
+    moving.update_vertices(&gpu.queue, &moved.vertices, &[moved.batches[0].center])?;
+    instances.update(
+        &gpu.queue,
+        &[SceneTransform {
+            transform: Mat4::IDENTITY,
+            ..transforms[0]
+        }],
+    )?;
+    let moved_oracle = renderer.upload(&gpu.device, &gpu.queue, &bake(motion))?;
+    let expected_move = gpu.frame(&mut renderer, &[&moved_oracle], &side, (64, 64))?;
+    let seen_move = gpu.frame_instances(
+        &mut renderer,
+        &[],
+        &[(&shared, &instances)],
+        &side,
+        (64, 64),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )?;
+    assert!(
+        seen_move
+            .iter()
+            .zip(&expected_move)
+            .all(|(a, b)| a.abs_diff(*b) <= 1),
+        "shared geometry retained obsolete instance bounds"
+    );
+    // Opaque ranges already submit once; culling may not fragment them.
+    let opaque = placements.map(|mut t| {
+        t.tint[3] = 1.;
+        t
+    });
+    instances.update(&gpu.queue, &opaque)?;
+    gpu.frame_instances(
+        &mut renderer,
+        &[],
+        &[(&base, &instances)],
+        &camera,
+        (64, 64),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )?;
+    assert_eq!(renderer.stats().draws, 1);
+    assert_eq!(renderer.stats().triangles, 4);
+    assert_eq!(renderer.stats().blended_draws_culled, 0);
+    // Shader displacement keeps the conservative full path.
+    let mut fx_data = data.clone();
+    for v in &mut fx_data.vertices {
+        v.fx = BrickFx::new(0, 1)?.encode([0.; 3], 0, 1)?;
+    }
+    let fx = renderer.upload(&gpu.device, &gpu.queue, &fx_data)?;
+    instances.update(&gpu.queue, &placements)?;
+    gpu.frame_instances(
+        &mut renderer,
+        &[],
+        &[(&fx, &instances)],
+        &camera,
+        (64, 64),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )?;
+    assert_eq!(renderer.stats().triangles, 4);
+    assert_eq!(renderer.stats().blended_draws_culled, 0);
     instances.update(&gpu.queue, &transforms)?;
     let mut invalid = transforms;
     invalid[1].transform = Mat4::ZERO;

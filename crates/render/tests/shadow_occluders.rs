@@ -283,6 +283,65 @@ fn shadows_land_only_on_the_first_surface_they_reach() -> Result<()> {
     );
     // Occluders never cast shadows of their own.
     assert_eq!(unshadowed, frame(&[], &[])?);
+
+    // Opaque instances retain their original range and shadow path, even
+    // behind this camera. Faded instances deliberately do not cast shadows.
+    let behind = renderer.upload(
+        &device,
+        &queue,
+        &cuboid(Vec3::new(-0.5, 3., 6.5), Vec3::new(0.5, 4., 7.5)),
+    )?;
+    let mut instances = GpuInstances::new(&device, 1)?;
+    instances.update(
+        &queue,
+        &[SceneTransform {
+            tint: [1.; 4],
+            ..Default::default()
+        }],
+    )?;
+    let mut facing = Camera::perspective([0., 3., 6.], [0., 0., 0.], 1., 1., 0.05, 100.);
+    facing.sun_direction = [0., -0.5, -1., 0.];
+    facing.sun_color = [0.7, 0.7, 0.7, 0.];
+    facing.ambient = [0.3, 0.3, 0.3, 0.];
+    let mut offscreen = |casts: bool| -> Result<Vec<u8>> {
+        renderer.update_camera(&queue, &facing);
+        let target_view = target.create_view(&Default::default());
+        let depth = create_depth(&device, width, height).create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let models = [(&behind, &instances)];
+        renderer.render_shadows(
+            &mut encoder,
+            ShadowCasters {
+                scenes: &[],
+                instances: if casts { &models } else { &[] },
+            },
+            ShadowCasters {
+                scenes: &[],
+                instances: &[],
+            },
+        );
+        renderer.render_with_instances(
+            &mut encoder,
+            &target_view,
+            &depth,
+            &[&floor],
+            &models,
+            Some(wgpu::Color::BLACK),
+        );
+        assert_eq!(renderer.stats().blended_draws_culled, 0);
+        queue.submit([encoder.finish()]);
+        read(&device, &queue, &target)
+    };
+    let clear = offscreen(false)?;
+    let shadow = offscreen(true)?;
+    let ndc = Mat4::from_cols_array(&facing.view_projection).project_point3(Vec3::ZERO);
+    let x = ((ndc.x * 0.5 + 0.5) * width as f32) as usize;
+    let y = ((0.5 - ndc.y * 0.5) * height as f32) as usize;
+    let pixel = (y * width as usize + x) * 4 + 1;
+    assert!(
+        i32::from(shadow[pixel]) < i32::from(clear[pixel]) - 20,
+        "offscreen opaque instance lost its visible shadow"
+    );
     Ok(())
 }
 
