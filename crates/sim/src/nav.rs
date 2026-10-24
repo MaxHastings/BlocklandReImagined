@@ -69,6 +69,10 @@ const MAX_SAMPLES: usize = 1 << 18;
 /// How far over a body's step a rise still counts as a step: a floor found
 /// by a ray can sit a hair above the brick top it stands for.
 const STEP_SLACK: f32 = 0.05;
+/// Half the grid's 0.1 height quantum plus floor-placement slack. A route's
+/// final walking point is a floor destination, rather than another riser
+/// which may be skipped while following the middle of a stair route.
+pub(crate) const FLOOR_HEIGHT_TOLERANCE: f32 = 0.1 * 0.5 + STEP_SLACK;
 /// How far under the crouched step measured in open air a crawlspace floor
 /// must be to be walked up: the measure has no roof over the lip, and at the
 /// limit the motor under one does not climb it (a bot pressed against it
@@ -1744,6 +1748,9 @@ const MAX_JET_TESTS: u32 = 24;
 /// ([`Costs`]).
 pub struct Search {
     pub goal: Vec3,
+    /// The requested point's walkable floor in the grid's height units.
+    /// Outer None has not been sampled; inner None has no nearby floor.
+    goal_floor: Option<Option<i32>>,
     start: Option<Node>,
     started: Vec3,
     open: BinaryHeap<Open>,
@@ -1779,6 +1786,7 @@ impl Search {
     pub fn with(from: Vec3, goal: Vec3, bound: f32, costs: Costs) -> Self {
         Self {
             goal,
+            goal_floor: None,
             start: None,
             started: from,
             open: BinaryHeap::new(),
@@ -1849,7 +1857,8 @@ impl Search {
         let swum = self.came.get(&node).is_some_and(|c| c.mode == Mode::Swim);
         Vec3::new(d.x, 0.0, d.z).length() <= ARRIVAL_RADIUS
             // Over a swum floor the goal may be anywhere up the water.
-            && (d.y.abs() <= 2.0 || swum && d.y < 0.0)
+            && (self.goal_floor.flatten().map_or(d.y.abs() <= 2.0, |floor| node.y == floor)
+                || swum && d.y < 0.0)
             // Beside someone standing on the goal is as near as it gets.
             || self.landing == Some(Some(node))
     }
@@ -2056,6 +2065,12 @@ impl Search {
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {
+        // A nearby stair can be within the old height tolerance while still
+        // being a different destination. Resolve the goal's own floor once,
+        // using the same placement and per-tick budget as the walk grid.
+        if self.goal_floor.is_none() {
+            self.goal_floor = Some(nav.node_at(ground, body, self.goal)?.map(|node| node.y));
+        }
         // Where a jet leg would land: the goal's own floor, or, where
         // someone stands on it (a chased enemy), the nearest floor beside
         // them at that height, so it does not come down on their head. A
@@ -3423,6 +3438,34 @@ mod tests {
             }
         }
         assert!(ticks > 1, "a long path takes several ticks");
+    }
+
+    #[test]
+    fn a_stair_goal_is_reached_on_its_floor() {
+        let mut boxes = vec![floor()];
+        for i in 0..5 {
+            let x = 0.5 + 4. * i as f32;
+            boxes.push((
+                Vec3::new(x, 0., -3.),
+                Vec3::new(x + 4., 0.6 * (i + 1) as f32, 3.),
+            ));
+        }
+        boxes.push((Vec3::new(20.5, 0., -3.), Vec3::new(25., 3., 3.)));
+        let physics = world(&boxes);
+        // This point fits on the second step. Nearby cells touching the
+        // following riser stand higher; proximity across must not substitute
+        // that other floor for the one requested.
+        // Cover different sub-cell positions, all physically clear of the
+        // next riser (8.5 minus this body's 0.625 half-width).
+        for x in [7.5, 7.6, 7.7, 7.75, 7.8, 7.85] {
+            let goal = Vec3::new(x, 1.2, 0.);
+            let a = path(search(&physics, Vec3::new(23., 3., 0.), goal).0);
+            let end = a.last().expect("stair route").feet;
+            assert!(
+                (end.y - goal.y).abs() < 0.11,
+                "search completed on another stair: {end:?} vs {goal:?}"
+            );
+        }
     }
 
     #[test]

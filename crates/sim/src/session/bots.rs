@@ -2137,9 +2137,14 @@ impl Session {
                 // by standing on it after the landing.
                 let reached = match next.mode {
                     Mode::Walk => {
+                        let height = if brain.plan.len() == 1 && !body.conservative {
+                            crate::nav::FLOOR_HEIGHT_TOLERANCE
+                        } else {
+                            body.step + 0.5
+                        };
                         next.through.is_none()
                             && (flat(d).length() < near || wedged)
-                            && d.y.abs() < body.step + 0.5
+                            && d.y.abs() < height
                     }
                     Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
                     Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. } => {
