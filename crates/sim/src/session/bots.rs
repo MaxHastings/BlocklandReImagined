@@ -51,6 +51,9 @@ mod extras;
 mod fire;
 mod harm;
 use fire::{Hand, Shot};
+#[cfg(test)]
+#[path = "bots/anchor_tests.rs"]
+mod anchor_tests;
 #[path = "bots/combat.rs"]
 mod hand_combat;
 mod hearing;
@@ -449,9 +452,9 @@ struct Brain {
     settled: bool,
     partial_route: bool,
     /// Where the best route home ended short of home and the bot stood at its
-    /// end: going home from there is no use until it has been moved
-    /// (`HOME_GIVEN_UP`), so `Return` stands instead of searching again.
-    home_given_up: Option<Vec3>,
+    /// end, and the anchor it tried. Retry when either the bot is moved
+    /// (`HOME_GIVEN_UP`) or its rules/leader move the anchor.
+    home_given_up: Option<(Vec3, Vec3)>,
     /// A chase point whose best route ends beyond its reach (`reach`):
     /// that enemy is not worth chasing while they stay there.
     out_of_reach: Option<Vec3>,
@@ -635,10 +638,11 @@ enum Goal {
     Stand(Vec3),
     /// Away from what it runs from (`intents`).
     Flee(Vec3),
-    Home,
+    /// The anchor this route was requested for. The live anchor may move.
+    Home(Vec3),
 }
 impl Goal {
-    fn point(self, home: Vec3) -> Vec3 {
+    fn point(self) -> Vec3 {
         match self {
             Self::Wander(p)
             | Self::Chase(p)
@@ -648,8 +652,8 @@ impl Goal {
             | Self::Objective(p)
             | Self::Arm(p)
             | Self::Stand(p)
-            | Self::Flee(p) => p,
-            Self::Home => home,
+            | Self::Flee(p)
+            | Self::Home(p) => p,
         }
     }
 }
@@ -840,7 +844,7 @@ impl Brain {
     fn set_goal_near(&mut self, goal: Goal) {
         let same = self.goal.is_some_and(|now| {
             std::mem::discriminant(&now) == std::mem::discriminant(&goal)
-                && now.point(Vec3::ZERO).distance(goal.point(Vec3::ZERO)) < GOAL_SLACK
+                && now.point().distance(goal.point()) < GOAL_SLACK
         });
         if !same {
             self.set_goal(Some(goal));
@@ -1940,7 +1944,6 @@ impl Session {
         tick: u64,
     ) -> Option<Waypoint> {
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let home = brain.home;
         let mut wanted = None;
         if let Some(height) = swim {
             // In water it swims straight there, keeping to the water.
@@ -1949,10 +1952,10 @@ impl Session {
             if let Some(goal) = brain.goal
                 && let Some((water, _)) = self.simulation.liquid_at(state.feet, height)
             {
-                let to = crate::water::swim_point(water, goal.point(home), height);
+                let to = crate::water::swim_point(water, goal.point(), height);
                 if to.distance(feet) < 0.8 {
                     brain.settled = true;
-                    if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
+                    if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home(_))) {
                         brain.goal = None;
                     }
                 } else {
@@ -1960,7 +1963,7 @@ impl Session {
                 }
             }
         } else if let Some(goal) = brain.goal {
-            let point = goal.point(home);
+            let point = goal.point();
             if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
                 // On a long way to an objective each bot (each life of it)
                 // leans its own way (`Costs::veer`), so a side spreads over
@@ -2059,10 +2062,10 @@ impl Session {
                             feet.y,
                             feet.z,
                             goal,
-                            goal.point(brain.home),
+                            goal.point(),
                             path.len(),
                             path.last()
-                                .map_or(f32::NAN, |w| w.feet.distance(goal.point(brain.home))),
+                                .map_or(f32::NAN, |w| w.feet.distance(goal.point())),
                             path.last().map(|w| w.feet),
                             if ground.fits(body, feet, false) {
                                 "does"
@@ -2153,7 +2156,7 @@ impl Session {
             }
             if brain.plan.is_empty() && brain.search.is_none() {
                 // Walked the whole plan: arrived, or as near as it goes.
-                if matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home))
+                if matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home(_)))
                     && brain.partial_route
                 {
                     // A search reaches only so far across and expands only so
@@ -2165,8 +2168,8 @@ impl Session {
                         brain.settled = false;
                     } else {
                         brain.settled = true;
-                        if matches!(brain.goal, Some(Goal::Home)) {
-                            brain.home_given_up = Some(feet);
+                        if matches!(brain.goal, Some(Goal::Home(_))) {
+                            brain.home_given_up = Some((feet, point));
                         } else {
                             brain
                                 .objective
@@ -2176,7 +2179,7 @@ impl Session {
                 } else {
                     brain.settled = true;
                 }
-                if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
+                if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home(_))) {
                     brain.goal = None;
                 }
             }
@@ -2790,7 +2793,10 @@ impl Session {
                 } else {
                     brain.stroll_radius()
                 };
-                (away - radius) / STRAY
+                // This is arrival at an anchor, rather than the horizontal
+                // combat leash above. A leader or post on another floor is
+                // still somewhere the bot must walk to.
+                (feet.distance(leash.at) - radius) / STRAY
             } else {
                 0.0
             },
@@ -3107,13 +3113,16 @@ impl Session {
             Behaviour::Return => {
                 // Where the way home ended short of it, it stands there.
                 // Searching again from the same spot finds the same end.
-                if brain
-                    .home_given_up
-                    .is_some_and(|at| at.distance(feet) > HOME_GIVEN_UP)
-                {
+                if brain.home_given_up.is_some_and(|(at, anchor)| {
+                    at.distance(feet) > HOME_GIVEN_UP || anchor.distance(brain.home) >= GOAL_SLACK
+                }) {
                     brain.home_given_up = None;
                 }
-                brain.set_goal(brain.home_given_up.is_none().then_some(Goal::Home));
+                if brain.home_given_up.is_none() {
+                    brain.set_goal_near(Goal::Home(brain.home));
+                } else {
+                    brain.set_goal(None);
+                }
                 false
             }
             Behaviour::Flee => {
@@ -3172,7 +3181,6 @@ impl Session {
             brain.set_goal(None);
         }
         // Path.
-        let home = brain.home;
         let mut wanted = self.bot_path(bot, feet, &body, costs, swim, &state, tick);
         // Standing on a body (a vehicle's roof, a crate, a head): the
         // world has no floor anywhere under its feet (its middle can stand
@@ -3205,7 +3213,7 @@ impl Session {
         // it: it steps off to the nearest free floor instead, toward the
         // goal where that side is open.
         if wanted.is_none() && on_body && self.bots.brains[&bot].search.is_none() {
-            let to = match self.bots.brains[&bot].goal.map(|g| g.point(home)) {
+            let to = match self.bots.brains[&bot].goal.map(|g| g.point()) {
                 Some(point) if flat(point - feet).length() > 1.5 => Some(point),
                 Some(point) if point.y >= feet.y - body.step - 0.5 => None,
                 point => self.bot_step_off(bot, feet, &body, point.unwrap_or(feet), f32::INFINITY),
@@ -3241,7 +3249,7 @@ impl Session {
             .target
             .filter(|_| matches!(behaviour, Behaviour::Fight | Behaviour::Chase))
             .map(|seen| seen.owner);
-        let goal_at = self.bots.brains[&bot].goal.map(|g| g.point(home));
+        let goal_at = self.bots.brains[&bot].goal.map(|g| g.point());
         let walk_direction = wanted.map(|p| {
             self.bot_walk_direction(
                 bot,

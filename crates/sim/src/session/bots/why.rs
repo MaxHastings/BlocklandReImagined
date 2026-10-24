@@ -122,7 +122,7 @@ impl Session {
                 route_short: b
                     .partial_route
                     .then(|| {
-                        let (goal, end) = (b.goal?.point(b.leash), b.plan.last()?.feet);
+                        let (goal, end) = (b.goal?.point(), b.plan.last()?.feet);
                         Some([flat(goal - end).length(), goal.y - end.y])
                     })
                     .flatten(),
@@ -171,7 +171,7 @@ impl Session {
                 // Standing still for a goof it wants to go nowhere: its
                 // route waits for it.
                 goal: (!b.surprise.standing())
-                    .then(|| b.goal.map(|g| g.point(b.leash).to_array()))
+                    .then(|| b.goal.map(|g| g.point().to_array()))
                     .flatten(),
                 next: (!b.surprise.standing())
                     .then(|| b.plan.first().map(|p| p.feet.to_array()))

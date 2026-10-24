@@ -2032,7 +2032,7 @@ impl Session {
                 && brain.objective.drive(self, bot).is_none()
                 && brain.goal.is_some_and(|g| {
                     matches!(g, Goal::Objective(_))
-                        && flat(g.point(brain.home) - at).length() <= standoff + OBJECTIVE_WALK
+                        && flat(g.point() - at).length() <= standoff + OBJECTIVE_WALK
                 });
             let leave = arrived
                 || carried.is_some_and(|(_, enemy, velocity)| {
@@ -2123,9 +2123,7 @@ impl Session {
             let unusable_gun = role.weapon && !w.weapon_available(v.id);
             let driver_coming = self.bot_coming_aboard(bot, vehicle, tick);
             // Carried only, by a teammate driving away from where it goes.
-            let goal = self.bots.brains[&bot]
-                .goal
-                .map(|g| g.point(self.bots.brains[&bot].home));
+            let goal = self.bots.brains[&bot].goal.map(|g| g.point());
             let other_way = carried_only
                 && needs_travel
                 && goal.is_some_and(|g| self.bot_driver_goes_toward(&v, g, tick) == Some(false));
