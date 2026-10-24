@@ -2598,7 +2598,14 @@ mod repeated_water_tests {
                 size: (160, 120),
                 ui_renderer: &mut self.ui,
             })?;
-            self.gpu.queue.submit([encoder.finish()]);
+            let submitted = self.gpu.queue.submit([encoder.finish()]);
+            // Readback fixtures must bound queued GPU work. A software adapter
+            // otherwise accumulates frames while the host/pipelines settle,
+            // so the first pixel comparison waits behind an unbounded backlog.
+            self.gpu.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submitted),
+                timeout: Some(Duration::from_secs(60)),
+            })?;
             Ok(drew)
         }
         fn until(
@@ -2686,6 +2693,9 @@ mod repeated_water_tests {
         app.host_on_any_port();
         app.graphics.samples = 1;
         app.graphics.bloom = false;
+        // Ambient/fog ownership does not need full-size sun shadow atlases.
+        // Keep this comparison small enough for the hosted software adapter.
+        app.graphics.shadows = None;
         app.graphics.lighting = 3;
         let mut frames = Frames::new()?;
         frames.open(&mut app)?;
