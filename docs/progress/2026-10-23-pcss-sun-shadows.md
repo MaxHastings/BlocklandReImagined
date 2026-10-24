@@ -15,8 +15,12 @@ instead of one fixed-width filter.
   path (the uploaded world is kept).
 - `scene.wgsl` and `scene_original.wgsl` (identical edits, so Classic lighting
   gets it too): `pcss_lit` replaces the 3x3 filter in `cascade_lit` when the
-  flag is on. 12 `textureLoad` taps within `PCSS_BASE_SEARCH_TEXELS` (4
-  texels) over the caster layer find blockers (none: lit); their mean distance along the sun times `PCSS_SUN_TAN`, in texels and
+  flag is on. The four texels under the receiver (one gather) and 12
+  `textureLoad` taps out to `PCSS_MAX_TEXELS` (10) over the caster layer find
+  blockers, nearer taps counting more (none: lit). Searching as far as the
+  filter can reach makes the soft edge spread to both sides of the true edge
+  instead of ending in a hard outline, and the four texels under the receiver
+  keep thin shadows from being missed; their mean distance along the sun times `PCSS_SUN_TAN`, in texels and
   clamped to 1.5..10, is the radius of a 16-tap rotated disc of bilinear
   comparisons that use the same caster and occluder rules as the 3x3 filter,
   so a player on a brick tower still does not shade the floor under it. The
@@ -27,8 +31,8 @@ instead of one fixed-width filter.
   tan 10, and every tap compares against the plane's depth at its offset.
 - `scene.wgsl` only: `map_pcss_lit` does the same for the map-layer sun
   shadows (Unified and Dynamic lighting, sun through windows onto builds),
-  with the same blocker search, a filter radius three times the object one
-  (up to 15 texels) and hardware comparison taps. `scene_original.wgsl` has
+  with a 4-texel blocker search (`PCSS_BASE_SEARCH_TEXELS`), a filter radius
+  three times the object one (up to 15 texels) and hardware comparison taps. `scene_original.wgsl` has
   no map layer, so it is unchanged by this. The far-map shadows keep the old
   filter.
 - `crates/ui/src/screens/options.rs`, `crates/client/src/graphics.rs`: the
@@ -50,6 +54,10 @@ numbers:
 - Edge across a floor, caster 0.3 and 4 units above it: the ordinary filter is
   0.05 units wide at both heights; PCSS stays 0.05 at 0.3 and is 0.17 at 4; lit
   and umbra levels match.
+- A caster 12 units up (the filter at its widest): the edge is 0.35 wide,
+  centered on the true edge, and fades without a step (largest jump between
+  neighbouring samples 0.04 of the dark-to-lit range; a search shorter than the
+  filter gave 0.11, the hard outline this test guards against).
 - A ramp tilted 50 and 65 degrees under a roof edge: PCSS gives a wide clean
   penumbra and a fully lit side beside it. With the receiver-plane slope
   zeroed the same test fails (the penumbra collapses to about half width and
@@ -60,6 +68,10 @@ Commands: see the PR description for the exact `cargo test`, `fmt` and
 
 ## Not verified
 
+- The new checkbox sits inside the Shadow Quality section; that box's
+  authored size is not in this repo. Run `cargo test -p bri-ui
+  native_graphics_panel_offscreen -- --ignored` on a PC with content and check
+  the label is not clipped.
 - Cost is roughly 4x the sun-shadow texture reads of the 3x3 filter, and wide
   penumbrae show some grain (no temporal accumulation); the knobs are the
   `PCSS_*` consts in the shaders and `PCSS_SUN_TAN`. A 4096 Best map uses

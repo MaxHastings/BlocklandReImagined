@@ -400,9 +400,25 @@ fn pcss_lit(c:CascadeCoord)->f32 {
     let bias=0.5*texel*scale;
     let angle=6.2831853*pcss_noise();
     let last=i32(size)-1;
-    // Blockers: texels in the caster layer in front of the receiver's plane.
-    var blocker_sum=0.0;
-    var blockers=0.0;
+    // The four texels around the receiver always count, so a shadow even one
+    // texel wide is never missed by the sparser ring below. Each is compared
+    // at its own place on the receiver's plane.
+    let core_base=clamp(floor(c.uv*size-vec2<f32>(0.5)),vec2<f32>(0.0),vec2<f32>(size-2.0));
+    let core=textureGather(shadow_map,shadow_point,(core_base+vec2<f32>(1.0))/size,c.cascade);
+    let core_to_texel=(core_base+vec2<f32>(0.5))/size-c.uv;
+    let core_z=vec4<f32>(c.depth-bias)+vec4<f32>(
+        dot(c.slope,core_to_texel+vec2<f32>(0.0,1.0)/size),
+        dot(c.slope,core_to_texel+vec2<f32>(1.0,1.0)/size),
+        dot(c.slope,core_to_texel+vec2<f32>(1.0,0.0)/size),
+        dot(c.slope,core_to_texel),
+    );
+    let core_blocks=core<core_z;
+    var blocker_sum=dot(select(vec4<f32>(0.0),core,core_blocks),vec4<f32>(1.0));
+    var weights=dot(select(vec4<f32>(0.0),vec4<f32>(1.0),core_blocks),vec4<f32>(1.0));
+    // Then a ring out to the widest the filter can grow, so a pixel just
+    // outside a shadow still finds it and the soft edge spreads to both sides
+    // of the shadow's true edge. Nearer taps count more, which keeps the
+    // distance estimate local to the edge in question.
     for (var i=0;i<PCSS_SEARCH_TAPS;i+=1) {
         let offset=pcss_disc(i,PCSS_SEARCH_TAPS,angle)*PCSS_MAX_TEXELS/size;
         let uv=c.uv+offset;
@@ -410,13 +426,14 @@ fn pcss_lit(c:CascadeCoord)->f32 {
         let texel_at=clamp(vec2<i32>(floor(uv*size)),vec2<i32>(0),vec2<i32>(last));
         let d=textureLoad(shadow_map,texel_at,c.cascade,0);
         if d<z {
-            blocker_sum+=d;
-            blockers+=1.0;
+            let w=1.0-(f32(i)+0.5)/f32(PCSS_SEARCH_TAPS);
+            blocker_sum+=w*d;
+            weights+=w;
         }
     }
     // Nothing in front of the receiver nearby: lit, whatever the occluders.
-    if blockers==0.0 {return 1.0;}
-    let blocker_distance=(c.depth-blocker_sum/blockers)/scale;
+    if weights==0.0 {return 1.0;}
+    let blocker_distance=(c.depth-blocker_sum/weights)/scale;
     let radius=clamp(blocker_distance*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS);
     var lit=0.0;
     for (var i=0;i<PCSS_FILTER_TAPS;i+=1) {

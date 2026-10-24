@@ -197,7 +197,7 @@ fn edge_width(
     pcss: bool,
     mode: f32,
     caster_height: f32,
-) -> Result<(f32, i32, i32)> {
+) -> Result<(f32, i32, i32, f32, f32)> {
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let (width, height) = (512u32, 512u32);
     let settings = ShadowSettings {
@@ -270,10 +270,18 @@ fn edge_width(
             .map_or(f32::NAN, |p| p.0)
     };
     let width = crossing(0.9) - crossing(0.1);
+    let center = crossing(0.5);
+    // The biggest step between neighbouring samples, as a share of the whole
+    // dark-to-lit range: a smooth edge has none, a hard outline has one.
+    let step = profile
+        .windows(2)
+        .map(|pair| (pair[1].1 - pair[0].1).abs())
+        .fold(0.0, f32::max)
+        / (lit - dark);
     eprintln!(
-        "mode {mode} pcss {pcss} caster {caster_height}: dark {dark:.0} lit {lit:.0} width {width:.2}"
+        "mode {mode} pcss {pcss} caster {caster_height}: dark {dark:.0} lit {lit:.0} width {width:.2} center {center:.2} step {step:.2}"
     );
-    Ok((width, dark as i32, lit as i32))
+    Ok((width, dark as i32, lit as i32, center, step))
 }
 
 #[test]
@@ -281,9 +289,9 @@ fn sun_shadow_edges_soften_with_distance_from_the_caster() -> Result<()> {
     let (device, queue) = gpu()?;
     for mode in [0., 2.] {
         let (off_near, ..) = edge_width(&device, &queue, false, mode, 0.3)?;
-        let (off_far, off_dark, off_lit) = edge_width(&device, &queue, false, mode, 4.0)?;
+        let (off_far, off_dark, off_lit, ..) = edge_width(&device, &queue, false, mode, 4.0)?;
         let (on_near, ..) = edge_width(&device, &queue, true, mode, 0.3)?;
-        let (on_far, on_dark, on_lit) = edge_width(&device, &queue, true, mode, 4.0)?;
+        let (on_far, on_dark, on_lit, ..) = edge_width(&device, &queue, true, mode, 4.0)?;
         assert!(off_lit - off_dark > 40, "mode {mode}: the shadow shows");
         assert!(
             (on_lit - off_lit).abs() <= 3,
@@ -304,6 +312,32 @@ fn sun_shadow_edges_soften_with_distance_from_the_caster() -> Result<()> {
         assert!(
             on_far > off_far * 2.0 && on_far > on_near * 2.0,
             "mode {mode}: a far caster softens the edge ({on_far}, near {on_near}, off {off_far})"
+        );
+    }
+    Ok(())
+}
+
+/// A soft edge spreads to both sides of where the sharp edge would be and
+/// fades out smoothly: no hard outline where the filter stops looking for the
+/// shadow, and its midpoint stays on the true edge.
+#[test]
+fn pcss_penumbra_spreads_both_ways_without_a_hard_outline() -> Result<()> {
+    let (device, queue) = gpu()?;
+    for mode in [0., 2.] {
+        // A caster 12 units up widens the filter to its limit.
+        let (off_width, _, _, off_center, _) = edge_width(&device, &queue, false, mode, 12.0)?;
+        let (on_width, _, _, on_center, on_step) = edge_width(&device, &queue, true, mode, 12.0)?;
+        assert!(
+            on_width > off_width * 3.0,
+            "mode {mode}: the far caster's edge is soft ({on_width} vs {off_width})"
+        );
+        assert!(
+            (on_center - off_center).abs() < 0.03,
+            "mode {mode}: the soft edge is centered on the true edge ({on_center} vs {off_center})"
+        );
+        assert!(
+            on_step < 0.07,
+            "mode {mode}: no step in the fade, even at its outer edge ({on_step})"
         );
     }
     Ok(())
