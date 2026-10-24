@@ -1306,3 +1306,26 @@ fn contact_geometry_survives_reliable_codec_and_invalid_batches_reject_atomicall
         assert!(replica.take_cues().is_empty());
     }
 }
+
+#[test]
+fn loading_and_active_roster_share_one_budget_in_checkpoints_and_deltas() {
+    let mut start = checkpoint();
+    // A full roster can include participants still downloading content.
+    start.loading = (2..=bri_sim::session::MAX_PARTICIPANTS as u64)
+        .map(|id| (id, format!("Loading {id}")))
+        .collect();
+    let mut replica = Replica::new(start.clone()).unwrap();
+    let mut overflow = start.clone();
+    overflow.loading.insert(129, "Overflow".into());
+    assert!(Replica::new(overflow).is_err());
+    let mut overlap = start;
+    overlap.loading.insert(1, "Already active".into());
+    assert!(Replica::new(overlap).is_err());
+    let mut delta = contact_geometry_delta(Vec::new());
+    let mut loading = replica.loading.clone();
+    loading.insert(129, "Overflow".into());
+    delta.loading = Some(loading);
+    assert!(replica.update(delta).is_err());
+    assert_eq!(replica.cursor, 0);
+    assert_eq!(replica.loading.len(), 127);
+}

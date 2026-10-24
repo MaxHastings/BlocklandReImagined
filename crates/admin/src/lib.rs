@@ -358,12 +358,13 @@ pub struct ServerSettings {
     pub addon_settings: BTreeMap<String, SettingValue>,
 }
 /// The most a host may set Max bots to: the bot budgets are sized for it.
-pub const MOST_BOTS: u32 = 32;
+pub const MOST_BOTS: u32 = 64;
 /// Max bots before the host changes it.
 pub const DEFAULT_BOTS: u32 = 16;
 fn default_max_bots() -> u32 {
     DEFAULT_BOTS
 }
+
 /// Most server-wide Add-On setting values the host keeps.
 pub const MAX_ADDON_SETTINGS: usize = 512;
 impl Default for ServerSettings {
@@ -1092,4 +1093,28 @@ impl Administration {
 /// deliberately not implicit here; the minigame subsystem applies its own rules.
 pub fn owns_minigame(actor: ConnectionId, owner: ConnectionId) -> bool {
     actor == owner
+}
+
+#[cfg(test)]
+mod authored_encounter_capacity {
+    use super::*;
+
+    #[test]
+    fn host_can_admit_a_finite_encounter_without_changing_the_default() {
+        assert_eq!(ServerSettings::default().max_bots, 16);
+        ServerSettings {
+            max_bots: 64,
+            ..ServerSettings::default()
+        }
+        .validate()
+        .unwrap();
+        assert!(
+            ServerSettings {
+                max_bots: 65,
+                ..ServerSettings::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
 }

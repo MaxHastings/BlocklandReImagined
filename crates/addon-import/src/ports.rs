@@ -810,6 +810,10 @@ fn try_apply(
         ("namespace", import.namespace.to_owned()),
         ("rules", rules_id(import.namespace)),
         ("version", import.version.to_owned()),
+        (
+            "engine_max_bots",
+            bri_package_runtime::ops::MAX_BOTS.to_string(),
+        ),
     ] {
         ensure!(
             values.insert(name.to_owned(), value).is_none(),

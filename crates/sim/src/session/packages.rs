@@ -150,7 +150,7 @@ impl PackageStateView {
         ensure!(self.packages.len() <= 256, "Too many package namespaces");
         for ns in self.packages.values() {
             ensure!(
-                ns.players.len() <= 64 && ns.global.len() <= 256,
+                ns.players.len() <= MAX_PARTICIPANTS && ns.global.len() <= 256,
                 "Oversized package state"
             );
             for v in ns

@@ -37,7 +37,7 @@ impl WeaponView {
     pub fn validate(&self, names: &BTreeMap<OwnerId, String>) -> Result<()> {
         ensure!(
             self.static_items.len() <= crate::item_spawners::MAX_STATIC_ITEMS
-                && self.images.len() <= 64
+                && self.images.len() <= MAX_PARTICIPANTS
                 && self.images.keys().all(|id| names.contains_key(id))
                 && self.projectiles.len() <= bri_weapons::MAX_PROJECTILES
                 && self.drops.len() <= bri_weapons::MAX_DROPS,
