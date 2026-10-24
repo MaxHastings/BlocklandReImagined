@@ -1,3 +1,4 @@
+pub mod bots;
 mod catalog;
 mod model;
 mod runtime;

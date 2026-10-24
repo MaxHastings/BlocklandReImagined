@@ -39,6 +39,13 @@ The [imported-map performance evidence](progress/2026-10-23-static-world-visibil
 records the compared rendering paths. Its bounded frame measurements do not
 establish 100 FPS gameplay or completed mission fidelity.
 
+A separately authorized v0.3.6 bot-encounter candidate adds pursuit beyond idle
+homes, intrinsic-hole reset fixes and native builder spawner/lifecycle controls.
+See the [candidate notes](releases/v0.3.6.md) and
+[supplied-source evidence](progress/2026-10-23-supplied-hole-bots.md).
+The latest published download above remains authoritative until its publication
+receipt is recorded; a candidate is not a new release.
+
 The Rule Workshop, bot planning and alpha formats remain experimental.
 Bots compose supported declared mechanics, not arbitrary scripts. Shark/Zombie
 ports remain partial. Private AA/Halo/GMod source assets stay excluded from

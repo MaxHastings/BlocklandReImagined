@@ -129,6 +129,7 @@ impl Session {
             brain.named = name;
             self.bots.brains.insert(bot, brain);
             self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
+            self.fire_bot_spawn(bot);
         }
         Ok(())
     }
@@ -418,6 +419,9 @@ impl Session {
         rest: bool,
     ) -> Result<()> {
         self.check_rest_rules_bot(package, bot)?;
+        self.set_bot_resting(bot, rest)
+    }
+    pub(in crate::session) fn set_bot_resting(&mut self, bot: OwnerId, rest: bool) -> Result<()> {
         let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;
         if rest && !brain.resting {
             brain.objective_threat = None;

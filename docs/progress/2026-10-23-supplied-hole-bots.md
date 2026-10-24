@@ -123,8 +123,7 @@ moves the player out of sight and checks real return movement; the original
 knowledge/search tests retain their stricter goal assertions. The corrected pursuit/knowledge target passes all 11 cases, and the explicit
 guard test passes. Its first fixture placed the enemy at the minigame spawn,
 inside the guard post; moving the enemy after minigame reset and asserting its
-actual position qualifies the control. Final focused/integration results are
-pending at this checkpoint.
+actual position qualifies the control. The qualified focused tier passed before commit `531b6e49d` (below).
 
 A full default Add-On source bundle rebuild could not find the unrelated exact
 pinned Weapon_Package_Tier1 ZIP; three other copies were correctly rejected.
@@ -137,14 +136,14 @@ This is explicitly not a successful full bundle rebuild.
 
 The original framework's own bot wrench UI and event API are not fully ported.
 Examples present in the supplied `events.cs` but without native mappings here:
-`onBotSpawn`, `onBotDeath`, `onBotActivated`, `onBotReachBrick`, `respawnBot`,
-`setBotType`, `setBotPowered`, search/idle/wander controls and bot appearance/
-weapon/team commands. These need bounded native compatibility work; an import
+`onBotActivated`, `onBotReachBrick`, `setBotType`, legacy distance signatures
+and bot appearance/weapon/team commands. Native spawn/death inputs, respawn,
+power and explicitly parameterized controls are now implemented below. These need bounded native compatibility work; an import
 or a successful spawn does not make them functional. No TorqueScript VM is
 introduced and the improved BRI brain is retained.
 
-Zombie infection ordering/marking/name prefixes and full authored body-part
-selection remain incomplete; this change does not close them. The earlier
+Zombie infection ordering is corrected below. Marking/name prefixes and full
+authored body-part selection remain incomplete. The earlier
 mixed Zombie/Blockhead Windows firefight crash remains unqualified. Human
 playtesting should check spawn placement, arms/face/colors/decal rendering,
 navigation and melee feel in an ordinary build, repeated deaths/resets and a
@@ -185,3 +184,89 @@ without injecting commands into the AI's sequence stream. The qualified
 new gameplay fix or a waived test. The focused tier then passed all six planned steps in 671 seconds
 (`focused-qualified.log`), including the corrected fixture and client unit
 tests, before the first source-fix commit.
+
+## Builder encounters and qualified multiplayer results
+
+Native `Self`/named-spawner outputs now control power, sight, wandering,
+return home, automatic respawn and melee damage. `onBotSpawn` initializes every
+life; `onBotDeath` can schedule the replacement. The existing event editor
+carries the vocabulary on both client and host. Distances are explicitly native
+world units. No general script interpreter, content-name AI branch or relaxed
+permissions were added. [Builder recipes](../modding/bot-spawners.md) ship in
+the release as `docs/BOT-SPAWNERS.md`.
+
+The seven live invented-content `bri-chaos::bot_builder` scenarios pass
+(`bot-builder-body-qualified-after.log`): pause, release, configured attack and stop; blind then
+restored detection; home return off/on; death with automatic respawn disabled
+until the authored ten-second replacement; infection above, at and below the
+source threshold; lethal human damage unchanged; and rejection of recursive
+zero-delay respawn. The source-backed infection expectations reject the old
+ordering (`infection-before.log`). Automatic-respawn metadata alone failed the
+timed comparison (`bot-builder-autorespawn-qualified-before.log`); the live
+death timer and trapped-respawn utility now honor the setting. Lifecycle inputs
+use the existing bounded deferred event path, preventing callbacks from being
+lost inside another event phase. A catalog idempotence regression caught an
+ordering error before integration; repeated setup and invalid range checks pass.
+
+The actual supplied-source two-client case passes in
+`supplied-two-client-wrench.log` (9.53 seconds): ordinary equip, aim, swing,
+Events dialog and `SetEvents` requests; minigame start and reset; distinct
+spawn-event color results; matching live health, source appearance and removal
+for a late joining observer. Earlier network attempts lacked an equipped wrench
+and then its required hit/inspection. Those were harness errors, corrected by
+the ordinary tool path without loosening host authority. Actual source assets
+are imported afresh; the room and tool fixture are invented. This does not
+establish final rendered pixels or subjective combat feel.
+
+The client event dialog test (`bot-wrench-ui.log`) verifies the new vocabulary
+is offered and a zero sight value roundtrips into a valid native row. Original
+source `hSearch=0` now converts to zero sight, and `hReturnToSpawn=0` retains
+its source meaning. Infection eligibility is tested before damage, as the
+supplied callback does; above-threshold bites still damage, eligible bots
+convert alive and recover health, and humans still take lethal damage.
+
+Final release integration, archive checks and publication receipts follow in a
+separate dated release entry. The alpha contract remains open; native Bot_Hole
+controls are deliberately not a promise of arbitrary v21 event compatibility.
+
+
+The final lifecycle review added a replacement-body negative control. With an
+immediate respawn after a native event kill, the deferred death input resolved
+its Bot slot from the current owner ID and a later death row killed the new
+body (`lifecycle-body-before.log`). Lifecycle inputs now capture the existing
+body generation before deferral; all seven scenarios pass in 0.50 seconds,
+including survival after the stale callback's delay. The initial version of
+this invented fixture omitted Self from its declared input targets and was
+rejected at admission (`lifecycle-body-executable-before.log`); that is distinct
+from the qualified production failure. The first broad focused run contains
+that superseded fixture and was stopped after its failure; continuing the old
+binaries would duplicate the corrected candidate run. Final tiers must be read from `quick-lifecycle-final`
+and `focused-lifecycle-final`, not promoted from an older passing checkpoint.
+
+The release Add-On bundle retains the v0.3.5 originals and credits except for
+fresh Hole Bots, Zombie, Shark and Shark's rules companion imports. All source
+pins and default/companion checks pass. Its uploaded draft ZIP was downloaded
+again and has SHA-256
+`e99ea9bed0c5b4b615001315d74aa60f8d0055c2f777395e0f220b13765d2118`.
+The exact importer executable SHA-256 is
+`1bb02fa19f57f7b7152b424b1ac946c1c084b493d52647cc93dfa2b55d3cb0b8`;
+this is a content-generation tool pin, separate from the final game build pin.
+No unrelated original was dropped to work around the unavailable Tier1 ZIP.
+
+
+The final source consumer passes all four cases in 18.51 seconds
+(`supplied-final-release-candidate.log`), including the ordinary two-client
+wrench path on the generation-safe event implementation. Scanning the recovered
+original manifests finds only `bot_zombie` and `bot_shark` providing native bot
+kinds; both were refreshed, together with Hole Bots and Shark's companion.
+The failed full rebuild is not concealed as a successful rebuild of unaffected
+weapons. Final publication remains contingent on the complete gate and exact
+Windows CI/build/archive checks.
+
+
+Final pre-commit tiers pass: quick, 12 steps in 308 seconds
+(`quick-lifecycle-final.log`); focused, nine steps in 1,268 seconds
+(`focused-lifecycle-final.log`), including strict all-target clippy, all twelve
+non-GPU affected/dependent crates and the client library. No new known-failure
+entries or waived comparisons were added. The actual-source consumer remains
+private/opt-in and is absent from the committed test tree.

@@ -233,7 +233,7 @@ pub enum RuleOp {
 /// One catalog supplies runtime, editor and documentation, including Add-On
 /// outputs supplied by Catalog::extended. These builtins need no private assets.
 pub fn workshop_catalog(catalog: &Catalog) -> Result<Catalog> {
-    let mut out = catalog.clone();
+    let mut out = crate::bots::catalog(catalog)?;
     let targets = [
         ("Self", "fxDTSBrick"),
         ("Player", "Player"),

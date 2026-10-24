@@ -1546,6 +1546,19 @@ impl Session {
             peer.control = super::ControlObject::Corpse;
         }
         self.observe_death_result(death);
+        if let Some(brick) = self.bots.spawn_brick(victim) {
+            self.fire_package_input(
+                brick,
+                "onBotDeath",
+                instigator.filter(|killer| !self.is_bot(*killer)),
+                super::events::InputExtra {
+                    bot: Some(self.player_entity(victim)),
+                    killer: instigator,
+                    game,
+                    ..Default::default()
+                },
+            );
+        }
         self.weapons.trigger(ActorId(victim), false)?;
         self.weapon_triggers.remove(&victim);
         // `armor::onDisabled` drops a held ball before the body goes limp.
@@ -2687,6 +2700,7 @@ impl Session {
         self.new_animation_life(owner)?;
         self.give_loadout(owner, equipment.as_ref())?;
         self.package_spawn(owner);
+        self.fire_bot_spawn(owner);
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
         let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
         let _ = self

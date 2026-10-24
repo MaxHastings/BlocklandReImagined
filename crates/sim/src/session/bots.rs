@@ -40,6 +40,7 @@ mod arming;
 mod behaviour;
 pub(crate) mod cadence;
 mod charged_control;
+mod controls;
 pub(super) use charged_control::FireAdmission;
 mod claims;
 mod combat_objectives;
@@ -438,6 +439,9 @@ struct Brain {
     /// `home` as seen from where it stands: carried with it through every
     /// opening it goes through, so how far it strayed is how far it walked.
     leash: Vec3,
+    /// Spawner policy survives a change of creature kind (infection).
+    return_home: bool,
+    auto_respawn: bool,
     /// The last trip through a portal (`Session::crossings`) it took
     /// account of.
     crossed: u64,
@@ -692,7 +696,8 @@ impl Brain {
     /// is and follows gunfire it hears (`hear_fighting`).
     /// An intent from its rules (`bot_intent`) anchors it the same way.
     fn tethered(&self) -> bool {
-        self.brick.is_some() || self.intent.as_ref().is_some_and(intents::Held::anchors)
+        self.brick.is_some() && self.return_home
+            || self.intent.as_ref().is_some_and(intents::Held::anchors)
     }
     /// A rules-authored anchor can bound pursuit. A spawn brick only
     /// supplies the idle home: crossing its radius must not erase a seen
@@ -710,11 +715,14 @@ impl Brain {
         Leash { at, radius }
     }
     fn new(brick: Option<BrickId>, kind: BotKind, home: Vec3, bot: OwnerId, crossed: u64) -> Self {
+        let return_home = kind.return_home;
         Self {
             brick,
             kind: std::sync::Arc::new(kind),
             home,
             leash: home,
+            return_home,
+            auto_respawn: true,
             crossed,
             resting: false,
             rehome: brick.is_none(),
@@ -1546,7 +1554,7 @@ impl Session {
         };
         let delay = cadence::spread(bot, cadence::salt::RESPAWN, respawn_tick, lo, hi);
         let wait = ticks(delay);
-        if tick >= respawn_tick + wait {
+        if self.bots.brains[&bot].auto_respawn && tick >= respawn_tick + wait {
             // A bot a bite turned comes back as its own kind.
             if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
                 self.bots.brains.get_mut(&bot).unwrap().kind = born.clone();
@@ -2276,6 +2284,19 @@ impl Session {
         if !peer.combat.alive {
             return self.step_dead_bot(bot, tick);
         }
+        // Zero-delay spawn policy runs in this tick's event phase before
+        // this new body may make its first autonomous attack.
+        if peer.combat.spawn_tick == tick
+            && self.bots.brains[&bot].brick.is_some_and(|brick| {
+                self.simulation.state().bricks.get(&brick).is_some_and(|b| {
+                    b.events
+                        .iter()
+                        .any(|r| r.enabled && r.input.eq_ignore_ascii_case("onBotSpawn"))
+                })
+            })
+        {
+            return Ok(());
+        }
         if self.step_held_bot(bot, tick)? {
             return Ok(());
         }
@@ -2831,7 +2852,8 @@ impl Session {
             flee: flee_from.is_some(),
             // Never a way out of a fight: not with an enemy in sight or
             // one that hurt it, nor while it carries something.
-            trapped: if sight.target.is_none()
+            trapped: if brain.auto_respawn
+                && sight.target.is_none()
                 && threat.is_none()
                 && hurt_by.is_none()
                 && !holding

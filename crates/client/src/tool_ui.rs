@@ -1133,6 +1133,58 @@ mod tests {
         assert!(ui.offer_bodies(&table).is_none());
     }
     #[test]
+    fn bot_spawn_controls_reach_the_wrench_and_zero_values_round_trip() {
+        let mut ui = fixture();
+        ui.install_events(bri_events::testing::catalog(), Vec::new(), Vec::new());
+        let lists = ui
+            .catalog_updates()
+            .into_iter()
+            .find_map(|update| match update {
+                UiUpdate::Events(lists) => Some(lists),
+                _ => None,
+            })
+            .expect("installed event vocabulary must reach the dialog");
+        for name in ["onBotSpawn", "onBotDeath"] {
+            assert!(lists.inputs.iter().any(|i| i.name == name));
+        }
+        for name in [
+            "setBotPowered",
+            "setBotSightRadius",
+            "setBotWanderRadius",
+            "setBotReturnHome",
+            "setBotAutoRespawn",
+            "setBotMeleeDamage",
+            "respawnBot",
+        ] {
+            assert!(lists.outputs.iter().any(|o| o.name == name && o.supported));
+        }
+        let catalog = bri_events::rules::workshop_catalog(&bri_events::testing::catalog()).unwrap();
+        let row = bri_events::Row {
+            conditions: vec![],
+            preserved: None,
+            enabled: true,
+            input: "onBotSpawn".into(),
+            delay_ms: 0,
+            target: bri_events::Target::Slot(bri_events::Slot::SelfBrick),
+            output: "setBotSightRadius".into(),
+            params: vec![bri_events::Value::Float(0.0)],
+        };
+        let line = ui_event(&row, &catalog).unwrap();
+        let restored = native_event(&line, &catalog).unwrap();
+        assert_eq!(
+            restored.params, row.params,
+            "zero means disabled; the editor must retain it"
+        );
+        assert_eq!(
+            catalog
+                .output(bri_events::Class::Brick, &restored.output)
+                .unwrap()
+                .name,
+            "setBotSightRadius"
+        );
+    }
+
+    #[test]
     fn the_wrench_lists_the_servers_add_on_inputs_targets_and_outputs() {
         let mut ui = fixture();
         let flag = bri_events::InputDef {

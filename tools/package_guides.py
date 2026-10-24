@@ -8,7 +8,8 @@ from urllib.parse import urlsplit
 
 
 GUIDES = {
-    'PLAYTEST.md': 'RULE-WORKSHOP-PLAYTEST.md',
+    'rule-workshop/PLAYTEST.md': 'RULE-WORKSHOP-PLAYTEST.md',
+    'modding/bot-spawners.md': 'BOT-SPAWNERS.md',
 }
 
 PLAYER_GUIDES = (
@@ -20,7 +21,7 @@ ONLINE_DOCS = 'https://github.com/MaxHastings/BlocklandReImagined/blob/main/docs
 
 def release_links(text: str, source: str, available: set[str]) -> str:
     """Resolve guide links into the flat ZIP; absent platform pages go online."""
-    names = {f'rule-workshop/{name}': target for name, target in GUIDES.items()}
+    names = dict(GUIDES)
     names.update({name: name for name in PLAYER_GUIDES})
 
     def replace(match):
@@ -56,8 +57,8 @@ def copy_guides(repo: Path, destination: Path, version: str = 'development') -> 
         # Platform packagers may already have copied the notice at the root.
         (destination / filename).unlink(missing_ok=True)
     for source, filename in GUIDES.items():
-        text = (repo / 'docs' / 'rule-workshop' / source).read_text(encoding='utf-8')
-        text = release_links(text, f'rule-workshop/{source}', available)
+        text = (repo / 'docs' / source).read_text(encoding='utf-8')
+        text = release_links(text, source, available)
         (docs / filename).write_text(text, encoding='utf-8')
         (destination / filename).unlink(missing_ok=True)
     # The platform packagers have already copied these player-facing pages.
@@ -78,6 +79,7 @@ def copy_guides(repo: Path, destination: Path, version: str = 'development') -> 
         'Known limitations: docs/KNOWN-ISSUES.md\n'
         'Detailed playtest guide: docs/PLAYTEST.md\n'
         'Creator recipes: docs/RULE-WORKSHOP-PLAYTEST.md\n'
+        'Bot encounters: docs/BOT-SPAWNERS.md\n'
         'Third-party credits: CREDITS.md and licenses/\n\n'
         'To report a problem, reproduce it, close the game and send the latest\n'
         'session log from logs/ with the version, map and a screenshot.\n'

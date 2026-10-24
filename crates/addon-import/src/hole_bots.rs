@@ -41,13 +41,13 @@ pub(crate) fn kind(
         .filter(|c| !c.is_control())
         .take(32)
         .collect();
-    // Without `hSearch` it never goes after anyone.
+    // Disabled source search must not retain a one-unit visual search radius.
     let sight = if fields.contains_key("hsearch") && !on("hsearch") {
-        1.0
+        0.0
     } else {
         num("hsearchradius").map_or(80.0, brick_to_radius)
     }
-    .clamped(1.0, 400.0);
+    .clamped(0.0, 400.0);
     let wander = if fields.contains_key("hwander") && !on("hwander") {
         0.0
     } else {
@@ -60,6 +60,7 @@ pub(crate) fn kind(
         "body": body,
         "sight": sight,
         "wander_radius": wander,
+        "return_home": !fields.contains_key("hreturntospawn") || on("hreturntospawn"),
         "chase_radius": wander.max(48.0),
     });
     if on("hmelee") {
@@ -133,6 +134,28 @@ mod tests {
         assert_eq!(k["melee"]["action"], "activate2");
         assert_eq!(k["body"], "x:archetype/walkerbot");
         assert_eq!(k["alerts_allies"], true);
+    }
+
+    #[test]
+    fn idle_home_and_disabled_search_keep_their_source_meaning() {
+        let fields: BTreeMap<String, String> = [
+            ("hsearch", "0"),
+            ("hreturntospawn", "0"),
+            ("hspawndist", "32"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+        let k = kind("x:bot/roamer", "Roamer", "x:archetype/roamer", &fields);
+        assert_eq!(
+            k["sight"], 0.0,
+            "disabled search must not retain one unit of sight"
+        );
+        assert_eq!(k["return_home"], false);
+        assert_eq!(
+            k["wander_radius"], 16.0,
+            "idle distance is still converted from brick units"
+        );
     }
 
     #[test]

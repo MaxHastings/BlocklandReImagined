@@ -513,6 +513,13 @@ impl Session {
         if let Some(action) = &melee.action {
             self.play_thread(tick, bot, MELEE_THREAD, action);
         }
+        // The source collision policy tests existing health before its
+        // ordinary damage handler. An eligible contact converts instead of
+        // first killing a critically hurt bot or converting a healthy one
+        // on the bite that merely crosses the threshold.
+        if self.try_convert_bitten_bot(bot, target, melee)? {
+            return Ok(());
+        }
         self.damage_player_at(
             target,
             melee.damage,
@@ -520,21 +527,29 @@ impl Session {
             Some(bot),
             Some(point),
         )?;
+        Ok(())
+    }
+    fn try_convert_bitten_bot(
+        &mut self,
+        bot: OwnerId,
+        target: OwnerId,
+        melee: &crate::bot_kind::BotMelee,
+    ) -> Result<bool> {
         // A brick's bot of another side, worn down far enough, turns into
         // one of its kind, whole again (`holeZombieInfect`); players never do.
         let Some(below) = melee.converts_below else {
-            return Ok(());
+            return Ok(false);
         };
         let worn = self.is_alive(target)
             && self.bots.is_brick_bot(target)
             && self.peers[&target].combat.health <= self.max_health(target) * below;
-        // The hit's hooks may have taken the biter away.
+        // The declared conversion attack supplies the replacement kind.
         let Some(kind) = self.bots.brains.get(&bot).map(|b| b.kind.clone()) else {
-            return Ok(());
+            return Ok(false);
         };
         let other = self.bots.brains.get(&target).map(|b| b.kind.side.clone());
         if !worn || other.is_none() || other == Some(kind.side.clone()) {
-            return Ok(());
+            return Ok(false);
         }
         let brain = self.bots.brains.get_mut(&target).unwrap();
         let born = std::mem::replace(&mut brain.kind, kind.clone());
@@ -547,7 +562,7 @@ impl Session {
         self.embody_bot(target, &kind)?;
         let max = self.max_health(target);
         self.peers.get_mut(&target).unwrap().combat.health = max;
-        Ok(())
+        Ok(true)
     }
     /// Where a bite meets `target` seated: the point of the hull it sits in
     /// (its bounds as it lies now) nearest `from`, when the bite wears a

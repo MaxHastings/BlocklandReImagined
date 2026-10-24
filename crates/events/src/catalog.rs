@@ -611,6 +611,11 @@ fn compile_native(class: Class, name: &str, p: &[Value]) -> Result<Action> {
         }
     };
     let name = name.to_ascii_lowercase();
+    if class == Class::Brick
+        && let Some(op) = crate::bots::compile(&name, p)
+    {
+        return Ok(Action::Intent(Intent::Brick(BrickOp::Bot(op?))));
+    }
     let op = match class {
         Class::Brick => {
             use BrickOp::*;

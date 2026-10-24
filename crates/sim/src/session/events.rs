@@ -101,6 +101,9 @@ pub(super) struct Events {
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct InputExtra {
     pub(super) object: Option<u64>,
+    /// Capture the lifecycle body now, not when a deferred input is delivered.
+    /// Another event may already have respawned that bot by then.
+    pub(super) bot: Option<Entity>,
     pub(super) projectile: Option<ProjectileActivation>,
     /// The mini-game the input is about (`onMinigameRoundStart`).
     pub(super) game: Option<mg::GameId>,
@@ -751,6 +754,9 @@ impl Session {
                     .targets
                     .insert(Slot::KillerClient, entity(Class::Client, killer));
             }
+        }
+        if let Some(bot) = extra.bot.filter(|_| slots.contains(&Slot::Bot)) {
+            trigger.targets.insert(Slot::Bot, bot);
         }
         Some(trigger)
     }
@@ -1688,6 +1694,7 @@ impl EventHost<'_> {
                 force,
                 vertical_force,
             } => self.radius_impulse(d, center, *radius, *force, *vertical_force),
+            BrickOp::Bot(op) => self.session.control_brick_bot(brick, op)?,
         }
         Ok(Apply::Applied)
     }

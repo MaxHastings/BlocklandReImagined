@@ -86,6 +86,13 @@ time. Supported native hand weapons account for ammunition, readiness and safer
 weapon choices. Planning and prediction have finite limits; the linked guide
 describes which creator rules and interactions are covered.
 
+**Bot encounters.** Spawn homes guide idle wandering without cutting off a
+visible chase. Native wrench [spawner controls](modding/bot-spawners.md) support
+start/stop switches, independent sight/wander distances, melee damage and timed
+replacement enemies through spawn/death events. Zombie Hole restores its own
+bot on resets; the supplied Zombie face/decal and pre-bite infection eligibility
+have source-backed checks. Full legacy Bot_Hole compatibility remains partial.
+
 **Save and load.** Builds save with their description, events and
 ownership, load per map, and sort by name or date. Loading a save made
 with a different colour set asks how to load its colours, as v20 did.

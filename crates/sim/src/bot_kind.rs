@@ -52,6 +52,8 @@ pub struct BotKind {
     pub sight: f32,
     /// How far from its spawn brick it strolls when nothing is going on.
     pub wander_radius: f32,
+    /// Whether a brick bot returns home when idle. Combat pursuit is separate.
+    pub return_home: bool,
     /// How far idle interactions may take it from home before returning.
     /// Also the pursuit radius for an explicit follow intent; ordinary
     /// combat is limited by perception and evidence, not distance to spawn.
@@ -364,10 +366,22 @@ pub struct BotMelee {
     /// What the kill feed and `on_damage` hooks call the hit.
     #[serde(default = "melee_name")]
     pub name: String,
-    /// A bot of another side it hits at or under this share of its health
-    /// becomes one of its kind (a zombie's bite turning a bot).
+    /// A bot of another side already at or under this share of health
+    /// converts on contact before damage (a zombie's bite turning a bot).
     #[serde(default)]
     pub converts_below: Option<f32>,
+}
+impl BotMelee {
+    pub(crate) fn with_damage(damage: f32) -> Self {
+        Self {
+            damage,
+            reach: melee_reach(),
+            seconds: melee_seconds(),
+            action: None,
+            name: melee_name(),
+            converts_below: None,
+        }
+    }
 }
 fn melee_reach() -> f32 {
     2.5
@@ -396,6 +410,7 @@ impl Default for BotKind {
             name: String::new(),
             sight: 80.0,
             wander_radius: 12.0,
+            return_home: true,
             chase_radius: 48.0,
             reaction_seconds: 0.35,
             turn_degrees: 300.0,
@@ -617,7 +632,7 @@ impl BotKind {
         }
         let ranges = [
             ("flee_below", self.flee_below, 0.0, 1.0),
-            ("sight", self.sight, 1.0, 400.0),
+            ("sight", self.sight, 0.0, 400.0),
             ("wander_radius", self.wander_radius, 0.0, 64.0),
             ("chase_radius", self.chase_radius, 0.0, 256.0),
             ("reaction_seconds", self.reaction_seconds, 0.0, 5.0),

@@ -419,6 +419,7 @@ each appears on the Vehicle Spawn list under its `name`. Every field but
 |---|---|---|
 | `sight` | 80 | how far it sees other players |
 | `wander_radius` | 12 | how far from its brick it strolls when nothing is going on |
+| `return_home` | true | whether a brick bot returns home when idle; independent of combat pursuit |
 | `chase_radius` | 48 | home allowance for idle interactions and explicit follow pursuit; ordinary combat has no spawn-distance cutoff |
 | `reaction_seconds` | 0.35 | from first seeing an enemy to its first shot |
 | `turn_degrees` | 300 | how fast its aim turns, per second |

@@ -245,6 +245,7 @@ pub enum BrickOp {
         vertical_force: f32,
     },
     PrintDigit(u8),
+    Bot(crate::bots::BotOp),
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PlayerOp {
