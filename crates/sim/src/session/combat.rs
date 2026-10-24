@@ -348,7 +348,7 @@ impl MiniGameView {
                         && !matches!(v, mg::SettingValue::Text(t) if t.len() > mg::MAX_SETTING_TEXT)
                 })
         };
-        self.members.len() <= 64
+        self.members.len() <= MAX_PARTICIPANTS
             && self.color < 10
             && self.paint_color.is_none_or(|c| c < 64)
             && self

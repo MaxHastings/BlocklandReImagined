@@ -501,7 +501,9 @@ pub const MAX_BOT_NAME_CHARS: usize = 23;
 /// The most bots a host may let one server run at once, from spawn bricks
 /// and rules together (Server Settings' Max bots; the sight and planning
 /// budgets are sized for it).
-pub const MAX_BOTS: usize = 32;
+pub const MAX_BOTS: usize = 64;
+/// Combined active and loading humans/bots. Human network slots remain 64.
+pub const MAX_PARTICIPANTS: usize = 128;
 /// Max bots before a host changes it: what the bot think-time bar was set at.
 pub const DEFAULT_BOTS: usize = 16;
 /// Mount points a body may have (`mountObject`'s node).

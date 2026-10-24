@@ -651,7 +651,7 @@
       "default": 0,
       "editor": "admin",
       "min": 0,
-      "max": 32,
+      "max": {{engine_max_bots}},
       "shown_when": { "setting": "mode", "is": ["{{dm_class}}"] },
       "help": "Not in Slayer itself (a Blockland ReImagined addition): in a mode without teams, how many Blockhead Bots play, each everyone's enemy, up to the host's Max bots (Server Settings). Team modes use each team's Preferred Player Count instead."
     },

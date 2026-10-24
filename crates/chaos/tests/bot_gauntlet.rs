@@ -1636,11 +1636,18 @@ fn bot_think_time_16() {
     let _ = bot_think_time(bri_package_runtime::ops::DEFAULT_BOTS);
 }
 
-/// [`bot_think_time`] at the most a host may set Max bots to.
+/// Preserve the existing 32-bot performance comparison.
 /// `cargo test --release -p bri-chaos --test bot_gauntlet bot_think_time_32 -- --ignored --nocapture`
 #[test]
 #[ignore = "timing; run in release"]
 fn bot_think_time_32() {
+    let _ = bot_think_time(32);
+}
+
+/// [`bot_think_time`] at the most a host may set Max bots to.
+#[test]
+#[ignore = "timing; run in release"]
+fn bot_think_time_64() {
     let _ = bot_think_time(bri_package_runtime::ops::MAX_BOTS);
 }
 

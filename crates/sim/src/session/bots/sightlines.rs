@@ -317,11 +317,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rays_stay_under_budget_with_32_bots_and_targets_are_always_checked() {
+    fn rays_stay_under_budget_at_capacity_and_targets_are_always_checked() {
         let mut lines = Sightlines::default();
         for tick in 1..50u64 {
             lines.begin(tick);
-            for bot in 0..32u64 {
+            for bot in 0..MOST_BOTS as u64 {
                 // Every bot scans for others, as many as it likes...
                 for _ in 0..40 {
                     lines.spend(bot, Urgency::Ordinary, 2);

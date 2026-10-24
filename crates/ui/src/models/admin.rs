@@ -98,7 +98,7 @@ pub struct AdminOptions {
     pub addon_settings: BTreeMap<String, crate::api::MiniGameSettingValue>,
 }
 /// The most Max bots may be, as `bri_admin::MOST_BOTS`.
-pub const MOST_BOTS: u32 = 32;
+pub const MOST_BOTS: u32 = 64;
 /// Max bots before the host changes it, as `bri_admin::DEFAULT_BOTS`.
 pub const DEFAULT_BOTS: u32 = 16;
 fn default_max_bots() -> u32 {
