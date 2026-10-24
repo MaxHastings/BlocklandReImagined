@@ -104,7 +104,7 @@ def maintained_docs(root):
     files = [root / 'README.md', root / 'CONTRIBUTING.md']
     files += [p for p in (root / 'docs').glob('*.md') if p.name not in HISTORY]
     files += list((root / 'docs/modding').glob('*.md'))
-    files += [root / 'docs/rule-workshop' / name for name in package_guides.GUIDES]
+    files += [root / 'docs' / name for name in package_guides.GUIDES]
     files += list((root / 'packages').glob('*/README.md'))
     files += list((root / 'crates').glob('*/README.md'))
     return sorted(set(files))

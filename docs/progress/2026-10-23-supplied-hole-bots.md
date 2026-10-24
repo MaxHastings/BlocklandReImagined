@@ -270,3 +270,12 @@ Final pre-commit tiers pass: quick, 12 steps in 308 seconds
 non-GPU affected/dependent crates and the client library. No new known-failure
 entries or waived comparisons were added. The actual-source consumer remains
 private/opt-in and is absent from the committed test tree.
+
+
+The first full gate stopped in the Python tool tests before the build: the
+shared packaged-guide map became relative to `docs/`, but `check_docs` still
+prepended `docs/rule-workshop`. Updating that consumer preserves the existing
+link check and includes the new bot guide in its real maintained inputs. The
+actual guide copy and runtime code were unaffected. The candidate build is
+restarted at the corrected tool commit; the initial tool-test failure is kept,
+not waived or recorded as a gate pass.
