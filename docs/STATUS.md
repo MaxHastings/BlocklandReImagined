@@ -11,19 +11,20 @@ Use the [latest published release](https://github.com/MaxHastings/BlocklandReIma
 for downloads, its exact source tag and release notes. Repository source
 can be ahead of that build; source checks alone are not a new publication.
 
-Published release: [v0.3.5 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.5),
-published October 23, 2026 at 12:42 PM America/Chicago, from
-`5a16c9317c2920bb6eb16211c57143a2c46b4073`. Windows x86-64,
+Published release: [v0.3.6 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.3.6),
+published October 23, 2026 at 9:44 PM America/Chicago, from
+`34c508fa3c82c491f1840666159cce822f0c0861`. Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives are available. The
-[v0.3.5 notes](releases/v0.3.5.md) describe that release; earlier notes remain
+[v0.3.6 notes](releases/v0.3.6.md) describe that release; earlier notes remain
 historical. Published tags and assets stay immutable.
 
-The [publication receipt](progress/2026-10-23-v035-public-release.md) records
+The [publication receipt](progress/2026-10-23-v036-public-release.md) records
 the full gate, Windows CI, platform build, actual archive/startup checks and
-published asset digests. Maxwell narrowed this chat to the public release and
-assigned further AA2 work and private preview delivery to another working
-thread. Main is available for its separately verified integration; the release
-tag remains fixed. Open PR count is not an acceptance criterion.
+published asset digests. AA2 work and private preview delivery remain separate
+from this public bot/menu release. Main remains available for separately
+verified integration; the release tag stays fixed. The
+[v0.3.5 receipt](progress/2026-10-23-v035-public-release.md) preserves the
+preceding release's evidence. Open PR count is not an acceptance criterion.
 
 An independent [actual v0.3.4 package audit](progress/2026-10-23-v034-release-package-resource-audit.md)
 confirmed doubled animation-resource paths and omitted menu background photos.
@@ -39,14 +40,12 @@ The [imported-map performance evidence](progress/2026-10-23-static-world-visibil
 records the compared rendering paths. Its bounded frame measurements do not
 establish 100 FPS gameplay or completed mission fidelity.
 
-A separately authorized v0.3.6 bot-encounter candidate adds pursuit beyond idle
+The v0.3.6 release adds pursuit beyond idle
 homes, intrinsic-hole reset fixes, native builder spawner/lifecycle controls,
 and a shuffled main-menu slideshow including saved screenshots.
-See the [candidate notes](releases/v0.3.6.md) and
+See the [release notes](releases/v0.3.6.md) and
 [supplied-source evidence](progress/2026-10-23-supplied-hole-bots.md), plus
 [menu pixel comparisons](progress/2026-10-23-menu-background-slideshow.md).
-The latest published download above remains authoritative until its publication
-receipt is recorded; a candidate is not a new release.
 
 The Rule Workshop, bot planning and alpha formats remain experimental.
 Bots compose supported declared mechanics, not arbitrary scripts. Shark/Zombie
