@@ -1,5 +1,65 @@
 //! A round-held corpse must not poll script policy; releasing the hold
-//! still permits its ordinary automatic respawn.
+//! still permits its ordinary automatic respawn. Behaviour anchors must not
+//! become birthplaces for rules-owned bots.
+
+#[test]
+fn rules_follow_and_guard_anchors_never_override_member_respawns() {
+    let sim = crate::simulation::Simulation::new(
+        bri_world::World::new("Spawn identity".into(), "fixture".into(), vec![[1.; 4]]),
+        crate::testing::definitions(),
+        vec![
+            rapier3d::prelude::ColliderBuilder::cuboid(24., 0.5, 24.)
+                .translation(Vec3::new(0., -0.5, 0.)),
+        ],
+    )
+    .unwrap();
+    let mut s = Session::new(sim);
+    let birthplace = Vec3::new(-8., 0.05, 0.);
+    let moving_anchor = Vec3::new(12., 0.05, 0.);
+    s.set_spawn_points(vec![birthplace]).unwrap();
+    let leader = s.join("Leader".into(), moving_anchor, false).unwrap();
+    let bot = s.join("Rules bot".into(), birthplace, false).unwrap();
+    s.command(
+        bot,
+        1,
+        Command::MiniGame(super::super::MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings::default(),
+        }),
+    )
+    .unwrap();
+    let game = s.game_of(bot).unwrap();
+    s.bots.brains.insert(
+        bot,
+        Brain::new(None, BotKind::default(), birthplace, bot, 0),
+    );
+    s.bots.by_rules.insert(bot, ("fixture".into(), game.0));
+    for intent in [
+        bri_package_runtime::ops::BotIntent::Follow {
+            leader,
+            distance: 1.,
+        },
+        bri_package_runtime::ops::BotIntent::Guard {
+            at: moving_anchor.to_array(),
+            radius: 6.,
+        },
+    ] {
+        s.set_bot_intent("fixture", bot, Some(intent)).unwrap();
+        s.bot_follow_intent(bot, 0);
+        assert!((s.bots.brains[&bot].home - moving_anchor).length() < 0.01);
+        let player = s.peers[&bot].combat.player;
+        let effects = s
+            .minigames
+            .execute(bri_minigames::Command::ForceRespawn { target: player })
+            .unwrap();
+        s.apply_minigame_effects(effects).unwrap();
+        let actual = Vec3::from(s.peers[&bot].player.state().feet);
+        assert!(
+            (actual - birthplace).length() < 0.1,
+            "member respawn used its behaviour anchor: {actual:?}, wanted {birthplace:?}"
+        );
+    }
+}
 use super::*;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use serde_json::json;

@@ -43,7 +43,15 @@ impl Session {
         self.bots.kind(id).is_some()
     }
     pub(in crate::session) fn bot_home(&self, owner: OwnerId) -> Option<Vec3> {
-        self.bots.home(owner)
+        // The idle/pursuit anchor can follow a player or a patrol. Only an
+        // actual spawn brick owns a native birthplace; rules bots use their
+        // game's spawn policy. Never respawn at a moving behaviour anchor.
+        let brick = self.bots.brains.get(&owner)?.brick?;
+        self.simulation
+            .state()
+            .bricks
+            .get(&brick)
+            .map(|brick| Vec3::from(brick.position) + Vec3::Y * 0.3)
     }
     /// The owner of the spawn brick that placed this bot.
     pub(in crate::session) fn bot_brick_owner(&self, bot: OwnerId) -> Option<OwnerId> {

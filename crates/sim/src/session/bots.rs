@@ -1067,14 +1067,6 @@ impl Bots {
     pub(super) fn spawn_brick(&self, owner: OwnerId) -> Option<BrickId> {
         self.brains.get(&owner).and_then(|b| b.brick)
     }
-    /// Where a brick's bot spawns: by its brick. A rules bot spawns where
-    /// its game's members do.
-    pub(super) fn home(&self, owner: OwnerId) -> Option<Vec3> {
-        self.brains
-            .get(&owner)
-            .filter(|b| b.tethered())
-            .map(|b| b.home)
-    }
     /// A bot a mini-game's rules added, and the package that added it: it
     /// plays as a member, so the rules' player hooks hear of it.
     pub(super) fn rules_package(&self, owner: OwnerId) -> Option<&str> {

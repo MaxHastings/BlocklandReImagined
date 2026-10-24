@@ -8,6 +8,10 @@ use super::*;
 use crate::map::MapMover;
 use bri_content::mover::{Encroach, MoverState};
 
+#[cfg(test)]
+#[path = "map_movers_tests.rs"]
+mod tests;
+
 /// What `movers()` tells a script about a mover.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MoverView {
@@ -33,7 +37,7 @@ pub struct MoverView {
     pub params: BTreeMap<String, String>,
 }
 
-/// How near a bot's body must be to a shut door it may open (units).
+/// How near a bot's body must be to a door it may ask to pass (units).
 const BOT_DOOR_REACH: f32 = 0.6;
 /// Ticks before a bot asks again for a door that is still shut.
 const BOT_DOOR_RETRY: u64 = 120 * 2;
@@ -109,9 +113,9 @@ impl Session {
         };
         Ok(())
     }
-    /// A bot at a shut door whose `bots_open` names a rules command sends it,
-    /// as the player's Use key would, once and again every few seconds while
-    /// the door stays shut. Whether it opens is the rules' own policy.
+    /// A bot at a closed or interrupted door whose `bots_open` names a rules
+    /// command asks to pass, retrying every few seconds. Moving doors and doors
+    /// resting open are left alone; packages decide how to recover obstruction.
     pub(super) fn bot_opens_door(&mut self, bot: OwnerId, tick: u64) {
         if self.map_movers.movers.iter().all(|m| {
             m.def
@@ -140,7 +144,8 @@ impl Session {
             else {
                 continue;
             };
-            if self.map_movers.states[index].resting_key(tick) != Some(0) {
+            let state = &self.map_movers.states[index];
+            if state.is_moving_at(tick) || state.resting_key(tick).is_some_and(|key| key != 0) {
                 continue;
             }
             if self
@@ -346,6 +351,20 @@ impl Session {
                 self.map_movers.placed[index] = Some(target);
             }
             self.map_movers.states[index].settle(tick);
+            // Closed/interrupted doors are passage affordances. Once open,
+            // their actual leaf is an obstacle to walk around, not through.
+            let opens = mover
+                .def
+                .params
+                .get("bots_open")
+                .is_some_and(|value| value == "1" || bot_door_command(value).is_some());
+            self.simulation.set_bot_passable(
+                mover.colliders.clone(),
+                opens
+                    && self.map_movers.states[index]
+                        .resting_key(tick)
+                        .is_none_or(|key| key == 0),
+            );
             let mut accepted = self.map_movers.states[index];
             accepted.halt(tick, false);
             self.map_movers.accepted[index] = accepted;

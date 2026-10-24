@@ -1095,6 +1095,11 @@ An intent moves the bot's anchor (where its stroll, its walk home and its
 leash are measured from); fleeing is the `flee` behaviour. Only the
 package that added the bot (`add_bot`) may set its intent.
 
+The behaviour anchor never chooses a birthplace. A brick bot respawns at its
+actual spawn brick; a rules-added bot uses the game's ordinary spawn policy.
+Following a player or guarding a point must not make the next life appear at
+that moving anchor before `on_pick_spawn` can run.
+
 ## Attacks
 
 What an attack looks like is data or the Add-On's, never the brain's. A

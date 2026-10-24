@@ -832,7 +832,16 @@ impl Simulation {
         }
         for handle in handles {
             if let Some(collider) = self.physics.colliders.get_mut(*handle) {
+                // Route samples must not retain a solid mover's old pose.
+                // Passable doors do not obstruct navigation until opened.
+                let solid = !self.bot_passable.contains(handle);
+                if solid {
+                    self.chunks.note_changed(&collider.compute_aabb());
+                }
                 collider.set_position(pose);
+                if solid {
+                    self.chunks.note_changed(&collider.compute_aabb());
+                }
             }
         }
         self.support_epoch = self.support_epoch.wrapping_add(1);
@@ -897,10 +906,13 @@ impl Simulation {
     /// again: a door the rules open for whoever comes to it.
     pub fn set_bot_passable(&mut self, colliders: std::ops::Range<usize>, passable: bool) {
         for handle in self.map_handles.get(colliders).unwrap_or_default() {
-            if passable {
-                self.bot_passable.insert(*handle);
+            let changed = if passable {
+                self.bot_passable.insert(*handle)
             } else {
-                self.bot_passable.remove(handle);
+                self.bot_passable.remove(handle)
+            };
+            if changed && let Some(collider) = self.physics.colliders.get(*handle) {
+                self.chunks.note_changed(&collider.compute_aabb());
             }
         }
     }
