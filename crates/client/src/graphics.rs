@@ -10,7 +10,7 @@ pub const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// shape shadows came from players, vehicles and items, never bricks.
 pub const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
 pub use bri_ui::screens::options::{
-    AMBIENT_OCCLUSION, BLOOM, LIGHTING, REFLECTIONS, RENDER_SCALE, SOFT_SHADING,
+    AMBIENT_OCCLUSION, BLOOM, LIGHTING, PCSS_SUN_SHADOWS, REFLECTIONS, RENDER_SCALE, SOFT_SHADING,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,6 +101,7 @@ impl Graphics {
             },
             shadows: shadows.map(|s| ShadowSettings {
                 light_cubes: lighting == 3,
+                pcss: prefs.bool_or(PCSS_SUN_SHADOWS, false),
                 ..s
             }),
             brick_shadows: prefs.bool_or(BRICK_SHADOWS, false),
@@ -157,6 +158,29 @@ mod tests {
         assert_eq!(graphics(&[(RENDER_SCALE, "400")]).render_scale, 100);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
+        assert_eq!(graphics(&[]).shadows, Some(ShadowSettings::BEST));
+        let pcss = graphics(&[(PCSS_SUN_SHADOWS, "1")]).shadows.unwrap();
+        assert!(pcss.pcss);
+        assert_eq!(
+            pcss,
+            ShadowSettings {
+                pcss: true,
+                ..ShadowSettings::BEST
+            }
+        );
+        // Soft sun shadows survive a lighting-mode change.
+        assert!(
+            graphics(&[(PCSS_SUN_SHADOWS, "1")])
+                .with_lighting(3)
+                .shadows
+                .unwrap()
+                .pcss
+        );
+        // With shadows off there is nothing to soften.
+        assert_eq!(
+            graphics(&[("$pref::ShadowQuality", "4"), (PCSS_SUN_SHADOWS, "1")]).shadows,
+            None
+        );
         assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);
         assert_eq!(
             graphics(&[(REFLECTIONS, "0")]).reflections,
