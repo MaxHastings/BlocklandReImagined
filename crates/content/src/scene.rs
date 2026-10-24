@@ -80,7 +80,7 @@ pub enum Kind {
     /// A climb volume (a ladder): `properties` hold `half` (half extents
     /// "x y z" in the node's axes), `speed` (units a second along the
     /// rungs), `strafe` (1 to let the strafe keys move sideways) and an
-    /// `id`. The climber faces the node's local +Z, as at a teleporter exit.
+    /// `id`. The climber faces the node's local +Z unless `facing_yaw` supplies an independent angle in radians.
     Climb,
     /// A named box a rule can ask about ([`Volume`]): `properties` hold
     /// `half` (half extents "x y z" in the node's axes), an optional `id` and
@@ -507,6 +507,13 @@ impl Scene {
             } else {
                 0.0
             };
+            let facing = numbers("facing_yaw")?;
+            ensure!(
+                facing.len() == usize::from(node.properties.contains_key("facing_yaw"))
+                    && facing.iter().all(|v| v.is_finite()),
+                "Climb {}: facing_yaw needs one finite angle",
+                node.name
+            );
             out.push(crate::mover::Climb {
                 node: index,
                 id: node
@@ -517,6 +524,7 @@ impl Scene {
                 center: matrix.w_axis.truncate(),
                 half: Vec3::new(half[0], half[1], half[2]),
                 yaw,
+                facing_yaw: facing.first().copied().unwrap_or(yaw),
                 speed,
                 strafe: node
                     .properties
@@ -777,6 +785,34 @@ mod tests {
             asset: asset.map(str::to_owned),
             properties: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn climb_facing_is_independent_of_sensor_placement_and_checked() {
+        let mut ladder = node(Kind::Climb, 0.0, None);
+        ladder.properties.insert("half".into(), "1 4 1".into());
+        ladder
+            .properties
+            .insert("facing_yaw".into(), "0.7853982".into());
+        let mut scene = Scene {
+            schema_version: 1,
+            id: "ladder".into(),
+            name: "Ladder".into(),
+            nodes: vec![ladder],
+            pending_scripts: vec![],
+        };
+        let read = &scene.climbs().unwrap()[0];
+        assert_eq!(read.half, Vec3::new(1.0, 4.0, 1.0));
+        assert!((read.facing_yaw - std::f32::consts::FRAC_PI_4).abs() < 1e-6);
+        for invalid in ["NaN", "0 1", ""] {
+            scene.nodes[0]
+                .properties
+                .insert("facing_yaw".into(), invalid.into());
+            assert!(scene.climbs().is_err(), "accepted {invalid:?}");
+        }
+        scene.nodes[0].properties.remove("facing_yaw");
+        let read = &scene.climbs().unwrap()[0];
+        assert_eq!(read.yaw, read.facing_yaw);
     }
 
     #[test]

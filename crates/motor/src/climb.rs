@@ -119,7 +119,23 @@ pub fn is_climb(user_data: u128) -> bool {
 /// extent along its own axes, which `yaw` turns about +Y so a climber
 /// faces `yaw`.
 pub fn collider(center: Vec3, half: Vec3, yaw: f32, speed: f32, strafe: bool) -> ColliderBuilder {
-    let tag = (MARK << SHIFT) | u128::from(speed.to_bits()) | if strafe { STRAFE } else { 0 };
+    collider_with_facing(center, half, yaw, speed, strafe, yaw)
+}
+
+/// A sensor box whose climbing direction need not follow its orientation.
+/// This preserves authored volume bounds when its rungs face diagonally.
+pub fn collider_with_facing(
+    center: Vec3,
+    half: Vec3,
+    yaw: f32,
+    speed: f32,
+    strafe: bool,
+    facing_yaw: f32,
+) -> ColliderBuilder {
+    let tag = (MARK << SHIFT)
+        | u128::from(speed.to_bits())
+        | (u128::from(facing_yaw.to_bits()) << 33)
+        | if strafe { STRAFE } else { 0 };
     ColliderBuilder::cuboid(half.x, half.y, half.z)
         .sensor(true)
         .position(Pose::from_parts(
@@ -142,20 +158,24 @@ pub fn find(physics: &PhysicsWorld, point: Vec3) -> Option<Volume> {
 
 fn read(collider: &Collider) -> Volume {
     let tag = collider.user_data;
-    let facing = collider.position().rotation * Vector::NEG_Z;
+    let yaw = f32::from_bits(((tag >> 33) & 0xffff_ffff) as u32);
+    let local_half = collider
+        .shape()
+        .as_cuboid()
+        .map_or(Vec3::ZERO, |c| Vec3::from_array(c.half_extents.to_array()));
+    let into_facing = glam::Quat::from_rotation_y(yaw)
+        * glam::Quat::from_array(collider.position().rotation.to_array());
+    let half = (into_facing * Vec3::X).abs() * local_half.x
+        + (into_facing * Vec3::Y).abs() * local_half.y
+        + (into_facing * Vec3::Z).abs() * local_half.z;
     Volume {
-        yaw: facing.x.atan2(-facing.z),
+        yaw,
         speed: f32::from_bits((tag & 0xffff_ffff) as u32),
         strafe: tag & STRAFE != 0,
         up: Vec3::Y,
         center: Vec3::from_array(collider.position().translation.to_array()),
-        depth: collider
-            .shape()
-            .as_cuboid()
-            .map_or(0.0, |cuboid| cuboid.half_extents.z),
-        half: collider.shape().as_cuboid().map_or(Vec3::ZERO, |cuboid| {
-            Vec3::from_array(cuboid.half_extents.to_array())
-        }),
+        depth: half.z,
+        half,
     }
 }
 
@@ -196,6 +216,21 @@ mod tests {
         assert!((volume.facing() - Vec3::X).length() < 1e-5);
         // Above its top the point is out of it.
         assert!(find(&physics, Vec3::new(10.0, 9.5, -3.0)).is_none());
+    }
+
+    #[test]
+    fn diagonal_facing_does_not_enlarge_the_sensor_box() {
+        let mut physics = bri_physics::new_world();
+        let yaw = -std::f32::consts::FRAC_PI_4;
+        physics.insert_collider(
+            collider_with_facing(Vec3::ZERO, Vec3::new(1.0, 4.0, 1.0), 0.0, 8.0, true, yaw),
+            None,
+        );
+        bri_physics::detect_collisions(&mut physics);
+        let volume = find(&physics, Vec3::new(0.99, 0.0, 0.99)).unwrap();
+        assert!((volume.yaw - yaw).abs() < 1e-6);
+        assert!(find(&physics, Vec3::new(1.01, 0.0, 0.0)).is_none());
+        assert!((volume.depth - std::f32::consts::SQRT_2).abs() < 1e-5);
     }
 
     #[test]

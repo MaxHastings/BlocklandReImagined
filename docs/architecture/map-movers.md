@@ -69,3 +69,9 @@ far side of the volume, so a climber hangs where a map's ladder markers sit.
 Leaving the volume, a jump
 (`jump_speed`) or coming down onto a floor lets go. `Posture::climbing` is in
 the player state, so the client predicts it.
+
+A climb node may supply `facing_yaw` (one finite angle in radians) independently
+of its sensor box orientation. Without it, the existing local +Z facing applies.
+This allows diagonal rungs inside an axis-aligned authored trigger without
+rotating and enlarging the trigger. The motor uses that direction for facing
+and wall pull; containment still uses the exact sensor box.

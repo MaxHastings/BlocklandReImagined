@@ -16,8 +16,10 @@ Quick: 667 passed / 78 ignored. Focused: strict all-target clippy and the same
 unit suite pass. A first workspace-wide cargo-fmt invocation exceeded Windows'
 command length; the repository's per-crate formatter passes.
 
-This proves the general camera-lighting defect. The reported exact doorway has
-not yet been located, and actual mission captures remain dark in Classic. It
+This proves the general camera-lighting defect. The exact doorway was subsequently located from Maxwell's coordinate reports
+(October 24). A separate inherited fog-color conversion defect was found in the
+private map producer; see the October 24 collision/lighting receipt. Actual
+mission appearance remains subject to bounded captures and Maxwell's acceptance. It
 does not certify original-game appearance or solve the separate missing saved
 lighting on movable doors. Direct original-data inspection finds saved lighting
 instances for 154 Interdiction movers which the existing instance emitter skips.

@@ -412,8 +412,10 @@ pub struct Climb {
     pub center: Vec3,
     /// Half extents in the node's own axes.
     pub half: Vec3,
-    /// Facing of the climber about +Y (a player's yaw).
+    /// Orientation of the sensor box about +Y.
     pub yaw: f32,
+    /// Facing of the climber, independent of the sensor box.
+    pub facing_yaw: f32,
     /// Units a second along `up` at full push.
     pub speed: f32,
     /// Whether the strafe keys move sideways along the rungs.
