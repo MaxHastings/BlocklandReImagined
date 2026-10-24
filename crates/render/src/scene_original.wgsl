@@ -358,7 +358,7 @@ fn shadow_block(uv:vec2<f32>,c:CascadeCoord,occluder_layer:i32,gap:f32)->vec4<f3
 // The caster layer is searched around the receiver for blockers; their mean
 // distance back along the sun sets how wide the filter disc is, so a shadow
 // is sharp where its caster touches the surface and soft far from it.
-const PCSS_SEARCH_TAPS:i32=12;
+const PCSS_SEARCH_TAPS:i32=8;
 const PCSS_FILTER_TAPS:i32=16;
 // The disc never grows past this many texels, nor shrinks below the width of
 // the ordinary 3x3 filter's softest edge.
@@ -400,13 +400,14 @@ fn pcss_lit(c:CascadeCoord)->f32 {
     let bias=0.5*texel*scale;
     let angle=6.2831853*pcss_noise();
     let last=i32(size)-1;
+    let depth_minus_bias=c.depth-bias;
     // The four texels around the receiver always count, so a shadow even one
     // texel wide is never missed by the sparser ring below. Each is compared
     // at its own place on the receiver's plane.
     let core_base=clamp(floor(c.uv*size-vec2<f32>(0.5)),vec2<f32>(0.0),vec2<f32>(size-2.0));
     let core=textureGather(shadow_map,shadow_point,(core_base+vec2<f32>(1.0))/size,c.cascade);
     let core_to_texel=(core_base+vec2<f32>(0.5))/size-c.uv;
-    let core_z=vec4<f32>(c.depth-bias)+vec4<f32>(
+    let core_z=vec4<f32>(depth_minus_bias)+vec4<f32>(
         dot(c.slope,core_to_texel+vec2<f32>(0.0,1.0)/size),
         dot(c.slope,core_to_texel+vec2<f32>(1.0,1.0)/size),
         dot(c.slope,core_to_texel+vec2<f32>(1.0,0.0)/size),
@@ -419,14 +420,16 @@ fn pcss_lit(c:CascadeCoord)->f32 {
     // outside a shadow still finds it and the soft edge spreads to both sides
     // of the shadow's true edge. Nearer taps count more, which keeps the
     // distance estimate local to the edge in question.
+    let max_texels_over_size=PCSS_MAX_TEXELS/size;
+    let search_weight_scale=1.0/f32(PCSS_SEARCH_TAPS);
     for (var i=0;i<PCSS_SEARCH_TAPS;i+=1) {
-        let offset=pcss_disc(i,PCSS_SEARCH_TAPS,angle)*PCSS_MAX_TEXELS/size;
+        let offset=pcss_disc(i,PCSS_SEARCH_TAPS,angle)*max_texels_over_size;
         let uv=c.uv+offset;
-        let z=c.depth+dot(c.slope,offset)-bias;
+        let z=depth_minus_bias+dot(c.slope,offset);
         let texel_at=clamp(vec2<i32>(floor(uv*size)),vec2<i32>(0),vec2<i32>(last));
         let d=textureLoad(shadow_map,texel_at,c.cascade,0);
         if d<z {
-            let w=1.0-(f32(i)+0.5)/f32(PCSS_SEARCH_TAPS);
+            let w=1.0-(f32(i)+0.5)*search_weight_scale;
             blocker_sum+=w*d;
             weights+=w;
         }
@@ -436,12 +439,14 @@ fn pcss_lit(c:CascadeCoord)->f32 {
     let blocker_distance=(c.depth-blocker_sum/weights)/scale;
     let radius=clamp(blocker_distance*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS);
     var lit=0.0;
+    let radius_over_size=radius/size;
+    let filter_weight_scale=1.0/f32(PCSS_FILTER_TAPS);
     for (var i=0;i<PCSS_FILTER_TAPS;i+=1) {
-        let offset=pcss_disc(i,PCSS_FILTER_TAPS,angle)*radius/size;
-        let z=c.depth+dot(c.slope,offset)-bias;
+        let offset=pcss_disc(i,PCSS_FILTER_TAPS,angle)*radius_over_size;
+        let z=depth_minus_bias+dot(c.slope,offset);
         lit+=pcss_tap(c.uv+offset,z,c.cascade,occluder_layer,gap);
     }
-    return lit/f32(PCSS_FILTER_TAPS);
+    return lit*filter_weight_scale;
 }
 // Smooth 3x3 percentage-closer filter from a 4x4 texel footprint, with
 // bilinear edge weights; 1 is fully lit.

@@ -172,7 +172,7 @@ impl ShadowSettings {
         resolution: 4096, // Upgraded to 4K for ultra-crisp shadows
         distance: 320.0,
         lamps: 4,
-        lamp_resolution: 2048, // Scaled up proportionally to match 4096
+        lamp_resolution: 1024,
         light_cubes: false,
         soft_cubes: 24,
         pcss: false,
