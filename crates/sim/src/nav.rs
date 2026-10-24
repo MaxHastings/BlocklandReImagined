@@ -737,6 +737,10 @@ pub struct Nav {
     /// The floors of a cell's column a body at a height hint reaches,
     /// highest first.
     floors: FxHashMap<(i32, i32, i32), Floors>,
+    /// Placing the same body on the same physical floor is independent of
+    /// the height from which a search discovered it. Hint bands share this
+    /// narrow-phase result, including floors where no posture fits.
+    placements: FxHashMap<(i32, i32), ColumnPlacements>,
     /// New samples left this tick.
     budget: u32,
     /// Node expansions left this tick.
@@ -899,6 +903,7 @@ impl Nav {
     }
     pub fn clear(&mut self) {
         self.floors.clear();
+        self.placements.clear();
         self.arcs.clear();
         self.leapt.clear();
     }
@@ -995,6 +1000,13 @@ impl Nav {
             });
         }
         self.forgotten += (before - self.floors.len()) as u64;
+        // A changed column forgets placement results on every storey. This
+        // is conservative; unlike floor discovery, placement has no hint.
+        self.placements.retain(|(x, z), _| {
+            !cells
+                .iter()
+                .any(|(xs, zs, _, _)| xs.contains(x) && zs.contains(z))
+        });
         // An arc's box: from its takeoff to its landing, a body wide, up to
         // the top of its jump and a body over.
         let grown: Vec<_> = boxes
@@ -1173,7 +1185,11 @@ impl Nav {
         if self.floors.len() >= MAX_SAMPLES {
             self.floors.clear();
         }
-        let found = sample(ground, body, x, z, band as f32 * HINT_BAND);
+        if self.placements.len() >= MAX_SAMPLES {
+            self.placements.clear();
+        }
+        let placements = self.placements.entry((x, z)).or_default();
+        let found = sample_cached(ground, body, x, z, band as f32 * HINT_BAND, placements);
         self.settled += found.iter().filter(|f| f.spot != (0, 0)).count() as u64;
         self.floors.insert((x, z, band), found.clone());
         Some(found)
@@ -1577,7 +1593,22 @@ struct Floor {
 /// crouching in the air, as high as it was measured to:
 /// `Body::crawl_jump`). A column can hold several: a stair tread over the
 /// floor beneath it, a roof over the crawlspace under it.
+#[cfg(test)]
 fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
+    sample_cached(ground, body, x, z, from, &mut Vec::new())
+}
+
+/// Exact ray-hit height bits and the corresponding posture classification.
+type ColumnPlacements = Vec<(u32, Option<Floor>)>;
+
+fn sample_cached(
+    ground: &Ground,
+    body: &Body,
+    x: i32,
+    z: i32,
+    from: f32,
+    placements: &mut ColumnPlacements,
+) -> Floors {
     let (px, pz) = (x as f32 * CELL, z as f32 * CELL);
     // Nothing is reached above a jump, or above the ceiling over the cell
     // a body stands under at `from` (the roof of the room it is in): an
@@ -1610,6 +1641,12 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
         // ray that starts right on a floor's top (a chassis's short reach
         // from its hint) is not inside it: that floor is found.
         if normal.y >= body.floor_cos && !ground.inside(origin + Vec3::Y * SETTLE_GAP) {
+            let key = hit.to_bits();
+            if let Some((_, placed)) = placements.iter().find(|(height, _)| *height == key) {
+                floors.extend(*placed);
+                top = hit - 0.02;
+                continue;
+            }
             let centre = Vec3::new(px, hit + 0.01, pz);
             // Upright, or else crouched; at the centre, or else wherever in
             // the cell the body fits.
@@ -1618,23 +1655,25 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
                     .place(body, centre, crouched)
                     .map(|feet| (feet, crouched))
             });
-            if let Some((feet, low)) = placed {
+            let classified = placed.map(|(feet, low)| {
                 let offset = |v: f32| (v / SPOT_UNIT).round() as i8;
-                floors.push(Floor {
+                Floor {
                     y: hit,
                     spot: (offset(feet.x - px), offset(feet.z - pz)),
                     snug: !ground.fits(body, feet, low),
                     low,
                     wet: ground.floats(body, feet).is_some(),
-                });
-            }
+                }
+            });
+            floors.extend(classified);
+            placements.push((key, classified));
         }
         top = hit - 0.02;
     }
     floors.into()
 }
 
-/// How far across from its column's centre a [`sample`] looks: the full
+/// How far across from its column's centre a [`sample_cached`] looks: the full
 /// body's half width (`Ground::fits`), off a centre pushed by up to half a
 /// cell (`Ground::place`), past touching by `SETTLE_GAP`, and a margin.
 fn sample_reach(body: &Body) -> f32 {
@@ -2731,6 +2770,41 @@ mod tests {
             }
         };
         assert!(matches!(found, Found::Path(_)), "{found:?}");
+    }
+
+    #[test]
+    fn floor_placement_reuse_preserves_hints_and_collision_changes() {
+        let body = body();
+        let ceiling = (
+            Vec3::new(-3.0, body.crouch_height * 0.5, -3.0),
+            Vec3::new(3.0, body.crouch_height * 0.5 + 0.2, 3.0),
+        );
+        let base = world(&[floor()]);
+        let blocked = world(&[floor(), ceiling]);
+        let ground = |physics| Ground {
+            physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+            solid: &all_solid,
+        };
+        let mut nav = Nav::default();
+        for physics in [&base, &blocked, &base] {
+            nav.invalidate(ceiling.0, ceiling.1, &body);
+            for hint in [-0.25, 0.0, 0.25, 0.5, 0.0] {
+                nav.unmetered();
+                let actual = nav.floor(&ground(physics), &body, 0, 0, hint).unwrap();
+                let expected = sample(&ground(physics), &body, 0, 0, hint);
+                assert_eq!(actual, expected, "hint {hint} after collision changed");
+            }
+        }
+        assert!(
+            !nav.floor(&ground(&base), &body, 0, 0, 0.0)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// One brick's box forgets the columns over it, whatever the cache

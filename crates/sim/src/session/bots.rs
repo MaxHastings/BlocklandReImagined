@@ -77,6 +77,8 @@ pub use surprise::{BotCandidate, BotDecision, BotDrive, BotSurpriseView};
 mod tactics;
 mod tuning;
 pub use tuning::{BotReload, BotTuning};
+#[cfg(test)]
+mod respawn_tests;
 mod team;
 mod why;
 pub use team::BotTeamView;
@@ -257,23 +259,6 @@ const ERROR_FLOOR: f32 = 1.0 / 3.0;
 const LEAD_STRAY: f32 = 0.15;
 /// Ticks between the lead's seeded points.
 const LEAD_TICKS: u64 = 120;
-/// Within this of where it began trying to get away, a bot has got
-/// nowhere (`trapped`).
-const PINNED: f32 = 2.0;
-/// Seconds of trying and getting nowhere before it thinks of respawning
-/// itself, and how many more before it is sure: its own unsticking (a
-/// hop, plans again, a new goal) has had its turn by then.
-const TRAPPED_AFTER: f32 = 10.0;
-const TRAPPED_RAMP: f32 = 10.0;
-/// Ticks without a try to get away after which it is not trapped.
-const TRY_GAP: u64 = 120 * 10;
-/// How sure it is that it is trapped, 0 to 1, from how long it has kept
-/// trying to get away from one spot (`Brain::pinned`).
-fn trapped(pinned: Option<(Vec3, u64, u64)>) -> f32 {
-    pinned.map_or(0.0, |(_, since, last)| {
-        ((last.saturating_sub(since) as f32 / 120.0 - TRAPPED_AFTER) / TRAPPED_RAMP).clamp(0.0, 1.0)
-    })
-}
 /// How far either way a search sweeps its view (all round), and the
 /// ticks between the points it looks to.
 const SWEEP: f32 = std::f32::consts::PI;
@@ -487,12 +472,6 @@ struct Brain {
     pressed: MoveInput,
     /// The way it faced as it began sweeping the spot it searches.
     sweep_from: Option<f32>,
-    /// Where it has been trying to get away from, since when, and when it
-    /// last tried (`trapped`).
-    pinned: Option<(Vec3, u64, u64)>,
-    /// Where this life began, and whether it began by respawning itself:
-    /// trapped again there, a respawn would only bring it back (`trapped`).
-    life: Option<(Vec3, bool)>,
     /// Current aim, turned toward the wanted one at the kind's rate.
     yaw: f32,
     pitch: f32,
@@ -745,8 +724,6 @@ impl Brain {
             acted: Default::default(),
             pressed: MoveInput::default(),
             sweep_from: None,
-            pinned: None,
-            life: None,
             yaw: 0.0,
             pitch: 0.0,
             target: None,
@@ -1554,7 +1531,14 @@ impl Session {
         };
         let delay = cadence::spread(bot, cadence::salt::RESPAWN, respawn_tick, lo, hi);
         let wait = ticks(delay);
-        if self.bots.brains[&bot].auto_respawn && tick >= respawn_tick + wait {
+        // A round/lives hold already forbids automatic respawn. Wait for
+        // the rules to lift it instead of rebuilding script snapshots to
+        // ask an action the authoritative life state refuses every tick.
+        let released = self
+            .minigames
+            .player(self.peers[&bot].combat.player)
+            .is_ok_and(|player| !player.respawn_held);
+        if self.bots.brains[&bot].auto_respawn && released && tick >= respawn_tick + wait {
             // A bot a bite turned comes back as its own kind.
             if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
                 self.bots.brains.get_mut(&bot).unwrap().kind = born.clone();
@@ -1585,12 +1569,6 @@ impl Session {
             brain.objective_tool = false;
             brain.surprise.new_life();
             brain.chase_offset = Vec3::ZERO;
-            brain.pinned = None;
-            // A life it ended itself begins where respawning brought it.
-            brain.life = brain
-                .life
-                .filter(|(_, ended)| *ended)
-                .map(|_| (Vec3::NAN, true));
         }
         Ok(())
     }
@@ -2638,29 +2616,6 @@ impl Session {
             && self.bot_enemies_about(bot, &self.bots.brains[&bot].kind))
         .then(|| self.bot_explore_target(bot, feet, eye, &body, &intents, tick))
         .flatten();
-        // Whether it may respawn itself, trapped: not while it rides, nor
-        // where a respawn it chose brought it (it would only come back),
-        // and only as the game's rules let a player (`allow_suicide`).
-        let respawn_worth = {
-            let brain = self.bots.brains.get_mut(&bot).unwrap();
-            let (began, ended) = match brain.life {
-                Some((at, ended)) if at.is_finite() => (at, ended),
-                Some((_, ended)) => (feet, ended),
-                None => (feet, false),
-            };
-            let ended = ended && flat(feet - began).length() <= 2.0 * PINNED;
-            brain.life = Some((began, ended));
-            let worth = trapped(brain.pinned);
-            if worth > 0.0
-                && !ended
-                && self.mounted(bot).is_none()
-                && self.package_policy("suicide", bot).is_ok()
-            {
-                worth
-            } else {
-                0.0
-            }
-        };
         let simulation = &self.simulation;
         let clear = move |a: Vec3, b: Vec3| {
             let d = b - a;
@@ -2850,19 +2805,6 @@ impl Session {
             pursuing: brain.objective.pursuing(),
             explore: explore_to.is_some(),
             flee: flee_from.is_some(),
-            // Never a way out of a fight: not with an enemy in sight or
-            // one that hurt it, nor while it carries something.
-            trapped: if brain.auto_respawn
-                && sight.target.is_none()
-                && threat.is_none()
-                && hurt_by.is_none()
-                && !holding
-                && !objective.is_some_and(|view| view.committed)
-            {
-                respawn_worth
-            } else {
-                0.0
-            },
         };
         // Across its band; up, what a jump brings within its band.
         brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
@@ -3188,10 +3130,9 @@ impl Session {
                 }
                 false
             }
-            Behaviour::Respawn => {
-                brain.set_goal(None);
-                false
-            }
+            // Retired option: the zero score preserves deterministic
+            // chooser identities without permitting navigation suicide.
+            Behaviour::Respawn => false,
             Behaviour::Explore => {
                 // A route that ends short of the place is as far as it goes
                 // that way: it looks elsewhere next.
@@ -3212,17 +3153,6 @@ impl Session {
         if behaviour != Behaviour::Wander {
             brain.idle = None;
         }
-        // Respawning: the command a player gives (Ctrl+K), with what it
-        // costs them in this game.
-        if behaviour == Behaviour::Respawn {
-            if let Some((at, _)) = brain.life {
-                brain.life = Some((at, true));
-            }
-            let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
-            let _ = self.command(bot, sequence, Command::Suicide);
-            return Ok(());
-        }
-
         // Its kind's own attack (`ability`): wound up in range of the enemy
         // it fights or chases, then the Add-On's hooks run.
         let quarry = sight
@@ -4012,28 +3942,6 @@ impl Session {
                 .stalled(feet, self.peers[&bot].player.tuning().forward, 120.0, tick);
         if !walking {
             brain.progress.reset();
-        }
-        // Trapped: trying again and again to get somewhere beyond
-        // `2 * PINNED` (walking at it, or wanting a goal it has no route
-        // to), and still within `PINNED` of where it began. A stroll that
-        // gets there leaves the spot, which clears it, as does no try for
-        // `TRY_GAP`. An objective's step is the step's to give up (its own
-        // deadline), not a trap.
-        let far_goal = brain.goal.is_some_and(|g| {
-            !matches!(g, Goal::Objective(_))
-                && flat(g.point(brain.home) - feet).length() > 2.0 * PINNED
-        });
-        let tries = far_goal
-            && driving.is_none()
-            && pushing.is_none()
-            && !at_work
-            && (walking || wanted.is_none());
-        brain.pinned = brain
-            .pinned
-            .filter(|(at, _, last)| flat(feet - *at).length() <= PINNED && tick < last + TRY_GAP);
-        if tries {
-            let (at, since, _) = brain.pinned.unwrap_or((feet, tick, tick));
-            brain.pinned = Some((at, since, tick));
         }
         // A goof's, an extra's, an objective's (into a body) or the stall
         // judge's hop, which safety lets through where it comes down on

@@ -175,13 +175,15 @@ bot does through the same code.
    and replans) is `act::Acted`, the F3 readout's "Acts" line.
 
    Then getting unstuck (hop, judged before the stage resolves and pressed
-   like any other hop, then plan again, give up the goal) on foot. A bot
-   that keeps trying to get somewhere and stays within 2 units of where it
-   began is trapped (bricks respawned round it): past 10 s its Respawn
-   option rises, and once sure it gives the command a player gives
-   (Ctrl+K). Respawn scores 0 with an enemy in sight, when hurt, or while
-   carrying, so it is never a way out of a fight; drivers instead brake, replan and
-   relinquish an unproductive seat. Shared claims are exclusive advisory
+   like any other hop, then plan again, give up the goal) on foot. A missing
+   route or lack of progress never kills the bot: a closed room, blocked
+   doorway or unreachable goal is not evidence of physical embedding.
+   Physical overlap recovery belongs to the motor. If that cannot recover
+   an embedded body, the bot stays alive for an administrator or world change
+   to free it; there is no AI suicide fallback. Ordinary respawning after
+   death and explicit builder respawn events retain their separate rules.
+   Drivers brake, replan and relinquish an unproductive seat. Shared claims
+   are exclusive advisory
    intentions, released on success, preemption or invalidation. A claim never
    overrides human occupancy, trust, mini-game policy or an Add-On ride hook.
    Claims on a loose body (a ball, a crate) conflict only between allies:

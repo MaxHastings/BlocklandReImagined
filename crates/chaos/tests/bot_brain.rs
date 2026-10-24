@@ -1107,7 +1107,7 @@ fn a_bot_that_fails_to_think_leaves_the_others_thinking() {
 /// gets it nowhere, so in the end it respawns itself, as a player would
 /// (Ctrl+K), back at its brick.
 #[test]
-fn a_bot_sealed_in_by_bricks_gets_out_eventually() {
+fn a_bot_sealed_in_a_room_stays_alive_in_the_same_life() {
     let mut s = session();
     only_kind(&mut s, |k| k.wander_radius = 6.0);
     let human = s
@@ -1179,16 +1179,21 @@ fn a_bot_sealed_in_by_bricks_gets_out_eventually() {
         },
     )
     .unwrap();
-    let mut out = None;
-    for tick in 0..120 * 90 {
+    // An enclosed room is not physical embedding. A missing route may
+    // leave it waiting, but must never destroy or replace its body.
+    let born = s.spawn_tick(bot);
+    for _ in 0..120 * 90 {
         steps(&mut s, &[human], 1, &mut sequence);
-        if flat_distance(feet(&s, bot), Vec3::new(cx, 0.0, cz)) > 2.5 {
-            out = Some(tick);
-            break;
-        }
+        assert!(
+            s.is_alive(bot),
+            "an unavailable route killed the sealed-in bot"
+        );
+        assert_eq!(
+            s.spawn_tick(bot),
+            born,
+            "an unavailable route replaced its life"
+        );
     }
-    let out = out.expect("the sealed-in bot got out");
-    eprintln!("out after {out} ticks, at {}", feet(&s, bot));
 }
 
 fn flat_distance(a: Vec3, b: Vec3) -> f32 {
