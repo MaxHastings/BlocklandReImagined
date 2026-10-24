@@ -818,6 +818,38 @@ impl Runner {
     fn focused_text(&self) -> bool {
         self.config.app.ui().takes_text()
     }
+    fn console_clipboard(&mut self, key: Key, mods: Modifiers) -> bool {
+        if self.config.app.ui().top_id() != bri_ui::screens::ScreenId::Console {
+            return false;
+        }
+        if !(mods.ctrl || mods.cmd) || mods.alt {
+            return false;
+        }
+        match key {
+            Key::Letter('v') if self.focused_text() => {
+                match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+                    Ok(text) => {
+                        for ch in pasted_console_chars(&text) {
+                            // The ordinary input path also records the actual pasted
+                            // characters for deterministic input replays.
+                            self.input(InputEvent::Char(ch));
+                        }
+                    }
+                    Err(error) => bri_console::warn(format!("Could not paste: {error}")),
+                }
+                true
+            }
+            Key::Letter('c') => {
+                if let Some(text) = self.config.app.ui().console_copy_text()
+                    && let Err(error) = arboard::Clipboard::new().and_then(|mut c| c.set_text(text))
+                {
+                    bri_console::warn(format!("Could not copy: {error}"));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
     fn sync_cursor(&mut self) -> Result<()> {
         let _span = crate::frame_trace::span("cursor");
         let Some(window) = &self.window else {
@@ -1712,6 +1744,7 @@ impl Runner {
                     if let PhysicalKey::Code(code) = event.physical_key
                         && let Some(key) =
                             translate_key(code, self.config.app.ui().config().platform)
+                        && !(down && !event.repeat && self.console_clipboard(key, self.mods))
                     {
                         self.input(if down {
                             InputEvent::KeyDown {
@@ -2256,6 +2289,15 @@ fn translate_button(button: winit::event::MouseButton) -> Option<MouseButton> {
         _ => return None,
     })
 }
+fn pasted_console_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+    // Paste edits the line; it never synthesizes Enter or executes commands.
+    text.chars().take(4096).filter_map(|c| match c {
+        '\r' | '\n' | '\t' => Some(' '),
+        c if c.is_control() => None,
+        c => Some(c),
+    })
+}
+
 fn committed_chars(text: &str, mods: Modifiers) -> Vec<char> {
     if mods.cmd || (mods.ctrl && !mods.alt) {
         vec![]
@@ -2290,6 +2332,16 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pasted_console_text_cannot_press_enter_and_is_bounded() {
+        assert_eq!(
+            pasted_console_chars("where\r\nversion\t\0").collect::<String>(),
+            "where  version "
+        );
+        assert_eq!(pasted_console_chars(&"x".repeat(10000)).count(), 4096);
+        assert_eq!(pasted_console_chars("é").collect::<String>(), "é");
+    }
 
     /// A refused grab (X11 at launch) is retried shortly instead of ending
     /// the game, with one warning per run of refusals.

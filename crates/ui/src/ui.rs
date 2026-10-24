@@ -1811,6 +1811,27 @@ impl Ui {
         self.screen(self.top_id())
             .is_some_and(|s| s.view().takes_text())
     }
+    /// Console copy: the entry line, or the log when the entry is empty.
+    /// Native clipboard access stays with the window host.
+    pub fn console_copy_text(&self) -> Option<String> {
+        if self.top_id() != ScreenId::Console {
+            return None;
+        }
+        let view = self.screen(ScreenId::Console)?.view();
+        let entry = view
+            .id("ConsoleEntry")
+            .map(|id| view.edit_text(id))
+            .unwrap_or_default();
+        Some(if entry.is_empty() {
+            bri_console::log::lines()
+                .into_iter()
+                .map(|l| l.text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            entry
+        })
+    }
     pub fn is_open(&self, id: ScreenId) -> bool {
         self.content.id() == id || self.dialogs.iter().any(|d| d.id() == id)
     }

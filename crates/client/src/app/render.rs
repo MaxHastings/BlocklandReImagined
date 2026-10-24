@@ -818,10 +818,9 @@ impl App {
                 .collect();
             camera.set_actor_suns(&suns);
             let zone = regions.locate(eye.to_array());
-            // The zone's ambient is what lit models take; lightmaps carry it already.
-            if let Some(ambient) = regions.ambient(zone) {
-                camera.ambient[..3].copy_from_slice(&ambient);
-            }
+            // Region ambient belongs to each actor's render box (actor_light),
+            // not the viewer. Changing this shared scene light at a doorway
+            // would relight every visible room and even the sky from the eye.
             let fog = self.scene.fog_blend.step(regions, zone, dt);
             if fog.enabled {
                 let [r, g, b] = fog.color.map(|c| f32::from(c) / 255.0);
@@ -2575,7 +2574,7 @@ mod repeated_water_tests {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             Ok(Self { gpu, ui, target })
@@ -2599,7 +2598,14 @@ mod repeated_water_tests {
                 size: (160, 120),
                 ui_renderer: &mut self.ui,
             })?;
-            self.gpu.queue.submit([encoder.finish()]);
+            let submitted = self.gpu.queue.submit([encoder.finish()]);
+            // Readback fixtures must bound queued GPU work. A software adapter
+            // otherwise accumulates frames while the host/pipelines settle,
+            // so the first pixel comparison waits behind an unbounded backlog.
+            self.gpu.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submitted),
+                timeout: Some(Duration::from_secs(60)),
+            })?;
             Ok(drew)
         }
         fn until(
@@ -2631,6 +2637,176 @@ mod repeated_water_tests {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+        fn pixels(&mut self, app: &mut App) -> Result<Vec<u8>> {
+            ensure!(self.draw(app)?, "session did not draw");
+            let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+            let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("region lighting readback"),
+                size: 768 * 120,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                self.target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(768),
+                        rows_per_image: Some(120),
+                    },
+                },
+                self.target.size(),
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            self.gpu.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(60)),
+            })?;
+            rx.recv_timeout(Duration::from_secs(5))??;
+            let mapped = buffer
+                .slice(..)
+                .get_mapped_range()
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            let pixels = mapped
+                .chunks_exact(768)
+                .flat_map(|r| r[..640].iter().copied())
+                .collect();
+            drop(mapped);
+            buffer.unmap();
+            Ok(pixels)
+        }
+    }
+    /// Hold the view and all surface/body locations fixed while moving only
+    /// the viewer's region boundary. A room's actor ambient belongs to actors
+    /// in that room; it must not relight every visible surface from the eye.
+    #[test]
+    fn viewer_region_ambient_does_not_relight_the_visible_world() -> Result<()> {
+        use bri_content::regions::{Region, RegionMap};
+        let fixture = ContentRoot::synthetic()?;
+        let state = fixture.state()?;
+        let mut app = App::load(&fixture.root, state.path(), (160, 120))?;
+        app.host_on_any_port();
+        app.graphics.samples = 1;
+        app.graphics.bloom = false;
+        // Ambient/fog ownership does not need full-size sun shadow atlases.
+        // Keep this comparison small enough for the hosted software adapter.
+        app.graphics.shadows = None;
+        app.graphics.lighting = 3;
+        let mut frames = Frames::new()?;
+        frames.open(&mut app)?;
+        app.ui.core.request(UiAction::HostGame {
+            map: fixture.open_map.0.clone(),
+            mode: ServerMode::SinglePlayer,
+            game_mode: None,
+            max_players: 1,
+            server_name: "Viewer region lighting".into(),
+            password: String::new(),
+            admin_password: String::new(),
+            super_admin_password: String::new(),
+        });
+        frames.until(&mut app, "region lighting host", |a| {
+            matches!(a.ui.core.conn, ConnectionState::InGame { .. })
+                && a.local_motion().is_some_and(|(p, _)| p.grounded)
+                && a.map_lighting_settled()
+        })?;
+        let eye = app.rendered_camera().context("camera missing")?.0;
+        // Move the boundary two centimetres across the eye, without changing
+        // the camera or world. Actor boxes spanning the boundary retain both
+        // regions; objects away from it retain their original region.
+        let mut regions = RegionMap {
+            planes: vec![[1., 0., 0., eye.x - 0.01]],
+            front: vec![-1],
+            back: vec![-1],
+            front_region: vec![0],
+            back_region: vec![1],
+            regions: vec![
+                Region {
+                    ambient: Some([0.2; 3]),
+                    ..Default::default()
+                },
+                Region {
+                    ambient: Some([0.; 3]),
+                    ..Default::default()
+                },
+            ],
+            sound: None,
+        };
+        regions.validate()?;
+        for mode in [0, 2, 3] {
+            app.graphics.lighting = mode;
+            frames.until(&mut app, "region lighting mode", App::map_lighting_settled)?;
+            regions.planes[0][3] = eye.x - 0.01;
+            app.scene.set_regions(Some(regions.clone()));
+            frames.pixels(&mut app)?;
+            let before = frames.pixels(&mut app)?;
+            assert_eq!(before, frames.pixels(&mut app)?, "fixture must be stable");
+            assert_eq!(regions.locate(eye.to_array()), 0);
+            let low = (eye - Vec3::splat(0.5)).to_array();
+            let high = (eye + Vec3::splat(0.5)).to_array();
+            let actor_light = regions.actor_light(low, high, 0.0);
+            regions.planes[0][3] = eye.x + 0.01;
+            assert_eq!(regions.locate(eye.to_array()), 1);
+            assert_eq!(regions.actor_light(low, high, 0.0), actor_light);
+            assert!(
+                actor_light.0[0] > 0.0,
+                "local actor lighting must remain active"
+            );
+            app.scene.set_regions(Some(regions.clone()));
+            let after = frames.pixels(&mut app)?;
+            let changed = before
+                .chunks_exact(4)
+                .zip(after.chunks_exact(4))
+                .filter(|(a, b)| a[..3].iter().zip(&b[..3]).any(|(a, b)| a.abs_diff(*b) > 2))
+                .count();
+            eprintln!("REGION mode={mode} changed_pixels={changed}");
+            if let Some(out) = std::env::var_os("BRI_REGION_EVIDENCE") {
+                let out = std::path::PathBuf::from(out);
+                std::fs::create_dir_all(&out)?;
+                for (name, pixels) in [("before", &before), ("after", &after)] {
+                    image::save_buffer(
+                        out.join(format!("mode-{mode}-{name}.png")),
+                        pixels,
+                        160,
+                        120,
+                        image::ColorType::Rgba8,
+                    )?;
+                }
+            }
+            assert_eq!(
+                changed, 0,
+                "mode {mode}: viewer region ambient changed world pixels"
+            );
+            // Fog really is viewer-owned. This control must still change the
+            // frame, then recover, rather than suppressing all region effects.
+            let mut foggy = regions.clone();
+            foggy.regions[1].fog = Some(bri_content::regions::Fog {
+                color: [255, 0, 0],
+                start: 0.0,
+                end: 1.0,
+                blend_time: 0.0,
+                clear_to_fog: false,
+            });
+            app.scene.set_regions(Some(foggy));
+            assert_ne!(
+                after,
+                frames.pixels(&mut app)?,
+                "viewer fog must still apply"
+            );
+            regions.planes[0][3] = eye.x - 0.01;
+            app.scene.set_regions(Some(regions.clone()));
+            assert_eq!(
+                before,
+                frames.pixels(&mut app)?,
+                "leaving the region must recover"
+            );
+        }
+        app.disconnect();
+        Ok(())
     }
     fn install_water(app: &App, map: &str, flat: bool) -> Result<()> {
         let root = app.content.paths.maps.root(map)?.to_owned();
