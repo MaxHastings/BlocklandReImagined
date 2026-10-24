@@ -5,6 +5,12 @@ use bri_console::Clamp;
 impl App {
     pub(super) fn frame(&mut self, elapsed: Duration) -> Result<()> {
         self.perf.frame_stats.push(elapsed);
+        let menu_open = self.ui.stack().contains(&ScreenId::MainMenu);
+        self.menu_backgrounds
+            .tick(elapsed, menu_open, &self.runtime);
+        if menu_open && let Some(background) = self.menu_backgrounds.view() {
+            self.ui.apply(UiUpdate::MainMenuBackground(background));
+        }
         // Tell the player about a newer release outside a game, not as a
         // dialog over play.
         if !self.ui.core.in_game()

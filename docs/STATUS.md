@@ -40,9 +40,11 @@ records the compared rendering paths. Its bounded frame measurements do not
 establish 100 FPS gameplay or completed mission fidelity.
 
 A separately authorized v0.3.6 bot-encounter candidate adds pursuit beyond idle
-homes, intrinsic-hole reset fixes and native builder spawner/lifecycle controls.
+homes, intrinsic-hole reset fixes, native builder spawner/lifecycle controls,
+and a shuffled main-menu slideshow including saved screenshots.
 See the [candidate notes](releases/v0.3.6.md) and
-[supplied-source evidence](progress/2026-10-23-supplied-hole-bots.md).
+[supplied-source evidence](progress/2026-10-23-supplied-hole-bots.md), plus
+[menu pixel comparisons](progress/2026-10-23-menu-background-slideshow.md).
 The latest published download above remains authoritative until its publication
 receipt is recorded; a candidate is not a new release.
 

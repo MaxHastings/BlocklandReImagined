@@ -2689,3 +2689,236 @@ fn weapon_frame_probe_drops_owned_buffers_on_toggle_session_reset_and_disconnect
     assert!(app.weapon_frame_observation().is_none());
     Ok(())
 }
+#[test]
+fn menu_photos_change_through_the_application_frame() -> anyhow::Result<()> {
+    use super::*;
+    use bri_ui::{draw::DrawCmd, pack::TexKey};
+    let fixture = ContentRoot::synthetic()?;
+    let state = fixture.state()?;
+    let dir = bri_package::testing::pack_dir(&fixture.root, "ui_pack");
+    let path = dir.join("ui-pack.json");
+    let mut pack: bri_ui::schema::UiPack = serde_json::from_slice(&std::fs::read(&path)?)?;
+    for (name, color) in [("one", [230, 20, 20, 255]), ("two", [20, 20, 230, 255])] {
+        let file = format!("{name}.png");
+        let bytes = crate::testing::png(32, 24, |_, _| color)?;
+        std::fs::write(dir.join(&file), &bytes)?;
+        pack.images.insert(
+            format!("screenshots/{name}"),
+            bri_ui::schema::ImageEntry {
+                file,
+                width: 32,
+                height: 24,
+                sha256: crate::testing::sha256(&bytes),
+                source: "invented menu regression".into(),
+            },
+        );
+    }
+    let mut background = bri_ui::screens::bitmap(
+        "GuiDefaultProfile",
+        bri_ui::geom::Rect::new(0, 0, 640, 480),
+        "screenshots/one",
+    );
+    background.name = Some("MM_BG".into());
+    background.h_sizing = bri_ui::schema::HSizing::Width;
+    background.v_sizing = bri_ui::schema::VSizing::Height;
+    pack.layouts
+        .get_mut("MainMenuGui")
+        .unwrap()
+        .children
+        .insert(0, background);
+    std::fs::write(path, serde_json::to_vec(&pack)?)?;
+    let mut app = App::load(&fixture.root, state.path(), (640, 480))?;
+    let photo = |app: &App| {
+        app.ui
+            .draw()
+            .cmds
+            .into_iter()
+            .find_map(|command| match command {
+                DrawCmd::Image { tex, dst, tint, .. }
+                    if dst == [0., 0., 640., 480.] && tint[3] == 255 =>
+                {
+                    Some(tex)
+                }
+                _ => None,
+            })
+            .expect("the main menu must draw a photograph")
+    };
+    // Allow asynchronous file preparation without advancing slideshow time.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        app.frame(Duration::ZERO)?;
+        app.ui.update(0);
+        if app
+            .menu_backgrounds
+            .view()
+            .is_some_and(|b| b.next.is_some())
+        {
+            break;
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "menu photos did not prepare"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let first = photo(&app);
+    assert!(!matches!(
+        first,
+        TexKey::FontSheet(..) | TexKey::Fallback(..)
+    ));
+    for _ in 0..60 {
+        app.frame(Duration::from_millis(100))?;
+        app.ui.update(100);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_ne!(
+        first,
+        photo(&app),
+        "the menu is stuck on the first photo after six seconds"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires generated v20 content and an offscreen GPU"]
+fn menu_slideshow_actual_pack_pixels_and_personal_photo() -> anyhow::Result<()> {
+    use super::*;
+    let fixture = ContentRoot::content()?;
+    let state = fixture.state()?;
+    let mut app = App::load(&fixture.root, state.path(), (960, 540))?;
+    app.lobby.update_check = None; // Keep the menu text fixed during pixel comparisons.
+    assert!(
+        app.content
+            .ui_pack
+            .data
+            .images
+            .keys()
+            .filter(|k| k.starts_with("screenshots/"))
+            .count()
+            >= 2,
+        "the assembled package needs stock photographs"
+    );
+    let ready = |app: &mut App| -> anyhow::Result<()> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while app.menu_backgrounds.view().is_none_or(|b| b.next.is_none()) {
+            app.frame(Duration::ZERO)?;
+            app.ui.update(0);
+            anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "the menu photographs never became ready"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    };
+    ready(&mut app)?;
+    let gpu = bri_ui::gpu::Headless::new()?;
+    let mut renderer = bri_ui::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+    let capture =
+        |app: &mut App, renderer: &mut bri_ui::gpu::UiRenderer| -> anyhow::Result<Vec<u8>> {
+            app.menu_backgrounds
+                .upload(&gpu.device, &gpu.queue, renderer);
+            gpu.render_rgba(
+                renderer,
+                &app.ui.core.pack,
+                &app.ui.draw(),
+                (960, 540),
+                app.ui.scale(),
+                [0., 0., 0., 1.],
+            )
+        };
+    let before = capture(&mut app, &mut renderer)?;
+    app.frame(Duration::from_secs(4))?;
+    app.ui.update(4000);
+    app.frame(Duration::from_millis(500))?;
+    app.ui.update(500);
+    assert_eq!(app.ui.core.menu_background.as_ref().unwrap().blend, 0.5);
+    let middle = capture(&mut app, &mut renderer)?;
+    app.frame(Duration::from_millis(500))?;
+    app.ui.update(500);
+    let after = capture(&mut app, &mut renderer)?;
+    let mut changed = 0;
+    for ((a, b), m) in before
+        .chunks_exact(4)
+        .zip(after.chunks_exact(4))
+        .zip(middle.chunks_exact(4))
+    {
+        if (0..3).any(|i| a[i].abs_diff(b[i]) > 20) {
+            changed += 1;
+            for i in 0..3 {
+                let expected = ((u16::from(a[i]) * 127 + u16::from(b[i]) * 128) / 255) as u8;
+                assert!(
+                    m[i].abs_diff(expected) <= 3,
+                    "fade pixel {m:?} disagrees with endpoints {a:?} / {b:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        changed > 100_000,
+        "the full-size photographs did not visibly change ({changed} pixels)"
+    );
+    // Re-upload the same two photographs after a device restart, without rereading files.
+    app.menu_backgrounds.gpu_stopped();
+    let mut restored = bri_ui::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
+    assert_eq!(capture(&mut app, &mut restored)?, after);
+    let out = std::env::var_os("BRI_MENU_OUT")
+        .map(PathBuf::from)
+        .unwrap_or(fixture.out("menu-slideshow")?);
+    std::fs::create_dir_all(&out)?;
+    for (name, rgba) in [
+        ("before", &before),
+        ("half-fade", &middle),
+        ("after", &after),
+    ] {
+        image::save_buffer(
+            out.join(format!("{name}.png")),
+            rgba,
+            960,
+            540,
+            image::ColorType::Rgba8,
+        )?;
+    }
+    // This is the same screenshots directory normal screenshot actions write.
+    // Force the existing stock library to one current photo so the newly added
+    // personal photo is the only next choice; exercise the real return scan.
+    app.menu_backgrounds.retain_current_for_test();
+    let directory = state.path().join("screenshots");
+    std::fs::create_dir_all(&directory)?;
+    std::fs::write(
+        directory.join("Blockland_test.png"),
+        crate::testing::png(40, 80, |_, y| {
+            if !(20..60).contains(&y) {
+                [255, 0, 0, 255]
+            } else {
+                [0, 220, 0, 255]
+            }
+        })?,
+    )?;
+    app.menu_backgrounds
+        .tick(Duration::ZERO, false, &app.runtime);
+    ready(&mut app)?;
+    app.frame(Duration::from_secs(5))?;
+    app.ui.update(5000);
+    let personal = capture(&mut app, &mut renderer)?;
+    image::save_buffer(
+        out.join("personal-portrait.png"),
+        &personal,
+        960,
+        540,
+        image::ColorType::Rgba8,
+    )?;
+    let pixel = |x: usize, y: usize| &personal[(y * 960 + x) * 4..(y * 960 + x) * 4 + 4];
+    assert_eq!(
+        pixel(950, 10),
+        [0, 220, 0, 255],
+        "portrait photo must cover/crop instead of stretching its red ends"
+    );
+    // Stay left of the original copyright artwork in the lower-right corner.
+    assert_eq!(pixel(700, 530), [0, 220, 0, 255]);
+    println!(
+        "menu: stock before/half/after; {changed} changing pixels; GPU recovery; personal screenshot and portrait crop; {}",
+        out.display()
+    );
+    Ok(())
+}

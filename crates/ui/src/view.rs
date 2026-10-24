@@ -3156,7 +3156,7 @@ pub fn resize(
 
 /// Source rectangle (pixels) of an image that covers `dst` at its own aspect,
 /// cropping the overflow evenly from both sides.
-fn cover_src(img: (f32, f32), dst: (f32, f32)) -> [f32; 4] {
+pub(crate) fn cover_src(img: (f32, f32), dst: (f32, f32)) -> [f32; 4] {
     if img.0 <= 0.0 || img.1 <= 0.0 || dst.0 <= 0.0 || dst.1 <= 0.0 {
         return [0.0, 0.0, img.0, img.1];
     }

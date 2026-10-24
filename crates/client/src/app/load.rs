@@ -129,19 +129,12 @@ impl App {
         ui.apply(UiUpdate::GameModes(crate::packages::modes(
             server_packages.as_ref(),
         )));
-        let backgrounds = content
-            .ui_pack
-            .data
-            .images
-            .keys()
-            .filter(|key| key.to_ascii_lowercase().starts_with("screenshots/"))
-            .cloned()
-            .map(IconRef::Pack)
-            .collect();
-        ui.apply(UiUpdate::MainMenuBackgrounds(backgrounds));
+        let menu_backgrounds =
+            crate::menu_backgrounds::Backgrounds::new(&content.ui_pack, state_dir);
         let frame_limit = settings::startup_display(&ui.settings()).max_fps;
         ui.apply(UiUpdate::Version(crate::updates::version()));
         let mut app = Box::new(Self {
+            menu_backgrounds,
             item_assets,
             item_ui,
             world_items,

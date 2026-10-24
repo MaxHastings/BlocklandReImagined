@@ -22,8 +22,8 @@ rather than repeating it. Two columns say where a seam stands:
   stay traceable, and it is often out of date: most `branch` rows below were
   merged long ago and their branches deleted.
 - *On main (checked 2026-10-23; yes = code integrated on main, not human-tested)*
-  is a check made against the source of main on that date; the new bot-control row explicitly marks
-  its release candidate until integration. Where a row names
+  is a check made against the source of main on that date; new candidate rows explicitly mark
+  their release candidate until integration. Where a row names
   code items in backticks (types, functions, fields), each was searched for in
   `crates/`, `packages/` and `tools/`. Where it names none, the code each row
   describes was found by hand and named in the cell. "yes" means that code is
@@ -43,6 +43,7 @@ labels are retained so earlier progress notes remain traceable.
 
 | Seam | What it covers | Owner | Recorded state (history) | On main (checked 2026-10-23; yes = code integrated on main, not human-tested) |
 |---|---|---|---|---|
+| Prepared menu photographs | Host scans stock/player screenshot files and prepares two bounded textures off the frame thread; native menu crossfades aspect-preserving full-screen photographs | Root v0.3.6 | `codex/zombie-hole-20261023`; application-frame negative control and assembled offscreen comparison | candidate, not yet on main: `Backgrounds` (client/src/menu_backgrounds.rs), `MenuBackground` (ui/src/api.rs) |
 | Read-only map partition policy query | Retains the authored RegionMap in the host and exposes bounded package-owned text properties through `map_region_at`; no engine acoustic classification | Root AA fidelity correction | Implemented; quick/focused, assembled audio, walking and two-client delivery pass; gate/integration pending | yes: `map_region_at` in package-runtime/src/script.rs and sim/src/session/script_world.rs; integrated in PR301 |
 | Independent spawn recovery extents | Optional `Unstick.vertical_reach` lets a tall narrow body recover above its lateral search radius, retaining whole-body clearance and existing defaults | Root AA mission integration | `codex/pipeline-round-flow-20261022`; floor/low-ceiling regression and ordinary private map consumer | yes: integrated in d07bc043f (PR293), full gate and ordinary private map consumer passed |
 | Live guard assignments and independent reservations | Bounded fair rediscovery releases withdrawn or full guard offers; declining a seat/loose-body opportunity retains unrelated work/guard reservations | Root AA mission integration | `codex/pipeline-round-flow-20261022`; ordinary two-post consumer | yes: integrated in d07bc043f (PR293), full gate and ordinary private map consumer passed |

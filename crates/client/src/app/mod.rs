@@ -547,6 +547,7 @@ pub struct App {
     /// Everything uploaded to the graphics card, and the renderers that draw it.
     gpu: GpuState,
     audio: crate::audio::ClientAudio,
+    menu_backgrounds: crate::menu_backgrounds::Backgrounds,
     pub ui: Ui,
     pub content: ClientContent,
     pub controls: Controls,
@@ -1746,6 +1747,7 @@ impl PlatformApp for App {
         self.gpu.opened = true;
         self.gpu.device = Some((device.clone(), queue.clone(), format));
         self.item_ui.gpu_stopped();
+        self.menu_backgrounds.gpu_stopped();
         self.addons.hud_regions.gpu_stopped();
         self.addons.panel_textures.gpu_stopped();
         self.scene.scenery.gpu_stopped();

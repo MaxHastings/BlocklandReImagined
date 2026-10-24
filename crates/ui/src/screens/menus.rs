@@ -447,9 +447,7 @@ impl NativeScreen {
         }
         match self.id {
             ScreenId::MainMenu => {
-                if let Some(i) = core.menu_backgrounds.first() {
-                    self.icon("MM_BG", i);
-                }
+                self.visible("MM_BG", core.menu_background.is_none());
                 self.set("MM_Version", &main_menu_version(core));
             }
             ScreenId::StartMission => {
@@ -817,6 +815,35 @@ impl Screen for NativeScreen {
     }
     fn on_update(&mut self, core: &mut Core) {
         self.refresh(core);
+    }
+    fn draw(&self, pack: &Pack, dl: &mut DrawList, core: &Core) {
+        if self.id == ScreenId::MainMenu
+            && let Some(background) = &core.menu_background
+        {
+            let (w, h) = (core.logical.0 as f32, core.logical.1 as f32);
+            let mut photo = |picture: PanelPicture, alpha: u8| {
+                let (pw, ph) = (picture.size[0] as f32, picture.size[1] as f32);
+                if pw <= 0.0 || ph <= 0.0 {
+                    return;
+                }
+                let [x, y, sw, sh] = crate::view::cover_src((pw, ph), (w, h));
+                dl.image(
+                    crate::pack::TexKey::External(picture.key),
+                    [x / pw, y / ph, sw / pw, sh / ph],
+                    [0.0, 0.0, w, h],
+                    [255, 255, 255, alpha],
+                    crate::draw::Filter::Linear,
+                );
+            };
+            photo(background.current, 255);
+            if let Some(next) = background.next {
+                photo(
+                    next,
+                    (background.blend.clamped(0.0, 1.0) * 255.0).round() as u8,
+                );
+            }
+        }
+        self.view.draw(pack, dl);
     }
     fn tick(&mut self, _dt_ms: u64, core: &mut Core) {
         // The Game Mode dialog stores its choice; show it once it closes.

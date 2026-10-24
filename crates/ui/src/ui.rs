@@ -359,7 +359,7 @@ pub struct Core {
     pub prints: BTreeMap<String, Vec<PrintInfo>>,
     pub events: EventCatalog,
     pub datablocks: DatablockMenus,
-    pub menu_backgrounds: Vec<IconRef>,
+    pub menu_background: Option<crate::api::MenuBackground>,
     /// Music loop names for Start Game's Music Files.
     pub music_tracks: Vec<String>,
     /// Whether the save waiting in `LoadBricksColorGui` can add its colours.
@@ -1624,7 +1624,7 @@ impl Ui {
             prints: BTreeMap::new(),
             events: EventCatalog::default(),
             datablocks: DatablockMenus::new(),
-            menu_backgrounds: Vec::new(),
+            menu_background: None,
             music_tracks: Vec::new(),
             color_append_fits: true,
             display_modes: None,
@@ -2073,7 +2073,15 @@ impl Ui {
                 c.servers = servers;
                 c.lan_querying = querying;
             }
-            UiUpdate::MainMenuBackgrounds(b) => c.menu_backgrounds = b,
+            UiUpdate::MainMenuBackground(b) => {
+                let first = c.menu_background.is_none();
+                c.menu_background = Some(b);
+                // Only the first prepared photograph replaces the fallback widget.
+                // Crossfade frames must not rebuild open dialog controls.
+                if !first {
+                    return;
+                }
+            }
             UiUpdate::Bricks(b) => {
                 let remap = |old: Option<usize>| {
                     old.and_then(|i| c.bricks.get(i))

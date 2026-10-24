@@ -2296,6 +2296,8 @@ impl App {
             self.rebuild_effects_renderer(frame.device, frame.queue, frame.format)?;
         }
         self.item_ui.register_icons(frame);
+        self.menu_backgrounds
+            .upload(frame.device, frame.queue, frame.ui_renderer);
         self.addons.hud_regions.register_textures(frame);
         self.addons.panel_textures.register_textures(frame);
         // Until its pipelines finish compiling, the preview stays due.

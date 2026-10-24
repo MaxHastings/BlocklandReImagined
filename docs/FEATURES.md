@@ -13,7 +13,10 @@ Each release's notes on [GitHub](https://github.com/MaxHastings/BlocklandReImagi
 
 **Menus.** Start Game, Join Game, Player (avatar), Options, About, Credits,
 the Tutorial and F1 help with v20's eight help pages. The screens are v20's
-own layouts and artwork, with native additions for the new settings.
+own layouts and artwork, with native additions for the new settings. The main
+menu shuffles the game photos and your saved JPEG/PNG screenshots, with a
+one-second crossfade about every five seconds. Newly captured pictures enter
+the rotation when you return from a game.
 
 **Maps.** All 14 v20 maps: Bedroom, Bedroom - Dark, Construct, Destruct,
 Halloween Slate, Kitchen, Kitchen - Dark, Skylands, Slate, Slate Desert,

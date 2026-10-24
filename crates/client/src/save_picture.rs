@@ -41,6 +41,19 @@ pub struct Picture {
 
 /// Read and scale the picture at `path`; `None` when there is none.
 pub fn read(path: &Path) -> Result<Option<Picture>> {
+    let Some(image) = read_image(path)? else {
+        return Ok(None);
+    };
+    let rgba = fit(image).into_rgba8();
+    Ok(Some(Picture {
+        width: rgba.width(),
+        height: rgba.height(),
+        rgba: rgba.into_raw(),
+    }))
+}
+
+/// Bounded source decoding shared by save previews and menu photographs.
+pub(crate) fn read_image(path: &Path) -> Result<Option<image::DynamicImage>> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -48,18 +61,16 @@ pub fn read(path: &Path) -> Result<Option<Picture>> {
     };
     let mut bytes = vec![];
     file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= MAX_BYTES, "Save picture is too large");
+    ensure!(
+        bytes.len() as u64 <= MAX_BYTES,
+        "UI photograph is too large"
+    );
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(16384);
     limits.max_image_height = Some(16384);
     reader.limits(limits);
-    let rgba = fit(reader.decode()?).into_rgba8();
-    Ok(Some(Picture {
-        width: rgba.width(),
-        height: rgba.height(),
-        rgba: rgba.into_raw(),
-    }))
+    Ok(Some(reader.decode()?))
 }
 
 /// `image` cut to the preview box's shape about its centre, then scaled
@@ -99,13 +110,24 @@ pub fn upload(frame: &mut crate::platform::RenderContext<'_>, picture: &Picture)
 
 /// Put `picture` in UI texture `id`.
 pub fn upload_as(frame: &mut crate::platform::RenderContext<'_>, id: u64, picture: &Picture) {
+    upload_to(frame.device, frame.queue, frame.ui_renderer, id, picture);
+}
+
+/// Upload a bounded photograph to an external UI texture (also usable offscreen).
+pub(crate) fn upload_to(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    renderer: &mut bri_ui::gpu::UiRenderer,
+    id: u64,
+    picture: &Picture,
+) {
     let size = wgpu::Extent3d {
         width: picture.width,
         height: picture.height,
         depth_or_array_layers: 1,
     };
-    let texture = frame.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Save picture"),
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("UI photograph"),
         size,
         mip_level_count: 1,
         sample_count: 1,
@@ -114,7 +136,7 @@ pub fn upload_as(frame: &mut crate::platform::RenderContext<'_>, id: u64, pictur
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    frame.queue.write_texture(
+    queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture: &texture,
             mip_level: 0,
@@ -129,7 +151,7 @@ pub fn upload_as(frame: &mut crate::platform::RenderContext<'_>, id: u64, pictur
         },
         size,
     );
-    frame.ui_renderer.set_external(
+    renderer.set_external(
         id,
         texture.create_view(&Default::default()),
         (picture.width, picture.height),

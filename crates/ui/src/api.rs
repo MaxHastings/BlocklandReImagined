@@ -1592,6 +1592,14 @@ pub struct PanelPicture {
     pub key: u64,
     pub size: [u32; 2],
 }
+/// The host prepares two menu photographs without retaining the entire library.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MenuBackground {
+    pub current: PanelPicture,
+    pub next: Option<PanelPicture>,
+    pub blend: f32,
+}
+
 /// A panel's background picture.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PanelBackgroundView {
@@ -1814,7 +1822,8 @@ pub enum UiUpdate {
         servers: Vec<ServerInfo>,
         querying: bool,
     },
-    MainMenuBackgrounds(Vec<IconRef>),
+    /// Prepared current/next menu photographs, with a 0..1 crossfade.
+    MainMenuBackground(MenuBackground),
     /// The window's monitor: what Options may offer (platform to UI).
     DisplayModes(DisplayModes),
     /// The platform changed the display itself (Alt+Enter, or a saved mode

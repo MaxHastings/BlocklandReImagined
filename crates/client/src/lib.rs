@@ -55,6 +55,7 @@ pub mod map_movers;
 pub mod map_scatter;
 pub mod match_hud;
 pub mod materials;
+mod menu_backgrounds;
 pub mod minigame_ui;
 pub mod mirrors;
 pub mod mods;
