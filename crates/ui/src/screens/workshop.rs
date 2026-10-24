@@ -738,7 +738,9 @@ mod tests {
         let content = std::env::var_os("BRI_CONTENT")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| root.join("content"));
-        let pack = Rc::new(Pack::load(&content.join("ui-pack-004"))?);
+        let pack = Rc::new(Pack::load(&bri_package::testing::pack_dir(
+            &content, "ui_pack",
+        ))?);
         let gpu = crate::gpu::Headless::new()?;
         let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
         let out = root.join("artifacts/workshop-ui");
