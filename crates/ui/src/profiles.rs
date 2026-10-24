@@ -59,7 +59,7 @@ pub struct MouseSettings {
 /// the `building` HUD claim, and the body's own `can_jet`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Hides {
-    /// Building, tools and inventory, and the free-camera drops.
+    /// Building, tools and inventory. Admin camera controls stay available.
     pub building: bool,
     /// Jet, and the Jump/Jet Combo option.
     pub jet: bool,
@@ -73,8 +73,9 @@ impl Hides {
 }
 
 /// A stock command of the building interface (brick, paint and tool
-/// picking, shifting the ghost brick, the selector) or of the free camera
-/// builders drop around; `c` is lower-case.
+/// picking, shifting the ghost brick, the selector). Admin camera controls
+/// have their own server permissions and are independent of building;
+/// `c` is lower-case.
 pub fn building_command(c: &str) -> bool {
     matches!(
         c,
@@ -96,8 +97,6 @@ pub fn building_command(c: &str) -> bool {
             | "useeighthslot"
             | "useninthslot"
             | "usetenthslot"
-            | "dropcameraatplayer"
-            | "dropplayeratcamera"
     ) || c.starts_with("shiftbrick")
         || c.starts_with("supershiftbrick")
 }

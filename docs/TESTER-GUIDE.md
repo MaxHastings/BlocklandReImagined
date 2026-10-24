@@ -186,6 +186,17 @@ they're your identity and your server's.
 | A legacy Add-On imported but does nothing | Read its `IMPORT-REPORT.md`. Scripts need a supported native port; importing resources alone does not recreate behavior. |
 | A source build reports missing packs | Developers should rerun `python tools/bootstrap.py`; a downloaded release should be extracted again into a fresh folder. |
 
+To report an exact bad spot, open the in-game console with **~**, type `where`
+and press Enter. It prints your map, feet position and camera direction, and
+copies the report to the clipboard. Paste it into your report with a screenshot.
+The console accepts **Ctrl+V** paste and **Ctrl+A** select-all; **Ctrl+C** copies
+the entry, or the console log when the entry is empty. Use Command on macOS.
+Pasting never runs a command until you press Enter.
+
+Administrators can use **F8** to fly through geometry and **F7** to move their
+player to the camera, including in games that hide the building interface.
+Server permissions and any explicit game policy still apply.
+
 ## Known limits
 
 - **Unsigned Windows builds; ad-hoc signed Mac app.** SmartScreen or macOS

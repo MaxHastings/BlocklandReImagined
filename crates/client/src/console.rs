@@ -61,7 +61,54 @@ pub fn registry() -> Registry<App> {
             Ok(())
         },
     );
+    r.command(
+        "where",
+        "",
+        "Print and copy the current map, player coordinates and camera direction for a bug report.",
+        |app, _, out| {
+            if let Some(report) = location(app, out) {
+                match crate::app::copy_to_clipboard(&report) {
+                    Ok(()) => {
+                        out.echo("Location copied to clipboard. Paste it into your bug report.")
+                    }
+                    Err(error) => out.warn(error.to_string()),
+                }
+            }
+            Ok(())
+        },
+    );
     r
+}
+
+fn location(app: &App, out: &mut Output) -> Option<String> {
+    let Some(view) = app.network_view() else {
+        out.echo("Location: not in a game");
+        return None;
+    };
+    let mut lines = vec![
+        format!("Blockland ReImagined {}", crate::updates::version()),
+        format!(
+            "Location: map {} owner {} tick {} (native Y-up units)",
+            view.world.map_id, view.owner, view.tick
+        ),
+    ];
+    if let Some((player, _)) = app.local_motion() {
+        let [x, y, z] = player.feet;
+        lines.push(format!(
+            "Feet: [{x:.4}, {y:.4}, {z:.4}] grounded={} crouched={}",
+            player.grounded, player.crouched
+        ));
+    }
+    if let Some((eye, yaw, pitch)) = app.rendered_camera() {
+        lines.push(format!(
+            "Camera: [{:.4}, {:.4}, {:.4}] yaw={yaw:.6} pitch={pitch:.6} radians",
+            eye.x, eye.y, eye.z
+        ));
+    }
+    for line in &lines {
+        out.echo(line);
+    }
+    Some(lines.join("\n"))
 }
 
 /// What the UI lists and forwards to [`registry`].
@@ -166,6 +213,6 @@ mod tests {
     #[test]
     fn host_commands_exclude_the_ui_builtins() {
         let names: Vec<_> = commands().into_iter().map(|c| c.name).collect();
-        assert_eq!(names, ["stats", "version"]);
+        assert_eq!(names, ["stats", "version", "where"]);
     }
 }
