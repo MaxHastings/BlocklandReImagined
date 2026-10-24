@@ -213,3 +213,70 @@ fn a_point_on_a_movers_collision_names_the_mover_and_one_off_it_does_not() {
     assert_eq!(s.mover_at(Vec3::new(1.5, 1.0, 0.1)), None);
     assert_eq!(s.mover_at(Vec3::new(0.1, 1.0, 1.5)), Some("door"));
 }
+
+#[test]
+fn a_blocked_door_publishes_its_last_nonpenetrating_pose() {
+    let mut s = session();
+    s.join("Stander".into(), Vec3::new(1.5, 0.05, 1.5), true)
+        .unwrap();
+    s.step().unwrap();
+    assert!(s.mover_goto("door", 1, 1.0).unwrap());
+    for _ in 0..120 {
+        s.step().unwrap();
+        let state = s.map_mover_states()[0];
+        if !state.blocked {
+            continue;
+        }
+        let tick = s.snapshot().world.tick;
+        let transform = door().transform(&state, tick);
+        let (_, rotation, translation) = transform.to_scale_rotation_translation();
+        let pose = Pose::from_parts(
+            Vector::from_array(translation.to_array()),
+            Rotation::from_array(rotation.to_array()),
+        );
+        assert!(
+            !s.simulation().map_collider_meets_player(1, &pose),
+            "a stopped door must publish its accepted pose, not the rejected penetrating step: {state:?}"
+        );
+        // The same published state drives a client collision mirror. Its
+        // surface must coincide with the host, including the blocked frame.
+        let mut mirror = CollisionMirror::new(
+            Definitions {
+                entries: Default::default(),
+            },
+            vec![door_collider()],
+            Vec::new(),
+        );
+        let mut mirrored_door = door();
+        mirrored_door.colliders = 0..1;
+        mirror.set_movers(&[mirrored_door]);
+        mirror.set_map_movers(&[state], tick);
+        for local in [Vec3::new(0.5, 1.0, 0.1), Vec3::new(2.5, 4.0, -0.1)] {
+            let point = transform.transform_point3(local);
+            assert!(
+                s.simulation().map_collider_gap(1, point).unwrap() < 0.0001,
+                "published surface differs from authoritative collision"
+            );
+            let collider = mirror.physics().colliders.iter().next().unwrap().1;
+            assert!(
+                collider.shape().distance_to_point(
+                    collider.position(),
+                    Vector::from_array(point.to_array()),
+                    true
+                ) < 0.0001,
+                "observer collision differs from published surface"
+            );
+        }
+        let before = feet(&s);
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+        assert!(
+            feet(&s).distance(before) < 0.02,
+            "stopped door pushed idle player: {before:?} -> {:?}",
+            feet(&s)
+        );
+        return;
+    }
+    panic!("door did not meet the player");
+}

@@ -270,3 +270,55 @@ fn shift_tilde_types_a_tilde_while_a_text_box_has_focus() {
     tilde(&mut u);
     assert!(!u.is_open(ScreenId::Console));
 }
+
+#[test]
+fn console_select_all_replaces_the_line_and_copy_returns_entry_or_log() {
+    let mut u = ui();
+    assert_eq!(
+        u.console_copy_text(),
+        None,
+        "closed console must not capture clipboard shortcuts"
+    );
+    tilde(&mut u);
+    type_text(&mut u, "wrong command");
+    assert_eq!(u.console_copy_text().as_deref(), Some("wrong command"));
+    u.handle_input(InputEvent::KeyDown {
+        key: Key::Letter('a'),
+        mods: Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
+        repeat: false,
+    });
+    type_text(&mut u, "stats");
+    assert_eq!(entry(&u), "stats");
+    assert!(
+        !u.drain_actions()
+            .iter()
+            .any(|(_, a)| matches!(a, UiAction::Console { .. })),
+        "pasted text must wait for Enter"
+    );
+    down(&mut u, Key::Return);
+    assert!(
+        u.drain_actions()
+            .iter()
+            .any(|(_, a)| matches!(a,UiAction::Console{line} if line=="stats"))
+    );
+    bri_console::echo("coordinate-copy-test-marker");
+    assert!(
+        u.console_copy_text()
+            .unwrap()
+            .contains("coordinate-copy-test-marker")
+    );
+    type_text(&mut u, "replace me");
+    u.handle_input(InputEvent::KeyDown {
+        key: Key::Letter('a'),
+        mods: Modifiers {
+            cmd: true,
+            ..Modifiers::NONE
+        },
+        repeat: false,
+    });
+    down(&mut u, Key::Backspace);
+    assert_eq!(entry(&u), "");
+}

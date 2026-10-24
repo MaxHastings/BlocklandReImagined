@@ -58,6 +58,8 @@ pub(super) struct MapMovers {
     states: Vec<MoverState>,
     /// The transform each mover's colliders were last put at.
     placed: Vec<Option<glam::Mat4>>,
+    /// Frozen state of the last collision pose actually accepted by the host.
+    accepted: Vec<MoverState>,
 }
 
 fn pose(transform: glam::Mat4) -> rapier3d::prelude::Pose {
@@ -103,6 +105,7 @@ impl Session {
             movers,
             states: vec![MoverState::default(); count],
             placed: vec![None; count],
+            accepted: vec![MoverState::default(); count],
         };
         Ok(())
     }
@@ -327,7 +330,13 @@ impl Session {
                         .clone()
                         .any(|c| self.simulation.map_collider_meets_player(c, &pose(target)));
                 if blocked {
-                    self.map_movers.states[index].halt(tick, true);
+                    // The attempted pose intersects a player. Publishing it as the
+                    // stopped state would apply it without the moving check next
+                    // tick, and clients would immediately predict that bad pose.
+                    self.map_movers.states[index] = MoverState {
+                        blocked: true,
+                        ..self.map_movers.accepted[index]
+                    };
                     continue;
                 }
                 self.simulation
@@ -337,6 +346,9 @@ impl Session {
                 self.map_movers.placed[index] = Some(target);
             }
             self.map_movers.states[index].settle(tick);
+            let mut accepted = self.map_movers.states[index];
+            accepted.halt(tick, false);
+            self.map_movers.accepted[index] = accepted;
         }
         Ok(())
     }

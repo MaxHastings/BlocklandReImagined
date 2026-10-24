@@ -681,12 +681,13 @@ impl NativeMap {
         }
         // Ladders: sensor boxes the player motor finds by a body's middle.
         for climb in scene.climbs()? {
-            colliders.push(bri_motor::climb::collider(
+            colliders.push(bri_motor::climb::collider_with_facing(
                 climb.center,
                 climb.half,
                 climb.yaw,
                 climb.speed,
                 climb.strafe,
+                climb.facing_yaw,
             ));
             surfaces.triangles.push(None);
             surfaces.identity_triangles.push(None);

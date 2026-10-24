@@ -605,6 +605,7 @@ impl Core {
         self.players.clear();
         self.minigames = MiniGameUiState::default();
         self.report = None;
+        self.panel = None;
         self.admin = Default::default();
         self.environment = Default::default();
         // A Setup draft belongs to the server it was made on.
@@ -1811,6 +1812,27 @@ impl Ui {
         self.screen(self.top_id())
             .is_some_and(|s| s.view().takes_text())
     }
+    /// Console copy: the entry line, or the log when the entry is empty.
+    /// Native clipboard access stays with the window host.
+    pub fn console_copy_text(&self) -> Option<String> {
+        if self.top_id() != ScreenId::Console {
+            return None;
+        }
+        let view = self.screen(ScreenId::Console)?.view();
+        let entry = view
+            .id("ConsoleEntry")
+            .map(|id| view.edit_text(id))
+            .unwrap_or_default();
+        Some(if entry.is_empty() {
+            bri_console::log::lines()
+                .into_iter()
+                .map(|l| l.text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            entry
+        })
+    }
     pub fn is_open(&self, id: ScreenId) -> bool {
         self.content.id() == id || self.dialogs.iter().any(|d| d.id() == id)
     }
@@ -2024,6 +2046,7 @@ impl Ui {
                     ConnectionState::DownloadingPackages(_) => ScreenId::PackageDownload,
                     ConnectionState::InGame { .. } => ScreenId::Play,
                 };
+                let entering = target == ScreenId::Play && !c.in_game();
                 if let ConnectionState::InGame {
                     server_name,
                     max_players,
@@ -2049,6 +2072,12 @@ impl Ui {
                     if target == ScreenId::MainMenu {
                         c.cursor_forced = false;
                     }
+                }
+                // Server rules can show a menu before local map preparation
+                // finishes. SetContent removes loading's dialogs: open the
+                // latest retained panel after Play has replaced that content.
+                if entering && c.panel.is_some() {
+                    c.push(ScreenId::AddOnPanel);
                 }
                 if connecting {
                     c.push(ScreenId::Connecting);
@@ -2258,7 +2287,14 @@ impl Ui {
                 c.pop(ScreenId::AddOnPanel);
                 let open = panel.is_some();
                 c.panel = panel;
-                if open {
+                if open
+                    && !matches!(
+                        c.conn,
+                        ConnectionState::Connecting { .. }
+                            | ConnectionState::Loading { .. }
+                            | ConnectionState::DownloadingPackages(_)
+                    )
+                {
                     c.push(ScreenId::AddOnPanel);
                 }
             }

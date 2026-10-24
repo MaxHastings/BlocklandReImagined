@@ -1,6 +1,7 @@
 use crate::protocol::*;
 use anyhow::{Result, ensure};
 use bri_console::Clamp;
+use bri_sim::session::MAX_PARTICIPANTS;
 use bri_world::OwnerId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Poses kept per player: over six seconds at the slowest remote rate.
@@ -180,13 +181,24 @@ fn validate_vehicle_pose(pose: &bri_sim::session::VehiclePose) -> Result<()> {
     );
     Ok(())
 }
+fn validate_roster(
+    names: &BTreeMap<OwnerId, String>,
+    loading: &BTreeMap<OwnerId, String>,
+) -> Result<()> {
+    ensure!(
+        names.len() + loading.len() <= MAX_PARTICIPANTS
+            && loading.keys().all(|id| !names.contains_key(id)),
+        "Invalid participant roster"
+    );
+    Ok(())
+}
 fn validate_vitals(
     vitals: &BTreeMap<OwnerId, bri_sim::session::Vitals>,
     names: &BTreeMap<OwnerId, String>,
     archetypes: &bri_sim::archetype::Archetypes,
 ) -> Result<()> {
     ensure!(
-        vitals.len() <= 64
+        vitals.len() <= MAX_PARTICIPANTS
             && vitals.keys().all(|id| names.contains_key(id))
             && vitals.values().all(|v| v.health.is_finite()
                 && (0.0..=archetypes.highest_max_health()).contains(&v.health)),
@@ -242,8 +254,8 @@ impl Replica {
             checkpoint.world.bricks.len() <= bri_world::MAX_BRICKS
                 && !checkpoint.world.palette.is_empty()
                 && checkpoint.world.palette.len() <= 256
-                && checkpoint.names.len() <= 64
-                && checkpoint.loading.len() <= 64
+                && checkpoint.names.len() <= MAX_PARTICIPANTS
+                && checkpoint.loading.len() <= MAX_PARTICIPANTS
                 && checkpoint.chat.len() <= 100,
             "Invalid checkpoint bounds"
         );
@@ -251,6 +263,7 @@ impl Replica {
             ensure!(*id > 0, "Invalid brick identity");
             b.validate(checkpoint.world.palette.len())?;
         }
+        validate_roster(&checkpoint.names, &checkpoint.loading)?;
         validate_avatars(&checkpoint.avatars, &checkpoint.names)?;
         validate_tools(&checkpoint.tools, &checkpoint.names)?;
         checkpoint.archetypes.validate()?;
@@ -363,8 +376,14 @@ impl Replica {
             delta.bricks.len() <= bri_world::MAX_BRICKS
                 && delta.cues.len() <= bri_sim::presentation::MAX_CUES
                 && delta.dropped_cues >= self.dropped_cues
-                && delta.names.as_ref().is_none_or(|n| n.len() <= 64)
-                && delta.loading.as_ref().is_none_or(|n| n.len() <= 64)
+                && delta
+                    .names
+                    .as_ref()
+                    .is_none_or(|n| n.len() <= MAX_PARTICIPANTS)
+                && delta
+                    .loading
+                    .as_ref()
+                    .is_none_or(|n| n.len() <= MAX_PARTICIPANTS)
                 && delta.chat.len() <= 100,
             "Invalid delta bounds"
         );
@@ -399,6 +418,7 @@ impl Replica {
             }
         }
         let names = delta.names.as_ref().unwrap_or(&self.names);
+        validate_roster(names, delta.loading.as_ref().unwrap_or(&self.loading))?;
         let avatars = merged(&self.avatars, &delta.avatars, names);
         validate_avatars(&avatars, names)?;
         let tools = merged(&self.tools, &delta.tools, names);
@@ -711,7 +731,7 @@ fn validate_avatars(
     names: &BTreeMap<OwnerId, String>,
 ) -> Result<()> {
     ensure!(
-        avatars.len() <= 64 && avatars.keys().all(|id| names.contains_key(id)),
+        avatars.len() <= MAX_PARTICIPANTS && avatars.keys().all(|id| names.contains_key(id)),
         "Invalid replicated avatar owners"
     );
     for appearance in avatars.values() {
@@ -725,7 +745,7 @@ fn validate_tools(
     names: &BTreeMap<OwnerId, String>,
 ) -> Result<()> {
     ensure!(
-        tools.len() <= 64 && tools.keys().eq(names.keys()),
+        tools.len() <= MAX_PARTICIPANTS && tools.keys().eq(names.keys()),
         "Invalid replicated inventory owners"
     );
     for inventory in tools.values() {

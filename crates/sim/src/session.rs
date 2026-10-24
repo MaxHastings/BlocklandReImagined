@@ -12,6 +12,8 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
+/// Shared admission and replicated roster budget, including bots and loading players.
+pub const MAX_PARTICIPANTS: usize = bri_package_runtime::ops::MAX_PARTICIPANTS;
 mod admin;
 mod animation;
 mod body_pose;
@@ -1643,7 +1645,7 @@ impl Session {
         principal: Option<bri_admin::Principal>,
     ) -> Result<Admitted> {
         ensure!(
-            self.peers.len() + self.arrivals.len() < 64,
+            self.peers.len() + self.arrivals.len() < MAX_PARTICIPANTS,
             "Server is full"
         );
         let wanted = name;
@@ -2133,7 +2135,7 @@ impl Session {
         ensure!(
             !self.peers.contains_key(&owner)
                 && !self.arrivals.contains_key(&owner)
-                && self.peers.len() + self.arrivals.len() < 64,
+                && self.peers.len() + self.arrivals.len() < MAX_PARTICIPANTS,
             "Player is connected or server is full"
         );
         let (name, _previous_administrator, avatar, saved_principal) = self

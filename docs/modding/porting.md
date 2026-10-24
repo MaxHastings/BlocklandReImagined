@@ -456,7 +456,7 @@ archetype field carries are listed in the report.
 
 **Names.** In rules files, `{{name}}` becomes a value at import:
 `{{namespace}}` (the import's id), `{{rules}}` (the rules' id),
-`{{version}}`, or anything a `covers` pattern captured. A `{{word}}` that
+`{{version}}`, `{{engine_max_bots}}` (the engine's supported bot count), or anything a `covers` pattern captured. A `{{word}}` that
 names nothing is an error. The importer's ids are
 `<ns>:<kind>/<datablock name in lower case>`, so a rule gives out the
 imported item as `"{{namespace}}:weapon/fillcanitem"`. `{{name|bool}}`

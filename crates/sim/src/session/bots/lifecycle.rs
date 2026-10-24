@@ -316,7 +316,10 @@ impl Session {
             .kind(kind)
             .with_context(|| format!("No bot kind `{kind}`: its Add-On is not enabled"))?;
         ensure!(self.bot_room(kind), "Server is limited to {limit} bots");
-        ensure!(self.peers.len() < 64, "Server is full");
+        ensure!(
+            self.peers.len() + self.arrivals.len() < MAX_PARTICIPANTS,
+            "Server is full"
+        );
         let found = self
             .minigames
             .game(bri_minigames::GameId(game))

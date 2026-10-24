@@ -173,6 +173,48 @@ fn the_rules_replace_or_close_the_panel() {
     assert!(actions(&mut ui).is_empty());
 }
 
+#[test]
+fn a_server_panel_received_during_loading_survives_game_entry() {
+    let mut ui = ui();
+    ui.apply(UiUpdate::Connection(ConnectionState::Loading {
+        map: "test:map/entry".into(),
+        preview: IconRef::None,
+        status: "LOADING".into(),
+        progress: 0.5,
+    }));
+    ui.apply(UiUpdate::Panel(Some(shop())));
+    let game = || ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: true,
+        single_player: false,
+        admin: true,
+    };
+    ui.apply(UiUpdate::Connection(game()));
+    assert!(
+        ui.is_open(ScreenId::AddOnPanel),
+        "entry lost the server's panel"
+    );
+    assert_eq!(ui.core.panel.as_ref().unwrap().id, "shop");
+    ui.apply(UiUpdate::Connection(game()));
+    assert_eq!(
+        ui.dialogs
+            .iter()
+            .filter(|d| d.id() == ScreenId::AddOnPanel)
+            .count(),
+        1
+    );
+    assert!(actions(&mut ui).is_empty(), "loading is not a user close");
+
+    ui.apply(UiUpdate::Connection(ConnectionState::Idle));
+    assert!(
+        ui.core.panel.is_none(),
+        "the previous server's panel leaked"
+    );
+    ui.apply(UiUpdate::Connection(game()));
+    assert!(!ui.is_open(ScreenId::AddOnPanel));
+}
+
 fn backpack_and_chest() -> PanelView {
     let list = |id: &str, rows: &[&str]| PanelItemView::List {
         id: id.into(),

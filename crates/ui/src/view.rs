@@ -81,6 +81,8 @@ pub struct NodeState {
     /// Vertical scroll offset (scroll controls).
     pub scroll_y: i32,
     pub cursor: usize,
+    /// The edit's complete text is selected (Ctrl/Cmd+A).
+    pub select_all: bool,
     /// Animation frame (animated bitmaps).
     pub frame: usize,
     /// Text-list row height from the profile font (`View::measure`).
@@ -458,6 +460,7 @@ impl View {
                 flagged: Vec::new(),
                 scroll_y: 0,
                 cursor: 0,
+                select_all: false,
                 frame: 0,
                 row_height: 16,
                 moved: (0, 0),
@@ -620,6 +623,7 @@ impl View {
         let n = &mut self.nodes[id];
         if matches!(n.state.value, Value::Text(_)) {
             n.state.cursor = t.chars().count();
+            n.state.select_all = false;
             n.state.value = Value::Text(t.clone());
         }
         n.state.text = Some(t);
@@ -1295,6 +1299,14 @@ impl View {
                         }
                         _ => 0,
                     };
+                    if self.focus == Some(id) && n.state.select_all && dl.push_clip(inner) {
+                        let width = font.as_ref().map_or(inner.w, |f| f.width(&shown));
+                        dl.fill(
+                            Rect::new(inner.x - scroll, inner.y, width, inner.h),
+                            [120, 170, 230, 255],
+                        );
+                        dl.pop_clip();
+                    }
                     if n.ctrl.class == "GuiMLTextEditCtrl" {
                         self.draw_ml(pack, dl, id, inner.offset(0, 2), &shown);
                     } else if scroll > 0 {
@@ -2593,6 +2605,7 @@ impl View {
             }
             "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => {
                 self.focus = Some(t);
+                self.nodes[t].state.select_all = false;
                 let len = self.edit_text(t).chars().count();
                 self.nodes[t].state.cursor = len;
             }
@@ -2995,6 +3008,36 @@ impl View {
         }
         let mut t: Vec<char> = self.edit_text(f).chars().collect();
         let cur = self.nodes[f].state.cursor.min(t.len());
+        if key == Key::Letter('a')
+            && (mods.ctrl || mods.cmd)
+            && !mods.alt
+            && matches!(
+                self.nodes[f].ctrl.class.as_str(),
+                "GuiTextEditCtrl" | "GuiMLTextEditCtrl"
+            )
+        {
+            self.nodes[f].state.select_all = true;
+            self.nodes[f].state.cursor = t.len();
+            return true;
+        }
+        if self.nodes[f].state.select_all && matches!(key, Key::Backspace | Key::Delete) {
+            self.nodes[f].state.select_all = false;
+            self.nodes[f].state.cursor = 0;
+            self.nodes[f].state.value = Value::Text(String::new());
+            out.push(ViewEvent {
+                node: f,
+                kind: EventKind::Changed,
+            });
+            return true;
+        }
+        if self.nodes[f].state.select_all && matches!(key, Key::Left | Key::Right) {
+            self.nodes[f].state.select_all = false;
+            self.nodes[f].state.cursor = if key == Key::Left { 0 } else { t.len() };
+            return true;
+        }
+        if matches!(key, Key::Home | Key::End) {
+            self.nodes[f].state.select_all = false;
+        }
         match key {
             Key::Backspace if cur > 0 => {
                 t.remove(cur - 1);
@@ -3079,6 +3122,11 @@ impl View {
             .and_then(|m| m.parse::<usize>().ok())
             .unwrap_or(255);
         let mut t: Vec<char> = self.edit_text(f).chars().collect();
+        if self.nodes[f].state.select_all {
+            t.clear();
+            self.nodes[f].state.cursor = 0;
+            self.nodes[f].state.select_all = false;
+        }
         if t.len() >= max {
             return true;
         }

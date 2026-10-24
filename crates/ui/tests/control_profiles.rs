@@ -118,6 +118,44 @@ fn press(u: &mut Ui, key: Key) -> Vec<UiAction> {
     u.drain_actions().into_iter().map(|(_, a)| a).collect()
 }
 
+#[test]
+fn a_building_hud_claim_keeps_admin_camera_bindings_available() {
+    let mut u = with_profile(Settings::default());
+    u.set_control_context("aa-soldier", None);
+    for (key, command) in [
+        (Key::F(8), "dropCameraAtPlayer"),
+        (Key::F(7), "dropPlayerAtCamera"),
+        (Key::Letter('b'), "useBricks"),
+    ] {
+        u.core
+            .binds
+            .bind(BindInput::Key(Chord::plain(key)), command);
+    }
+    u.core.hud_regions.push(HudRegionDraw {
+        region: bri_content::hud::Region::Building,
+        pixelated: false,
+        items: vec![],
+        name_tags: None,
+    });
+    assert!(u.core.building_off());
+    assert_eq!(
+        press(&mut u, Key::F(8)),
+        vec![UiAction::Game(GameAction::DropCameraAtPlayer)]
+    );
+    assert_eq!(
+        press(&mut u, Key::F(7)),
+        vec![UiAction::Game(GameAction::DropPlayerAtCamera)]
+    );
+    assert!(press(&mut u, Key::Letter('b')).is_empty());
+    let hides = profiles::Hides {
+        building: true,
+        jet: true,
+    };
+    assert!(!hides.command("dropCameraAtPlayer"));
+    assert!(!hides.command("dropPlayerAtCamera"));
+    assert!(hides.command("useBricks"));
+}
+
 fn package(command: &str, pressed: Option<bool>) -> UiAction {
     UiAction::Game(GameAction::Package {
         package: "aa".into(),

@@ -638,7 +638,7 @@ struct JoinList {
 }
 
 /// Put `text` on the system clipboard.
-fn copy_to_clipboard(text: &str) -> Result<()> {
+pub(crate) fn copy_to_clipboard(text: &str) -> Result<()> {
     arboard::Clipboard::new()
         .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
         .map_err(|error| anyhow::anyhow!("Could not use the clipboard: {error}"))
