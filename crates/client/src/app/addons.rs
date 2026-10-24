@@ -647,27 +647,14 @@ impl App {
             self.ui.core.addon_help = help;
             self.ui.welcome_addons();
         }
-        // The admin orb is the control object, while the parked body's
-        // archetype and held item still replicate. Its HUD is always stock;
-        // retain the catalog so the body's HUD returns on leaving the orb.
-        if view
-            .vitals
-            .get(&view.owner)
-            .is_some_and(|v| v.control == bri_sim::session::ControlObject::Camera)
-        {
-            self.ui.core.package_panels.clear();
-            self.ui.core.package_keys.clear();
-            self.ui.core.hud_regions.clear();
-            self.ui.core.stock_texts.clear();
-            self.addons.hud_regions.forget_drawn();
-            self.addons.client_code.set_hud_owners(Default::default());
-            return;
-        }
+        let vitals = view.vitals.get(&view.owner);
+        let camera = vitals.is_some_and(|v| v.control == bri_sim::session::ControlObject::Camera);
         let binds = &self.ui.core.binds;
         let held = view
             .weapons
             .images
             .get(&view.owner)
+            .filter(|_| !camera)
             .and_then(|images| images.iter().find(|i| i.hand == 0))
             .map_or("", |i| i.image.as_str());
         let (panels, keys) =
@@ -682,11 +669,30 @@ impl App {
         self.ui.core.package_panels = panels;
         self.ui.core.package_keys = keys;
         // HUD regions: the viewer's body, held item and seat pick the claims.
-        let presented = self.motion.presented().get(&view.owner);
+        // An admin orb has no body/held item, but remains in its minigame.
+        // Let declared game-wide HUD claims apply instead of forcing stock UI.
+        let presented = self.motion.presented().get(&view.owner).filter(|_| !camera);
         let body = presented.map_or("", |p| view.archetypes.resolve(p.archetype).id.as_str());
-        // The control profile follows the body; a layer follows the seat.
+        // Before a held first spawn (or between lives), no pose exists yet.
+        // Its declared team/game player type still owns menu controls.
+        let game = vitals
+            .and_then(|v| v.minigame)
+            .and_then(|id| view.minigames.iter().find(|g| g.id == id));
+        // A replica may retain an initial/default pose while respawn is held;
+        // that pose does not describe the next playable body.
+        let control_body = if !body.is_empty() && vitals.is_none_or(|v| v.alive) {
+            body
+        } else {
+            game.map_or(body, |g| {
+                vitals
+                    .and_then(|v| v.team)
+                    .and_then(|id| g.teams.iter().find(|t| t.id.0 == id))
+                    .and_then(|t| t.player_type.as_deref())
+                    .unwrap_or(&g.settings.player_type)
+            })
+        };
         self.ui.set_control_context(
-            body,
+            control_body,
             self.controls.ride_context().map(|(driver, mouse_driver)| {
                 bri_ui::profiles::RideContext {
                     driver,
@@ -712,7 +718,6 @@ impl App {
             })
             .collect();
         self.ui.set_rule_flags(flags);
-        let vitals = view.vitals.get(&view.owner);
         let vehicle = vitals
             .and_then(|v| v.mounted)
             .and_then(|(vehicle, _)| view.vehicles.get(&vehicle))
