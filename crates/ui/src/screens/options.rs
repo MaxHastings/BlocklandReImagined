@@ -64,6 +64,9 @@ const ANTI_ALIASING: &str = "$pref::Video::AntiAliasing";
 /// Not a v20 setting (v20 shadowed only players, vehicles and items): bricks
 /// cast sun shadows too, off unless turned on.
 const BRICK_SHADOWS: &str = "$pref::Video::BrickShadows";
+/// Not a v20 setting: percentage-closer soft shadows for the sun, whose edges
+/// widen with the distance from their caster. Off unless turned on.
+pub const PCSS_SUN_SHADOWS: &str = "$pref::Video::PcssSunShadows";
 /// Not a v20 setting: sky-tinted shade in Unified and Dynamic lighting
 /// (Classic never draws it), on unless turned off.
 pub const SOFT_SHADING: &str = "$pref::Video::SoftShading";
@@ -309,6 +312,7 @@ const CHECKBOX_PREFS: &[&str] = &[
     "$pref::OpenGL::useGLNearest",
     ANTI_ALIASING,
     BRICK_SHADOWS,
+    PCSS_SUN_SHADOWS,
     SOFT_SHADING,
     AMBIENT_OCCLUSION,
     BLOOM,
@@ -1033,6 +1037,50 @@ fn graphics_pane(v: &mut View) {
     }
     let f = &mut v.nodes[full].ctrl;
     f.extent[1] = PANE_BOTTOM - f.position[1];
+
+    // Add PCSS Sun Shadows checkbox inside the Shadow Quality section below the radio buttons
+    if let Some(shadow_node) = find_section(v, "Shadow Quality") {
+        let last_radio_bottom = v
+            .node(shadow_node)
+            .children
+            .iter()
+            .map(|&k| v.node(k))
+            .filter(|n| {
+                n.ctrl.class == "GuiRadioCtrl"
+                    || n.ctrl
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.starts_with(SHADOW_RADIO))
+            })
+            .map(|n| n.ctrl.position[1] + n.ctrl.extent[1])
+            .max()
+            .unwrap_or(120);
+
+        let template_ctrl = {
+            v.walk().find_map(|n| {
+                let ctrl = &v.node(n).ctrl;
+                if ctrl
+                    .variable
+                    .as_deref()
+                    .is_some_and(|var| var.eq_ignore_ascii_case(NO_VSYNC))
+                {
+                    Some(ctrl.clone())
+                } else {
+                    None
+                }
+            })
+        };
+
+        if let Some(mut c) = template_ctrl {
+            c.name = Some("OptGraphicsPcssSunShadowsToggle".into());
+            c.variable = Some(PCSS_SUN_SHADOWS.into());
+            c.text = Some("Soft Sun Shadows".into());
+            c.position = [10, last_radio_bottom + 6];
+            c.extent = [130, 20];
+            c.command = None;
+            v.add(shadow_node, c);
+        }
+    }
 }
 
 /// Audio: the driver panel under Volume is gone; Volume and Audio Options

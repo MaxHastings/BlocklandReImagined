@@ -28,6 +28,13 @@
 //! sun, the receiver is in the map's shadow anyway, so the caster's shadow
 //! continuing there is what a fully lit scene would show.
 //!
+//! PCSS Sun Shadows (`ShadowSettings::pcss`, off unless chosen): the shader
+//! searches the caster layer around a receiver for blockers, takes the
+//! average blocker's distance along the sun, and filters over a disc whose
+//! radius grows with it (`PCSS_SUN_TAN`), so a shadow is sharp where its
+//! caster touches the surface and soft far from it. The disc is rotated per
+//! pixel, and the occluder rules above apply to every tap.
+//!
 //! Lamps: in the Unified lighting modes the nearest, strongest of a map's
 //! recovered lights (`crate::map_lighting`) also cast live shadows, from a
 //! cube of six perspective maps each, so a build on the Bedroom dresser or
@@ -111,6 +118,12 @@ const CASTER_SIZE: u64 = 80;
 pub const FITTED_VIEWS: usize = 1 + crate::reflection::ReflectionSettings::MAX_PLANES;
 /// Receiver uniform stride per view; bound offsets must be 256-byte aligned.
 const RECEIVER_STRIDE: u64 = (std::mem::size_of::<ShadowUniform>() as u64).div_ceil(256) * 256;
+/// How wide the sun looks to PCSS: the tangent of its apparent half angle.
+/// A shadow edge's half width is this times the distance between the caster
+/// and the receiver along the sun. The real sun is 0.0047; this is several
+/// times that, so softening shows at the scale of a Blockland build (a
+/// blocker 10 units away blurs about 0.3 units) while contact stays sharp.
+pub const PCSS_SUN_TAN: f32 = 0.03;
 /// Occluders must lie this many world units past a caster to stop its
 /// shadow, so the brick a player stands on still receives it.
 const OCCLUDER_GAP: f32 = 0.1;
@@ -146,25 +159,33 @@ pub struct ShadowSettings {
     /// soft 3x3-texel edge; the rest take one 2x2 comparison, a harder edge
     /// that only shows far away. Every light stays shadowed at any quality.
     pub soft_cubes: u32,
+    /// Percentage-closer soft shadows for the sun (the PCSS Sun Shadows
+    /// option): the edge of a sun shadow widens with the distance from its
+    /// caster to the surface it lands on, sharp at contact and soft far
+    /// away, instead of one fixed-width filter. Costs several times the
+    /// sun-shadow texture reads, so it is off unless chosen.
+    pub pcss: bool,
 }
 impl ShadowSettings {
     pub const BEST: Self = Self {
         cascades: 4,
-        resolution: 2048,
+        resolution: 4096, // Upgraded to 4K for ultra-crisp shadows
         distance: 320.0,
         lamps: 4,
-        lamp_resolution: 1024,
+        lamp_resolution: 2048, // Scaled up proportionally to match 4096
         light_cubes: false,
         soft_cubes: 24,
+        pcss: false,
     };
     pub const HIGH: Self = Self {
         cascades: 3,
-        resolution: 2048,
+        resolution: 2048, // Former BEST setting moved here
         distance: 240.0,
         lamps: 2,
-        lamp_resolution: 512,
+        lamp_resolution: 1024,
         light_cubes: false,
         soft_cubes: 12,
+        pcss: false,
     };
     pub const MEDIUM: Self = Self {
         cascades: 3,
@@ -174,6 +195,7 @@ impl ShadowSettings {
         lamp_resolution: 512,
         light_cubes: false,
         soft_cubes: 6,
+        pcss: false,
     };
     pub const LOW: Self = Self {
         cascades: 2,
@@ -183,6 +205,7 @@ impl ShadowSettings {
         lamp_resolution: 256,
         light_cubes: false,
         soft_cubes: 3,
+        pcss: false,
     };
     /// Faces of moving casters (players, vehicles, items): half the
     /// resolution of the kept brick faces.
@@ -1267,11 +1290,12 @@ impl ShadowMaps {
         }
         uniform.forward_count = forward.extend(cascades.len() as f32).to_array();
         uniform.origin = eye.extend(1.0).to_array();
+        // z: 1 for PCSS sun shadows; w: the sun's apparent size for them.
         uniform.params = [
             settings.cascades as f32,
             settings.resolution as f32,
-            0.0,
-            0.0,
+            f32::from(u8::from(settings.pcss)),
+            PCSS_SUN_TAN,
         ];
     }
     /// Fit cascades of `view`'s own (a live plane, after `update`) to its
@@ -1930,26 +1954,29 @@ mod tests {
         // and the map: 12 at Best).
         let best = ShadowSettings::BEST;
         assert_eq!(best.lamp_layers(), 10);
-        assert_eq!(best.lamp_tile(0), (12, [0, 0, 1024]));
-        assert_eq!(best.lamp_tile(5), (13, [1024, 0, 1024]));
-        assert_eq!(best.lamp_tile(16), (16, [0, 0, 1024]));
+        assert_eq!(best.lamp_tile(0), (12, [0, 0, 2048]));
+        assert_eq!(best.lamp_tile(5), (13, [2048, 0, 2048]));
+        assert_eq!(best.lamp_tile(16), (16, [0, 0, 2048]));
         // Moving casters' coarser faces follow in layers of their own.
-        assert_eq!(best.lamp_dynamic_tile(0), (18, [0, 0, 512]));
-        assert_eq!(best.lamp_dynamic_tile(9), (18, [512, 1024, 512]));
+        assert_eq!(best.lamp_dynamic_tile(0), (18, [0, 0, 1024]));
+        assert_eq!(best.lamp_dynamic_tile(9), (18, [1024, 2048, 1024]));
         // Then the map's faces, as coarse.
-        assert_eq!(best.lamp_map_tile(0), (20, [0, 0, 512]));
-        assert_eq!(best.lamp_map_tile(23), (21, [1536, 512, 512]));
+        assert_eq!(best.lamp_map_tile(0), (20, [0, 0, 1024]));
+        assert_eq!(best.lamp_map_tile(23), (21, [3072, 1024, 1024]));
         assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 4);
         assert_eq!(ShadowSettings::LOW.lamp_layers(), 0);
-        // Dynamic: 24 lights' cubes after the lamps, 16 faces of 512 a layer.
+        // Dynamic: 24 lights' cubes after the lamps, 16 faces of 1024 a layer.
         assert_eq!(best.cube_layers(), 0);
         let dynamic = ShadowSettings {
             light_cubes: true,
             ..best
         };
-        assert_eq!((dynamic.cube_resolution(), dynamic.cube_layers()), (512, 9));
-        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 512]));
-        assert_eq!(dynamic.cube_tile(143), (30, [1536, 1536, 512]));
+        assert_eq!(
+            (dynamic.cube_resolution(), dynamic.cube_layers()),
+            (1024, 9)
+        );
+        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 1024]));
+        assert_eq!(dynamic.cube_tile(143), (30, [3072, 3072, 1024]));
         let low = ShadowSettings {
             light_cubes: true,
             ..ShadowSettings::LOW

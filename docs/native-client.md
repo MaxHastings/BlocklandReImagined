@@ -87,7 +87,13 @@ bricks only with Brick Shadows. Bricks that do not cast, interiors and terrain
 render into a separate occluder depth map: a shadow is dropped wherever an
 occluder lies between the caster and the receiving surface, so a player on a
 brick tower shades the tower top and not the floor beneath it
-(`crates/render/tests/shadow_occluders.rs`). Baked surfaces darken by a
+(`crates/render/tests/shadow_occluders.rs`). PCSS Sun Shadows (off unless
+chosen) replaces the fixed 3x3 filter with a blocker search and a filter disc
+that widens with the caster's distance above the surface, so shadow edges are
+sharp at contact and soft far away, under the same occluder rules
+(`crates/render/tests/pcss_sun_shadows.rs`). The map-layer sun shadows that
+Unified and Dynamic lighting cast onto objects soften the same way. The
+option is labeled Soft Sun Shadows in Options > Graphics. Baked surfaces darken by a
 bounded share of the mission's ambient/sun ratio; vertex-lit surfaces lose the
 sun term.
 
