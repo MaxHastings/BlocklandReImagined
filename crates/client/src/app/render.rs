@@ -588,10 +588,17 @@ impl App {
         // shadow without being drawn.
         let casts = renderer.shadow_settings().is_some();
         // Held and dropped items take the light of where they are, as bodies do.
+        let sky = self
+            .scene
+            .cpu_scene
+            .as_ref()
+            .zip(self.scene.receiver_index.as_deref())
+            .map(|(scene, index)| lighting::Sky { scene, index });
         let item_light = |at: [f32; 3]| {
             let near = |sign: f32| at.map(|v| v + sign * ITEM_LIGHT_REACH);
             self.lighting.light_volume.actor_light(
                 self.scene.regions.as_ref(),
+                sky,
                 near(-1.0),
                 near(1.0),
             )
@@ -1036,6 +1043,11 @@ impl App {
             let (low, high) = avatar.render_box();
             avatar.light = self.lighting.light_volume.actor_light(
                 self.scene.regions.as_ref(),
+                self.scene
+                    .cpu_scene
+                    .as_ref()
+                    .zip(self.scene.receiver_index.as_deref())
+                    .map(|(scene, index)| lighting::Sky { scene, index }),
                 low.to_array(),
                 high.to_array(),
             );

@@ -30,6 +30,8 @@ pub(super) struct LightVolumeState {
     compatibility_source: Option<Arc<SceneData>>,
     compatibility_started: bool,
     pub(super) volume: Option<bri_render::light_volume::LightVolume>,
+    /// Whether a sun saw a half-unit cell ([`Self::sun_sees`]), behind a mutex like the bake.
+    sun_sight: std::sync::Mutex<HashMap<(glam::IVec3, [u32; 3]), bool>>,
     pub(super) map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     pub(super) leaks: Vec<bri_render::map_lighting::TexelFix>,
@@ -280,17 +282,32 @@ impl LightVolumeState {
         room
     }
 }
+/// What the map's sun can be hidden by: its geometry and the grid that finds the triangles on a line.
+#[derive(Clone, Copy)]
+pub(super) struct Sky<'a> {
+    pub(super) scene: &'a SceneData,
+    pub(super) index: &'a bri_render::decals::ReceiverIndex,
+}
+/// The cell, in world units, a body's sun sight is worked out for and cached by.
+const SUN_SIGHT_CELL: f32 = 0.5;
+/// A hit this near the body is the surface it stands on or holds against, and hides no sun.
+const SUN_SIGHT_SKIN: f32 = 0.25;
+/// Most sights kept before the cache starts again (a few bodies move through a few thousand cells).
+const SUN_SIGHT_CACHE: usize = 16_384;
 /// Which way the room's light is read for a body: up, as the volume's form shading reads a roof-lit surface.
 const ROOM_NORMAL: [f32; 3] = [0.0, 1.0, 0.0];
 impl LightVolumeState {
     /// The light a lit moving thing in `low..high` takes where it is: its
     /// zone's ambient and suns, and the light of the room it stands in (the
     /// map's baked volume) as a floor under the ambient, so a body or a held
-    /// weapon in a lit room reads as lit by it. `None` where the scene's own
-    /// light stands (no zones and no room light).
+    /// weapon in a lit room reads as lit by it. A sun lights it only if it can
+    /// see the body (`sky`: the map's geometry; the original's
+    /// `bLightingVisibility`), so a body under a roof takes no sun. `None`
+    /// where the scene's own light stands (no zones and no room light).
     pub(super) fn actor_light(
         &self,
         regions: Option<&bri_content::regions::RegionMap>,
+        sky: Option<Sky<'_>>,
         low: [f32; 3],
         high: [f32; 3],
     ) -> Option<bri_render::scene::ActorLight> {
@@ -298,10 +315,25 @@ impl LightVolumeState {
         match regions {
             Some(regions) => {
                 let (ambient, suns) = regions.actor_light(low, high, 0.0);
+                let (sun_first, sun_count) = suns.unwrap_or((0, 0));
+                let sun_mask = if sun_count == 0 {
+                    0
+                } else {
+                    let table = regions.sun_table().0;
+                    let centre = Vec3::from(low).midpoint(Vec3::from(high));
+                    (0..sun_count)
+                        .filter(|i| {
+                            table
+                                .get(usize::from(sun_first) + usize::from(*i))
+                                .is_none_or(|sun| self.sun_sees(sky, centre, sun))
+                        })
+                        .fold(0u8, |mask, i| mask | 1 << i)
+                };
                 Some(bri_render::scene::ActorLight {
                     ambient: [0, 1, 2].map(|c| ambient[c].max(room[c])),
-                    sun_first: suns.map_or(0, |s| s.0),
-                    sun_count: suns.map_or(0, |s| s.1),
+                    sun_first,
+                    sun_count,
+                    sun_mask,
                     scene_sun: false,
                 })
             }
@@ -312,9 +344,46 @@ impl LightVolumeState {
                     ambient: room,
                     sun_first: 0,
                     sun_count: 0,
+                    sun_mask: 0,
                     scene_sun: true,
                 }),
         }
+    }
+    /// Whether `sun` can see `at`: no triangle of the map's geometry between the point and the sun along its light. Kept per
+    /// half-unit cell and sun for the map's life; without geometry to ask (`sky` none) every sun sees.
+    fn sun_sees(
+        &self,
+        sky: Option<Sky<'_>>,
+        at: Vec3,
+        sun: &bri_content::regions::RegionSun,
+    ) -> bool {
+        let Some(Sky { scene, index }) = sky else {
+            return true;
+        };
+        let toward = -Vec3::from(sun.direction).normalize_or_zero();
+        if toward == Vec3::ZERO {
+            return true;
+        }
+        let cell = (at / SUN_SIGHT_CELL).floor().as_ivec3();
+        let key = (cell, toward.to_array().map(f32::to_bits));
+        if let Some(seen) = self
+            .sun_sight
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&key).copied())
+        {
+            return seen;
+        }
+        let from = (cell.as_vec3() + Vec3::splat(0.5)) * SUN_SIGHT_CELL;
+        let seen =
+            !index.segment_blocked(scene, from, from + toward * index.extent(), SUN_SIGHT_SKIN);
+        if let Ok(mut cache) = self.sun_sight.lock() {
+            if cache.len() >= SUN_SIGHT_CACHE {
+                cache.clear();
+            }
+            cache.insert(key, seen);
+        }
+        seen
     }
     /// A map's prepared room light (Dynamic reads no lightmaps to bake one
     /// from), kept until a bake of the lightmaps replaces it.
@@ -824,14 +893,14 @@ mod tests {
             ..Default::default()
         };
         let light = state
-            .actor_light(None, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0])
+            .actor_light(None, None, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0])
             .expect("a lit room");
         assert!(light.scene_sun && light.ambient[0] > 0.4);
         // Outside any room light, and with no zones, the scene's own light stands.
-        assert!(state.actor_light(None, [9.0; 3], [10.0; 3]).is_none());
+        assert!(state.actor_light(None, None, [9.0; 3], [10.0; 3]).is_none());
         assert!(
             LightVolumeState::default()
-                .actor_light(None, [1.0; 3], [2.0; 3])
+                .actor_light(None, None, [1.0; 3], [2.0; 3])
                 .is_none()
         );
     }
@@ -1059,5 +1128,71 @@ mod tests {
             state.baking.is_none(),
             "the completed map did not start another job"
         );
+    }
+
+    #[test]
+    fn a_sun_lights_a_body_only_where_the_map_lets_it_through() {
+        use bri_content::regions::{Region, RegionMap, RegionSun};
+        let regions = RegionMap {
+            planes: Vec::new(),
+            front: Vec::new(),
+            back: Vec::new(),
+            front_region: Vec::new(),
+            back_region: Vec::new(),
+            regions: vec![Region {
+                suns: vec![RegionSun {
+                    direction: [0.0, -1.0, 0.0],
+                    color: [1.0; 3],
+                    position: [0.0, 50.0, 0.0],
+                }],
+                ..Default::default()
+            }],
+            sound: None,
+        };
+        // A roof 10 units up over the origin, and nothing over x = 50.
+        let mut scene = SceneData::default();
+        for (x, z) in [(-5.0, -5.0), (-5.0, 5.0), (5.0, 5.0)] {
+            scene.vertices.push(bri_render::scene::SceneVertex {
+                position: [x, 10.0, z],
+                normal: [0.0, -1.0, 0.0],
+                uv: [0.0; 2],
+                lightmap_uv: [0.0; 2],
+                color: [1.0; 4],
+                fx: [0.0; 4],
+            });
+        }
+        scene.indices = vec![0, 1, 2];
+        scene
+            .materials
+            .push(bri_render::scene::Material::vertex_lit("roof", 0));
+        scene.batches.push(bri_render::scene::MeshBatch {
+            zone: None,
+            indices: 0..3,
+            material: 0,
+            center: [0.0; 3],
+        });
+        let index = bri_render::decals::ReceiverIndex::build(&scene);
+        let sky = Some(Sky {
+            scene: &scene,
+            index: &index,
+        });
+        let state = LightVolumeState::default();
+        let under = state
+            .actor_light(Some(&regions), sky, [-1.0, 0.0, -1.0], [1.0, 2.0, 1.0])
+            .unwrap();
+        assert_eq!(
+            (under.sun_count, under.sun_mask),
+            (1, 0),
+            "the roof hides the sun"
+        );
+        let open = state
+            .actor_light(Some(&regions), sky, [49.0, 0.0, 0.0], [51.0, 2.0, 2.0])
+            .unwrap();
+        assert_eq!((open.sun_count, open.sun_mask), (1, 1));
+        // With nothing to ask, every sun sees.
+        let unasked = state
+            .actor_light(Some(&regions), None, [-1.0, 0.0, -1.0], [1.0, 2.0, 1.0])
+            .unwrap();
+        assert_eq!(unasked.sun_mask, 1);
     }
 }
