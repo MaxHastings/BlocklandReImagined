@@ -241,6 +241,13 @@ impl Session {
         &self.weapon_gaps
     }
 
+    /// Whether `owner`'s fire button is held as far as their weapons know.
+    pub fn trigger_held(&self, owner: OwnerId) -> bool {
+        self.weapons
+            .actor(ActorId(owner))
+            .is_some_and(|a| a.trigger_held())
+    }
+
     /// Queue a trigger press or release. `aimed` says `direction` is the
     /// click's own aim rather than the body's facing when it arrived.
     ///

@@ -614,4 +614,8 @@ fn allow_equip(who) { !player(who).mounted }"#,
     // With no image mounted, a fire press reaches the rule too.
     g.cmd(rider, Command::WeaponTrigger { down: true }).unwrap();
     assert_eq!(seen(&g), "0:true 0:false 0:true ");
+    // The rule took the press, and the button is still held for an image
+    // that mounts after it.
+    g.steps(1);
+    assert!(g.s.trigger_held(rider));
 }
