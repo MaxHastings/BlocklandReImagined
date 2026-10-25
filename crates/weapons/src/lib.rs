@@ -238,6 +238,11 @@ pub struct Cue {
     pub sequence: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sound: String,
+    /// The image throws its shell (casing) at this time, in place of at the
+    /// state's start (`eject_shell`): where the clip ejects it
+    /// (`AnimNotify_ShellEject`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub eject_shell: bool,
 }
 impl Cue {
     /// The most cues a state has.
@@ -250,8 +255,8 @@ impl Cue {
                 && self.thread.is_none_or(|t| t <= 3)
                 && self.thread.is_some() != self.sequence.is_empty()
                 && is_sequence_name(&self.sequence)
-                && (self.thread.is_some() || !self.sound.is_empty()),
-            "Invalid state cue: up to {} ms, thread 0 to 3 with a sequence, or a sound",
+                && (self.thread.is_some() || !self.sound.is_empty() || self.eject_shell),
+            "Invalid state cue: up to {} ms, thread 0 to 3 with a sequence, a sound, or a shell ejected",
             Self::MAX_AFTER_MS
         );
         Ok(())
@@ -482,6 +487,23 @@ pub struct Zoom {
     /// its flash stay drawn (a model with real iron sights, no `overlay`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sights: Option<Sights>,
+}
+/// A point in a model node's own frame ([`Image::first_person_offsets`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeOffset {
+    /// Moved by this much, world units.
+    #[serde(default)]
+    pub offset: [f32; 3],
+    /// Turned by this much, Euler degrees in x, y, z order.
+    #[serde(default)]
+    pub rotation_degrees: [f32; 3],
+}
+impl NodeOffset {
+    fn valid(&self) -> bool {
+        self.offset.iter().all(|v| v.is_finite() && v.abs() <= 100.)
+            && self.rotation_degrees.iter().all(|v| v.is_finite())
+    }
 }
 /// Where the held model sits to look down its sights ([`Zoom::sights`]).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1161,6 +1183,12 @@ pub struct Image {
     /// Logical effect to authored effect for the local first-person model.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub first_person_effects: BTreeMap<String, String>,
+    /// Where an effect or shell leaves the local first-person model from its
+    /// node, by the logical attachment name (`muzzlePoint`, `ejectPoint`):
+    /// moved and turned in the node's own frame, as a muzzle flash that is
+    /// attached to a bone with an offset (`_FPMuzzleFlashOffset`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub first_person_offsets: BTreeMap<String, NodeOffset>,
     /// Euler XYZ degrees in the original Z-up frame, explicitly transformed by presentation.
     pub source_rotation_degrees: [f32; 3],
     pub correct_muzzle: bool,
@@ -4483,6 +4511,14 @@ impl Pack {
                     );
                 }
             }
+            ensure!(
+                image.first_person_offsets.len() <= 16
+                    && image
+                        .first_person_offsets
+                        .iter()
+                        .all(|(name, o)| !name.is_empty() && name.len() <= 64 && o.valid()),
+                "Invalid first-person attachment offsets"
+            );
             ensure!(
                 [image.lower, image.redraw]
                     .into_iter()

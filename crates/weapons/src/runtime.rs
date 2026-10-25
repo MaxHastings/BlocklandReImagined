@@ -962,6 +962,11 @@ struct PendingCue {
     due: u64,
     cue: crate::Cue,
     position: Vec3,
+    /// The image and hand whose state set it, for a shell it ejects.
+    #[serde(default)]
+    image: String,
+    #[serde(default)]
+    hand: u8,
 }
 /// The most cues one holder has waiting.
 const MAX_PENDING_CUES: usize = 64;
@@ -3674,6 +3679,8 @@ impl WeaponsWorld {
                         due: self.tick + cue.ticks(),
                         cue: cue.clone(),
                         position: a.frame.position,
+                        image: image.id.clone(),
+                        hand: e.hand,
                     };
                     if cue.ticks() == 0 {
                         self.play_cue(id, pending);
@@ -3875,6 +3882,19 @@ impl WeaponsWorld {
                 source: TargetId::Actor(id),
                 profile: c.cue.sound,
                 position: c.position,
+            });
+        }
+        if c.cue.eject_shell
+            && self
+                .pack
+                .images
+                .get(&c.image)
+                .is_some_and(|image| image.throws_shell())
+        {
+            self.events.push(Event::Shell {
+                actor: id,
+                image: c.image,
+                hand: c.hand,
             });
         }
     }

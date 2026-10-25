@@ -546,6 +546,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 shell_mesh: None,
                 first_person_nodes: BTreeMap::new(),
                 first_person_effects: BTreeMap::new(),
+                first_person_offsets: Default::default(),
                 id,
                 name: d.name.clone(),
                 model: resource(d, "shapeFile"),

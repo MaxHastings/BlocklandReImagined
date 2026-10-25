@@ -1811,6 +1811,7 @@ fn add_launcher(
     let image = bri_weapons::Image {
         first_person_nodes: Default::default(),
         first_person_effects: Default::default(),
+        first_person_offsets: Default::default(),
         id: image_id.clone(),
         name: "rocketLauncherImage".into(),
         model: String::new(),

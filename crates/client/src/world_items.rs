@@ -1682,6 +1682,7 @@ impl WorldItems {
             mounted.pose.sequence.as_deref(),
             f32::from_bits(mounted.pose.seconds),
         )?;
+        let logical = node;
         let node = if mounted.first_person {
             self.assets
                 .presentation
@@ -1700,6 +1701,26 @@ impl WorldItems {
         let mut at = self
             .assets
             .node_transform(&mounted.model, &pose, mounted.transform, node)?;
+        // The point on the node the first-person model gives it, in the
+        // node's own frame.
+        if mounted.first_person
+            && let Some(offset) = self
+                .weapons
+                .images
+                .get(image)
+                .and_then(|i| {
+                    i.first_person_offsets
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(logical))
+                })
+                .map(|(_, o)| o)
+        {
+            let [x, y, z] = offset.rotation_degrees.map(f32::to_radians);
+            at *= Mat4::from_rotation_translation(
+                Quat::from_euler(glam::EulerRot::XYZ, x, y, z),
+                Vec3::from(offset.offset),
+            );
+        }
         // A node of an image drawn by the local view (its own field of view)
         // is where the world sees it appear, so what leaves it (a casing, a
         // shot's start) leaves the gun on the screen.

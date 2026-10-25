@@ -55,6 +55,7 @@ fn rocket_pack() -> bri_weapons::Pack {
     let image = bri_weapons::Image {
         first_person_nodes: Default::default(),
         first_person_effects: Default::default(),
+        first_person_offsets: Default::default(),
         id: ROCKET_IMAGE.into(),
         name: "rocketLauncherImage".into(),
         model: String::new(),

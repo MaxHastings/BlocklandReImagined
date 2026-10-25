@@ -1560,6 +1560,7 @@ mod tests {
                 bri_weapons::Image {
                     first_person_nodes: Default::default(),
                     first_person_effects: Default::default(),
+                    first_person_offsets: Default::default(),
                     id: image.clone(),
                     name: format!("{stem}Image"),
                     model: "source.dts".into(),

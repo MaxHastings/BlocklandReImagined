@@ -1571,6 +1571,7 @@ fn teleport_image() -> bri_weapons::Image {
         shell_mesh: None,
         first_person_nodes: BTreeMap::new(),
         first_person_effects: BTreeMap::new(),
+        first_person_offsets: Default::default(),
         id: bri_weapons::native_id("image", "PlayerTeleportImage"),
         name: "PlayerTeleportImage".into(),
         model: "base/data/shapes/empty.dts".into(),
