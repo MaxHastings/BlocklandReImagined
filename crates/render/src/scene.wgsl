@@ -401,6 +401,9 @@ fn pcss_tap(uv:vec2<f32>,z:f32,cascade:i32,occluder_layer:i32,gap:f32)->f32 {
     // Gather order is (0,1), (1,1), (1,0), (0,0).
     return dot(lit,vec4<f32>((1.0-t.x)*t.y,t.x*t.y,t.x*(1.0-t.y),(1.0-t.x)*(1.0-t.y)));
 }
+// The sum of a vector's four components, written out: DXC on Windows rejects
+// dot() against a constant vector of ones here ("DXIL intrinsic overload").
+fn pcss_sum4(v:vec4<f32>)->f32 {return v.x+v.y+v.z+v.w;}
 fn pcss_lit(c:CascadeCoord)->f32 {
     let size=shadows.params.y;
     let texel=shadows.texels[c.cascade];
@@ -425,8 +428,8 @@ fn pcss_lit(c:CascadeCoord)->f32 {
         dot(c.slope,core_to_texel),
     );
     let core_blocks=core<core_z;
-    var blocker_sum=dot(select(vec4<f32>(0.0),core,core_blocks),vec4<f32>(1.0));
-    var weights=dot(select(vec4<f32>(0.0),vec4<f32>(1.0),core_blocks),vec4<f32>(1.0));
+    var blocker_sum=pcss_sum4(select(vec4<f32>(0.0),core,core_blocks));
+    var weights=pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),core_blocks));
     // Then a ring out to the widest the filter can grow, so a pixel just
     // outside a shadow still finds it and the soft edge spreads to both sides
     // of the shadow's true edge. Nearer taps count more, which keeps the
