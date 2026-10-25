@@ -762,6 +762,7 @@ impl App {
             contacts: Vec::new(),
             facing: presented.map_or([0.0, 0.0], |me| [me.yaw.sin(), -me.yaw.cos()]),
             position: presented.map_or([0.0, 0.0], |me| [me.feet[0], me.feet[2]]),
+            altitude: presented.map_or(0.0, |me| me.feet[1]),
             heading: presented.map_or(0.0, |me| me.yaw.to_degrees().rem_euclid(360.0)),
             fov: self.controls.fov(),
             aiming: self.controls.aiming(),

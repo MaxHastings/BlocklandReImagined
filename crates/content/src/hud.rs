@@ -700,6 +700,91 @@ pub enum Element {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
+    /// A map panel: a picture of the level panned to the viewer, turned to
+    /// the way they face and cut off at the panel's edge, with marks for
+    /// the places and people a rule lists. `maps` pick the picture by the
+    /// viewer's height, `range` are the zoom steps, and `expand` blends the
+    /// panel to a bigger box.
+    Radar {
+        /// The panel's box in units from the region's corner.
+        rect: [f32; 4],
+        /// One picture per floor; the first whose `floor` band holds the
+        /// viewer's height, else the nearest band.
+        maps: Vec<RadarMap>,
+        /// Units from the middle of the panel to its edge at each zoom
+        /// step, 1 to 8 steps.
+        range: Vec<f32>,
+        /// A value (a rule's state) picking the step, from 0; left out,
+        /// the first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zoom: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expand: Option<RadarExpand>,
+        /// Degrees added to the way the map turns to face the viewer,
+        /// for a picture whose top is not north.
+        #[serde(default)]
+        yaw_offset: f32,
+        /// The map turns so the viewer faces up (true), or north stays up
+        /// and the viewer's icon turns (false).
+        #[serde(default = "yes")]
+        rotate: bool,
+        /// The panel is a circle inscribed in its box (else the box).
+        #[serde(default)]
+        round: bool,
+        /// Marks farther than this share of the panel's half size from its
+        /// middle are not drawn (0.1 to 1).
+        #[serde(default = "radar_cull")]
+        cull: f32,
+        /// Colour and opacity of the map picture.
+        #[serde(default = "white")]
+        tint: [f32; 4],
+        /// Drawn behind the map where it ends.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        back: Option<[f32; 4]>,
+        /// A frame drawn over the panel's box, not cut off.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ring: Option<String>,
+        /// The viewer's own icon in the middle, and its size.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        viewer: Option<String>,
+        #[serde(default = "radar_viewer_size")]
+        viewer_size: [f32; 2],
+        /// Rule states holding mark lists (`package:global/key` or
+        /// `package:player/key`; an array of `{"icon", "x", "y", "z",
+        /// "rot", "color", "blink"}`), 0 to 8 of them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        markers: Vec<String>,
+        /// A mark's `icon` name to its texture.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        icons: BTreeMap<String, String>,
+        #[serde(default = "radar_mark_size")]
+        mark_size: [f32; 2],
+        /// A mark more than this many units above or below the viewer is
+        /// drawn with the `above` or `below` texture instead of its icon.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        above: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        below: Option<String>,
+        /// Seconds a blinking mark is on, and then off.
+        #[serde(default = "radar_blink")]
+        blink: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show: Option<Show>,
+    },
+}
+fn radar_viewer_size() -> [f32; 2] {
+    [8.0, 8.0]
+}
+fn radar_mark_size() -> [f32; 2] {
+    [6.0, 6.0]
+}
+fn radar_cull() -> f32 {
+    1.0
+}
+fn radar_blink() -> f32 {
+    0.5
 }
 fn white() -> [f32; 4] {
     [1.0; 4]
@@ -829,6 +914,131 @@ pub struct Live<'a> {
     pub facing: [f32; 2],
     /// The viewer's position (x, z) in the world, for [`Element::StripMarker`].
     pub position: [f32; 2],
+    /// The viewer's height, for [`Element::Radar`]'s floors.
+    pub altitude: f32,
+    /// Seconds since the HUD began, for blinking marks.
+    pub seconds: f32,
+    /// How far each element has blended to its bigger form, 0 to 1, by its
+    /// index in the layout (missing: 0).
+    pub blends: &'a [f32],
+    /// The mark lists the layout's map panels read.
+    pub marks: &'a [MarkList],
+}
+
+/// One floor's picture of a map panel ([`Element::Radar`]): `world` is the
+/// ground it covers, left, top (north), right and bottom (south) in world
+/// x and z, `floor` the viewer heights (low, high) and `area` the ground
+/// (left, top, right, bottom) the viewer stands on for it to be shown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RadarMap {
+    pub texture: String,
+    pub world: [f32; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<[f32; 4]>,
+}
+impl RadarMap {
+    /// How badly this picture suits a viewer at `at` (x, z) and `height`:
+    /// 0 when both its area and floor hold them, otherwise worse the
+    /// farther outside the floor and any area they are, so the best of
+    /// several is the one to show.
+    fn miss(&self, at: [f32; 2], height: f32) -> (bool, f32) {
+        let outside = self.area.is_some_and(|[x0, z0, x1, z1]| {
+            at[0] < x0.min(x1) || at[0] > x0.max(x1) || at[1] < z0.min(z1) || at[1] > z0.max(z1)
+        });
+        let off = self.floor.map_or(0.0, |[low, high]| {
+            (low - height).max(height - high).max(0.0)
+        });
+        (outside, off)
+    }
+}
+
+/// A map panel's bigger form ([`Element::Radar`]): while `value` is above
+/// 0.5 the panel blends over `seconds` to `rect`, showing `range_scale`
+/// times the ground.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RadarExpand {
+    pub rect: [f32; 4],
+    pub value: String,
+    #[serde(default = "radar_seconds")]
+    pub seconds: f32,
+    #[serde(default = "radar_scale")]
+    pub range_scale: f32,
+}
+fn radar_seconds() -> f32 {
+    0.25
+}
+fn radar_scale() -> f32 {
+    1.0
+}
+
+/// Most marks a map panel draws from one list, and lists it reads.
+pub const MAX_MARKS: usize = 128;
+pub const MAX_MARK_LISTS: usize = 8;
+
+/// A place or person on a map panel ([`Element::Radar`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mark {
+    pub icon: String,
+    /// World x, height and z.
+    pub at: [f32; 3],
+    /// Degrees clockwise from north the icon points.
+    pub rot: f32,
+    pub color: [f32; 4],
+    pub blink: bool,
+}
+impl Mark {
+    /// The marks in a rule's state value, an array of objects; one that is
+    /// not understood is left out.
+    pub fn parse_list(value: &serde_json::Value) -> Vec<Mark> {
+        let Some(list) = value.as_array() else {
+            return Vec::new();
+        };
+        list.iter()
+            .take(MAX_MARKS)
+            .filter_map(Self::parse)
+            .collect()
+    }
+    fn parse(value: &serde_json::Value) -> Option<Mark> {
+        let number = |key: &str| {
+            value
+                .get(key)?
+                .as_f64()
+                .map(|n| n as f32)
+                .filter(|n| n.is_finite())
+        };
+        let color = value
+            .get("color")
+            .and_then(|c| c.as_array())
+            .filter(|c| matches!(c.len(), 3 | 4))
+            .and_then(|c| {
+                let part = |i: usize| match c.get(i) {
+                    Some(v) => v.as_f64().map(|n| (n as f32).clamped(0.0, 1.0)),
+                    None => Some(1.0),
+                };
+                Some([part(0)?, part(1)?, part(2)?, part(3)?])
+            })
+            .unwrap_or([1.0; 4]);
+        Some(Mark {
+            icon: value.get("icon")?.as_str()?.to_string(),
+            at: [number("x")?, number("y").unwrap_or(0.0), number("z")?],
+            rot: number("rot").unwrap_or(0.0),
+            color,
+            blink: value
+                .get("blink")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false),
+        })
+    }
+}
+/// The marks one rule state held ([`Element::Radar`]'s `markers`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkList {
+    pub binding: String,
+    pub marks: Vec<Mark>,
 }
 
 /// A strip of equal frames in one texture, left to right then down. The
@@ -1523,6 +1733,121 @@ impl Layout {
                     );
                     show_ok(show)?;
                 }
+                Element::Radar {
+                    rect,
+                    maps,
+                    range,
+                    zoom,
+                    expand,
+                    yaw_offset,
+                    cull,
+                    tint,
+                    back,
+                    ring,
+                    viewer,
+                    viewer_size,
+                    markers,
+                    icons,
+                    mark_size,
+                    height,
+                    above,
+                    below,
+                    blink,
+                    show,
+                    ..
+                } => {
+                    ensure!(
+                        rect_ok(rect),
+                        "radar rect must be finite with no negative size"
+                    );
+                    ensure!((1..=16).contains(&maps.len()), "a radar has 1 to 16 maps");
+                    for map in maps {
+                        texture_ok(&map.texture)?;
+                        let [x0, z0, x1, z1] = map.world;
+                        ensure!(
+                            map.world.iter().all(|v| v.is_finite() && v.abs() <= 1.0e6)
+                                && x0 != x1
+                                && z0 != z1,
+                            "a radar map's world box must be finite with some size"
+                        );
+                        ensure!(
+                            map.floor.is_none_or(|[low, high]| low.is_finite()
+                                && high.is_finite()
+                                && low <= high),
+                            "a radar map's floor is a low and a high that are finite"
+                        );
+                        ensure!(
+                            map.area.is_none_or(|a| a.iter().all(|v| v.is_finite())),
+                            "a radar map's area must be finite"
+                        );
+                    }
+                    ensure!(
+                        (1..=8).contains(&range.len())
+                            && range
+                                .iter()
+                                .all(|r| r.is_finite() && (0.01..=1.0e6).contains(r)),
+                        "a radar has 1 to 8 zoom ranges, each a positive distance"
+                    );
+                    for source in zoom.iter().chain(expand.iter().map(|e| &e.value)) {
+                        source_ok(source)?;
+                    }
+                    if let Some(e) = expand {
+                        ensure!(
+                            rect_ok(&e.rect)
+                                && e.seconds.is_finite()
+                                && (0.0..=10.0).contains(&e.seconds)
+                                && e.range_scale.is_finite()
+                                && (0.01..=1000.0).contains(&e.range_scale),
+                            "a radar's expanded form needs a finite rect, 0 to 10 seconds and a positive range_scale"
+                        );
+                    }
+                    ensure!(yaw_offset.is_finite(), "yaw_offset must be finite");
+                    ensure!(
+                        cull.is_finite() && (0.1..=1.0).contains(cull),
+                        "a radar's cull is 0.1 to 1"
+                    );
+                    ensure!(color_ok(tint), "radar tint must be 0..1 RGBA");
+                    ensure!(
+                        back.as_ref().is_none_or(color_ok),
+                        "radar back must be 0..1 RGBA"
+                    );
+                    for t in ring.iter().chain(viewer).chain(above).chain(below) {
+                        texture_ok(t)?;
+                    }
+                    ensure!(
+                        markers.len() <= MAX_MARK_LISTS
+                            && markers
+                                .iter()
+                                .all(|m| matches!(Source::parse(m), Some(Source::State(_)))),
+                        "radar markers are up to {MAX_MARK_LISTS} rule states (package:global/key)"
+                    );
+                    ensure!(icons.len() <= 64, "a radar names at most 64 icons");
+                    for (name, icon) in icons {
+                        ensure!(
+                            !name.is_empty()
+                                && name.len() <= 32
+                                && !name.chars().any(char::is_control),
+                            "a radar icon is named by 1 to 32 printable characters"
+                        );
+                        texture_ok(icon)?;
+                    }
+                    ensure!(
+                        viewer_size
+                            .iter()
+                            .chain(mark_size)
+                            .all(|v| v.is_finite() && *v > 0.0 && *v <= 480.0),
+                        "radar icon sizes must be positive"
+                    );
+                    ensure!(
+                        height.is_none_or(|h| h.is_finite() && h >= 0.0),
+                        "a radar's height threshold must be finite and not negative"
+                    );
+                    ensure!(
+                        blink.is_finite() && (0.05..=10.0).contains(blink),
+                        "a radar's blink is 0.05 to 10 seconds"
+                    );
+                    show_ok(show)?;
+                }
             }
         }
         ensure!(self.texts.len() <= STOCK_TEXTS.len(), "too many texts");
@@ -1573,6 +1898,26 @@ impl Layout {
                 Element::KillFeed { icons, .. } | Element::MessageFeed { icons, .. } => {
                     out.extend(icons.values().map(String::as_str));
                 }
+                Element::Radar {
+                    maps,
+                    ring,
+                    viewer,
+                    icons,
+                    above,
+                    below,
+                    ..
+                } => out.extend(
+                    maps.iter()
+                        .map(|m| m.texture.as_str())
+                        .chain(
+                            ring.iter()
+                                .chain(viewer)
+                                .chain(above)
+                                .chain(below)
+                                .map(String::as_str),
+                        )
+                        .chain(icons.values().map(String::as_str)),
+                ),
                 Element::Tracker {
                     blip,
                     blip_above,
@@ -1672,6 +2017,19 @@ impl Layout {
                     names.extend([x.as_str(), z.as_str()]);
                     names.extend(show.as_ref().map(|s| s.value.as_str()));
                 }
+                Element::Radar {
+                    zoom,
+                    expand,
+                    markers,
+                    show,
+                    ..
+                } => {
+                    names.extend(zoom.as_deref());
+                    names.extend(expand.as_ref().map(|e| e.value.as_str()));
+                    names.extend(markers.iter().map(String::as_str));
+                    names.push("heading");
+                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                }
                 Element::KillFeed { show, .. }
                 | Element::MessageFeed { show, .. }
                 | Element::Tracker { show, .. } => {
@@ -1703,6 +2061,13 @@ pub enum Item {
         rect: [f32; 4],
         color: [f32; 4],
     },
+    /// Everything up to the matching [`Item::ClipEnd`] is cut off at `rect`.
+    ClipBegin {
+        rect: [f32; 4],
+        /// Cut off at the circle in `rect`, not at `rect`.
+        round: bool,
+    },
+    ClipEnd,
     /// A line in the stock HUD font.
     Text {
         at: [f32; 2],
@@ -1782,7 +2147,7 @@ pub fn resolve_live(
         })
     };
     let mut out = Vec::new();
-    for e in &layout.elements {
+    for (index, e) in layout.elements.iter().enumerate() {
         match e {
             Element::Image {
                 texture: id,
@@ -2236,6 +2601,174 @@ pub fn resolve_live(
                     });
                 }
             }
+            Element::Radar {
+                rect,
+                maps,
+                range,
+                zoom,
+                expand,
+                yaw_offset,
+                rotate,
+                round,
+                cull,
+                tint,
+                back,
+                ring,
+                viewer,
+                viewer_size,
+                markers,
+                icons,
+                mark_size,
+                height,
+                above,
+                below,
+                blink,
+                show,
+            } => {
+                if !shown(show) {
+                    continue;
+                }
+                // Blended toward the bigger form, eased.
+                let blend = live
+                    .blends
+                    .get(index)
+                    .copied()
+                    .unwrap_or(0.0)
+                    .clamped(0.0, 1.0);
+                let ease = blend * blend * (3.0 - 2.0 * blend);
+                let lerp = |a: f32, b: f32| a + (b - a) * ease;
+                let (panel, range_scale) = match expand {
+                    Some(e) => (
+                        [0, 1, 2, 3].map(|i| lerp(rect[i], e.rect[i])),
+                        lerp(1.0, e.range_scale),
+                    ),
+                    None => (*rect, 1.0),
+                };
+                let step = zoom
+                    .as_deref()
+                    .and_then(number)
+                    .map_or(0, |n| n.round().max(0.0) as usize)
+                    .min(range.len() - 1);
+                let half = [panel[2] / 2.0, panel[3] / 2.0];
+                let (cx, cy) = (panel[0] + half[0], panel[1] + half[1]);
+                let radius = half[0].min(half[1]);
+                if radius <= 0.0 {
+                    continue;
+                }
+                // Units on the panel per unit of ground.
+                let scale = radius / (range[step] * range_scale);
+                let heading = number("heading").unwrap_or(0.0);
+                let turn = (if *rotate { -heading } else { 0.0 } + yaw_offset).to_radians();
+                let (sin, cos) = turn.sin_cos();
+                let spin = |dx: f32, dy: f32| (dx * cos - dy * sin, dx * sin + dy * cos);
+                let at = live.position;
+                out.push(Item::ClipBegin {
+                    rect: panel,
+                    round: *round,
+                });
+                if let Some(color) = back {
+                    out.push(Item::Fill {
+                        rect: panel,
+                        color: *color,
+                    });
+                }
+                let floor = maps.iter().min_by(|a, b| {
+                    a.miss(at, live.altitude)
+                        .partial_cmp(&b.miss(at, live.altitude))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                if let Some((map, (key, _))) = floor.and_then(|m| Some((m, texture(&m.texture)?))) {
+                    let [x0, z0, x1, z1] = map.world;
+                    let (ox, oy) = spin(
+                        ((x0 + x1) / 2.0 - at[0]) * scale,
+                        ((z0 + z1) / 2.0 - at[1]) * scale,
+                    );
+                    let (w, h) = ((x1 - x0).abs() * scale, (z1 - z0).abs() * scale);
+                    out.push(Item::Image {
+                        texture: key,
+                        uv: [
+                            if x1 >= x0 { 0.0 } else { 1.0 },
+                            if z1 >= z0 { 0.0 } else { 1.0 },
+                            if x1 >= x0 { 1.0 } else { 0.0 },
+                            if z1 >= z0 { 1.0 } else { 0.0 },
+                        ],
+                        rect: [cx + ox - w / 2.0, cy + oy - h / 2.0, w, h],
+                        tint: *tint,
+                        turn,
+                    });
+                }
+                out.push(Item::ClipEnd);
+                let lit = (live.seconds / blink).floor() as i64 % 2 == 0;
+                for binding in markers {
+                    let Some(list) = live.marks.iter().find(|l| &l.binding == binding) else {
+                        continue;
+                    };
+                    for mark in &list.marks {
+                        if mark.blink && !lit {
+                            continue;
+                        }
+                        let (mx, my) =
+                            spin((mark.at[0] - at[0]) * scale, (mark.at[2] - at[1]) * scale);
+                        let far = if *round {
+                            mx.hypot(my) > radius * cull
+                        } else {
+                            mx.abs() > half[0] * cull || my.abs() > half[1] * cull
+                        };
+                        if far {
+                            continue;
+                        }
+                        let rise = mark.at[1] - live.altitude;
+                        let picture = match height {
+                            Some(h) if rise > *h => above.as_ref(),
+                            Some(h) if rise < -*h => below.as_ref(),
+                            _ => None,
+                        }
+                        .or_else(|| icons.get(&mark.icon));
+                        let Some((key, _)) = picture.and_then(|id| texture(id)) else {
+                            continue;
+                        };
+                        out.push(Item::Image {
+                            texture: key,
+                            uv: [0.0, 0.0, 1.0, 1.0],
+                            rect: [
+                                cx + mx - mark_size[0] / 2.0,
+                                cy + my - mark_size[1] / 2.0,
+                                mark_size[0],
+                                mark_size[1],
+                            ],
+                            tint: mark.color,
+                            turn: mark.rot.to_radians() + turn,
+                        });
+                    }
+                }
+                if let Some((key, _)) = ring.as_deref().and_then(texture) {
+                    out.push(Item::Image {
+                        texture: key,
+                        uv: [0.0, 0.0, 1.0, 1.0],
+                        rect: panel,
+                        tint: [1.0; 4],
+                        turn: 0.0,
+                    });
+                }
+                if let Some((key, _)) = viewer.as_deref().and_then(texture) {
+                    out.push(Item::Image {
+                        texture: key,
+                        uv: [0.0, 0.0, 1.0, 1.0],
+                        rect: [
+                            cx - viewer_size[0] / 2.0,
+                            cy - viewer_size[1] / 2.0,
+                            viewer_size[0],
+                            viewer_size[1],
+                        ],
+                        tint: [1.0; 4],
+                        turn: if *rotate {
+                            0.0
+                        } else {
+                            heading.to_radians() + turn
+                        },
+                    });
+                }
+            }
             Element::Tracker {
                 rect,
                 range,
@@ -2430,6 +2963,246 @@ mod tests {
         l.validate().unwrap();
         l
     }
+    /// A 100 x 100 map panel at the middle of the region, one unit of
+    /// panel per world unit at the first zoom step, with two floors.
+    fn radar_layout(extra: serde_json::Value) -> Layout {
+        let mut element = serde_json::json!({ "type": "radar", "rect": [0, 0, 100, 100],
+            "maps": [
+                { "texture": "pack:texture/low", "world": [-1000, -1000, 1000, 1000], "floor": [-10, 0] },
+                { "texture": "pack:texture/high", "world": [-1000, -1000, 1000, 1000], "floor": [0, 10] }],
+            "range": [50, 25],
+            "markers": ["game:global/team", "game:global/hit"],
+            "icons": { "friend": "pack:texture/friend" },
+            "mark_size": [6, 6], "height": 3,
+            "above": "pack:texture/up", "below": "pack:texture/down" });
+        for (key, value) in extra.as_object().unwrap() {
+            element[key] = value.clone();
+        }
+        layout(
+            serde_json::json!({ "schema_version": 1, "region": "bottom_left", "elements": [element] }),
+        )
+    }
+    fn radar_textures(id: &str) -> Option<TextureInfo> {
+        Some((
+            match id {
+                "pack:texture/low" => 1,
+                "pack:texture/high" => 2,
+                "pack:texture/friend" => 3,
+                "pack:texture/up" => 4,
+                "pack:texture/down" => 5,
+                "pack:texture/ring" => 6,
+                _ => return None,
+            },
+            [64, 64],
+        ))
+    }
+    fn mark(icon: &str, at: [f32; 3]) -> Mark {
+        Mark {
+            icon: icon.into(),
+            at,
+            rot: 0.0,
+            color: [1.0; 4],
+            blink: false,
+        }
+    }
+    /// What a panel draws for a viewer at `position`, `altitude`, facing
+    /// `heading`, with `friends` listed under `game:global/team`.
+    fn draw_radar(
+        layout: &Layout,
+        (position, altitude, heading): ([f32; 2], f32, f32),
+        friends: Vec<Mark>,
+        blend: f32,
+    ) -> Vec<Item> {
+        let lists = [MarkList {
+            binding: "game:global/team".into(),
+            marks: friends,
+        }];
+        let live = Live {
+            position,
+            altitude,
+            blends: &[blend],
+            marks: &lists,
+            ..Default::default()
+        };
+        resolve_live(
+            layout,
+            &|source| match source {
+                Source::Heading => Some(Value::Number(heading)),
+                Source::State(s) if s == "game:player/zoom" => Some(Value::Number(1.0)),
+                Source::State(s) if s == "game:player/big" => Some(Value::Number(1.0)),
+                _ => None,
+            },
+            &radar_textures,
+            &live,
+        )
+    }
+    fn image(items: &[Item], texture: u64) -> Option<([f32; 4], f32)> {
+        items.iter().find_map(|i| match i {
+            Item::Image {
+                texture: t,
+                rect,
+                turn,
+                ..
+            } if *t == texture => Some((*rect, *turn)),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_radar_pans_to_the_viewer_turns_with_them_and_places_marks() {
+        let layout = radar_layout(serde_json::json!({}));
+        let friend = mark("friend", [0.0, -5.0, -25.0]);
+        // Facing north on the low floor: the map is centred on the viewer,
+        // 2000 units wide at one panel unit a unit, and a friend 25 north
+        // sits 25 above the middle.
+        let items = draw_radar(&layout, ([0.0, 0.0], -5.0, 0.0), vec![friend.clone()], 0.0);
+        assert!(matches!(
+            items[0],
+            Item::ClipBegin {
+                rect: [0.0, 0.0, 100.0, 100.0],
+                round: false
+            }
+        ));
+        assert_eq!(
+            image(&items, 1),
+            Some(([-950.0, -950.0, 2000.0, 2000.0], 0.0))
+        );
+        assert_eq!(image(&items, 3), Some(([47.0, 22.0, 6.0, 6.0], 0.0)));
+        assert!(matches!(items[2], Item::ClipEnd));
+        // Facing east the map turns a quarter anticlockwise and the same
+        // friend is to the viewer's left.
+        let items = draw_radar(&layout, ([0.0, 0.0], -5.0, 90.0), vec![friend.clone()], 0.0);
+        let (rect, turn) = image(&items, 3).unwrap();
+        assert!(
+            (rect[0] - 22.0).abs() < 1e-3 && (rect[1] - 47.0).abs() < 1e-3,
+            "{rect:?}"
+        );
+        assert!((turn + std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        // Walking east slides the map west under the viewer.
+        let items = draw_radar(&layout, ([10.0, 0.0], -5.0, 0.0), vec![], 0.0);
+        assert_eq!(image(&items, 1).unwrap().0[0], -960.0);
+        // A yaw offset adds to the turn; without `rotate` north stays up.
+        let fixed = radar_layout(serde_json::json!({ "rotate": false, "yaw_offset": 90.0 }));
+        let items = draw_radar(&fixed, ([0.0, 0.0], -5.0, 33.0), vec![], 0.0);
+        assert!((image(&items, 1).unwrap().1 - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_radar_picks_the_floor_by_height_and_the_zoom_and_blend_by_rule_values() {
+        let layout = radar_layout(serde_json::json!({ "zoom": "game:player/zoom",
+            "expand": { "rect": [0, 0, 200, 200], "value": "game:player/big", "range_scale": 2 } }));
+        let low = draw_radar(&layout, ([0.0, 0.0], -5.0, 0.0), vec![], 0.0);
+        let high = draw_radar(&layout, ([0.0, 0.0], 5.0, 0.0), vec![], 0.0);
+        assert!(image(&low, 1).is_some() && image(&low, 2).is_none());
+        assert!(image(&high, 2).is_some() && image(&high, 1).is_none());
+        // Above every floor: the nearest one.
+        let roof = draw_radar(&layout, ([0.0, 0.0], 40.0, 0.0), vec![], 0.0);
+        assert!(image(&roof, 2).is_some());
+        // Zoom step 1 shows 25 units to the edge: twice the size.
+        assert_eq!(image(&low, 1).unwrap().0[2], 4000.0);
+        // Fully blended: the bigger box, twice the ground to its edge, so
+        // the same scale as the small form at its second step doubled.
+        let big = draw_radar(&layout, ([0.0, 0.0], -5.0, 0.0), vec![], 1.0);
+        assert!(matches!(
+            big[0],
+            Item::ClipBegin {
+                rect: [0.0, 0.0, 200.0, 200.0],
+                ..
+            }
+        ));
+        assert_eq!(image(&big, 1).unwrap().0[2], 4000.0);
+    }
+
+    #[test]
+    fn radar_marks_are_culled_blink_and_turn_to_arrows_off_the_viewers_level() {
+        let layout = radar_layout(serde_json::json!({ "cull": 0.5, "round": true, "blink": 1.0 }));
+        let at = ([0.0, 0.0], 0.0, 0.0);
+        let here = mark("friend", [10.0, 0.0, 0.0]);
+        let near_edge = mark("friend", [30.0, 0.0, 0.0]);
+        let upstairs = mark("friend", [0.0, 5.0, 10.0]);
+        let downstairs = mark("friend", [0.0, -5.0, 10.0]);
+        let items = draw_radar(
+            &layout,
+            at,
+            vec![here, near_edge, upstairs, downstairs],
+            0.0,
+        );
+        // Past half the radius: gone. Beyond the 3 unit threshold the
+        // level arrows take the icon's place.
+        let count = |texture| {
+            items
+                .iter()
+                .filter(|i| matches!(i, Item::Image { texture: t, .. } if *t == texture))
+                .count()
+        };
+        assert_eq!((count(3), count(4), count(5)), (1, 1, 1));
+        // A blinking mark is lit for `blink` seconds, then dark.
+        let mut blinking = mark("friend", [10.0, 0.0, 0.0]);
+        blinking.blink = true;
+        let lists = [MarkList {
+            binding: "game:global/team".into(),
+            marks: vec![blinking],
+        }];
+        let lit = |seconds| {
+            let live = Live {
+                blends: &[0.0],
+                marks: &lists,
+                seconds,
+                ..Default::default()
+            };
+            let items = resolve_live(&layout, &|_| None, &radar_textures, &live);
+            image(&items, 3).is_some()
+        };
+        assert!(lit(0.5) && !lit(1.5) && lit(2.5));
+    }
+
+    #[test]
+    fn mark_lists_are_read_leniently_and_a_radar_is_checked() {
+        let marks = Mark::parse_list(&serde_json::json!([
+            { "icon": "friend", "x": 1, "y": 2, "z": 3, "rot": 90, "color": [1, 0, 0], "blink": true },
+            { "icon": "friend", "x": 1, "z": 3 },
+            { "icon": "friend", "x": 1 },
+            { "x": 1, "z": 3 },
+            "junk"
+        ]));
+        assert_eq!(marks.len(), 2);
+        assert_eq!(
+            (marks[0].at, marks[0].rot, marks[0].color, marks[0].blink),
+            ([1.0, 2.0, 3.0], 90.0, [1.0, 0.0, 0.0, 1.0], true)
+        );
+        assert_eq!((marks[1].at, marks[1].blink), ([1.0, 0.0, 3.0], false));
+        assert!(Mark::parse_list(&serde_json::json!({ "icon": "friend" })).is_empty());
+        for bad in [
+            serde_json::json!({ "range": [] }),
+            serde_json::json!({ "range": [0] }),
+            serde_json::json!({ "cull": 2 }),
+            serde_json::json!({ "markers": ["not a binding"] }),
+            serde_json::json!({ "markers": ["game:player/zoom", "game:player/zoom", "game:player/zoom", "game:player/zoom", "game:player/zoom", "game:player/zoom", "game:player/zoom", "game:player/zoom", "game:player/zoom"] }),
+            serde_json::json!({ "maps": [] }),
+            serde_json::json!({ "maps": [{ "texture": "pack:texture/low", "world": [0, 0, 0, 5] }] }),
+            serde_json::json!({ "expand": { "rect": [0, 0, 9, 9], "value": "nonsense" } }),
+        ] {
+            let mut element = serde_json::json!({ "type": "radar", "rect": [0, 0, 100, 100],
+                "maps": [{ "texture": "pack:texture/low", "world": [-1, -1, 1, 1] }], "range": [50] });
+            for (key, value) in bad.as_object().unwrap() {
+                element[key] = value.clone();
+            }
+            let layout: Layout = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "region": "bottom_left", "elements": [element] }))
+            .unwrap();
+            assert!(layout.validate().is_err(), "{bad}");
+        }
+        // The rules a radar reads are named, so a server without them
+        // falls back to the stock HUD.
+        let layout = radar_layout(serde_json::json!({ "zoom": "game:player/zoom" }));
+        assert!(
+            layout
+                .sources()
+                .contains(&Source::State("game:global/hit".into()))
+        );
+        assert_eq!(layout.textures().len(), 5);
+    }
+
     fn values(source: &Source) -> Option<Value> {
         match source {
             Source::Health => Some(Value::Number(75.0)),

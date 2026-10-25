@@ -356,95 +356,143 @@ fn hud_regions(pack: &Pack, dl: &mut DrawList, core: &Core) {
         } else {
             crate::draw::Filter::Linear
         };
-        for item in &region.items {
-            match item {
-                Item::Image {
-                    texture,
-                    uv,
-                    rect,
-                    tint,
-                    turn,
-                } => {
-                    let (x, y) = px(rect[0], rect[1]);
-                    dl.image_turned(
-                        crate::pack::TexKey::External(*texture),
-                        [uv[0], uv[1], uv[2] - uv[0], uv[3] - uv[1]],
-                        [x, y, rect[2] * unit, rect[3] * unit],
-                        *turn,
-                        rgba(*tint),
-                        filter,
-                    );
-                }
-                Item::Fill { rect, color } => {
-                    let (x, y) = px(rect[0], rect[1]);
-                    let (x1, y1) = px(rect[0] + rect[2], rect[1] + rect[3]);
-                    let (x, y) = (x.round() as i32, y.round() as i32);
-                    dl.fill(
-                        Rect::new(x, y, x1.round() as i32 - x, y1.round() as i32 - y),
-                        rgba(*color),
-                    );
-                }
-                Item::Text {
-                    at,
-                    text,
-                    color,
-                    align,
-                } => {
-                    let Some(font) = font.as_ref() else {
-                        continue;
-                    };
-                    let (x, y) = px(at[0], at[1]);
-                    let tw = font.width(text) as f32;
-                    let x = match align {
-                        Align::Left => x,
-                        Align::Center => x - tw / 2.0,
-                        Align::Right => x - tw,
-                    };
-                    font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
-                }
-                Item::Line { at, align, spans } => {
-                    use bri_content::hud::Span;
-                    let Some(font) = font.as_ref() else {
-                        continue;
-                    };
-                    let gap = 2.0 * unit;
-                    let span_width = |span: &Span| match span {
-                        Span::Text { text, .. } => font.width(text) as f32,
-                        Span::Image { size, .. } => size[0] * unit,
-                    };
-                    let tw = spans.iter().map(span_width).sum::<f32>()
-                        + gap * spans.len().saturating_sub(1) as f32;
-                    let (x, y) = px(at[0], at[1]);
-                    let mut x = match align {
-                        Align::Left => x,
-                        Align::Center => x - tw / 2.0,
-                        Align::Right => x - tw,
-                    };
-                    let bottom = y + font.line_height() as f32;
-                    for span in spans {
-                        match span {
-                            Span::Text { text, color } => {
-                                font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
-                            }
-                            Span::Image {
-                                texture,
-                                size,
-                                tint,
-                            } => dl.image(
-                                crate::pack::TexKey::External(*texture),
-                                [0.0, 0.0, 1.0, 1.0],
-                                [x, bottom - size[1] * unit, size[0] * unit, size[1] * unit],
-                                rgba(*tint),
-                                filter,
-                            ),
+        let draw = |dl: &mut DrawList, item: &Item| match item {
+            Item::Image {
+                texture,
+                uv,
+                rect,
+                tint,
+                turn,
+            } => {
+                let (x, y) = px(rect[0], rect[1]);
+                dl.image_turned(
+                    crate::pack::TexKey::External(*texture),
+                    [uv[0], uv[1], uv[2] - uv[0], uv[3] - uv[1]],
+                    [x, y, rect[2] * unit, rect[3] * unit],
+                    *turn,
+                    rgba(*tint),
+                    filter,
+                );
+            }
+            Item::Fill { rect, color } => {
+                let (x, y) = px(rect[0], rect[1]);
+                let (x1, y1) = px(rect[0] + rect[2], rect[1] + rect[3]);
+                let (x, y) = (x.round() as i32, y.round() as i32);
+                dl.fill(
+                    Rect::new(x, y, x1.round() as i32 - x, y1.round() as i32 - y),
+                    rgba(*color),
+                );
+            }
+            Item::Text {
+                at,
+                text,
+                color,
+                align,
+            } => {
+                let Some(font) = font.as_ref() else {
+                    return;
+                };
+                let (x, y) = px(at[0], at[1]);
+                let tw = font.width(text) as f32;
+                let x = match align {
+                    Align::Left => x,
+                    Align::Center => x - tw / 2.0,
+                    Align::Right => x - tw,
+                };
+                font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
+            }
+            Item::ClipBegin { .. } | Item::ClipEnd => {}
+            Item::Line { at, align, spans } => {
+                use bri_content::hud::Span;
+                let Some(font) = font.as_ref() else {
+                    return;
+                };
+                let gap = 2.0 * unit;
+                let span_width = |span: &Span| match span {
+                    Span::Text { text, .. } => font.width(text) as f32,
+                    Span::Image { size, .. } => size[0] * unit,
+                };
+                let tw = spans.iter().map(span_width).sum::<f32>()
+                    + gap * spans.len().saturating_sub(1) as f32;
+                let (x, y) = px(at[0], at[1]);
+                let mut x = match align {
+                    Align::Left => x,
+                    Align::Center => x - tw / 2.0,
+                    Align::Right => x - tw,
+                };
+                let bottom = y + font.line_height() as f32;
+                for span in spans {
+                    match span {
+                        Span::Text { text, color } => {
+                            font.draw(dl, x.round(), y.round(), text, rgba(*color), &[]);
                         }
-                        x += span_width(span) + gap;
+                        Span::Image {
+                            texture,
+                            size,
+                            tint,
+                        } => dl.image(
+                            crate::pack::TexKey::External(*texture),
+                            [0.0, 0.0, 1.0, 1.0],
+                            [x, bottom - size[1] * unit, size[0] * unit, size[1] * unit],
+                            rgba(*tint),
+                            filter,
+                        ),
                     }
+                    x += span_width(span) + gap;
                 }
             }
+        };
+        let mut next = 0;
+        while next < region.items.len() {
+            if let Item::ClipBegin { rect, round } = &region.items[next] {
+                let end = region.items[next..]
+                    .iter()
+                    .position(|i| matches!(i, Item::ClipEnd))
+                    .map_or(region.items.len(), |at| next + at);
+                let inner = &region.items[next + 1..end];
+                let (x0, y0) = px(rect[0], rect[1]);
+                let (x1, y1) = px(rect[0] + rect[2], rect[1] + rect[3]);
+                for slice in clip_slices([x0, y0, x1, y1], *round) {
+                    if dl.push_clip(slice) {
+                        for item in inner {
+                            draw(dl, item);
+                        }
+                        dl.pop_clip();
+                    }
+                }
+                next = end + 1;
+                continue;
+            }
+            draw(dl, &region.items[next]);
+            next += 1;
         }
     }
 }
+
+/// Rows of a box that cut off at its edge (`round`: at the circle in it), in
+/// pixels: a draw is repeated once through each, as the one clip the
+/// renderer has is a rectangle.
+fn clip_slices([x0, y0, x1, y1]: [f32; 4], round: bool) -> Vec<Rect> {
+    let (left, top) = (x0.round() as i32, y0.round() as i32);
+    let (right, bottom) = (x1.round() as i32, y1.round() as i32);
+    if !round {
+        return vec![Rect::new(left, top, right - left, bottom - top)];
+    }
+    let (cx, cy) = ((left + right) as f32 / 2.0, (top + bottom) as f32 / 2.0);
+    let radius = ((right - left).min(bottom - top)) as f32 / 2.0;
+    (top..bottom)
+        .step_by(ROUND_CLIP_ROW as usize)
+        .filter_map(|y| {
+            let rows = ROUND_CLIP_ROW.min(bottom - y);
+            let dy = (y as f32 + rows as f32 / 2.0 - cy).abs();
+            let chord = (radius * radius - dy * dy).max(0.0).sqrt();
+            let (a, b) = ((cx - chord).round() as i32, (cx + chord).round() as i32);
+            (b > a).then(|| Rect::new(a, y, b - a, rows))
+        })
+        .collect()
+}
+/// Pixel rows of a round clip: finer is a smoother circle and more draws.
+const ROUND_CLIP_ROW: i32 = 2;
 
 fn hud(core: &Core) -> View {
     let (w, h) = core.logical;
@@ -958,4 +1006,34 @@ fn scope_overlay(dl: &mut DrawList, core: &Core) -> Option<Rect> {
         crate::draw::Filter::Linear,
     );
     Some(lens)
+}
+
+#[cfg(test)]
+mod round_clip_tests {
+    use super::*;
+
+    #[test]
+    fn a_round_clip_is_rows_narrowing_toward_the_top_and_bottom() {
+        let rows = clip_slices([0.0, 0.0, 100.0, 100.0], true);
+        assert_eq!(rows.len(), 50);
+        let widest = rows.iter().map(|r| r.w).max().unwrap();
+        assert!((98..=100).contains(&widest), "{widest}");
+        assert!(
+            rows[0].w < 30 && rows[49].w < 30,
+            "{} {}",
+            rows[0].w,
+            rows[49].w
+        );
+        assert!(
+            rows.iter()
+                .all(|r| r.x >= 0 && r.x + r.w <= 100 && r.h == 2)
+        );
+        // The middle rows sit centred.
+        assert_eq!((rows[25].x * 2 + rows[25].w), 100);
+        // A square clip is the one box.
+        assert_eq!(
+            clip_slices([10.0, 20.0, 60.0, 90.0], false),
+            [Rect::new(10, 20, 50, 70)]
+        );
+    }
 }

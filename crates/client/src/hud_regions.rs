@@ -3,7 +3,8 @@
 //! game's values and the rules' replicated state, and the textures they
 //! draw, uploaded for the UI. Data only: nothing here runs Add-On code.
 use bri_content::hud::{
-    Claim, Contact, FeedKill, Item, Layout, Live, Region, Source, TextureInfo, Value, Viewer,
+    Claim, Contact, Element, FeedKill, Item, Layout, Live, Mark, MarkList, Region, Source,
+    TextureInfo, Value, Viewer,
 };
 use bri_package_runtime::Catalog;
 use bri_render::scene::SceneImage;
@@ -14,6 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Texture keys of HUD region images (`bri_ui::pack::TexKey::External`).
 const KEY_BASE: u64 = 0x4855_0000;
+/// Longest frame a map panel's blend and blinking count, seconds, so a stall
+/// does not skip them.
+const MAX_FRAME: f32 = 0.25;
 /// Most textures all layouts together draw.
 const MAX_TEXTURES: usize = 512;
 
@@ -42,8 +46,9 @@ pub struct GameValues {
     pub contacts: Vec<Contact>,
     /// The viewer's level facing (x, z), for edge arrows.
     pub facing: [f32; 2],
-    /// The viewer's position (x, z) in the world.
+    /// The viewer's position (x, z) in the world, and their height.
     pub position: [f32; 2],
+    pub altitude: f32,
     /// The way the viewer's body faces in degrees (clockwise from -z), the
     /// camera's field of view, and whether they aim down sights.
     pub heading: f32,
@@ -74,6 +79,13 @@ pub struct HudRegions {
     kill_feed: bool,
     /// Whether a drawn layout shows a motion tracker.
     tracker: bool,
+    /// How far each map panel has blended to its bigger form, by region
+    /// and element index.
+    blends: BTreeMap<(Region, usize), f32>,
+    /// When the last frame was drawn, and seconds of drawing so far (marks
+    /// blink by it).
+    clock: Option<std::time::Instant>,
+    seconds: f32,
 }
 
 impl HudRegions {
@@ -169,8 +181,14 @@ impl HudRegions {
         viewer: &Viewer<'_>,
         game: &GameValues,
     ) -> Vec<HudRegionDraw> {
+        let now = std::time::Instant::now();
+        let dt = self
+            .clock
+            .replace(now)
+            .map_or(0.0, |before| (now - before).as_secs_f32().min(MAX_FRAME));
+        self.seconds += dt;
         let layouts = std::mem::take(&mut self.layouts);
-        let out = self.resolve(&layouts, state, owner, viewer, game);
+        let out = self.resolve(dt, &layouts, state, owner, viewer, game);
         self.layouts = layouts;
         out
     }
@@ -200,6 +218,7 @@ impl HudRegions {
     }
     fn resolve(
         &mut self,
+        dt: f32,
         layouts: &[(String, String, Layout)],
         state: &PackageStateView,
         owner: OwnerId,
@@ -272,7 +291,11 @@ impl HudRegions {
             contacts: &game.contacts,
             facing: game.facing,
             position: game.position,
+            altitude: game.altitude,
+            seconds: self.seconds,
+            ..Default::default()
         };
+        let mut blends = BTreeMap::new();
         let mut texts = BTreeMap::new();
         let mut kill_feed = false;
         let mut tracker = false;
@@ -304,6 +327,55 @@ impl HudRegions {
             }
             kill_feed |= winner.layout.has_kill_feed();
             tracker |= winner.layout.has_tracker();
+            // Map panels: ease each toward its asked form, and read the
+            // mark lists they draw.
+            let mut eased = vec![0.0; winner.layout.elements.len()];
+            let mut lists: Vec<MarkList> = Vec::new();
+            for (index, element) in winner.layout.elements.iter().enumerate() {
+                let Element::Radar {
+                    expand, markers, ..
+                } = element
+                else {
+                    continue;
+                };
+                if let Some(expand) = expand {
+                    let asked = Source::parse(&expand.value)
+                        .and_then(|s| value(&s))
+                        .and_then(|v| v.number())
+                        .is_some_and(|n| n > 0.5);
+                    let held = self.blends.get(&(region, index)).copied().unwrap_or(0.0);
+                    let step = if expand.seconds > 0.0 {
+                        dt / expand.seconds
+                    } else {
+                        1.0
+                    };
+                    let now = if asked {
+                        (held + step).min(1.0)
+                    } else {
+                        (held - step).max(0.0)
+                    };
+                    blends.insert((region, index), now);
+                    eased[index] = now;
+                }
+                for binding in markers {
+                    if lists.iter().any(|l| &l.binding == binding) {
+                        continue;
+                    }
+                    let marks = bri_package_runtime::content::Binding::parse(binding)
+                        .and_then(|b| state.get(&b, owner))
+                        .map(Mark::parse_list)
+                        .unwrap_or_default();
+                    lists.push(MarkList {
+                        binding: binding.clone(),
+                        marks,
+                    });
+                }
+            }
+            let live = Live {
+                blends: &eased,
+                marks: &lists,
+                ..live
+            };
             let items: Vec<Item> =
                 bri_content::hud::resolve_live(winner.layout, &value, &texture, &live);
             out.push(HudRegionDraw {
@@ -314,6 +386,7 @@ impl HudRegions {
                 name_tags: winner.layout.name_tags.clone(),
             });
         }
+        self.blends = blends;
         self.texts = texts;
         self.kill_feed = kill_feed;
         self.tracker = tracker;
@@ -644,5 +717,54 @@ mod tests {
         assert_eq!(text(&mut regions, Some(2)).as_deref(), Some("hull 50"));
         assert_eq!(text(&mut regions, Some(3)), None, "no such seat claim");
         assert_eq!(text(&mut regions, None), None, "on foot");
+    }
+
+    #[test]
+    fn a_map_panel_reads_its_marks_from_rule_state_and_eases_toward_its_big_form() {
+        let radar = layout(
+            serde_json::json!({ "schema_version": 1, "region": "bottom_left",
+            "elements": [{ "type": "radar", "rect": [0, 0, 100, 100], "range": [50],
+                "maps": [{ "texture": "hud:texture/map", "world": [-100, -100, 100, 100] }],
+                "markers": ["game:global/team"], "icons": { "friend": "hud:texture/dot" },
+                "expand": { "rect": [0, 0, 200, 200], "value": "game:global/big", "seconds": 0.4 } }] }),
+        );
+        let mut regions = regions(&[("hud", vec![radar])]);
+        for (n, id) in ["hud:texture/map", "hud:texture/dot"]
+            .into_iter()
+            .enumerate()
+        {
+            regions.keys.insert(id.into(), (100 + n as u64, [8, 8]));
+        }
+        let mut state = PackageStateView::default();
+        let space = state.packages.entry("game".into()).or_default();
+        space.global.insert("big".into(), serde_json::json!(1));
+        space.global.insert(
+            "team".into(),
+            serde_json::json!([{ "icon": "friend", "x": 10, "y": 0, "z": -20 }]),
+        );
+        // A tenth of a second of a 0.4 second blend since the last frame.
+        regions.clock = Some(std::time::Instant::now() - std::time::Duration::from_millis(100));
+        let draws = regions.draws(&state, 1, &Viewer::default(), &GameValues::default());
+        let [Item::ClipBegin { rect, .. }, ..] = draws[0].items.as_slice() else {
+            panic!("a panel starts with its clip: {:?}", draws[0].items);
+        };
+        assert!(
+            rect[2] > 100.0 && rect[2] < 140.0,
+            "a quarter of the way: {rect:?}"
+        );
+        let dot = draws[0]
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::Image { texture: 101, .. }));
+        assert!(dot, "the friend's mark is drawn");
+        // Asked to close, it eases back.
+        let space = state.packages.get_mut("game").unwrap();
+        space.global.insert("big".into(), serde_json::json!(0));
+        regions.clock = Some(std::time::Instant::now() - std::time::Duration::from_millis(100));
+        let draws = regions.draws(&state, 1, &Viewer::default(), &GameValues::default());
+        let [Item::ClipBegin { rect: closing, .. }, ..] = draws[0].items.as_slice() else {
+            panic!("clip");
+        };
+        assert!(closing[2] < rect[2], "{closing:?} {rect:?}");
     }
 }
