@@ -452,6 +452,11 @@ pub fn room(col_floor: bool) -> Vec<u8> {
 
 /// [`room`] with its floor's node under another name (a map's world mesh).
 pub fn room_named(col_floor: bool, floor: &str) -> Vec<u8> {
+    room_with(col_floor, floor, |_| {})
+}
+
+/// [`room_named`] with more of the scene added by `extra` before it is written.
+pub fn room_with(col_floor: bool, floor: &str, extra: impl FnOnce(&mut Gltf)) -> Vec<u8> {
     let mut g = Gltf::new();
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     let part = |g: &mut Gltf, name: &str, center: Vec3, size: Vec3, material: usize| {
@@ -555,5 +560,6 @@ pub fn room_named(col_floor: bool, floor: &str) -> Vec<u8> {
         "extensions": { "KHR_lights_punctual": { "light": 1 } } }),
         None,
     );
+    extra(&mut g);
     g.glb()
 }

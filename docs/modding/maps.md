@@ -132,6 +132,15 @@ front of themselves, every frame. A set can also list `pictures` (`name`: what a
 file): pictures for projectors that attach while the game runs, held by the decal layer whether or not the map has a decal of them
 (`--projector-pictures FILE.json` gives a map a set of only these, written by `projector_bake`: the game's Projector actors attach at run time, and the importer bakes none).
 
+**Projector nodes.** A node's custom property `bri_projector` bakes a decal where the node stands, made the way a game's projector is made at
+run time (`bri_effects_render::projector_runtime::make_decal`). It is an object: `picture` (a PNG beside the glTF; required), `reach` and `width`
+(the volume's depth along the throw and its width at the node, in the model's units; both above 0; required), `fov_degrees` (the cone's full opening;
+0, the default, is a box `width` wide), `roll_degrees` (turn of the picture about the throw), `spin_degrees_per_second`, `blend`
+(`modulate2x` by default, `alpha`, `add`), and the receivers `surfaces`, `terrain` and `grazing_surfaces` (true by default) and `backfaces`
+(false by default). The picture is thrown along the node's forward axis, Blender's -Y for an Empty or the way a light or camera looks (glTF -Z).
+Pointed straight down, the picture's yaw is fixed, so give a slight tilt or a `roll_degrees` to turn it. Unknown keys are an error. Glass and other
+alpha-blended surfaces take a decal like any other surface.
+
 **Light baked into a mesh.** A node's custom property `bri_vertex_lights` names the fixed lights that reach its mesh
 (`bri_content::vertex_lighting`: `lights` with `position`, `color`, `radius`, optional `glow` and `negative`, and an `effect`
 of `{"kind": "point"}` or `{"kind": "directional", "direction": [x, y, z]}`; `ambient`; and `visible`, one hex mask per light with
