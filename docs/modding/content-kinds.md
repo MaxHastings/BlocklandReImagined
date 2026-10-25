@@ -416,6 +416,18 @@ does; it leaves no mark. `"postures": {"crouch": "your-id:down", "stand":
 "your-id:up", "prone": "your-id:prone"}` sounds once where the body is
 when it enters that posture.
 
+`step_noise` (0 to 1) makes each footfall a clip marks a noise bots hear, as
+they hear fighting, and a mark can say its own with `"noise"`; the gait shows
+only in how often the clip's marks come, so a clip with none (backing up,
+strafing, crawling) makes none. `land_noise` (`{"factor": 0.5,
+"jump_floor": 150}`) makes touching down after a fall a noise of `factor`
+times the speed fallen over the larger of the body's jump speed and
+`jump_floor`, 0 to 1 (a fall at jump speed is `factor`, faster ones louder).
+The host follows the clip itself (`bri-sim`'s `gait`: the same pick and the
+same rate from `ground_speeds` as the client), so bots hear a footfall when a
+client would see it land; scripted threads, intent clips, seats and water are
+not followed. Who hears how far is the listener's own (its kind's hearing).
+
 `takeoff_on_surface: true` makes the take-off of a jump sound once like a
 footfall on the surface underfoot, as `land_on_surface` does the landing.
 `contacts` makes each footfall (a mark, the timer's step, a landing or

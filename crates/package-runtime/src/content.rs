@@ -1928,10 +1928,13 @@ pub struct ArchetypeSounds {
     /// Frames a second of the clips, for steps marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
-    /// How loud a footfall is to bots, by posture then ground speed (see the
-    /// content kinds document: `noise`).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub noise: BTreeMap<String, Vec<NoiseBandDef>>,
+    /// How loud each marked footfall is to bots, 0 to 1 (see the content
+    /// kinds document: `step_noise`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_noise: Option<f32>,
+    /// The noise of landing from a fall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land_noise: Option<LandNoiseDef>,
     /// A sound for entering each posture (`stand`, `crouch`, `prone`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub postures: BTreeMap<String, String>,
@@ -1943,12 +1946,13 @@ pub struct ArchetypeSounds {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub contacts: BTreeMap<String, FootContactDef>,
 }
-/// [`ArchetypeSounds::noise`]: from this ground speed, this loud (0 to 1).
+/// [`ArchetypeSounds::land_noise`]: `factor` times the speed fallen over the
+/// larger of the body's jump speed and `jump_floor`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NoiseBandDef {
-    pub min_speed: f32,
-    pub volume: f32,
+pub struct LandNoiseDef {
+    pub factor: f32,
+    pub jump_floor: f32,
 }
 /// [`ArchetypeSounds::contacts`]: what a footfall leaves on one surface kind.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1996,6 +2000,9 @@ pub struct StepEventDef {
     pub volume: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f32>,
+    /// How loud the mark is to bots, 0 to 1, in place of `step_noise`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise: Option<f32>,
 }
 /// [`ArchetypeSounds::clips`]: a sound at a moment of a clip.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2126,18 +2133,16 @@ impl ArchetypeDef {
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
         );
         ensure!(
-            self.sounds.noise.len() <= 3
-                && self.sounds.noise.iter().all(|(posture, bands)| {
-                    ["stand", "crouch", "prone"].contains(&posture.as_str())
-                        && (1..=8).contains(&bands.len())
-                        && bands.iter().all(|b| {
-                            b.min_speed.is_finite()
-                                && b.min_speed >= 0.0
-                                && b.volume.is_finite()
-                                && (0.0..=1.0).contains(&b.volume)
-                        })
+            self.sounds
+                .step_noise
+                .is_none_or(|n| n.is_finite() && (0.0..=1.0).contains(&n))
+                && self.sounds.land_noise.as_ref().is_none_or(|l| {
+                    l.factor.is_finite()
+                        && (0.0..=10.0).contains(&l.factor)
+                        && l.jump_floor.is_finite()
+                        && l.jump_floor > 0.0
                 }),
-            "sounds.noise names stand, crouch or prone, each with 1 to 8 bands of min_speed 0 or more and volume 0 to 1"
+            "sounds.step_noise is 0 to 1; sounds.land_noise has a factor of 0 to 10 and a positive jump_floor"
         );
         ensure!(
             self.sounds.postures.len() <= 3

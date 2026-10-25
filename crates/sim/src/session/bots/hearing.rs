@@ -3,12 +3,12 @@
 use super::*;
 
 impl Session {
-    /// The noise bodies make walking: each body whose clips mark their
-    /// footfalls (`Sounds::steps`) and that has a loudness for its gait
-    /// (`Sounds::noise`) makes it at each marked moment of the clip it plays,
-    /// heard by bots as fighting is and drawing the eye of those who see
-    /// nothing better. The marks are the ones a client sounds the footfall
-    /// from (`gait`).
+    /// The noise bodies make as they move: a body's clips mark its
+    /// footfalls (`Sounds::steps`), and each marked moment the clip it plays
+    /// goes by makes the mark's noise (`Sounds::step_noise`); touching down
+    /// after a fall makes `Sounds::land_noise`. Bots hear it as they hear
+    /// fighting and it draws the eye of those who see nothing better. The
+    /// marks are the ones a client sounds the footfall from (`gait`).
     pub(in crate::session) fn footfall_noise(&mut self) {
         if self.bots.brains.is_empty() {
             self.gaits.retain(|_| false);
@@ -21,12 +21,19 @@ impl Session {
             let state = peer.player.state();
             let archetype = self.archetypes.resolve(state.archetype);
             let sounds = &archetype.sounds;
-            if !peer.combat.alive
-                || peer.sitting
-                || !state.grounded
-                || sounds.steps.is_empty()
-                || sounds.noise.is_empty()
+            let feet = Vec3::from(state.feet);
+            if !peer.combat.alive || peer.sitting {
+                continue;
+            }
+            if sounds.land_noise.is_some()
+                && let Some(fall) = gaits.landed(owner, state)
             {
+                let volume = sounds.land_noise_for(fall, peer.player.tuning().jump_speed);
+                if volume > 0.0 {
+                    heard.push((owner, feet, volume));
+                }
+            }
+            if !state.grounded || sounds.steps.is_empty() || sounds.step_noise.is_none() {
                 continue;
             }
             let model = &archetype.look.model;
@@ -35,26 +42,16 @@ impl Session {
             }) else {
                 continue;
             };
-            let posture = if state.posture.prone {
-                "prone"
-            } else if state.crouched {
-                "crouch"
-            } else {
-                "stand"
-            };
-            let speed = Vec3::new(state.velocity[0], 0.0, state.velocity[2]).length();
-            let volume = sounds.noise_for(posture, speed);
-            if volume <= 0.0 {
-                continue;
-            }
-            let marks = sounds.steps.get(&span.clip).map_or(0, |events| {
-                events
-                    .iter()
-                    .filter(|e| sounds.step_time(e).is_some_and(|at| span.passes(at)))
-                    .count()
-            });
-            if marks > 0 {
-                heard.push((owner, Vec3::from(state.feet), volume));
+            let loudest = sounds
+                .steps
+                .get(&span.clip)
+                .into_iter()
+                .flatten()
+                .filter(|e| sounds.step_time(e).is_some_and(|at| span.passes(at)))
+                .filter_map(|e| e.noise.or(sounds.step_noise))
+                .fold(0.0_f32, f32::max);
+            if loudest > 0.0 {
+                heard.push((owner, feet, loudest));
             }
         }
         gaits.retain(|owner| self.peers.contains_key(&owner));

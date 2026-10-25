@@ -2,6 +2,7 @@
 //! clip its motion picks and the stretch of a clip a frame plays, so the
 //! footfalls a clip marks are the same moments wherever they are worked out.
 use crate::player::PlayerState;
+use bri_console::Clamp;
 use bri_content::body::{GroundSpeeds, LocomotionPick, Role, RoleClips};
 use glam::{Quat, Vec3};
 use std::collections::BTreeMap;
@@ -269,6 +270,9 @@ pub struct Gaits {
 }
 #[derive(Default)]
 struct Pace {
+    /// Whether it stood on the ground last tick, and the fastest it fell since.
+    grounded: bool,
+    falling: f32,
     /// The action the body is in.
     mode: String,
     phase: f32,
@@ -327,9 +331,23 @@ impl Gaits {
         pace.phase = if looping && duration > 0.0 {
             pace.phase.rem_euclid(duration)
         } else {
-            pace.phase.clamp(0.0, duration)
+            pace.phase.clamped(0.0, duration)
         };
         Some(span)
+    }
+    /// How fast `owner` fell if it touched down this tick after falling (units
+    /// per second, positive), else none. Call once a tick for each body.
+    pub fn landed(&mut self, owner: u64, player: &PlayerState) -> Option<f32> {
+        let pace = self.bodies.entry(owner).or_default();
+        let fell =
+            (player.grounded && !pace.grounded && pace.falling > 0.0).then_some(pace.falling);
+        pace.falling = if player.grounded {
+            0.0
+        } else {
+            pace.falling.max(-player.velocity[1])
+        };
+        pace.grounded = player.grounded;
+        fell
     }
     /// Forget the bodies `keep` does not name.
     pub fn retain(&mut self, keep: impl Fn(u64) -> bool) {
@@ -340,7 +358,7 @@ impl Gaits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archetype::{Archetype, PlayerType};
+    use crate::archetype::Archetypes;
 
     fn running(speed: f32) -> PlayerState {
         PlayerState {
@@ -370,7 +388,10 @@ mod tests {
 
     #[test]
     fn the_host_walks_the_clip_at_the_rate_a_client_would() {
-        let mut look = Archetype::v20(PlayerType::EVERY[0]).look;
+        let mut look = Archetypes::default()
+            .resolve(Default::default())
+            .look
+            .clone();
         look.locomotion_pick = LocomotionPick::Ue2FourWay;
         look.ground_speeds.insert("run".into(), 6.0);
         let clips = |name: &str| (name == "run" || name == "root").then_some((0.8, true));
