@@ -74,26 +74,7 @@ impl Perform for ops::PushArchetype {
             .archetypes
             .find(&archetype)
             .with_context(|| format!("No archetype {archetype}"))?;
-        let peer = session.peers.get_mut(&player).context("No such player")?;
-        if !peer.combat.alive {
-            return Ok(());
-        }
-        let current = peer.player.state().archetype;
-        // `pushDatablock` takes only a datablock of the same shape.
-        if session.archetypes.resolve(current).look.model
-            != session.archetypes.resolve(laid).look.model
-        {
-            return Ok(());
-        }
-        let overlays = peer.overlays.get_or_insert_with(|| super::Overlays {
-            base: current,
-            laid: Vec::new(),
-        });
-        if overlays.base == laid || overlays.laid.contains(&laid) {
-            return Ok(());
-        }
-        overlays.laid.push(laid);
-        session.set_player_archetype(player, laid)
+        session.lay_archetype(player, laid)
     }
 }
 impl Perform for ops::PopArchetype {
@@ -103,22 +84,7 @@ impl Perform for ops::PopArchetype {
             .archetypes
             .find(&archetype)
             .with_context(|| format!("No archetype {archetype}"))?;
-        let peer = session.peers.get_mut(&player).context("No such player")?;
-        let Some(overlays) = peer.overlays.as_mut().filter(|_| peer.combat.alive) else {
-            return Ok(());
-        };
-        let Some(at) = overlays.laid.iter().position(|a| *a == lifted) else {
-            return Ok(());
-        };
-        overlays.laid.remove(at);
-        let top = overlays.laid.last().copied().unwrap_or(overlays.base);
-        if overlays.laid.is_empty() {
-            peer.overlays = None;
-        }
-        if peer.player.state().archetype != top {
-            session.set_player_archetype(player, top)?;
-        }
-        Ok(())
+        session.lift_archetype(player, lifted)
     }
 }
 impl Perform for ops::Respawn {

@@ -186,6 +186,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             both_arms: false,
             paint_tint: false,
             left_image: None,
+            stance: Default::default(),
             magazine: None,
             volleys: vec![],
             last_shot: None,

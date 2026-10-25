@@ -1211,6 +1211,12 @@ pub struct Image {
     /// image's trigger for one tick; both hands share the holder's ammo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub left_image: Option<String>,
+    /// The archetype laid over the holder's body while this image is in
+    /// their right hand, by the body's archetype id (`push_archetype`'s
+    /// effect, kept by the engine so a switch of tool lifts it): a stance
+    /// for a held grenade. A body with no entry keeps its own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stance: BTreeMap<String, String>,
     /// Rounds in a magazine and a reserve to reload it from, kept by the
     /// engine for every gun that declares one: tactical packs' magazines
     /// (Tier+Tactical's `ammo` system, the Adventure Pack's), in data.

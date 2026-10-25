@@ -5,6 +5,7 @@
 //! body: what a body may do (ride, use items, fit) is its archetype's data.
 use super::*;
 use crate::archetype::ArchetypeId;
+use bri_weapons::ActorId;
 
 /// Fewest ticks between two `/body` switches of one player.
 const BODY_COMMAND_TICKS: u64 = 60;
@@ -46,6 +47,89 @@ pub(super) enum Chosen {
 }
 
 impl Session {
+    /// Lay `laid` over `owner`'s body (`pushDatablock`): they move as it
+    /// until it is lifted. A body of another shape, a dead one, or one
+    /// already under it takes nothing.
+    pub(super) fn lay_archetype(
+        &mut self,
+        owner: OwnerId,
+        laid: crate::archetype::ArchetypeId,
+    ) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("No such player")?;
+        if !peer.combat.alive {
+            return Ok(());
+        }
+        let current = peer.player.state().archetype;
+        // `pushDatablock` takes only a datablock of the same shape.
+        if self.archetypes.resolve(current).look.model != self.archetypes.resolve(laid).look.model {
+            return Ok(());
+        }
+        let overlays = peer.overlays.get_or_insert_with(|| super::Overlays {
+            base: current,
+            laid: Vec::new(),
+        });
+        if overlays.base == laid || overlays.laid.contains(&laid) {
+            return Ok(());
+        }
+        overlays.laid.push(laid);
+        self.set_player_archetype(owner, laid)
+    }
+    /// Take `lifted` from under `owner`'s laid archetypes; the next one down
+    /// (or their own body) is theirs again.
+    pub(super) fn lift_archetype(
+        &mut self,
+        owner: OwnerId,
+        lifted: crate::archetype::ArchetypeId,
+    ) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("No such player")?;
+        let Some(overlays) = peer.overlays.as_mut().filter(|_| peer.combat.alive) else {
+            return Ok(());
+        };
+        let Some(at) = overlays.laid.iter().position(|a| *a == lifted) else {
+            return Ok(());
+        };
+        overlays.laid.remove(at);
+        let top = overlays.laid.last().copied().unwrap_or(overlays.base);
+        if overlays.laid.is_empty() {
+            peer.overlays = None;
+        }
+        if peer.player.state().archetype != top {
+            self.set_player_archetype(owner, top)?;
+        }
+        Ok(())
+    }
+    /// Keep the archetype laid over `owner` for the image in their right
+    /// hand ([`bri_weapons::Image::stance`]): lay the one it names for their
+    /// body, lift the one the last image laid. Called as images mount and
+    /// unmount, so a switch of tool never leaves a stance behind.
+    pub(super) fn sync_stance(&mut self, owner: OwnerId) -> Result<()> {
+        let Some(peer) = self.peers.get(&owner) else {
+            return Ok(());
+        };
+        let base = peer
+            .overlays
+            .as_ref()
+            .map_or(peer.player.state().archetype, |o| o.base);
+        let want = self
+            .weapons
+            .image_id(ActorId(owner), 0)
+            .and_then(|image| self.weapons.pack.images.get(image))
+            .and_then(|image| image.stance.get(&self.archetypes.resolve(base).id))
+            .and_then(|id| self.archetypes.find(id));
+        let laid = peer.stance;
+        if want == laid {
+            return Ok(());
+        }
+        if let Some(old) = laid {
+            self.lift_archetype(owner, old)?;
+        }
+        if let Some(new) = want {
+            self.lay_archetype(owner, new)?;
+        }
+        self.peers.get_mut(&owner).context("No such player")?.stance = want;
+        Ok(())
+    }
+
     /// Choose `archetype` for `owner` and, when alive, make them it. The
     /// choice is kept for later spawns as [`Self::kept_body`] says. Under
     /// bodies an Add-On laid on top (`push_archetype`) it changes the one

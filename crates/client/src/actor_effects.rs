@@ -1625,6 +1625,7 @@ fn teleport_image() -> bri_weapons::Image {
         both_arms: false,
         paint_tint: false,
         left_image: None,
+        stance: Default::default(),
         magazine: None,
         volleys: vec![],
         last_shot: None,

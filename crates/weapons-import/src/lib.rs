@@ -579,6 +579,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 both_arms: false,
                 paint_tint: false,
                 left_image: None,
+                stance: Default::default(),
                 magazine: None,
                 volleys: vec![],
                 last_shot: None,

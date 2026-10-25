@@ -672,7 +672,13 @@ impl App {
         // An admin orb has no body/held item, but remains in its minigame.
         // Let declared game-wide HUD claims apply instead of forcing stock UI.
         let presented = self.motion.presented().get(&view.owner).filter(|_| !camera);
-        let body = presented.map_or("", |p| view.archetypes.resolve(p.archetype).id.as_str());
+        // A stance laid over the body (`push_archetype`) changes how it looks
+        // and moves, not which body the HUD and controls are for.
+        let body = vitals
+            .and_then(|v| v.base_body)
+            .filter(|_| !camera)
+            .or(presented.map(|p| p.archetype))
+            .map_or("", |a| view.archetypes.resolve(a).id.as_str());
         // Before a held first spawn (or between lives), no pose exists yet.
         // Its declared team/game player type still owns menu controls.
         let game = vitals

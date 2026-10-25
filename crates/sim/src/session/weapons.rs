@@ -605,11 +605,15 @@ impl Session {
             self.note_weapon_gap("radius targets truncated", truncated as u64);
         }
         let mut ammo = std::collections::BTreeSet::new();
+        let mut stances = std::collections::BTreeSet::new();
         for event in events {
             match event {
-                WeaponEvent::Ammo { actor }
-                | WeaponEvent::Mounted { actor, hand: 0, .. }
+                WeaponEvent::Mounted { actor, hand: 0, .. }
                 | WeaponEvent::Unmounted { actor, hand: 0 } => {
+                    ammo.insert(actor.0);
+                    stances.insert(actor.0);
+                }
+                WeaponEvent::Ammo { actor } => {
                     ammo.insert(actor.0);
                 }
                 // An Add-On's `local` sound is for its holder's ears only.
@@ -1096,6 +1100,9 @@ impl Session {
         }
         for owner in ammo {
             self.show_ammo(owner);
+        }
+        for owner in stances {
+            self.sync_stance(owner)?;
         }
         // Inventory mutations need not mount an image (pickup, quick use,
         // loadout replacement). Compare the bounded projection, never equip
