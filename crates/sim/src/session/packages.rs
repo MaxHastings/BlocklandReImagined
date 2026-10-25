@@ -681,6 +681,9 @@ pub(super) fn archetype(
     if let Some(v) = &def.deaths {
         archetype.look.deaths = v.clone();
     }
+    if let Some(v) = &def.ragdoll {
+        archetype.look.ragdoll = Some(v.clone());
+    }
     if let Some(v) = def.max_time_scale {
         archetype.look.max_time_scale = v;
     }
