@@ -662,6 +662,7 @@ fn normal_death_physics_and_respawn_poses_remain_valid_authoritative_corrections
                         0.0,
                         None,
                         0.0,
+                        None,
                         "lifecycle",
                         None,
                     )
