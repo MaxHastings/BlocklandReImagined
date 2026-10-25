@@ -1078,13 +1078,15 @@ pub struct ActorSun {
     pub color: [f32; 3],
 }
 /// The light one lit moving body ([`MaterialKind::ActorLit`]) takes in place of the scene's: an ambient colour and the run of the camera's
-/// [`ActorSun`]s that reach it (`sun_count` of them from `sun_first`, at most [`MAX_BODY_SUNS`]). A body with `scene_sun` keeps the scene's
+/// [`ActorSun`]s that reach it (`sun_count` of them from `sun_first`, at most [`MAX_BODY_SUNS`]; bit `i` of `sun_mask` says sun
+/// `sun_first + i` can see the body, a sun the map's geometry hides from it lighting nothing). A body with `scene_sun` keeps the scene's
 /// own sun and takes `ambient` only as a floor under the scene's ambient (the light of the room it stands in).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActorLight {
     pub ambient: [f32; 3],
     pub sun_first: u8,
     pub sun_count: u8,
+    pub sun_mask: u8,
     pub scene_sun: bool,
 }
 impl ActorLight {
@@ -1564,7 +1566,9 @@ impl SceneTransform {
                     if l.scene_sun {
                         -1.0
                     } else {
-                        f32::from(l.sun_first) + 256.0 * f32::from(l.sun_count)
+                        f32::from(l.sun_first)
+                            + 256.0 * f32::from(l.sun_count)
+                            + 65536.0 * f32::from(l.sun_mask)
                     },
                 ]
             }),
@@ -6483,6 +6487,7 @@ mod tests {
             ambient: [0.3, 0.2, 0.1],
             sun_first: 0,
             sun_count: 0,
+            sun_mask: 0,
             scene_sun: true,
         };
         assert_eq!(at.record(KEEP_ALL, Some(room)).light, [0.3, 0.2, 0.1, -1.0]);
@@ -6490,11 +6495,12 @@ mod tests {
             scene_sun: false,
             sun_first: 2,
             sun_count: 3,
+            sun_mask: 0b101,
             ..room
         };
         assert_eq!(
             at.record(KEEP_ALL, Some(zone)).light,
-            [0.3, 0.2, 0.1, 2.0 + 256.0 * 3.0]
+            [0.3, 0.2, 0.1, 2.0 + 256.0 * 3.0 + 65536.0 * 5.0]
         );
         assert_eq!(at.record(KEEP_ALL, None).light, [0.0, 0.0, 0.0, -1.0]);
     }
