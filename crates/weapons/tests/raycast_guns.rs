@@ -455,3 +455,43 @@ fn hit_sound_pairs_pick_by_the_draw_and_keep_what_they_leave_out() {
         assert!(Pack::from_json(bad.as_bytes()).is_err());
     }
 }
+
+/// Click the SMG `clicks` times and count its tracers.
+fn smg_tracers(tracer: &str, clicks: usize) -> usize {
+    let hitscan = r#""hitscan": { "range": 200 }"#;
+    assert!(GUNS.contains(hitscan));
+    let pack = GUNS.replacen(
+        hitscan,
+        &format!(r#""hitscan": {{ "range": 200, "tracer": {tracer} }}"#),
+        1,
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(pack.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let slot = w.give(A, "ray:weapon/smg").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 8, false);
+    let mut events = Vec::new();
+    for _ in 0..clicks {
+        w.trigger(A, true).unwrap();
+        events.extend(step(&mut w, 2, false));
+        w.trigger(A, false).unwrap();
+        events.extend(step(&mut w, 14, false));
+    }
+    shots(&events)
+}
+
+#[test]
+fn a_tracer_draws_only_every_nth_round() {
+    let all = smg_tracers(r#"{ "color": [1, 0, 0, 1] }"#, 20);
+    let fifth = smg_tracers(r#"{ "color": [1, 0, 0, 1], "every": 5 }"#, 20);
+    assert!(all >= 10, "{all}");
+    assert_eq!(fifth, all / 5);
+    for bad in ["0", "1001"] {
+        let pack = GUNS.replacen(
+            r#""hitscan": { "range": 200 }"#,
+            &format!(r#""hitscan": {{ "range": 200, "tracer": {{ "color": [1, 0, 0, 1], "every": {bad} }} }}"#),
+            1,
+        );
+        assert!(Pack::from_json(pack.as_bytes()).is_err(), "every {bad}");
+    }
+}

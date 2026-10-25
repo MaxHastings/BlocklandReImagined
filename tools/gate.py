@@ -1396,11 +1396,24 @@ def run_binaries(units, log, jobs, exclusive=(), env=None):
     return seconds
 
 
-def shard(labels, part):
-    """The labels of shard `part` = (k, n): every nth label from the kth,
-    in sorted order, so the n shards together run each label exactly once."""
+def shard(labels, part, weights=None):
+    """The labels of shard `part` = (k, n), so the n shards together run each
+    label exactly once and take about equally long: heaviest label first onto
+    the lightest shard so far. `weights` is {label: seconds}; a label it does
+    not name weighs the mean of those it does, and with no weights at all
+    this deals the sorted labels out in turn."""
     k, n = part
-    return [label for i, label in enumerate(sorted(labels)) if i % n == k]
+    known = [weights[label] for label in labels if label in weights] if weights else []
+    default = sum(known) / len(known) if known else 1.0
+    cost = {label: (weights or {}).get(label, default) for label in labels}
+    loads = [0.0] * n
+    mine = []
+    for label in sorted(labels, key=lambda label: (-cost[label], label)):
+        lightest = loads.index(min(loads))
+        loads[lightest] += cost[label]
+        if lightest == k:
+            mine.append(label)
+    return sorted(mine)
 
 
 def parse_shard(text):
@@ -1433,13 +1446,16 @@ def ci_test(part=(0, 1), tier="full"):
         say(f"ci_skip_target/ci_nightly_target entries match no test target: "
             f"{', '.join(sorted(unknown))}")
         return False
+    if tier != "full":
+        say(f"{tier} tier: {len(nightly)} slow render targets are left to the nightly run")
     if tier == "pr":
-        say(f"pr tier: {len(nightly)} slow render targets are left to the nightly run")
-    skipped = ci_left_out(data, tier)
+        say("pr tier: the slow packages' suites run after merge (ci_quick in gate-known-failures.toml)")
+    skipped = ci_left_out(data, tier, labels)
     for label in sorted(labels):
         if label in skipped and label not in nightly:
             say(f"skipping {label} (needs generated content)")
-    mine = set(shard([label for label in labels if label not in skipped], part))
+    weights = json.loads((top / "tools" / "ci-timings.json").read_text(encoding="utf-8"))
+    mine = set(shard([label for label in labels if label not in skipped], part, weights))
     say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(labels) - len(skipped)} test targets")
     if not mine:
         return True
@@ -1457,14 +1473,19 @@ def ci_test(part=(0, 1), tier="full"):
     skip_args = [arg for entry in data.get("skip", []) + data.get("nightly", [])
                  for arg in ("--skip", entry["test"])]
     failed = []
+    seconds = {}
     for label, executable, cwd, _ in sorted(binaries):
         if label not in mine:
             continue
         say(f"running {label}")
+        started = time.monotonic()
         output, code = run_binary(label, executable, skip_args, cwd)
+        seconds[label] = round(time.monotonic() - started, 1)
         print(output, end="", flush=True)
         if code and not ci_tolerated(label, output, known):
             failed.append((label, output))
+    # tools/ci-timings.json weighs the shards; merge these lines into it.
+    say("ci-timings " + json.dumps(seconds, sort_keys=True))
     if failed:
         failed = retry_ci_failures(failed, binaries)
     if failed:
@@ -1562,12 +1583,21 @@ def target_filters(labels, kinds):
     return args
 
 
-def ci_left_out(data, tier):
+def ci_left_out(data, tier, labels=()):
     """Targets a CI run of `tier` does not run, from the known-failures
-    table `data`: content targets always, nightly targets on the pr tier."""
+    table `data`: content targets always; on "main" and "pr" the nightly
+    targets too; on "pr" also every target of a [ci_quick] slow package
+    (end-to-end, GPU and soak suites) except the named keep targets, which
+    the run after merge covers."""
     left_out = {entry["target"] for entry in data.get("ci_skip_target", [])}
-    if tier == "pr":
+    if tier in ("pr", "main"):
         left_out |= {entry["target"] for entry in data.get("ci_nightly_target", [])}
+    if tier == "pr":
+        quick = data.get("ci_quick", {})
+        slow = set(quick.get("slow_packages", []))
+        keep = set(quick.get("keep", []))
+        left_out |= {label for label in labels
+                     if label.split("/", 1)[0] in slow and label not in keep}
     return left_out
 
 
@@ -1656,8 +1686,9 @@ def main():
                         help="run the tests that need no generated content (used by CI)")
     parser.add_argument("--shard", type=parse_shard, default=(0, 1), metavar="K/N",
                         help="with --ci-test, run only the Kth of N even shares (from 0)")
-    parser.add_argument("--tier", choices=("pr", "full"), default="full",
-                        help="with --ci-test: 'pr' leaves out the [[ci_nightly_target]]s")
+    parser.add_argument("--tier", choices=("pr", "main", "full"), default="full",
+                        help="with --ci-test: 'pr' runs the quick tier, 'main' everything but the "
+                             "[[ci_nightly_target]]s, 'full' everything")
     parser.add_argument("--push", action="store_true",
                         help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),

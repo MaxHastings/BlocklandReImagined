@@ -1141,11 +1141,17 @@ impl App {
         );
         let eyes = crate::views::eyes(eye, &other_views);
         // Slots are disjoint from every mirror and the six probe faces.
-        let local_bindings = if !stock_third_person && shot.is_none() {
+        let local_bindings: Vec<_> = if !stock_third_person && shot.is_none() {
             self.world_items.local_views(view.owner)
         } else {
             Vec::new()
-        };
+        }
+        .into_iter()
+        .map(|(affinity, mut policy)| {
+            policy.horizontal_fov = controls.view_model_fov(policy.horizontal_fov);
+            (affinity, policy)
+        })
+        .collect();
         let mut local_views = Vec::with_capacity(local_bindings.len());
         // Where a held image appears to be in the world, for what leaves it.
         self.world_items
@@ -2219,9 +2225,11 @@ impl App {
         // a map change needs renderers built for the new map.
         // Colour-vision assistance is a pipeline constant, too.
         let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
+        let ramp = bri_ui::screens::options::display_ramp(&self.ui.core.prefs);
         let restart = std::mem::take(&mut self.gpu.gpu_restart);
         if restart
             || bri_render::color::color_vision() != vision
+            || bri_render::color::display_ramp() != ramp
             || self
                 .gpu
                 .renderer

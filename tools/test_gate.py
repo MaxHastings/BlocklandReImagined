@@ -1,4 +1,5 @@
 """Regression tests for release-gate outcomes; no content or compiler needed."""
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -82,6 +83,15 @@ class CiShards(unittest.TestCase):
         self.assertEqual(gate.ci_left_out(data, "pr"), {"a/content", "b/render"})
         self.assertEqual(gate.ci_left_out(data, "full"), {"a/content"})
 
+    def test_the_pr_tier_also_leaves_out_the_slow_packages_except_the_kept_targets(self):
+        data = {"ci_nightly_target": [{"target": "bri-render/gpu"}],
+                "ci_quick": {"slow_packages": ["bri-client", "bri-render"],
+                             "keep": ["bri-client/lib"]}}
+        labels = ["bri-client/lib", "bri-client/flow", "bri-render/gpu", "bri-render/x", "bri-sim/lib"]
+        self.assertEqual(gate.ci_left_out(data, "pr", labels),
+                         {"bri-client/flow", "bri-render/gpu", "bri-render/x"})
+        self.assertEqual(gate.ci_left_out(data, "main", labels), {"bri-render/gpu"})
+
     def test_every_nightly_target_is_named_once_with_a_reason(self):
         import tomllib
         path = Path(__file__).with_name("gate-known-failures.toml")
@@ -112,6 +122,20 @@ class CiShards(unittest.TestCase):
         self.assertEqual(gate.target_filters({"bri-a/flow", "bri-b/flow", "bri-a/bri-a"}, labels),
                          ["--bin", "bri-a", "--test", "flow"])
         self.assertEqual(gate.target_filters({"bri-b/lib"}, labels), ["--lib"])
+
+    def test_weighted_shards_balance_the_heavy_targets(self):
+        weights = {"a/slow1": 100.0, "a/slow2": 90.0, "a/slow3": 80.0, "a/slow4": 70.0}
+        labels = sorted(weights) + [f"b/t{i}" for i in range(8)]
+        weights.update({label: 1.0 for label in labels if label.startswith("b/")})
+        parts = [gate.shard(labels, (k, 4), weights) for k in range(4)]
+        self.assertEqual(sorted(sum(parts, [])), sorted(labels))
+        self.assertTrue(all(sum(label.startswith("a/") for label in p) == 1 for p in parts))
+
+    def test_the_committed_weights_name_only_real_shapes(self):
+        path = Path(__file__).with_name("ci-timings.json")
+        weights = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(weights)
+        self.assertTrue(all(isinstance(v, float) and v > 0 for v in weights.values()))
 
     def test_one_shard_is_all_of_them(self):
         self.assertEqual(gate.shard(["b", "a"], (0, 1)), ["a", "b"])

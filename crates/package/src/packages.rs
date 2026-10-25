@@ -260,6 +260,41 @@ pub fn animation_library_ids(dir: &Path, model: &str) -> Vec<String> {
     libraries
 }
 
+/// Every animation library (lower-case `package:asset/file` id) any enabled
+/// package's archetypes name. These shapes are read whole as libraries
+/// (`animation_library_ids`), so a scan of a package's standalone shapes
+/// leaves them out.
+pub fn animation_library_set(
+    root: &Path,
+    packages: &PackageSet,
+) -> std::collections::BTreeSet<String> {
+    let mut libraries = std::collections::BTreeSet::new();
+    for entry in &packages.packages {
+        let Ok(dir) = package_dir(root, entry) else {
+            continue;
+        };
+        let Ok(archetypes) = std::fs::read_dir(dir.join("assets/archetypes")) else {
+            continue;
+        };
+        for path in archetypes.flatten().map(|e| e.path()) {
+            let Some(json) = std::fs::read(path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            else {
+                continue;
+            };
+            libraries.extend(
+                json["animation_libraries"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.as_str().map(str::to_ascii_lowercase)),
+            );
+        }
+    }
+    libraries
+}
+
 /// Where the animation library `id` (`package:asset/file`) is: its package's
 /// directory and the shape file its `assets/content.json` gives it, relative to
 /// that directory. The package must be enabled.
@@ -334,6 +369,29 @@ mod tests {
             assert_eq!(id::content_namespace(&package.id), id::BASE_NAMESPACE);
             assert!(package.role.is_some());
         }
+    }
+
+    #[test]
+    fn animation_libraries_are_the_ones_archetypes_name() {
+        let root = std::env::temp_dir().join(format!("bri-libs-{}", std::process::id()));
+        let archetypes = root.join("soldier/assets/archetypes");
+        std::fs::create_dir_all(&archetypes).unwrap();
+        std::fs::write(
+            archetypes.join("a.json"),
+            r#"{"model":"m","animation_libraries":["Anims:asset/Run.shape.json","anims:asset/aim.shape.json"]}"#,
+        )
+        .unwrap();
+        std::fs::write(archetypes.join("b.json"), r#"{"model":"m"}"#).unwrap();
+        let set = PackageSet {
+            schema_version: 1,
+            packages: vec![entry("soldier", "soldier", None)],
+        };
+        let libraries = animation_library_set(&root, &set);
+        std::fs::remove_dir_all(&root).ok();
+        assert_eq!(
+            libraries.into_iter().collect::<Vec<_>>(),
+            ["anims:asset/aim.shape.json", "anims:asset/run.shape.json"]
+        );
     }
 
     #[test]

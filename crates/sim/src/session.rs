@@ -863,6 +863,8 @@ struct Peer {
     body_command_tick: Option<u64>,
     /// Archetypes packages laid over this life's own (`push_archetype`).
     overlays: Option<Overlays>,
+    /// The archetype the image in the right hand laid over the body.
+    stance: Option<crate::archetype::ArchetypeId>,
     window_tick: u64,
     actions: u32,
     chats: u32,
@@ -1008,6 +1010,7 @@ impl Peer {
             chosen_body: None,
             body_command_tick: None,
             overlays: None,
+            stance: None,
             window_tick: tick,
             actions: 0,
             chats: 0,

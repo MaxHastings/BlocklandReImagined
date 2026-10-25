@@ -1,9 +1,11 @@
 # Content-free checks. Tests that need the generated v20 content are
 # #[ignore]d or listed as ci_skip_target in tools/gate-known-failures.toml;
-# the local push gate (tools/gate.py) runs them all. Pull requests and pushes
-# run the "pr" tier, which leaves the slow offscreen renders
-# (ci_nightly_target) to the nightly and manual runs; the push gate runs
-# those too, on a real GPU, before anything reaches main.
+# the local push gate (tools/gate.py) runs them all. Pull requests run the
+# quick "pr" tier: every target except the slow packages' end-to-end, GPU and
+# soak suites ([ci_quick] in gate-known-failures.toml). Pushes to main run the
+# "main" tier, everything but the slow offscreen renders (ci_nightly_target);
+# the nightly and manual runs run it all. The push gate runs those too, on a
+# real GPU, before anything reaches main.
 name: ci
 
 on:
@@ -33,7 +35,7 @@ env:
   # outlives its idle limit reports nothing at the end of the job.
   SCCACHE_IDLE_TIMEOUT: '0'
   RUSTC_WRAPPER: sccache
-  TEST_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full' || 'pr' }}
+  TEST_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full' || (github.event_name == 'push' && 'main' || 'pr') }}
 
 jobs:
   linux-wheel:

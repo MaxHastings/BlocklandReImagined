@@ -29,8 +29,22 @@ fn daltonize(c:vec3<f32>)->vec3<f32> {
     let shift = vec3<f32>(0.0, 0.7 * err.x + err.y, 0.7 * err.x + err.z);
     return clamp(c + shift, vec3<f32>(0.0), vec3<f32>(1.0));
 }
+// The display ramp of the games that set one through the video driver's gamma
+// table (Unreal Engine 2's Brightness, Contrast and Gamma): per channel,
+// clamp(x * (C + 0.5) + (B - C) / 2, 0, 1) with x = c ^ (1 / (G - 0.2)).
+// That is the table D3DDrv's UpdateGamma builds, 16-bit steps aside. The
+// neutral values (B 0.5, C 0.5, G 1.2) are the identity.
+override RAMP_BRIGHTNESS: f32 = 0.5;
+override RAMP_CONTRAST: f32 = 0.5;
+override RAMP_GAMMA: f32 = 1.2;
+fn display_ramp(c:vec3<f32>)->vec3<f32> {
+    // The identity is returned untouched, not through pow.
+    if RAMP_BRIGHTNESS == 0.5 && RAMP_CONTRAST == 0.5 && RAMP_GAMMA == 1.2 { return c; }
+    let x = pow(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / (RAMP_GAMMA - 0.2)));
+    return clamp(x * (RAMP_CONTRAST + 0.5) + vec3<f32>((RAMP_BRIGHTNESS - RAMP_CONTRAST) * 0.5), vec3<f32>(0.0), vec3<f32>(1.0));
+}
 fn output_color(display:vec3<f32>)->vec3<f32> {
-    let seen = daltonize(display);
+    let seen = display_ramp(daltonize(display));
     if OUTPUT_ENCODED == 1u { return seen; }
     return linear_color(seen);
 }

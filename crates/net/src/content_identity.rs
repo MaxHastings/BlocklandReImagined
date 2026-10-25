@@ -159,6 +159,9 @@ pub fn body_pose_assets(
         checked.validate()?;
         Ok(checked.assets.pop())
     };
+    // Animation libraries are read whole, to their own limit, with the body
+    // that uses them; the scan of standalone shapes below leaves them out.
+    let libraries = bri_package::packages::animation_library_set(content_root, packages);
     for entry in &packages.packages {
         let dir = bri_package::packages::package_dir(content_root, entry)?;
         let candidates = body_pose_candidates(&dir, &entry.id, entry.role.is_none());
@@ -208,6 +211,7 @@ pub fn body_pose_assets(
                 if !file.ends_with(".shape.json")
                     || assets.contains_key(id)
                     || selected.contains(id)
+                    || libraries.contains(&id.to_ascii_lowercase())
                 {
                     continue;
                 }
@@ -1571,6 +1575,7 @@ mod tests {
                 bri_weapons::Image {
                     first_person_nodes: Default::default(),
                     first_person_effects: Default::default(),
+                    first_person_offsets: Default::default(),
                     id: image.clone(),
                     name: format!("{stem}Image"),
                     model: "source.dts".into(),
@@ -1606,6 +1611,9 @@ mod tests {
                     both_arms: false,
                     paint_tint: false,
                     left_image: None,
+                    stance: Default::default(),
+                    lower: None,
+                    redraw: None,
                     magazine: None,
                     volleys: vec![],
                     last_shot: None,

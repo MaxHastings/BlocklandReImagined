@@ -60,6 +60,7 @@ fn shop() -> PanelView {
                 drag: false,
                 columns: vec![],
                 icons: vec![],
+                place: None,
             },
             PanelItemView::Field {
                 id: "note".into(),
@@ -230,6 +231,7 @@ fn backpack_and_chest() -> PanelView {
         drag: true,
         columns: vec![],
         icons: vec![],
+        place: None,
     };
     PanelView {
         package: "rp".into(),
@@ -248,6 +250,7 @@ fn backpack_and_chest() -> PanelView {
                 drag: false,
                 columns: vec![],
                 icons: vec![],
+                place: None,
             },
         ],
         border: true,
@@ -423,6 +426,7 @@ fn menu() -> PanelView {
                     color: Some([1.0, 0.0, 0.0, 1.0]),
                     align: PanelAlign::Center,
                     height: Some(60),
+                    place: None,
                 },
             },
             PanelItemView::List {
@@ -439,6 +443,7 @@ fn menu() -> PanelView {
                     }),
                     None,
                 ],
+                place: None,
             },
             PanelItemView::Buttons(buttons),
         ],
@@ -495,4 +500,52 @@ fn a_button_with_an_action_is_done_by_the_client_and_sends_no_event() {
     event(&mut ui, "Panel_Button_help", EventKind::Click);
     let sent = actions(&mut ui);
     assert!(matches!(&sent[..], [UiAction::PanelEvent { control, .. }] if control == "help"));
+}
+
+#[test]
+fn a_placed_text_or_list_stands_where_asked_and_leaves_the_flow_alone() {
+    use bri_ui::api::PanelPlace;
+    let button_y = |panel: PanelView| {
+        let mut ui = ui();
+        ui.apply(UiUpdate::Panel(Some(panel)));
+        ui.update(0);
+        let v = view(&ui);
+        v.node(v.id("Panel_Button_leave").unwrap()).rect.y
+    };
+    let mut panel = menu();
+    let flowed = button_y(panel.clone());
+    let PanelItemView::Text { style, .. } = &mut panel.items[0] else {
+        panic!("the first item is text")
+    };
+    style.place = Some(PanelPlace {
+        x: 200,
+        y: 250,
+        width: Some(90),
+    });
+    let PanelItemView::List { place, .. } = &mut panel.items[1] else {
+        panic!("the second item is the list")
+    };
+    *place = Some(PanelPlace {
+        x: 10,
+        y: 260,
+        width: None,
+    });
+    // The 320x300 panel stands centred in 640x480.
+    let (left, top) = (160, 90);
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(panel.clone())));
+    ui.update(0);
+    let v = view(&ui);
+    let text = v
+        .walk()
+        .find(|n| v.node(*n).ctrl.class == "GuiMLTextCtrl")
+        .unwrap();
+    let scroll = v.node(text).parent.unwrap();
+    let r = v.node(scroll).rect;
+    assert_eq!((r.x, r.y, r.w), (left + 200, top + 250, 90));
+    let list = v.node(v.id("Panel_List_team").unwrap()).parent.unwrap();
+    let r = v.node(list).rect;
+    assert_eq!((r.x, r.y), (left + 10, top + 260));
+    // The buttons flow up into the room the placed items left.
+    assert!(button_y(panel) < flowed);
 }

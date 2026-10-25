@@ -1785,6 +1785,9 @@ impl PlatformApp for App {
         bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
             &self.ui.core.prefs,
         ));
+        bri_render::color::set_display_ramp(bri_ui::screens::options::display_ramp(
+            &self.ui.core.prefs,
+        ));
         let samples = self.graphics.samples;
         bri_console::echo(format!(
             "World renderer: format {format:?}, samples {samples}, lighting {}, soft shading {}, ambient occlusion {}",
