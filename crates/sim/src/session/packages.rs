@@ -4176,12 +4176,14 @@ impl Session {
         let mut changed = Vec::new();
         let mut problems = Vec::new();
         for (id, package) in &mut catalog.packages {
-            match package.reread_script() {
-                Ok(Some(source)) => {
-                    package.set_script(source);
+            match package.reread_scripts() {
+                Ok(files) if files.is_empty() => {}
+                Ok(files) => {
+                    for (file, source) in files {
+                        package.set_script(&file, source);
+                    }
                     changed.push(id.clone());
                 }
-                Ok(None) => {}
                 Err(problem) => {
                     problems.push(Diagnostic::error("script.reload", problem).at(id.clone()));
                 }

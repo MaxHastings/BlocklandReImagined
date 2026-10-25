@@ -4302,27 +4302,57 @@ impl Runtime {
             let Some(behaviour) = &package.behaviour else {
                 continue;
             };
-            let Some(source) = package.script_source() else {
+            let sources = package.script_sources();
+            if sources.is_empty() {
+                continue;
+            }
+            // Each file compiles on its own, so a problem names its file and
+            // line; the files then load as one script.
+            let mut combined: Option<AST> = None;
+            let mut defined: BTreeMap<(String, usize), &str> = BTreeMap::new();
+            for (file, source) in sources {
+                let part = match runtime.engine.compile(source) {
+                    Ok(ast) => ast,
+                    Err(e) => {
+                        let at = match e.1.line() {
+                            Some(line) => format!("{}:{line}", location(id, file)),
+                            None => location(id, file),
+                        };
+                        problems.push(Diagnostic::error("script.syntax", e.0.to_string()).at(at));
+                        continue;
+                    }
+                };
+                if !part.statements().is_empty() {
+                    problems.push(
+                        Diagnostic::error("script.top_level", "scripts may only define functions")
+                            .at(location(id, file))
+                            .hint("move top-level statements into a function; keep constants in behaviour state"),
+                    );
+                }
+                for f in part.iter_functions() {
+                    if let Some(first) = defined.insert((f.name.to_string(), f.params.len()), file)
+                    {
+                        problems.push(
+                            Diagnostic::error(
+                                "script.duplicate_function",
+                                format!(
+                                    "`fn {}` with {} parameter(s) is defined in both {first} and {file}",
+                                    f.name,
+                                    f.params.len()
+                                ),
+                            )
+                            .at(location(id, file)),
+                        );
+                    }
+                }
+                combined = Some(match combined {
+                    Some(whole) => whole.merge(&part),
+                    None => part,
+                });
+            }
+            let Some(ast) = combined else {
                 continue;
             };
-            let ast = match runtime.engine.compile(source) {
-                Ok(ast) => ast,
-                Err(e) => {
-                    let at = match e.1.line() {
-                        Some(line) => format!("{}:{line}", location(id, &behaviour.script)),
-                        None => location(id, &behaviour.script),
-                    };
-                    problems.push(Diagnostic::error("script.syntax", e.0.to_string()).at(at));
-                    continue;
-                }
-            };
-            if !ast.statements().is_empty() {
-                problems.push(
-                    Diagnostic::error("script.top_level", "scripts may only define functions")
-                        .at(location(id, &behaviour.script))
-                        .hint("move top-level statements into a function; keep constants in behaviour state"),
-                );
-            }
             let has = |name: &str, arity: usize| {
                 ast.iter_functions()
                     .any(|f| f.name == name && f.params.len() == arity)
