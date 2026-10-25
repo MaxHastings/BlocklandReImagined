@@ -5852,10 +5852,7 @@ impl WeaponsWorld {
                 falloff(distance, d.explosion.radius * p.scale)
             };
             let killed = distance < kill_radius;
-            if (damage_factor > 0.0 || killed)
-                && (d.explosion.damage > 0.0 || killed)
-                && spared.is_none()
-            {
+            if (killed || (damage_factor > 0.0 && d.explosion.damage > 0.0)) && spared.is_none() {
                 self.events.push(Event::Damage {
                     source: p.source,
                     target: target.target,
