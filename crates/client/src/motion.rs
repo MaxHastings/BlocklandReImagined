@@ -548,7 +548,10 @@ impl Motion {
             .filter(|(owner, history)| {
                 **owner != view.owner && !history.is_empty() && view.poses.contains_key(owner)
             })
-            .map(|(owner, history)| (*owner, history.clone()))
+            .map(|(owner, history)| {
+                let spawn = view.vitals.get(owner).map(|v| v.spawn_tick);
+                (*owner, since_spawn(history, spawn))
+            })
             .collect();
         self.remote_delays
             .retain(|owner, _| self.remotes.contains_key(owner));
@@ -1193,6 +1196,23 @@ fn blend_through(
         false => back,
     }
 }
+/// The poses of the body the vitals name (`spawn` is its spawn tick): every
+/// spawn is a new body, drawn where it appears, never moved there from the
+/// old one (a corpse, a body held out of the world before its first spawn).
+/// Poses are kept whole while none yet belongs to the new body.
+fn since_spawn(
+    history: &imbl::Vector<bri_net::protocol::Pose>,
+    spawn: Option<u64>,
+) -> imbl::Vector<bri_net::protocol::Pose> {
+    match spawn {
+        Some(spawn) if history.back().is_some_and(|pose| pose.tick >= spawn) => history
+            .iter()
+            .filter(|pose| pose.tick >= spawn)
+            .cloned()
+            .collect(),
+        _ => history.clone(),
+    }
+}
 /// Whether `b` is farther from `a` than either could have travelled in
 /// `seconds` at the speed they report, plus the distance a correction may
 /// move a body ([`SNAP_DISTANCE`]): the host moved it, it did not walk.
@@ -1239,6 +1259,28 @@ mod crossing_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_new_body_appears_where_it_spawned_without_moving_from_the_old_one() {
+        let pose = |tick: u64, x: f32| bri_net::protocol::Pose {
+            tick,
+            acknowledged_input: 0,
+            spawn_tick: 0,
+            passage_frame: Default::default(),
+            passage_vehicle: None,
+            player: state(x, 0.0),
+        };
+        let history: imbl::Vector<_> = [pose(100, 0.0), pose(160, 0.5), pose(200, 80.0)]
+            .into_iter()
+            .collect();
+        // The body spawned at tick 200: nothing of the old one is blended in.
+        let kept = since_spawn(&history, Some(200));
+        assert_eq!(kept.len(), 1);
+        let passages = bri_content::passage::Passages::default();
+        assert_eq!(sample(&kept, 150.0, &passages).feet[0], 80.0);
+        // Before any pose of the new body arrives the old ones stay.
+        assert_eq!(since_spawn(&history, Some(300)).len(), 3);
+        assert_eq!(since_spawn(&history, None).len(), 3);
+    }
     #[test]
     fn a_relocated_body_is_drawn_at_once_where_it_arrived_not_slid_across() {
         let mut a = state(0.0, 0.0);
