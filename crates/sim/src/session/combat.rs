@@ -220,12 +220,32 @@ impl HitSide {
 /// How a body died, for every client to pick the same death clip
 /// (`Look::deaths`): the side the killing hit came from, if it had one,
 /// and a roll that picks among the clips for it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeathPose {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<HitSide>,
     pub roll: u8,
+    /// The killing hit, for a body that goes limp (`Look::ragdoll`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hit: Option<DeathHit>,
+}
+
+/// The hit that killed a body, as every client's ragdoll takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeathHit {
+    /// Which way it was travelling (a unit vector), if it had a way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f32; 3]>,
+    /// Where it struck, in the world, if it had a place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<[f32; 3]>,
+    /// What it gives the body: its damage type's kick, else the archetype's.
+    pub kick: bri_content::body::DeathKick,
+    /// A shot killed a body lying prone, which a ragdoll takes gently.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prone_shot: bool,
 }
 
 impl Combat {
@@ -1477,7 +1497,40 @@ impl Session {
         if alive {
             return Ok(());
         }
-        self.kill(target, source, kind)
+        self.kill(target, source, kind, at)
+    }
+
+    /// The killing hit as a ragdoll body takes it: none for a body without
+    /// one. A damage type's own kick wins over the archetype's.
+    fn death_hit(
+        &self,
+        state: &crate::player::PlayerState,
+        kind: &DamageKind,
+        direction: Option<Vec3>,
+        at: Option<Vec3>,
+    ) -> Option<DeathHit> {
+        let ragdoll = self
+            .archetypes
+            .resolve(state.archetype)
+            .look
+            .ragdoll
+            .as_ref()?;
+        let own = match kind {
+            DamageKind::Weapon { name, .. } => self
+                .weapons
+                .pack
+                .damage_type(name)
+                .and_then(|t| t.death_kick),
+            _ => None,
+        };
+        Some(DeathHit {
+            direction: direction
+                .and_then(Vec3::try_normalize)
+                .map(|d| d.to_array()),
+            point: at.map(|p| p.to_array()),
+            kick: own.unwrap_or(ragdoll.kick),
+            prone_shot: state.posture.prone && kind.projectile().is_some(),
+        })
     }
 
     pub(super) fn kill(
@@ -1485,6 +1538,7 @@ impl Session {
         victim: OwnerId,
         killer: Option<OwnerId>,
         kind: DamageKind,
+        at: Option<Vec3>,
     ) -> Result<()> {
         let tick = self.simulation.state().tick;
         let Some(peer) = self.peers.get(&victim) else {
@@ -1513,6 +1567,7 @@ impl Session {
             roll: (victim ^ tick)
                 .wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 .to_be_bytes()[0],
+            hit: self.death_hit(state, &kind, direction, at),
         };
         // A killer from another minigame (or none) cannot be credited.
         let killer = killer.filter(|k| *k == victim || self.game_of(*k) == self.game_of(victim));
@@ -1876,7 +1931,7 @@ impl Session {
     pub(super) fn suicide(&mut self, owner: OwnerId) -> Result<()> {
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         ensure!(peer.combat.alive, "You are already dead");
-        self.kill(owner, Some(owner), DamageKind::Suicide)
+        self.kill(owner, Some(owner), DamageKind::Suicide, None)
     }
 
     /// Click-to-respawn after death.

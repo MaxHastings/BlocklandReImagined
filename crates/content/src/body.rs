@@ -481,6 +481,52 @@ pub struct Ragdoll {
     /// never.
     #[serde(default, skip_serializing_if = "zero_f32")]
     pub freeze: f32,
+    /// What a killing hit gives the body when its damage type names no
+    /// [`DeathKick`] of its own.
+    pub kick: DeathKick,
+    /// How much of the speed the body died at it keeps: along the ground
+    /// and up or down.
+    pub carry: [f32; 2],
+    /// Downward speed (units/s) past which the body counts as already
+    /// falling and gets no `up_kick`.
+    pub falling: f32,
+    /// Turns the hit's offset from the body's centre and its push into
+    /// spin (the inverse of how hard the body is to turn).
+    pub inertia: f32,
+    /// How much further across the ground than up the hit's offset counts
+    /// toward that spin.
+    pub spin_scale: f32,
+    /// What a shot that kills a prone body gives it, of its kick, its spin
+    /// and its turning: 0 to 1, with no upward kick at all.
+    pub prone_scale: f32,
+    /// The spin (radians/s) of a death with no direction to it, in a random
+    /// direction.
+    pub random_spin: f32,
+}
+/// What a killing hit gives a [`Ragdoll`], in speeds (units/s) along the
+/// way the hit travelled. A damage type may carry its own (the weapons
+/// pack's `death_kick`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeathKick {
+    /// Given to the body at the point the hit struck: it turns the body as
+    /// it moves it.
+    pub impulse: f32,
+    /// Given to the whole body.
+    pub speed: f32,
+    /// Added upward when the body is not already falling.
+    pub up_kick: f32,
+}
+impl DeathKick {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            [self.impulse, self.speed, self.up_kick]
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=MAX_RAGDOLL_SPEED).contains(v)),
+            "a death kick's impulse, speed and up_kick are 0 to {MAX_RAGDOLL_SPEED} units/s"
+        );
+        Ok(())
+    }
 }
 fn zero_f32(v: &f32) -> bool {
     *v == 0.0
@@ -544,10 +590,7 @@ pub struct RagdollJoint {
     pub twist: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hinge: Option<[f32; 2]>,
-    /// How hard it pulls back from its limits; 0 stops at them.
-    #[serde(default, skip_serializing_if = "zero_f32")]
-    pub stiffness: f32,
-    /// How much it resists moving at its limits; 0 swings freely.
+    /// How much it resists moving; 0 swings freely.
     #[serde(default, skip_serializing_if = "zero_f32")]
     pub damping: f32,
 }
@@ -584,9 +627,16 @@ impl Ragdoll {
                 && finite(self.bounce, 0.0, 1.0)
                 && finite(self.max_speed, 0.1, MAX_RAGDOLL_SPEED)
                 && finite(self.max_spin, 0.1, 1000.0)
-                && finite(self.freeze, 0.0, 600.0),
-            "ragdoll friction (0 to 4), bounce (0 to 1), max_speed (0.1 to {MAX_RAGDOLL_SPEED}), max_spin (0.1 to 1000) or freeze (0 to 600 s) is out of range"
+                && finite(self.freeze, 0.0, 600.0)
+                && self.carry.iter().all(|c| finite(*c, 0.0, 1.0))
+                && finite(self.falling, 0.0, MAX_RAGDOLL_SPEED)
+                && finite(self.inertia, 0.0, 1000.0)
+                && finite(self.spin_scale, 0.0, 1000.0)
+                && finite(self.prone_scale, 0.0, 1.0)
+                && finite(self.random_spin, 0.0, 1000.0),
+            "ragdoll friction (0 to 4), bounce (0 to 1), max_speed (0.1 to {MAX_RAGDOLL_SPEED}), max_spin (0.1 to 1000), freeze (0 to 600 s), carry (0 to 1), inertia, spin_scale or random_spin (0 to 1000) or prone_scale (0 to 1) is out of range"
         );
+        self.kick.validate()?;
         for (index, bone) in self.bones.iter().enumerate() {
             ensure!(
                 !bone.node.is_empty()
@@ -628,9 +678,8 @@ impl Ragdoll {
                         && joint
                             .hinge
                             .is_none_or(|[low, high]| finite(low, -pi, pi) && finite(high, low, pi))
-                        && finite(joint.stiffness, 0.0, 10000.0)
                         && finite(joint.damping, 0.0, 1000.0),
-                    "ragdoll bone {}: joint angles are 0 to pi radians (a hinge from -pi, rising), stiffness 0 to 10000 and damping 0 to 1000",
+                    "ragdoll bone {}: joint angles are 0 to pi radians (a hinge from -pi, rising) and damping 0 to 1000",
                     bone.node
                 );
             }
@@ -881,9 +930,12 @@ mod tests {
                  "shapes": [{"kind": "capsule", "radius": 0.12, "half_length": 0.1, "axis": "y"}]},
                 {"node": "shin", "mass": 0.1, "linear_damping": 1.0,
                  "shapes": [{"kind": "box", "half": [0.05, 0.2, 0.05], "offset": [0.0, -0.2, 0.0]}],
-                 "joint": {"swing": 0.3, "twist": 0.2, "stiffness": 50.0, "damping": 2.0}}
+                 "joint": {"swing": 0.3, "twist": 0.2, "damping": 2.0}}
             ],
-            "friction": 0.8, "max_speed": 40.0, "max_spin": 10.0, "freeze": 10.0
+            "friction": 0.8, "max_speed": 40.0, "max_spin": 10.0, "freeze": 10.0,
+            "kick": {"impulse": 10.0, "speed": 2.0, "up_kick": 0.1},
+            "carry": [0.6, 1.0], "falling": 0.2, "inertia": 4.0, "spin_scale": 13.0, "prone_scale": 0.35,
+            "random_spin": 9.0
         }))
         .unwrap()
     }

@@ -306,21 +306,31 @@ every screen simulates its own, so they do not tumble identically):
 "radius": 0.12, "half_length": 0.1, "axis": "y", "offset": [0, 0, 0]}],
 "mass": 0.22}, {"node": "thigh_l", "shapes": [{...}], "mass": 0.1,
 "linear_damping": 1, "angular_damping": 0.5, "joint": {"swing": 0.5,
-"swing_second": 0.2, "twist": 0.2, "stiffness": 120, "damping": 1}},
+"swing_second": 0.2, "twist": 0.2, "damping": 1}},
 {"node": "shin_l", "shapes": [{...}], "mass": 0.1, "joint": {"swing": 0,
 "twist": 0, "hinge": [-1.5, 0]}}], "friction": 0.8, "max_speed": 40,
-"max_spin": 10, "freeze": 10}`. Each bone becomes a rigid body made of up to
+"max_spin": 10, "freeze": 10, "kick": {...}, "carry": [0.6, 1],
+"falling": 0.2, "inertia": 4, "spin_scale": 13, "prone_scale": 0.35, "random_spin": 9}`. Each bone becomes a rigid body made of up to
 8 `shapes` (a `capsule` lying along the node's `axis`, a `box` or a `ball`,
 each centred `offset` from the node) weighing `mass`, jointed at the bone's
 node to the nearest bone above it in the skeleton that is listed. The first
 bone is the root and has no joint; the others have a ball joint (`swing`,
 optional `swing_second`, `twist`, radians, 0 to pi, round the pose it died in)
-or a hinge (`hinge: [low, high]` about the node's x axis), with `stiffness`
-(how hard it pulls back from its limits) and `damping` (how much it resists
-moving). The body goes limp at once. `max_speed` and `max_spin` cap every
-bone, `bounce` and each bone's `linear_damping` and `angular_damping` shape
-its fall, and `freeze` seconds after it goes limp hold it where it lies (0:
-never). It lies as long as `corpse_seconds` and fades as `corpse_fade` says.
+or a hinge (`hinge: [low, high]` about the node's x axis), with `damping`
+(how much it resists moving). The body goes limp at once. `max_speed` and
+`max_spin` cap every bone, `bounce` and each bone's `linear_damping` and
+`angular_damping` shape its fall, and `freeze` seconds after it goes limp
+hold it where it lies (0: never). The killing hit sets it moving:
+`"kick": {"impulse": 10, "speed": 2, "up_kick": 0.1}` (speeds, units/s, along
+the way the hit travelled: `impulse` given at the point struck, which turns
+the body, `speed` to the whole body, `up_kick` added upward when it was not
+already falling) unless the damage type carries its own `death_kick` in the
+weapons pack. `carry` is how much of the speed it died at the body keeps
+(along the ground, up or down); `inertia` and `spin_scale` turn the offset of
+the hit from the body's centre into spin (`spin_scale` counts the offset
+across the ground that much more than the height); `prone_scale` (0 to 1) is
+what a shot that kills a prone body gives of all that, with no upward kick;
+`falling` (units/s) is how fast down it must be going to get no `up_kick`; `random_spin` (radians/s) is the spin of a death with no direction. It lies as long as `corpse_seconds` and fades as `corpse_fade` says.
 A body over the physics budget, or whose skeleton lacks a listed node, plays
 its death clip as before and the Add-On faults log says why. A dead body lies 5 seconds (v20's `$CorpseTimeoutValue`) and then goes in a
 puff; `corpse_seconds` (0 to 600) lets it lie longer, and `corpse_fade` (up to

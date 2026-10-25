@@ -469,6 +469,7 @@ fn damage_type(name: &str, verb: &str) -> (String, DamageType) {
             vehicle_scale: 0.5,
             direct: true,
             special: false,
+            death_kick: None,
         },
     )
 }
