@@ -104,6 +104,7 @@ macro_rules! for_each_op {
             SetTools = player,
             TakeItem = player,
             DropItem = player,
+            PlaceItem = player,
             RemoveDrop = player,
             RenewDrop = player,
             NameDrop = player,

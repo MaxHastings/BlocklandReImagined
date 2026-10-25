@@ -28,7 +28,12 @@ impl WeaponsWorld {
             animation_serial: self.animation_serial,
             actors: self.actors.iter().map(|(id, a)| (*id, a.clone())).collect(),
             projectiles: self.projectiles.values().cloned().collect(),
-            drops: self.drops.values().cloned().collect(),
+            drops: self
+                .drops
+                .values()
+                .filter(|d| !self.pinned.contains(&d.id))
+                .cloned()
+                .collect(),
             fuses: self.fuses.iter().map(|(id, f)| (*id, *f)).collect(),
         }
     }

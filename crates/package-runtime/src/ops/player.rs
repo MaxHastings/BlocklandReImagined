@@ -315,6 +315,50 @@ impl ScriptOp for DropItem {
     }
 }
 
+/// Put an item of this package in the world held at `position`, its up
+/// axis turned to `normal` (a charge stuck to a wall): it does not fall and
+/// nobody picks it up, until the package takes it back (`remove_drop`) or
+/// `seconds` run out. With `mover` it rides that map mover (a door).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaceItem {
+    pub item: String,
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    #[serde(default)]
+    pub mover: Option<String>,
+    /// Kept with it, as `drop_item`'s: `drops()` shows it.
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+    /// Seconds until it pops (1 to [`MAX_DROP_SECONDS`]).
+    pub seconds: u32,
+}
+impl ScriptOp for PlaceItem {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "place_item";
+    fn bounded(&self) -> bool {
+        let PlaceItem {
+            item: id,
+            position,
+            normal,
+            mover,
+            data,
+            seconds,
+        } = self;
+        (1..=MAX_DROP_SECONDS).contains(seconds)
+            && item(id)
+            && finite(position)
+            && finite(normal)
+            && glam_length(normal) > 1e-6
+            && mover
+                .as_ref()
+                .is_none_or(|m| !m.is_empty() && m.len() <= 64)
+            && data.as_ref().is_none_or(|d| {
+                serde_json::to_vec(d).is_ok_and(|b| b.len() <= MAX_DROP_DATA_BYTES)
+                    && crate::state::check_value(d).is_ok()
+            })
+    }
+}
+
 /// Keep an existing owned world item for this many seconds from now. A package
 /// renews its objective items while active; ordinary dropped tools still expire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -250,6 +250,11 @@ pub trait World {
     fn movers_near(&self, _player: u64, _reach: f32) -> Vec<String> {
         Vec::new()
     }
+    /// The shown movers whose collision lies within `radius` of `at`, as
+    /// (id, distance, nearest point of it), nearest first.
+    fn movers_within(&self, _at: [f32; 3], _radius: f32) -> Vec<(String, f32, [f32; 3])> {
+        Vec::new()
+    }
     /// The map's volumes holding the world point `at`, highest priority
     /// first and then in map order.
     fn volumes_at(&self, _at: [f32; 3]) -> Vec<VolumeInfo> {
@@ -2632,6 +2637,39 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
+    // A world item held where it is put, on a map mover when `mover` names
+    // one (`()` for none): place_item(item, x, y, z, nx, ny, nz, mover,
+    // seconds).
+    engine.register_fn(
+        "place_item",
+        |item: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         nx: Dynamic,
+         ny: Dynamic,
+         nz: Dynamic,
+         mover: Dynamic,
+         seconds: i64| {
+            let mover = if mover.is_unit() {
+                None
+            } else {
+                Some(
+                    mover
+                        .into_string()
+                        .map_err(|_| "a mover is named by text")?,
+                )
+            };
+            push(Op::PlaceItem(ops::PlaceItem {
+                item: item.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                normal: [float(&nx)?, float(&ny)?, float(&nz)?],
+                mover,
+                data: None,
+                seconds: u32::try_from(seconds).map_err(|_| "seconds is 1 up to ten minutes")?,
+            }))
+        },
+    );
     engine.register_fn("heal", |player: Dynamic, amount: Dynamic| {
         push(Op::Heal(ops::Heal {
             player: id(&player)?,
@@ -3440,6 +3478,35 @@ fn register_presentation(engine: &mut Engine) {
             ))
         })
     });
+    // The shown movers a blast at a point reaches: #[#{ id, gap, x, y, z }]
+    // with the nearest point of each, nearest first.
+    engine.register_fn(
+        "movers_within",
+        |x: Dynamic, y: Dynamic, z: Dynamic, radius: Dynamic| {
+            let at = [float(&x)?, float(&y)?, float(&z)?];
+            let radius = float(&radius)?;
+            if !(0.0..=64.0).contains(&radius) {
+                return fail("movers_within reaches 0 to 64 units");
+            }
+            with_world(|world, _| {
+                Ok(Dynamic::from_array(
+                    world
+                        .movers_within(at, radius)
+                        .into_iter()
+                        .map(|(id, gap, [px, py, pz])| {
+                            map([
+                                ("id", id.into()),
+                                float_entry("gap", gap),
+                                float_entry("x", px),
+                                float_entry("y", py),
+                                float_entry("z", pz),
+                            ])
+                        })
+                        .collect(),
+                ))
+            })
+        },
+    );
     engine.register_fn("map_region_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
         let at = [float(&x)?, float(&y)?, float(&z)?];
         with_world(|world, _| {
