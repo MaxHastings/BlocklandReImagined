@@ -135,6 +135,7 @@ fn a_building_hud_claim_keeps_admin_camera_bindings_available() {
         region: bri_content::hud::Region::Building,
         pixelated: false,
         items: vec![],
+        basis: None,
         name_tags: None,
     });
     assert!(u.core.building_off());

@@ -230,6 +230,31 @@ back to the stock HUD when nothing claims a region.
   stays on the edge, or is left out when `edge` is false. It draws nothing
   while either value is missing or the viewer stands on the point. Use one
   per point; put a ring or disc `image` under or over the dial for its look.
+- `radar`: a map panel, as a shooter's minimap. `rect` is the panel's box.
+  `maps` are pictures of the level, each with the ground it covers (`world`:
+  left, top/north, right, bottom/south in world x and z), optionally the
+  viewer heights it is for (`floor`: [low, high]) and the ground the viewer
+  must stand on (`area`: left, top, right, bottom); the best fit for the
+  viewer's height and place is shown, panned so the viewer is in the
+  middle and turned to face up (`rotate`, default true; `yaw_offset`
+  degrees are added to the turn for a picture whose top is not north).
+  `range` are zoom steps, the ground in units from the middle to the edge,
+  and `zoom` is a rule value (`package:player/key`) picking the step from 0.
+  `expand` gives a bigger `rect`, a `value` that is above 0.5 while it is
+  wanted, the `seconds` to blend and a `range_scale` for the ground shown
+  at full size. `round` cuts the map off at the circle in the box; `cull`
+  (0.1 to 1) hides marks past that share of the half size. `tint` colours
+  the map (its alpha is the opacity), `back` fills behind it, `ring` is a
+  frame drawn over the box and `viewer` the viewer's own icon in the middle
+  (`viewer_size`). Marks come from `markers`, up to 8 rule states each
+  holding an array of `{ "icon", "x", "y", "z", "rot", "color", "blink" }`
+  (world position with y up, `rot` degrees clockwise from north, `color`
+  RGB or RGBA 0..1, `blink` a bool; state values are at most 4096 bytes);
+  `icons` names each `icon`'s texture and `mark_size` is their size. A mark
+  more than `height` units above or below the viewer is drawn with the
+  `above` or `below` texture instead, tinted by its colour; a blinking mark
+  is lit for `blink` seconds, then dark. A rule posts the lists with
+  `set` (everyone sees the same) or `set_player` (one player, a team member's own list).
 - Any element takes `show` `{ "value", "above", "below" }` to appear only
   while a value is in range: a low-health flash, a reload prompt.
 
@@ -296,3 +321,13 @@ sprite fonts, kill feeds, message feeds, trackers, stock texts), `crates/client/
 `crates/client/tests/hud_regions_render.rs` (including the Runner's ammo
 counter), and `crates/sim/tests/script_api.rs`
 `a_held_guns_ammo_reaches_its_holder_for_hud_counters`.
+
+**A layout's own frame.** A layout that sets `"basis": [800, 600]` is
+authored in a frame of that size instead of the region's box: every
+position, size and spacing in the file is in those units, from the frame's
+top left. The frame is as tall as the screen and sits against the edge its
+region touches (left for `top_left`, `left`, `bottom_left` and `chat`;
+right for `top_right`, `right`, `bottom_right`, `energy`, `ammo` and
+`tools`; the middle for the rest), so a game drawn at 800x600 keeps its
+numbers at any aspect. Left out, units are HUD units from the region's
+corner as above.
