@@ -694,6 +694,7 @@ mod tests {
             backdrop: None,
             regions: None,
             zones: None,
+            display_ramp: None,
             decals: None,
             receiver_index: std::sync::Arc::new(bri_render::decals::ReceiverIndex::build(
                 &SceneData::default(),

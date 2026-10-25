@@ -10,6 +10,8 @@ pub(super) struct SceneState {
     pub(super) regions: Option<bri_content::regions::RegionMap>,
     /// How the map's zones open onto each other: the viewer draws only the zones it can see into.
     pub(super) zones: Option<bri_content::zones::ZoneGraph>,
+    /// The map's own display ramp (brightness, contrast, gamma), for what the player has not set.
+    pub(super) display_ramp: Option<[f32; 3]>,
     /// How the map's sounds carry, when its regions say ([`Self::set_regions`]).
     pub(super) sound_carry: Option<crate::sound_carry::SoundCarryModel>,
     /// The map's decals and the triangles they draw on.

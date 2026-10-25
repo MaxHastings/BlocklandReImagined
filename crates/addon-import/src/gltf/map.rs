@@ -443,6 +443,7 @@ pub(super) fn write(
         &mut |rel, bytes, report| put(rel, bytes, report),
         &mut report,
     )?;
+    let display_ramp = map_zones::display_ramp(opts)?;
     let decals = map_decals::decals(
         opts,
         id,
@@ -569,6 +570,7 @@ pub(super) fn write(
         "backdrops": { map_id.clone(): backdrop.record },
         "regions": { map_id.clone(): regions_file },
         "zones": { map_id.clone(): zones_file },
+        "display_ramps": { map_id.clone(): display_ramp },
         "decals": { map_id.clone(): decals.file },
         "environments": { map_id.clone(): environment },
         "waters": { map_id.clone(): waters },

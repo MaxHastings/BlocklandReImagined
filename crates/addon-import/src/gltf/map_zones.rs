@@ -196,3 +196,32 @@ pub(super) fn zones(
     put(&format!("map/{file}"), &serde_json::to_vec(&graph)?, report)?;
     Ok(Some(file))
 }
+
+/// The map's own display ramp `[brightness, contrast, gamma]` from `--mapdata`'s `display_ramp`, when it names one. A player's setting overrides it.
+pub(super) fn display_ramp(opts: &Options) -> Result<Option<[f32; 3]>> {
+    let Some(dir) = &opts.mapdata else {
+        return Ok(None);
+    };
+    let data = read(&find(dir, "-mapdata.json")?)?;
+    let ramp = &data["display_ramp"];
+    if ramp.is_null() {
+        return Ok(None);
+    }
+    let value = |name: &str, range: (f32, f32)| -> Result<f32> {
+        let v = ramp[name]
+            .as_f64()
+            .with_context(|| format!("The display ramp has no {name}"))? as f32;
+        ensure!(
+            v.is_finite() && (range.0..=range.1).contains(&v),
+            "The display ramp's {name} {v} is outside {}..{}",
+            range.0,
+            range.1
+        );
+        Ok(v)
+    };
+    Ok(Some([
+        value("brightness", (0.0, 1.0))?,
+        value("contrast", (0.0, 1.0))?,
+        value("gamma", (0.5, 2.5))?,
+    ]))
+}

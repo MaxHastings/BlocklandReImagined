@@ -110,6 +110,8 @@ first.
 `[first_triangle, count, zone, ..]` for primitive `i` of the node `aa25_pipeline_generated`). Zone numbers are the region numbers. The importer
 splits that node's primitives by zone and lists the zone graph (`bri_content::zones`) in the bundle's `zones` table; in the game, a zone the
 eye cannot see into through the openings (`kind` `zone` portals) is not drawn. Data that does not fit the mesh stops the import.
+The mapdata file's `display_ramp` (`brightness`, `contrast`, `gamma`; Unreal Engine 2's, 0..1, 0..1, 0.5..2.5) becomes the map's default display
+ramp (bundle `display_ramps`): the player's own `$pref::Video::Brightness`, `Contrast` and `Gamma` win for any value they set.
 
 **How sound carries.** A regions file can also say how the map's sounds reach the listener. Top level `sound` is
 `{ "zone_decay": 0..1, "blocked_reference": 0..1 }`; per region, `connects` lists the regions sound passes into from it (a

@@ -2202,6 +2202,7 @@ impl App {
             self.scene.backdrop = visual.backdrop;
             self.scene.set_regions(visual.regions);
             self.scene.zones = visual.zones;
+            self.scene.display_ramp = visual.display_ramp;
             self.scene.decals = visual.decals;
             self.scene.receiver_index = Some(visual.receiver_index);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
@@ -2235,7 +2236,7 @@ impl App {
         // a map change needs renderers built for the new map.
         // Colour-vision assistance is a pipeline constant, too.
         let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
-        let ramp = bri_ui::screens::options::display_ramp(&self.ui.core.prefs);
+        let ramp = self.display_ramp();
         let restart = std::mem::take(&mut self.gpu.gpu_restart);
         if restart
             || bri_render::color::color_vision() != vision

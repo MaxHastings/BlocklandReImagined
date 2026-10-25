@@ -22,6 +22,9 @@
   "decals": {
     "sample-map:map/sample-map": null
   },
+  "display_ramps": {
+    "sample-map:map/sample-map": null
+  },
   "environments": {
     "sample-map:map/sample-map": {
       "bottom": false,

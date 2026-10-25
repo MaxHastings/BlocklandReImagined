@@ -1996,6 +1996,7 @@ fn map_data_splits_the_world_mesh_by_zone_and_lists_the_zone_graph() {
     std::fs::write(
         data.join("test-mapdata.json"),
         json!({
+            "display_ramp": { "brightness": 0.8, "contrast": 0.7, "gamma": 1.0 },
             "zones": [zone(0, -9.0), zone(1, 0.0), zone(2, 1.0)],
             "portals": [
                 { "kind": "zone", "front_zone": 1, "back_zone": 2, "plane": [1, 0, 0, 1.0],
@@ -2017,6 +2018,9 @@ fn map_data_splits_the_world_mesh_by_zone_and_lists_the_zone_graph() {
     let name = bundle["zones"]["test_room:map/test_room"].as_str().unwrap();
     let graph: ZoneGraph =
         serde_json::from_slice(&std::fs::read(dir.join("map").join(name)).unwrap()).unwrap();
+    let ramp: [f32; 3] =
+        serde_json::from_value(bundle["display_ramps"]["test_room:map/test_room"].clone()).unwrap();
+    assert_eq!(ramp, [0.8, 0.7, 1.0]);
     assert_eq!(graph.zones.len(), 3);
     assert_eq!(graph.portals.len(), 1, "sky portals are not zone openings");
     // glTF to native flips x and z; lengths take the scale of 2.
