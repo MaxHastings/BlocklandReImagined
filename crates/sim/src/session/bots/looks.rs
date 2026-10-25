@@ -102,6 +102,7 @@ mod tests {
             colors: Default::default(),
             face: "face0".into(),
             decal: "decal0".into(),
+            dress: Default::default(),
         };
         for slot in [
             "head", "torso", "larm", "rarm", "lleg", "rleg", "hip", "accent",

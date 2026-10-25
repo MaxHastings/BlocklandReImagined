@@ -105,6 +105,7 @@ fn main() -> Result<()> {
         colors: BTreeMap::new(),
         face: pref("facename")?.into(),
         decal: pref("decalname")?.into(),
+        dress: Default::default(),
     };
     // v20 prefs hold list positions; the pack names the part. The accent's
     // list is the one its hat allows, and accent 0 with none allowed is none.

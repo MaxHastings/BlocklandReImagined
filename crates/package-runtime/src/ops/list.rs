@@ -191,6 +191,7 @@ macro_rules! for_each_op {
             MountObject = physics,
             UnmountObject = physics,
             SetScale = player,
+            SetBodyDress = player,
             SetLookLimits = player,
             HoldRespawn = minigame,
             SetRespawnTime = minigame,

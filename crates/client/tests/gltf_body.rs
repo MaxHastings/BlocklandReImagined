@@ -620,3 +620,91 @@ fn eight_heavy_bodies_draw_their_distant_detail_when_small() -> Result<()> {
     ensure!(measure(&mut bodies, None, "no frame yet")? == near);
     Ok(())
 }
+
+#[test]
+fn a_dress_puts_another_texture_on_a_material_and_draws_the_body_bigger() -> Result<()> {
+    let root = bri_client::testing::ScratchDir::new("gltf-dress")?;
+    let source = root.path().join("figure.glb");
+    std::fs::write(&source, gltf::testing::character(true).glb)?;
+    let dir = root.path().join("addons/figure");
+    let opts = gltf::Options::new(&source, dir.clone(), Kind::Body);
+    gltf::import(&opts)?;
+    // The package carries a second image for the body's one material.
+    let content_file = dir.join("assets/content.json");
+    let mut content: serde_json::Value = serde_json::from_slice(&std::fs::read(&content_file)?)?;
+    let material = {
+        let entries = content["content"].as_array().context("content list")?;
+        let png = entries
+            .iter()
+            .find(|c| c["id"].as_str().is_some_and(|id| id.ends_with(".png")))
+            .context("the body's own texture")?;
+        png["id"]
+            .as_str()
+            .and_then(|id| id.strip_prefix("figure:asset/"))
+            .and_then(|name| name.strip_suffix(".png"))
+            .context("a figure texture")?
+            .to_owned()
+    };
+    let mut red = image::RgbaImage::new(2, 2);
+    for pixel in red.pixels_mut() {
+        *pixel = image::Rgba([12, 34, 56, 255]);
+    }
+    red.save(dir.join("assets/skin_red.png"))?;
+    content["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "figure:asset/skin_red.png", "file": "assets/skin_red.png"
+        }));
+    std::fs::write(&content_file, serde_json::to_vec(&content)?)?;
+
+    let mut assets = bri_client::testing::avatar::assets()?;
+    let packages: PackageSet = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "packages": [{ "id": "figure", "version": "1.0.0", "side": "shared", "dir": "addons/figure" }]
+    }))?;
+    assets.load_bodies(root.path(), &packages);
+    ensure!(assets.has_body(MODEL), "the body loaded");
+    let player = player()?;
+    let top = |mesh: &bri_client::avatar::AvatarMesh| {
+        mesh.data
+            .vertices
+            .iter()
+            .map(|v| v.position[1])
+            .fold(f32::MIN, f32::max)
+    };
+
+    let mut plain = assets.body_mesh(MODEL, assets.package.defaults.clone())?;
+    plain.pose(&assets, &player, 0.0)?;
+    let mut appearance = assets.package.defaults.clone();
+    appearance.dress.skins.insert(
+        material.to_ascii_uppercase(),
+        "figure:asset/skin_red.png".into(),
+    );
+    appearance.dress.scale = 1.5;
+    let mut dressed = assets.body_mesh(MODEL, appearance)?;
+    dressed.pose(&assets, &player, 0.0)?;
+    ensure!(
+        plain
+            .data
+            .images
+            .iter()
+            .all(|i| i.rgba[..4] != [12, 34, 56, 255]),
+        "its own texture is not the skin"
+    );
+    ensure!(
+        dressed
+            .data
+            .images
+            .iter()
+            .any(|i| i.rgba[..4] == [12, 34, 56, 255]),
+        "the skin replaced the material's texture"
+    );
+    ensure!(
+        (top(&dressed) / top(&plain) - 1.5).abs() < 0.01,
+        "drawn one and a half times as tall: {} against {}",
+        top(&dressed),
+        top(&plain)
+    );
+    Ok(())
+}

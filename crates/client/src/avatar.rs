@@ -5,7 +5,7 @@ use bri_client_sandbox::world::{Bounds, Rig as NodeTree, Skeleton};
 use bri_console::Clamp;
 use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition, sample_layers_with_transitions},
-    avatar::{Appearance, Outfit, Package, Rig},
+    avatar::{Appearance, Dress, Outfit, Package, Rig},
     body::{Animations, CrouchComposition, LocomotionPick, Role, RoleClips, Sockets},
     body_pose::{
         BodyFitInput, BodyFits as Fits, BodyFittingInput, BodyHolds, BodySocketInput,
@@ -27,6 +27,9 @@ pub struct AvatarAssets {
     pub package: Package,
     pub rig: Rig,
     images: BTreeMap<String, SceneImage>,
+    /// For an Add-On's body, the image files of its package by lower-case
+    /// file name: the textures a [`Dress`] may put on its materials.
+    skins: BTreeMap<String, SceneImage>,
     detail: usize,
     /// A body's details by distance: each visible detail's screen height
     /// in pixels and index, tallest first. Empty for a body of one detail.
@@ -51,6 +54,8 @@ pub struct AvatarAssets {
     /// where a seat puts a fitted body's hip.
     seat_hip: Option<Vec3>,
 }
+/// Most image files of one body package a [`Dress`] can choose from.
+const MAX_BODY_SKINS: usize = 256;
 /// Farthest a posed node may be put from the body's feet; a pose further
 /// away is not drawn.
 const MAX_POSE_REACH: f32 = 256.0;
@@ -297,6 +302,7 @@ impl AvatarAssets {
             package,
             rig,
             images,
+            skins: BTreeMap::new(),
             detail,
             lods: Vec::new(),
             bodies: BTreeMap::new(),
@@ -408,6 +414,7 @@ impl AvatarAssets {
             package: self.package.clone(),
             rig,
             images,
+            skins: BTreeMap::new(),
             detail,
             lods: Vec::new(),
             bodies: BTreeMap::new(),
@@ -506,6 +513,44 @@ impl AvatarAssets {
                 },
             );
         }
+        // The package's other image files: what a `Dress` may lay over a
+        // material (one body, many uniforms).
+        let mut skins = BTreeMap::new();
+        let prefix = format!("{package}:asset/").to_ascii_lowercase();
+        for entry in content["content"].as_array().into_iter().flatten() {
+            let (Some(id), Some(path)) = (entry["id"].as_str(), entry["file"].as_str()) else {
+                continue;
+            };
+            let id = id.to_ascii_lowercase();
+            let Some(name) = id
+                .strip_prefix(&prefix)
+                .filter(|name| name.ends_with(".png"))
+            else {
+                continue;
+            };
+            if skins.len() >= MAX_BODY_SKINS {
+                bri_console::fallback::report(
+                    bri_console::fallback::kind::DROPPED_ITEM,
+                    model,
+                    "skin images",
+                    &format!("only the first {MAX_BODY_SKINS} images of its package can be worn"),
+                );
+                break;
+            }
+            let pixels =
+                image::load_from_memory(&crate::materials::read_resource(&root, path, 16 << 20)?)?
+                    .to_rgba8();
+            skins.insert(
+                name.to_owned(),
+                SceneImage {
+                    label: format!("{model}/{name}"),
+                    width: pixels.width(),
+                    height: pixels.height(),
+                    rgba: pixels.into_raw(),
+                    srgb: false,
+                },
+            );
+        }
         let detail = shape
             .details
             .iter()
@@ -549,6 +594,7 @@ impl AvatarAssets {
             package: self.package.clone(),
             rig,
             images,
+            skins,
             detail,
             lods,
             bodies: BTreeMap::new(),
@@ -564,6 +610,40 @@ impl AvatarAssets {
     /// chest colour and the head black; the ski nodes stay hidden.
     pub fn horse_mesh(&self, appearance: Appearance) -> Result<AvatarMesh> {
         self.body_mesh(HORSE_SHAPE, appearance)
+    }
+    /// The images `dress` lays over this body's materials, by lower-case
+    /// material name. A skin the package lacks, or for a material the body
+    /// has none of, is reported and leaves the texture it has.
+    fn skins_of(&self, model: &str, dress: &Dress) -> BTreeMap<String, SceneImage> {
+        let mut out = BTreeMap::new();
+        for (material, file) in &dress.skins {
+            let material = material.to_ascii_lowercase();
+            let file = file.rsplit('/').next().unwrap_or(file).to_ascii_lowercase();
+            let file = if file.ends_with(".png") {
+                file
+            } else {
+                format!("{file}.png")
+            };
+            let fault = if !self.images.contains_key(&material) {
+                Some(format!("the body has no material `{material}`"))
+            } else if !self.skins.contains_key(&file) {
+                Some(format!("its package has no image `{file}`"))
+            } else {
+                None
+            };
+            match fault {
+                None => {
+                    out.insert(material, self.skins[&file].clone());
+                }
+                Some(fault) => bri_console::fallback::report(
+                    bri_console::fallback::kind::DROPPED_ITEM,
+                    model,
+                    "skin",
+                    &format!("{fault}, so the material keeps its own texture"),
+                ),
+            }
+        }
+        out
     }
     /// A player drawn with the body `model`. An Add-On's own model paints
     /// each object named as an avatar colour slot with that slot's paint
@@ -633,10 +713,12 @@ impl AvatarAssets {
             ..Default::default()
         };
         let mut materials = Vec::new();
+        let skins = horse.skins_of(model, &appearance.dress);
         for source in &horse.rig.shape.materials {
             let name = source.name.to_ascii_lowercase();
             let image = data.images.len();
-            data.images.push(horse.images[&name].clone());
+            data.images
+                .push(skins.get(&name).unwrap_or(&horse.images[&name]).clone());
             materials.push(data.materials.len());
             let name = format!("{model}/{name}");
             // The horse lays its texture over its chest colour. Any other
@@ -800,6 +882,7 @@ impl AvatarAssets {
         materials: Vec<usize>,
         translucent_materials: Vec<usize>,
     ) -> AvatarMesh {
+        let draw_scale = appearance.dress.scale;
         AvatarMesh {
             model: None,
             appearance,
@@ -848,6 +931,7 @@ impl AvatarAssets {
             fits: None,
             held: ([false; 2], 0.0),
             skipped: Vec::new(),
+            draw_scale,
             opacity: 1.0,
         }
     }
@@ -968,6 +1052,9 @@ pub struct AvatarMesh {
     held: ([bool; 2], f32),
     /// Clips the last pose asked for that the body lacks, left out.
     skipped: Vec<String>,
+    /// How much bigger the body is drawn than it is (`Dress::scale`); only
+    /// what is drawn changes, not where it is or what it hits.
+    draw_scale: f32,
     /// How much of the body shows, 1 whole to 0 gone: a dead body fades out
     /// over its archetype's `corpse_fade`. Drawn in [`FADE_STEPS`] steps.
     opacity: f32,
@@ -2536,9 +2623,11 @@ impl AvatarMesh {
     ) -> Result<()> {
         // A body whose own clips pose it lying is not laid face down as well.
         let lie_down = player.posture.prone && !self.roles(assets).has_own(Role::Prone);
-        // `setScale` scales the whole shape about the feet.
+        // `setScale` scales the whole shape about the feet; a dress may draw it
+        // bigger or smaller still.
+        let scale = player.scale * self.draw_scale;
         let model_transform = Mat4::from_scale_rotation_translation(
-            Vec3::splat(player.scale),
+            Vec3::splat(scale),
             mount_rotation
                 .filter(|q| q.is_finite() && q.is_normalized())
                 .unwrap_or_else(|| Quat::from_rotation_y(-player.body_yaw())),
@@ -2557,8 +2646,8 @@ impl AvatarMesh {
                 Mat4::from_rotation_translation(
                     Quat::from_rotation_y(-player.body_yaw()),
                     Vec3::from(player.feet),
-                ) * posture_frame_for(lean_tilt, 0.3 * player.scale, lie_down)
-                    * Mat4::from_scale(Vec3::splat(player.scale))
+                ) * posture_frame_for(lean_tilt, 0.3 * scale, lie_down)
+                    * Mat4::from_scale(Vec3::splat(scale))
             }
             _ => model_transform,
         };
