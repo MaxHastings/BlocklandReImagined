@@ -299,7 +299,10 @@ must list `crouched`, and one with `movement.prone` must list `prone` (the
 Add-On does not load without them, so a posture never falls in a standing
 clip). A listed clip the model lacks is named in the Add-On faults log.
 Without `deaths` the body plays its `death`
-role. The client names what a
+role. A dead body lies 5 seconds (v20's `$CorpseTimeoutValue`) and then goes in a
+puff; `corpse_seconds` (0 to 600) lets it lie longer, and `corpse_fade` (up to
+`corpse_seconds`) makes it fade out over the last of those seconds instead of
+puffing away. The client names what a
 body lacks once, in the Add-On faults log ("no `sit` animation; it plays
 its `idle` instead"). The Playground's
 [Runner](../../packages/playground/playground-runner/runner.json) and the

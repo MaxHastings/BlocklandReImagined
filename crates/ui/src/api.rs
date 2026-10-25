@@ -631,6 +631,9 @@ pub struct HudRegionDraw {
     /// Images drawn with sharp pixels.
     pub pixelated: bool,
     pub items: Vec<bri_content::hud::Item>,
+    /// The layout's frame (`Layout::basis`): `items` are in its units, from
+    /// its top left. `None`: HUD units from the region's corner.
+    pub basis: Option<[f32; 2]>,
     /// A `name_tags` claim's style for the names over players' heads.
     pub name_tags: Option<bri_content::hud::NameTagStyle>,
 }
@@ -1619,6 +1622,8 @@ pub struct PanelButtonView {
     pub color: Option<[f32; 4]>,
     /// x, y, w, h in the panel, when the button has its own place.
     pub rect: Option<[i32; 4]>,
+    /// Done by the client when pressed, instead of an event to the rules.
+    pub action: Option<PanelAction>,
 }
 /// A panel list's row dragged from list `from` (row `row`, from 0) and let
 /// go over row `at` of the list an event names (none: below its rows).
@@ -1631,14 +1636,19 @@ pub struct PanelDropView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PanelItemView {
     /// Lines of plain text.
-    Text(String),
+    Text { text: String, style: PanelTextView },
     /// Rows to pick one of; with `drag`, rows drag to other such lists.
     List {
         id: String,
+        /// A row's cells are separated by tabs when there are `columns`.
         rows: Vec<String>,
         selected: Option<u16>,
         height: u16,
         drag: bool,
+        /// Where each cell column starts, in pixels from the list's left.
+        columns: Vec<u16>,
+        /// A picture at the left of each row, by row (missing: none).
+        icons: Vec<Option<PanelPicture>>,
     },
     /// A line to type in, with a label.
     Field {
@@ -1656,6 +1666,32 @@ pub enum PanelItemView {
         rect: [i32; 4],
         tint: [f32; 4],
     },
+}
+/// How a panel's text item looks. Left out, the panel's own.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PanelTextView {
+    pub size: Option<u8>,
+    /// A font face of the game's fonts (`arial`).
+    pub font: Option<String>,
+    pub color: Option<[f32; 4]>,
+    pub align: PanelAlign,
+    /// A scrolling box this tall; none: the text's own height.
+    pub height: Option<u16>,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PanelAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+/// What the client itself does when a panel button is pressed, with no
+/// event to the rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PanelAction {
+    Settings,
+    Disconnect,
+    Quit,
 }
 /// A score report the host showed (Slayer's End of Round Report): plain
 /// text, laid out by the Report window.

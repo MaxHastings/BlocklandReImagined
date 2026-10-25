@@ -27,13 +27,68 @@ pub struct Source {
 /// A player's avatar, as saved and sent. Parts are named by the part chosen
 /// (`hat: "helmet"`, `accent: "visor"`), never by position in the pack's
 /// lists, so adding or reordering parts keeps everyone's avatar.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Appearance {
     pub parts: BTreeMap<String, String>,
     pub colors: BTreeMap<String, [f32; 4]>,
     pub face: String,
     pub decal: String,
+    /// How the host dresses an Add-On's own body (`set_body_dress`); never
+    /// taken from a client.
+    #[serde(default, skip_serializing_if = "Dress::is_empty")]
+    pub dress: Dress,
+}
+/// What one player of an Add-On's body wears over what its archetype draws:
+/// a texture in place of a material's, and a drawn size. One body then
+/// serves many looks (a crowd of soldiers in different uniforms).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dress {
+    /// Material name of the body's model to a texture, an image file of the
+    /// same Add-On's assets (`face` to `face_3.png`), each in place of the
+    /// material's own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skins: BTreeMap<String, String>,
+    /// How much bigger or smaller the body is drawn than it is (AA's
+    /// `DrawScale`); what it collides with and how it moves do not change.
+    #[serde(default = "Dress::whole", skip_serializing_if = "Dress::is_whole")]
+    pub scale: f32,
+}
+impl Default for Dress {
+    fn default() -> Self {
+        Self {
+            skins: BTreeMap::new(),
+            scale: Self::whole(),
+        }
+    }
+}
+impl Dress {
+    /// Most materials one dress re-textures.
+    pub const MAX_SKINS: usize = 16;
+    /// The drawn sizes a dress may ask for.
+    pub const SCALES: std::ops::RangeInclusive<f32> = 0.2..=5.0;
+    fn whole() -> f32 {
+        1.0
+    }
+    fn is_whole(scale: &f32) -> bool {
+        *scale == Self::whole()
+    }
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+    /// Whether the dress is within what a host may send and a client draw.
+    pub fn valid(&self) -> bool {
+        let name = |n: &str, most: usize| {
+            !n.is_empty() && n.len() <= most && n.is_ascii() && !n.chars().any(char::is_control)
+        };
+        self.skins.len() <= Self::MAX_SKINS
+            && self
+                .skins
+                .iter()
+                .all(|(material, file)| name(material, 64) && name(file, 160))
+            && Self::SCALES.contains(&self.scale)
+    }
 }
 impl Appearance {
     /// The colour of the avatar slot a masked tint names
@@ -56,6 +111,7 @@ impl Appearance {
                     && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))),
             "Invalid avatar appearance bounds"
         );
+        ensure!(self.dress.valid(), "Invalid avatar dress");
         Ok(())
     }
 }
@@ -148,6 +204,7 @@ impl TryFrom<PackageFile> for Package {
                 colors: file.defaults.colors,
                 face: file.defaults.face,
                 decal: file.defaults.decal,
+                dress: Default::default(),
             },
         })
     }
@@ -291,6 +348,7 @@ impl Package {
             colors: BTreeMap::new(),
             face: appearance.face.clone(),
             decal: appearance.decal.clone(),
+            dress: Dress::default(),
         };
         let known = |slot: &str, name: &str| {
             self.parts
@@ -602,6 +660,7 @@ mod tests {
                 colors,
                 face: "smiley".into(),
                 decal: "AAA-None".into(),
+                dress: Default::default(),
             },
         }
     }
@@ -622,6 +681,7 @@ mod tests {
             ]),
             face: "AddOnFace".into(),
             decal: "AAA-None".into(),
+            dress: Default::default(),
         };
         // Before: one unknown part refused the whole avatar.
         assert!(package.resolve(&wanted).is_err());

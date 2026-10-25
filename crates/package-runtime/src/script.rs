@@ -3554,6 +3554,47 @@ fn register_presentation(engine: &mut Engine) {
             decal,
         }))
     });
+    // A body's dress: #{ skins: #{ face: "face_3.png", shirt: "shirt_1.png" },
+    // scale: 1.12 }, or () for the body's own again.
+    engine.register_fn("set_body_dress", |player: Dynamic, look: Dynamic| {
+        let mut dress = bri_content::avatar::Dress::default();
+        if !look.is_unit() {
+            let Some(look) = look.try_cast::<Map>() else {
+                return fail(
+                    "set_body_dress takes #{ skins: #{ material: file }, scale: n } or ()",
+                );
+            };
+            for (key, value) in look {
+                match key.as_str() {
+                    "skins" => {
+                        let Some(skins) = value.try_cast::<Map>() else {
+                            return fail("skins is #{ material: image file }");
+                        };
+                        for (material, file) in skins {
+                            let file = file
+                                .into_string()
+                                .map_err(|_| "a skin is the name of an image file")?;
+                            dress.skins.insert(material.to_string(), file);
+                        }
+                    }
+                    "scale" => {
+                        dress.scale = value
+                            .as_float()
+                            .or_else(|_| value.as_int().map(|i| i as f64))
+                            .map_err(|_| "scale is a number")?
+                            as f32;
+                    }
+                    k => {
+                        return fail(format!("`{k}` is not skins or scale"));
+                    }
+                }
+            }
+        }
+        push(Op::SetBodyDress(ops::SetBodyDress {
+            player: id(&player)?,
+            dress,
+        }))
+    });
     // temp_look(player, look, seconds): for a while every colour slot
     // #{ color: [r, g, b, a] } or palette colour #{ paint: n } (and no
     // decal), a face #{ face: "name" },
@@ -4343,27 +4384,57 @@ impl Runtime {
             let Some(behaviour) = &package.behaviour else {
                 continue;
             };
-            let Some(source) = package.script_source() else {
+            let sources = package.script_sources();
+            if sources.is_empty() {
+                continue;
+            }
+            // Each file compiles on its own, so a problem names its file and
+            // line; the files then load as one script.
+            let mut combined: Option<AST> = None;
+            let mut defined: BTreeMap<(String, usize), &str> = BTreeMap::new();
+            for (file, source) in sources {
+                let part = match runtime.engine.compile(source) {
+                    Ok(ast) => ast,
+                    Err(e) => {
+                        let at = match e.1.line() {
+                            Some(line) => format!("{}:{line}", location(id, file)),
+                            None => location(id, file),
+                        };
+                        problems.push(Diagnostic::error("script.syntax", e.0.to_string()).at(at));
+                        continue;
+                    }
+                };
+                if !part.statements().is_empty() {
+                    problems.push(
+                        Diagnostic::error("script.top_level", "scripts may only define functions")
+                            .at(location(id, file))
+                            .hint("move top-level statements into a function; keep constants in behaviour state"),
+                    );
+                }
+                for f in part.iter_functions() {
+                    if let Some(first) = defined.insert((f.name.to_string(), f.params.len()), file)
+                    {
+                        problems.push(
+                            Diagnostic::error(
+                                "script.duplicate_function",
+                                format!(
+                                    "`fn {}` with {} parameter(s) is defined in both {first} and {file}",
+                                    f.name,
+                                    f.params.len()
+                                ),
+                            )
+                            .at(location(id, file)),
+                        );
+                    }
+                }
+                combined = Some(match combined {
+                    Some(whole) => whole.merge(&part),
+                    None => part,
+                });
+            }
+            let Some(ast) = combined else {
                 continue;
             };
-            let ast = match runtime.engine.compile(source) {
-                Ok(ast) => ast,
-                Err(e) => {
-                    let at = match e.1.line() {
-                        Some(line) => format!("{}:{line}", location(id, &behaviour.script)),
-                        None => location(id, &behaviour.script),
-                    };
-                    problems.push(Diagnostic::error("script.syntax", e.0.to_string()).at(at));
-                    continue;
-                }
-            };
-            if !ast.statements().is_empty() {
-                problems.push(
-                    Diagnostic::error("script.top_level", "scripts may only define functions")
-                        .at(location(id, &behaviour.script))
-                        .hint("move top-level statements into a function; keep constants in behaviour state"),
-                );
-            }
             let has = |name: &str, arity: usize| {
                 ast.iter_functions()
                     .any(|f| f.name == name && f.params.len() == arity)
@@ -4859,6 +4930,16 @@ pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i6
         out.push(item);
     }
     Ok(out)
+}
+
+fn sound(profile: &str, at: SoundAt, volume: f32, pitch: f32, radius: f32) -> ops::Sound {
+    ops::Sound {
+        profile: profile.into(),
+        at,
+        volume,
+        pitch,
+        radius,
+    }
 }
 
 #[cfg(test)]

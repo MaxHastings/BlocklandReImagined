@@ -26,6 +26,15 @@ A rule is a `behaviour` file and a Rhai `script`, both listed in
 }
 ```
 
+**Several script files.** A script file holds at most 256 KiB. A rule that
+needs more splits into files and lists the extra ones in `"modules"`
+(`["spawns.rhai", "waves.rhai"]`, at most 32), each also in `provides` as a
+`script`. They load together with `script` as one script: a function in any
+file calls any other, and a hook may live in whichever file defines it.
+Each file keeps the size limit, a name defined in two files (same parameter
+count) is refused naming both, and `/reloadrules` re-reads all of them.
+Several Add-Ons can also split work between them by exports and events.
+
 **Hooks.** A script may only define functions; top-level statements are
 refused. The engine calls:
 
@@ -580,10 +589,10 @@ needs no client code. `panel` is `#{ id, title, width, height, items }`,
 
 | `kind` | Fields |
 |---|---|
-| `"text"` | `text`: lines of plain text (no markup), up to 1024 characters |
-| `"list"` | `id`, `rows` (up to 256 lines of 96 characters), `selected` (a row or `()`), `height` (40 to 400, default 120), `drag` (`true`: rows can be dragged to another list with `drag`, or to another place in this one) |
+| `"text"` | `text`: lines of plain text (no markup), up to 1024 characters; optional `size` (6 to 72), `font` (a face of the game's fonts, `arial`, `impact`; one it lacks falls back), `color` (RGBA 0..1), `align` (`"left"`, `"center"`, `"right"`) and `height` (40 to 400: a box that long, scrolling when the lines are taller) |
+| `"list"` | `id`, `rows` (up to 256 lines of 96 characters), `selected` (a row or `()`), `height` (40 to 400, default 120), `drag` (`true`: rows can be dragged to another list with `drag`, or to another place in this one), `columns` (up to 8 rising pixel starts, `[0, 120, 200]`: a row's cells are then separated by tabs) and `icons` (an Add-On texture per row, `""` for none, drawn at the left of the row before its first cell) |
 | `"field"` | `id`, `label`, `text` to start with, `max` characters (1 to 256, default 64) |
-| `"buttons"` | `buttons`: up to 6 `#{ id, label }`, each optionally with `texture` (an Add-On picture `package:texture/name` in place of the stock button), `hover_texture` (while the pointer is over it, default `texture`), `color` (the caption's RGBA 0..1) and `x`, `y`, `w`, `h` (its own place in the panel; without them it takes the next place in its row) |
+| `"buttons"` | `buttons`: up to 6 `#{ id, label }`, each optionally with `texture` (an Add-On picture `package:texture/name` in place of the stock button), `hover_texture` (while the pointer is over it, default `texture`), `color` (the caption's RGBA 0..1), `x`, `y`, `w`, `h` (its own place in the panel; without them it takes the next place in its row) and `action` (`"settings"` opens Options, `"disconnect"` leaves the game, `"quit"` quits: the client does it and the rules get no event) |
 | `"image"` | `texture` (`package:texture/name`), `x`, `y`, `w`, `h` (its place and size inside the panel, from its top-left corner; it takes no room in the top-to-bottom flow and draws in item order), optional `tint` (RGBA 0..1) |
 
 Textures are images of the Add-On that shows the panel; one that cannot be
@@ -1297,6 +1306,16 @@ the pack's choices in v20's order, a slot's list (`hat`, `face`, `decal`)
 and each hat's accents (`accents.helmet`), so a rule reading v20's list
 positions (`$pref::Avatar::Hat` 6) finds the part. Both last across
 respawns until the rule changes them.
+`set_body_dress(p, #{ skins: #{ face: "face_3.png", shirt: "shirt_1.png" },
+scale: 1.12 })` (`player`) dresses a player whose archetype draws an Add-On's
+own body: each `skins` entry lays an image file of the body's package (its
+`assets`, `.png`) over the model's material of that name, so one body serves
+many uniforms, and `scale` (0.2 to 5) draws the body bigger or smaller without
+changing what it collides with or how fast it moves (AA's `DrawScale`).
+A name the body or its package lacks is named in the Add-On faults log and the
+material keeps its texture. `set_body_dress(p, ())` gives the body its own
+again. It lasts across respawns until the rule changes it, and a client's own
+avatar never carries one.
 
 **Filling.** `paint_fill(p, brick, color, limit)` paints `brick` and every
 brick of the same colour joined to it through shared faces (side by side,

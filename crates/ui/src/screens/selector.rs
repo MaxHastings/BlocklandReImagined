@@ -1053,6 +1053,7 @@ mod tests {
             region: bri_content::hud::Region::Building,
             pixelated: false,
             items: vec![],
+            basis: None,
             name_tags: None,
         });
         assert!(ui.core.building_off());

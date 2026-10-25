@@ -893,6 +893,9 @@ struct Peer {
     /// Parts, face and decal an Add-On dresses the avatar in over the
     /// player's own (`set_avatar_parts`): a team's full uniform.
     uniform_parts: Option<UniformParts>,
+    /// What an Add-On puts on the player's own body model (`set_body_dress`):
+    /// other skins and a drawn size.
+    dress: bri_content::avatar::Dress,
     /// `%client.currentColor`: the palette index of the last colour spray
     /// can picked (index 0 until one is).
     current_color: u8,
@@ -984,6 +987,7 @@ impl Peer {
             temp_look: None,
             uniform: BTreeMap::new(),
             uniform_parts: None,
+            dress: Default::default(),
             current_color: 0,
             fx_can: None,
             talking: false,
@@ -1421,6 +1425,7 @@ impl Session {
                 if let Some(temp) = &p.temp_color {
                     temp.apply(&mut avatar);
                 }
+                avatar.dress = p.dress.clone();
                 Some((*id, avatar))
             })
             .collect()

@@ -690,6 +690,12 @@ pub(super) fn archetype(
     if let Some(v) = def.locomotion_pick {
         archetype.look.locomotion_pick = v;
     }
+    if let Some(v) = def.corpse_seconds {
+        archetype.look.corpse_seconds = v;
+    }
+    if let Some(v) = def.corpse_fade {
+        archetype.look.corpse_fade = v;
+    }
     if let Some(v) = def.uses_items {
         archetype.uses_items = v;
     }
@@ -4176,12 +4182,14 @@ impl Session {
         let mut changed = Vec::new();
         let mut problems = Vec::new();
         for (id, package) in &mut catalog.packages {
-            match package.reread_script() {
-                Ok(Some(source)) => {
-                    package.set_script(source);
+            match package.reread_scripts() {
+                Ok(files) if files.is_empty() => {}
+                Ok(files) => {
+                    for (file, source) in files {
+                        package.set_script(&file, source);
+                    }
                     changed.push(id.clone());
                 }
-                Ok(None) => {}
                 Err(problem) => {
                     problems.push(Diagnostic::error("script.reload", problem).at(id.clone()));
                 }

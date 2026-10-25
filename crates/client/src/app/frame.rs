@@ -1118,7 +1118,8 @@ impl App {
                 .avatar_actions
                 .retain(|owner, _| view.poses.contains_key(owner));
             // Corpses past their timeout are no longer drawn.
-            let gone = self.combat.hidden_bodies(&view.vitals);
+            let corpses = CombatPresentation::corpse_opacities(view);
+            let gone = CombatPresentation::hidden_bodies(view);
             let avatars_span = crate::frame_trace::span("avatars");
             for (owner, player) in presented {
                 let appearance = view
@@ -1255,6 +1256,13 @@ impl App {
                 self.avatar.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = life.is_some_and(|life| life.dead);
                 self.avatar.avatars.get_mut(owner).unwrap().set_dead(dead);
+                // A dead body fades out over its last `corpse_fade` seconds.
+                let opacity = corpses.get(owner).copied().flatten().unwrap_or(1.0);
+                self.avatar
+                    .avatars
+                    .get_mut(owner)
+                    .unwrap()
+                    .set_opacity(opacity);
                 // Only the player's own first-person image follows the arm.
                 self.avatar.avatars.get_mut(owner).unwrap().wants_unacted = *owner == view.owner;
                 // `Armor::onMount` applies the mount's look limits; the Tank's

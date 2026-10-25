@@ -1457,7 +1457,7 @@ fn panel_view(
     catalog: Option<&bri_package_runtime::Catalog>,
     textures: &mut crate::panel_textures::PanelTextures,
 ) -> bri_ui::api::PanelView {
-    use bri_package_runtime::panel::PanelKind;
+    use bri_package_runtime::panel::{PanelAction, PanelAlign, PanelKind};
     use bri_ui::api::{PanelBackgroundView, PanelButtonView, PanelItemView};
     let panel = shown.panel;
     let package = shown.package;
@@ -1480,13 +1480,28 @@ fn panel_view(
         .map(|item| {
             let max = item.max_chars();
             match item.kind {
-                PanelKind::Text => PanelItemView::Text(item.text),
+                PanelKind::Text => PanelItemView::Text {
+                    text: item.text,
+                    style: bri_ui::api::PanelTextView {
+                        size: item.size,
+                        font: Some(item.font).filter(|f| !f.is_empty()),
+                        color: item.color,
+                        align: match item.align.unwrap_or_default() {
+                            PanelAlign::Left => bri_ui::api::PanelAlign::Left,
+                            PanelAlign::Center => bri_ui::api::PanelAlign::Center,
+                            PanelAlign::Right => bri_ui::api::PanelAlign::Right,
+                        },
+                        height: item.height,
+                    },
+                },
                 PanelKind::List => PanelItemView::List {
                     id: item.id,
                     rows: item.rows,
                     selected: item.selected,
                     height: item.height.unwrap_or(120),
                     drag: item.drag,
+                    columns: item.columns,
+                    icons: item.icons.iter().map(|i| picture(i)).collect(),
                 },
                 PanelKind::Field => PanelItemView::Field {
                     id: item.id,
@@ -1512,6 +1527,11 @@ fn panel_view(
                                 picture: normal,
                                 hover_picture: hover,
                                 color: b.color,
+                                action: b.action.map(|a| match a {
+                                    PanelAction::Settings => bri_ui::api::PanelAction::Settings,
+                                    PanelAction::Disconnect => bri_ui::api::PanelAction::Disconnect,
+                                    PanelAction::Quit => bri_ui::api::PanelAction::Quit,
+                                }),
                             }
                         })
                         .collect(),

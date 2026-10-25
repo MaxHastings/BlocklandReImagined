@@ -8,7 +8,6 @@ pub(super) struct CombatPresentation {
     pub(super) alive: Option<bool>,
     pub(super) health: f32,
     pub(super) countdown: Option<u64>,
-    pub(super) died_at: std::collections::BTreeMap<bri_world::OwnerId, std::time::Instant>,
     pub(super) lights: std::collections::BTreeMap<bri_world::OwnerId, bool>,
     /// `/hug` and `/zombie`: `playThread(1, armReadyBoth)` holds until the
     /// arms change again (`Player::updateArm`, `fixArms`, unequip), kept
@@ -100,18 +99,37 @@ impl CombatPresentation {
         }
         crate::avatar::HeldToolPose::Both
     }
-    /// Corpses disappear after `$CorpseTimeoutValue` (5 s).
-    pub(super) fn hidden_bodies(
-        &self,
-        vitals: &std::collections::BTreeMap<bri_world::OwnerId, bri_sim::session::Vitals>,
-    ) -> std::collections::BTreeSet<bri_world::OwnerId> {
-        self.died_at
+    /// How much of each dead body still shows, by owner: `None` when its
+    /// archetype's `corpse_seconds` are up, below 1 while it fades out
+    /// (`Look::corpse_fade`). Living bodies are not listed.
+    pub(super) fn corpse_opacities(
+        view: &crate::network::View,
+    ) -> std::collections::BTreeMap<bri_world::OwnerId, Option<f32>> {
+        view.vitals
             .iter()
-            .filter(|(owner, at)| {
-                vitals.get(owner).is_some_and(|v| !v.alive)
-                    && at.elapsed() >= Duration::from_secs(5)
+            .filter(|(_, vitals)| !vitals.alive)
+            .filter_map(|(owner, vitals)| {
+                let died = vitals.died_tick?;
+                let archetype = view.poses.get(owner)?.player.archetype;
+                let lying = view.tick.saturating_sub(died) as f32 / bri_weapons::TICK_HZ as f32;
+                Some((
+                    *owner,
+                    view.archetypes
+                        .resolve(archetype)
+                        .look
+                        .corpse_opacity(lying),
+                ))
             })
-            .map(|(owner, _)| *owner)
+            .collect()
+    }
+    /// Corpses past their archetype's time (v20's `$CorpseTimeoutValue`,
+    /// 5 s, unless it sets `corpse_seconds`) are no longer drawn.
+    pub(super) fn hidden_bodies(
+        view: &crate::network::View,
+    ) -> std::collections::BTreeSet<bri_world::OwnerId> {
+        Self::corpse_opacities(view)
+            .into_iter()
+            .filter_map(|(owner, opacity)| opacity.is_none().then_some(owner))
             .collect()
     }
 }
@@ -144,13 +162,6 @@ impl App {
             updates.push(UiUpdate::Energy(energy));
         }
         for (owner, vitals) in &view.vitals {
-            if !vitals.alive {
-                c.died_at
-                    .entry(*owner)
-                    .or_insert_with(std::time::Instant::now);
-            } else {
-                c.died_at.remove(owner);
-            }
             let previous = c.lights.insert(*owner, vitals.light);
             if previous.is_some_and(|old| old != vitals.light)
                 && let Some(pose) = view.poses.get(owner)
@@ -165,7 +176,6 @@ impl App {
                 );
             }
         }
-        c.died_at.retain(|owner, _| view.vitals.contains_key(owner));
         c.lights.retain(|owner, _| view.vitals.contains_key(owner));
         if let Some(local) = view.vitals.get(&view.owner) {
             if local.alive {

@@ -30,6 +30,12 @@ pub const PANEL_WIDTH: std::ops::RangeInclusive<u16> = 160..=640;
 pub const PANEL_HEIGHT: std::ops::RangeInclusive<u16> = 100..=480;
 /// Longest texture id.
 pub const MAX_PANEL_TEXTURE: usize = 160;
+/// A text item's font size, in points of the game's bitmap fonts.
+pub const PANEL_TEXT_SIZE: std::ops::RangeInclusive<u8> = 6..=72;
+/// Longest font face name.
+pub const MAX_PANEL_FACE: usize = 32;
+/// Most columns a list has.
+pub const MAX_PANEL_COLUMNS: usize = 8;
 
 /// A window the rules show a player.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,6 +124,28 @@ pub enum PanelKind {
     Image,
 }
 
+/// Where a text item's lines sit in its width.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// A thing a button does in the client itself, with no event to the rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelAction {
+    /// Open the Options window.
+    Settings,
+    /// Leave the game, or stop hosting it.
+    Disconnect,
+    /// Quit the application.
+    Quit,
+}
+
 /// One item of a panel. Which fields mean anything depends on its `kind`;
 /// the rest stay at their defaults.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -139,9 +167,34 @@ pub struct PanelItem {
     /// A list's picked row.
     #[serde(default)]
     pub selected: Option<u16>,
-    /// A list's height (default 120).
+    /// A list's height (default 120). A text item with one is a box that
+    /// scrolls when its lines are taller.
     #[serde(default)]
     pub height: Option<u16>,
+    /// A text item's font size (`PANEL_TEXT_SIZE`; default the panel's own).
+    #[serde(default)]
+    pub size: Option<u8>,
+    /// A text item's font face, as the game's fonts are named (`arial`,
+    /// `impact`); one it does not have falls back to the default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub font: String,
+    /// A text item's RGBA 0..1 colour (default the panel's own).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "rgba"
+    )]
+    pub color: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<PanelAlign>,
+    /// A list's column starts in pixels from its left; a row's cells are
+    /// then separated by tabs. At most `MAX_PANEL_COLUMNS`, rising.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<u16>,
+    /// A list's row pictures, one Add-On texture id per row (empty: none),
+    /// drawn at the left of the row before its cells.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icons: Vec<String>,
     /// A field's most characters (default 64).
     #[serde(default)]
     pub max: Option<u16>,
@@ -189,6 +242,9 @@ pub struct PanelButton {
         deserialize_with = "rgba"
     )]
     pub color: Option<[f32; 4]>,
+    /// What pressing it does in the client instead of an event to the rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<PanelAction>,
     /// Where the button sits in the panel and how big it is, as an image
     /// does; without them it takes the next place in its row.
     #[serde(default)]
@@ -299,6 +355,19 @@ impl PanelItem {
                 self.kind
             ));
         }
+        let styled = self.size.is_some()
+            || !self.font.is_empty()
+            || self.color.is_some()
+            || self.align.is_some();
+        if self.kind != PanelKind::Text && styled {
+            return Some(format!(
+                "a {:?} item has no size, font, color or align",
+                self.kind
+            ));
+        }
+        if self.kind != PanelKind::List && (!self.columns.is_empty() || !self.icons.is_empty()) {
+            return Some(format!("a {:?} item has no columns or icons", self.kind));
+        }
         let unused =
             |what: &str, set: bool| set.then(|| format!("a {:?} item has no {what}", self.kind));
         let no_id = || (!self.id.is_empty()).then(|| format!("a {:?} item has no id", self.kind));
@@ -308,6 +377,35 @@ impl PanelItem {
                 .or_else(|| unused("label", !self.label.is_empty()))
                 .or_else(|| unused("rows", !self.rows.is_empty()))
                 .or_else(|| unused("buttons", !self.buttons.is_empty()))
+                .or_else(|| {
+                    self.size
+                        .is_some_and(|s| !PANEL_TEXT_SIZE.contains(&s))
+                        .then(|| {
+                            format!(
+                                "a text size is {} to {}",
+                                PANEL_TEXT_SIZE.start(),
+                                PANEL_TEXT_SIZE.end()
+                            )
+                        })
+                })
+                .or_else(|| {
+                    (self.font.len() > MAX_PANEL_FACE
+                        || !self
+                            .font
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'_' | b'-')))
+                    .then(|| format!("a font is up to {MAX_PANEL_FACE} letters, digits, spaces, _ and -"))
+                })
+                .or_else(|| {
+                    self.color
+                        .is_some_and(|c| !colour(&c))
+                        .then(|| "a text colour is RGBA 0..1".into())
+                })
+                .or_else(|| {
+                    self.height
+                        .is_some_and(|h| !(40..=400).contains(&h))
+                        .then(|| "a scrolling text box is 40 to 400 tall".into())
+                })
                 .or_else(|| {
                     (self.text.chars().count() > MAX_PANEL_TEXT
                         || self.text.chars().any(|c| c.is_control() && c != '\n'))
@@ -319,8 +417,24 @@ impl PanelItem {
                 .or_else(|| unused("buttons", !self.buttons.is_empty()))
                 .or_else(|| {
                     (self.rows.len() > MAX_PANEL_ROWS
-                        || !self.rows.iter().all(|r| line(r, MAX_PANEL_LINE)))
-                    .then(|| format!("a list has at most {MAX_PANEL_ROWS} rows of {MAX_PANEL_LINE} characters"))
+                        || !self.rows.iter().all(|r| {
+                            // A tab ends a cell, as many as the list has columns.
+                            let cells = r.split('\t').count();
+                            cells <= self.columns.len().max(1)
+                                && r.split('\t').all(|cell| line(cell, MAX_PANEL_LINE))
+                        }))
+                    .then(|| format!("a list has at most {MAX_PANEL_ROWS} rows of {MAX_PANEL_LINE} characters, tab-separated into at most its columns"))
+                })
+                .or_else(|| {
+                    (self.columns.len() > MAX_PANEL_COLUMNS
+                        || self.columns.windows(2).any(|w| w[0] >= w[1])
+                        || self.columns.iter().any(|c| *c > *PANEL_WIDTH.end()))
+                    .then(|| format!("a list has up to {MAX_PANEL_COLUMNS} rising column starts within the panel"))
+                })
+                .or_else(|| {
+                    (self.icons.len() > self.rows.len()
+                        || self.icons.iter().any(|i| !i.is_empty() && !is_texture_id(i)))
+                    .then(|| "a list has at most one icon per row, each an Add-On texture id".into())
                 })
                 .or_else(|| {
                     self.selected
@@ -598,6 +712,48 @@ mod tests {
         let mut p = shop();
         p.items[0].drag = true;
         assert!(p.problem().unwrap().contains("no drag"));
+    }
+
+    #[test]
+    fn text_looks_columns_icons_and_button_actions_are_bounded() {
+        let panel = |item: serde_json::Value| -> Panel {
+            serde_json::from_value(serde_json::json!({ "id": "menu", "items": [item] })).unwrap()
+        };
+        let ok = panel(
+            serde_json::json!({ "kind": "text", "text": "Orders", "size": 18,
+            "font": "impact", "color": [1, 0, 0, 1], "align": "center", "height": 60 }),
+        );
+        assert_eq!(ok.problem(), None);
+        let list = panel(
+            serde_json::json!({ "kind": "list", "id": "team", "columns": [0, 100],
+            "rows": ["Ann\tRifleman", "Bo"], "icons": ["a:texture/x", ""] }),
+        );
+        assert_eq!(list.problem(), None);
+        let button = panel(serde_json::json!({ "kind": "buttons", "buttons": [
+            { "id": "quit", "label": "Quit", "action": "quit" }] }));
+        assert_eq!(button.problem(), None);
+        for bad in [
+            serde_json::json!({ "kind": "text", "size": 2 }),
+            serde_json::json!({ "kind": "text", "size": 100 }),
+            serde_json::json!({ "kind": "text", "font": "no/slash" }),
+            serde_json::json!({ "kind": "text", "color": [2, 0, 0, 1] }),
+            serde_json::json!({ "kind": "text", "height": 10 }),
+            serde_json::json!({ "kind": "field", "id": "f", "size": 12 }),
+            serde_json::json!({ "kind": "field", "id": "f", "columns": [0] }),
+            serde_json::json!({ "kind": "list", "id": "l", "rows": ["a\tb"] }),
+            serde_json::json!({ "kind": "list", "id": "l", "columns": [10, 10] }),
+            serde_json::json!({ "kind": "list", "id": "l", "columns": [0, 1, 2, 3, 4, 5, 6, 7, 8] }),
+            serde_json::json!({ "kind": "list", "id": "l", "rows": ["a"], "icons": ["", ""] }),
+            serde_json::json!({ "kind": "list", "id": "l", "rows": ["a"], "icons": ["not a texture"] }),
+        ] {
+            assert!(panel(bad.clone()).problem().is_some(), "{bad}");
+        }
+        // Only the three client actions exist.
+        assert!(
+            serde_json::from_value::<Panel>(serde_json::json!({ "id": "menu", "items": [
+                { "kind": "buttons", "buttons": [{ "id": "x", "label": "X", "action": "format_disk" }] }] }))
+            .is_err()
+        );
     }
 
     #[test]
