@@ -652,6 +652,23 @@ impl ScriptOp for SetImageState {
     }
 }
 
+/// Take the tool in inventory slot `slot` out (or put tools away with
+/// `None`), as the player's own number key would: the one in hand is put
+/// down first when its image says so. A rule's swap key between two long
+/// arms is this.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectTool {
+    pub player: u64,
+    pub slot: Option<u8>,
+}
+impl ScriptOp for SelectTool {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "select_tool";
+    fn bounded(&self) -> bool {
+        self.slot.is_none_or(|s| s < 16)
+    }
+}
+
 /// Use a carried item once without switching to it for good: take it out,
 /// pull its trigger until it fires (a thrown grenade, a quick heal), then
 /// put the item held before back in hand.

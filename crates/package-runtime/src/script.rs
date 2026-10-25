@@ -3865,6 +3865,21 @@ fn register_presentation(engine: &mut Engine) {
             state: state.into(),
         }))
     });
+    // Take the tool in a slot out, or () to put tools away.
+    engine.register_fn("select_tool", |player: Dynamic, slot: Dynamic| {
+        let slot = if slot.is_unit() {
+            None
+        } else {
+            Some(
+                u8::try_from(slot.as_int().map_err(|_| "a slot is a number")?)
+                    .map_err(|_| "a slot is 0 to 15")?,
+            )
+        };
+        push(Op::SelectTool(ops::SelectTool {
+            player: id(&player)?,
+            slot,
+        }))
+    });
     engine.register_fn("quick_use", |player: Dynamic, item: &str| {
         push(Op::QuickUse(ops::QuickUse {
             player: id(&player)?,

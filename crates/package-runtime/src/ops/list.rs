@@ -162,6 +162,7 @@ macro_rules! for_each_op {
             Reload = player,
             SetImageState = player,
             QuickUse = player,
+            SelectTool = player,
             SetImageAmmo = player,
             SetImageLoaded = player,
             SetAimScale = player,

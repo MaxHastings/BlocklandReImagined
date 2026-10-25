@@ -615,6 +615,12 @@ impl Perform for ops::SetImageState {
             .set_state(bri_weapons::ActorId(player), &state)
     }
 }
+impl Perform for ops::SelectTool {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SelectTool { player, slot } = self;
+        session.equip_tool(player, slot.map(usize::from))
+    }
+}
 impl Perform for ops::QuickUse {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::QuickUse { player, item } = self;
