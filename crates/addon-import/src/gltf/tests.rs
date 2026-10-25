@@ -1007,6 +1007,121 @@ fn projector_pictures_are_copied_and_listed_in_the_bundle() {
     assert!(check.ok, "{check} {:?}", report.warnings);
 }
 
+#[test]
+fn a_projector_node_bakes_a_decal_the_way_a_games_projector_makes_one() {
+    use bri_content::decals::{Blend, DecalSet};
+    use bri_effects_render::projector_runtime::{
+        MakeOptions, Placement, ProjectorReceivers, ProjectorSpec, make_decal,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    // A box 2 wide, 6 deep, thrown straight down from 3 above the floor (glTF -Z turned to -Y).
+    std::fs::write(
+        &input,
+        super::testing::room_with(false, "Floor", |g| {
+            g.node(
+                json!({ "name": "Shadow", "translation": [1.0, 3.0, -2.0],
+                    "rotation": Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2).to_array(),
+                    "extras": { "bri_projector": { "picture": "blob.png", "reach": 6.0, "width": 2.0,
+                        "blend": "alpha", "backfaces": true } } }),
+                None,
+            );
+        }),
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("blob.png"),
+        bri_content::testing::png(8, 4, |_, _| [10, 20, 30, 255]).unwrap(),
+    )
+    .unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    let report = import(&opts).unwrap();
+    let out = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(out.join("map/bundle.json")).unwrap()).unwrap();
+    let file = bundle["decals"]["test_room:map/test_room"]
+        .as_str()
+        .unwrap();
+    let back: DecalSet =
+        serde_json::from_slice(&std::fs::read(out.join("map").join(file)).unwrap()).unwrap();
+    assert_eq!(back.decals.len(), 1);
+    let decal = &back.decals[0];
+    assert!(out.join("map").join(&decal.picture).is_file());
+    assert_eq!(decal.blend, Blend::Alpha);
+    // The same decal a game's projector makes at that place with the lengths scaled by 2 and glTF's x and z flipped to native.
+    let spec = ProjectorSpec {
+        picture: "blob.png".into(),
+        fov_degrees: 0.0,
+        reach: 12.0,
+        width: 4.0,
+        spin_degrees_per_second: 0.0,
+        receivers: ProjectorReceivers {
+            backfaces: true,
+            ..ProjectorReceivers::default()
+        },
+        blend: bri_effects_render::projector_runtime::ProjectorBlend::Alpha,
+    };
+    let want = make_decal(
+        &spec,
+        &Placement {
+            position: [-2.0, 6.0, 4.0],
+            direction: [0.0, -1.0, 0.0],
+            roll_degrees: 0.0,
+        },
+        (8, 4),
+        &decal.picture,
+        MakeOptions {
+            bake_spin: true,
+            widen_for_turn: true,
+        },
+    )
+    .unwrap();
+    for (a, b) in decal.world_to_texture.iter().zip(want.world_to_texture) {
+        assert!(
+            (a - b).abs() < 1e-3,
+            "{:?} {:?}",
+            decal.world_to_texture,
+            want.world_to_texture
+        );
+    }
+    assert_eq!(decal.bounds.is_some(), want.bounds.is_some());
+    let check = bri_package_runtime::check::check(&out);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+}
+
+#[test]
+fn a_projector_node_without_its_picture_or_with_a_bad_reach_fails_plainly() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    let build = |spec: Value| {
+        std::fs::write(
+            &input,
+            super::testing::room_with(false, "Floor", |g| {
+                g.node(
+                    json!({ "name": "Shadow", "extras": { "bri_projector": spec } }),
+                    None,
+                );
+            }),
+        )
+        .unwrap();
+        import(&Options::new(&input, root.path().join("out"), Kind::Map))
+            .unwrap_err()
+            .to_string()
+    };
+    assert!(build(json!({ "picture": "none.png", "reach": 1.0, "width": 1.0 })).contains("Shadow"));
+    std::fs::write(
+        root.path().join("a.png"),
+        bri_content::testing::png(2, 2, |_, _| [0; 4]).unwrap(),
+    )
+    .unwrap();
+    assert!(build(json!({ "picture": "a.png", "reach": 0.0, "width": 1.0 })).contains("reach"));
+    assert!(
+        build(json!({ "picture": "a.png", "reach": 1.0, "width": 1.0, "speed": 3 }))
+            .contains("Shadow")
+    );
+}
+
 /// A one-layer lit-by-vertex mesh whose node names its lights (`mask` is the visibility mask of its one light).
 fn vertex_lit_import(mask: &str) -> Vec<[f32; 4]> {
     let mut g = super::testing::Gltf::new();

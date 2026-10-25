@@ -359,6 +359,7 @@ dependencies = [
  "bri-console",
  "bri-content",
  "bri-convert",
+ "bri-effects-render",
  "bri-foliage",
  "bri-minigames",
  "bri-net",

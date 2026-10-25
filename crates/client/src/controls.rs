@@ -1297,6 +1297,9 @@ impl Controls {
         }
         let target = self.target_fov();
         let shown = self.fov_shown.get_or_insert(target);
+        if self.aim.as_ref().is_some_and(|a| a.instant) {
+            *shown = target;
+        }
         let step = ZOOM_DEGREES_PER_SECOND * seconds.clamped(0.0, 0.25);
         *shown += (target - *shown).clamped(-step, step);
         let shown = *shown;
@@ -2618,6 +2621,19 @@ mod tests {
         assert_eq!(c.zoom_level(), 2, "the wheel's step");
         settle(&mut c);
         assert!((c.fov() - 10.0).abs() < 0.01);
+    }
+    #[test]
+    fn an_instant_aim_snaps_the_view_in_and_out() {
+        let mut zoom = scope();
+        zoom.instant = true;
+        let mut c = Controls::default();
+        held(&mut c, HeldControl::Jet, true);
+        c.set_aim_in_state(Some(zoom), Some("Ready"));
+        c.advance_zoom(1.0 / 60.0);
+        assert!((c.fov() - 22.0).abs() < 1e-3, "{}", c.fov());
+        held(&mut c, HeldControl::Jet, false);
+        c.advance_zoom(1.0 / 60.0);
+        assert_eq!(c.fov(), 90.0);
     }
     #[test]
     fn the_held_image_keeps_its_own_field_through_a_zoom_and_back() {

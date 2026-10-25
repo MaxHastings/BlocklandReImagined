@@ -111,9 +111,9 @@ pub use admin::{
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{
-    AmbientPlay, DEATH_PROJECTILE, DeathPose, HeldAmmo, HitSide, InventoryAmmo, InventoryAmmoSlots,
-    KillLine, MAX_HEALTH, MiniGameRequest, MiniGameView, MusicPlay, Notice, SPAWN_PROJECTILE,
-    Vitals,
+    AmbientPlay, DEATH_PROJECTILE, DeathHit, DeathPose, HeldAmmo, HitSide, InventoryAmmo,
+    InventoryAmmoSlots, KillLine, MAX_HEALTH, MiniGameRequest, MiniGameView, MusicPlay, Notice,
+    SPAWN_PROJECTILE, Vitals,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
@@ -2596,17 +2596,17 @@ impl Session {
                 ensure!(!down || peer.combat.alive, "Dead players cannot fire");
                 // With nothing in hand (a tool switch an Add-On refused, or
                 // one not yet mounted) the trigger is the empty-hand one.
-                if peer.combat.alive
+                let ruled = peer.combat.alive
                     && self
                         .weapons
                         .image_state(bri_weapons::ActorId(owner), 0)
                         .is_none()
-                    && self.package_trigger(owner, 0, down)
-                {
-                    return Ok(Reply::Accepted);
-                }
+                    && self.package_trigger(owner, 0, down);
+                // A rule that takes the press still leaves the button held:
+                // an image mounted a moment later (the switch this press
+                // came behind) fires without a second click.
                 self.weapon_trigger(owner, down, direction, aim.is_some())?;
-                if down {
+                if down && !ruled {
                     self.note_shot(owner);
                 }
                 Ok(Reply::Accepted)

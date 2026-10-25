@@ -105,6 +105,7 @@ mod tests {
                 owner,
                 Some(owner),
                 super::super::combat::DamageKind::Suicide,
+                None,
             )
             .unwrap();
         let result = session.death_results().next_back().unwrap();
@@ -118,6 +119,7 @@ mod tests {
                 owner,
                 Some(owner),
                 super::super::combat::DamageKind::Suicide,
+                None,
             )
             .unwrap();
         assert_eq!(session.death_results().count(), 1);
@@ -130,7 +132,7 @@ mod tests {
                 .unwrap();
             session.apply_minigame_effects(effects).unwrap();
             session
-                .kill(owner, None, super::super::combat::DamageKind::Event)
+                .kill(owner, None, super::super::combat::DamageKind::Event, None)
                 .unwrap();
         }
         assert_eq!(session.death_results().count(), 64);

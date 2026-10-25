@@ -468,6 +468,9 @@ pub struct Climb {
     pub speed: f32,
     /// Whether the strafe keys move sideways along the rungs.
     pub strafe: bool,
+    /// The surface kind the rungs sound like to a climber's steps
+    /// (`bri_content::surface`), when the map names one.
+    pub surface: Option<String>,
 }
 
 #[cfg(test)]

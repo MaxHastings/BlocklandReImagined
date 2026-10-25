@@ -1857,6 +1857,10 @@ pub struct ArchetypeDef {
     /// the base's.
     #[serde(default)]
     pub deaths: Option<bri_content::body::Deaths>,
+    /// A body that goes limp when it dies, drawn on each screen only and
+    /// replacing its death clip (see the content kinds document: `ragdoll`).
+    #[serde(default)]
+    pub ragdoll: Option<bri_content::body::Ragdoll>,
     /// The model's clip for each of its movement controller's intents
     /// (`{"11": "triple"}`), replacing the base's.
     #[serde(default)]
@@ -1942,7 +1946,7 @@ pub struct ArchetypeSounds {
     /// The noise of landing from a fall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land_noise: Option<LandNoiseDef>,
-    /// A sound for entering each posture (`stand`, `crouch`, `prone`).
+    /// A sound for entering each posture (`stand`, `crouch`, `prone`, `climb`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub postures: BTreeMap<String, String>,
     /// Taking off in a jump sounds like a footfall on the surface underfoot.
@@ -1952,6 +1956,20 @@ pub struct ArchetypeSounds {
     /// and a mark (see the content kinds document: `contacts`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub contacts: BTreeMap<String, FootContactDef>,
+    /// Footfalls of their own in a posture (`prone`), in place of
+    /// `footsteps` and `surfaces` there.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub posture_steps: BTreeMap<String, PostureStepsDef>,
+}
+/// [`ArchetypeSounds::posture_steps`]: one posture's `footsteps` and
+/// `surfaces`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostureStepsDef {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footsteps: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, Vec<String>>,
 }
 /// [`ArchetypeSounds::land_noise`]: `factor` times the speed fallen over the
 /// larger of the body's jump speed and `jump_floor`.
@@ -1999,8 +2017,8 @@ pub struct StepEventDef {
     /// The body node that lands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foot: Option<String>,
-    /// Another sound source in place of the surface's footfall, with its
-    /// `volume` (0 to 4) and `radius`.
+    /// Another sound source in place of the surface's footfall. The footfall
+    /// is heard at `volume` (0 to 4) times its own out to `radius`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sound: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2086,6 +2104,9 @@ impl ArchetypeDef {
         if let Some(deaths) = &self.deaths {
             deaths.validate()?;
         }
+        if let Some(ragdoll) = &self.ragdoll {
+            ragdoll.validate()?;
+        }
         ensure!(
             self.max_time_scale
                 .is_none_or(|v| v.is_finite() && (0.1..=16.0).contains(&v)),
@@ -2140,6 +2161,21 @@ impl ArchetypeDef {
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
         );
         ensure!(
+            self.sounds.posture_steps.len() <= 4
+                && self.sounds.posture_steps.iter().all(|(posture, p)| {
+                    ["stand", "crouch", "prone", "climb"].contains(&posture.as_str())
+                        && p.footsteps.len() <= 8
+                        && p.footsteps.iter().all(|s| text(s, 128))
+                        && p.surfaces.len() <= 16
+                        && p.surfaces.iter().all(|(kind, ids)| {
+                            bri_content::surface::valid_name(kind)
+                                && (1..=8).contains(&ids.len())
+                                && ids.iter().all(|s| text(s, 128))
+                        })
+                }),
+            "sounds.posture_steps names up to 4 postures (stand, crouch, prone, climb), each with up to 8 footsteps and up to 16 surface kinds of 1 to 8 sound profiles"
+        );
+        ensure!(
             self.sounds
                 .step_noise
                 .is_none_or(|n| n.is_finite() && (0.0..=1.0).contains(&n))
@@ -2154,7 +2190,8 @@ impl ArchetypeDef {
         ensure!(
             self.sounds.postures.len() <= 3
                 && self.sounds.postures.iter().all(|(posture, sound)| {
-                    ["stand", "crouch", "prone"].contains(&posture.as_str()) && text(sound, 128)
+                    ["stand", "crouch", "prone", "climb"].contains(&posture.as_str())
+                        && text(sound, 128)
                 }),
             "sounds.postures names stand, crouch or prone, each with a sound profile"
         );

@@ -28,6 +28,7 @@ image = { workspace = true, features = ["jpeg"] }
 sha2.workspace = true
 zip.workspace = true
 bri-foliage = { path = "../foliage", default-features = false }
+bri-effects-render = { path = "../effects-render" }
 
 [dev-dependencies]
 bri-admin = { path = "../admin" }

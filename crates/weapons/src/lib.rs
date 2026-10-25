@@ -529,6 +529,11 @@ pub struct Zoom {
     /// drawn in the world's own and are unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_fov: Vec<f32>,
+    /// The view jumps to the aim's field of view and back with no ease (a
+    /// scope that snaps into place, AA's `bInstantZoom`). The held image's
+    /// own `sights` motion keeps its `seconds`.
+    #[serde(default)]
+    pub instant: bool,
 }
 /// A point in a model node's own frame ([`Image::first_person_offsets`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -3013,6 +3018,10 @@ pub struct Explosion {
     /// the radius, and `edge_damage` up to 1.
     pub core_radius: f32,
     pub edge_damage: f32,
+    /// Within this distance of the blast's centre (scaled with the
+    /// projectile) whatever the blast reaches takes a lethal hit, whatever
+    /// the falloff would give: a rocket's kill radius. 0: none.
+    pub kill_radius: f32,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -3776,6 +3785,10 @@ pub struct DamageType {
     /// between the names (its death icon).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub special: bool,
+    /// What a kill of this type gives a ragdoll body, in place of the
+    /// archetype's own kick (a grenade throws a body further than a bullet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death_kick: Option<bri_content::body::DeathKick>,
 }
 impl DamageType {
     /// Lower-case ids of the icons both templates show.
@@ -4246,6 +4259,10 @@ impl Pack {
                     }),
                 "Invalid damage type {key}"
             );
+            if let Some(kick) = &t.death_kick {
+                kick.validate()
+                    .map_err(|e| anyhow::anyhow!("Invalid damage type {key}: {e}"))?;
+            }
         }
         for (key, e) in &self.explosions {
             ensure!(
@@ -4699,6 +4716,7 @@ impl Pack {
                     p.explosion.burn_seconds,
                     p.explosion.core_radius,
                     p.explosion.edge_damage,
+                    p.explosion.kill_radius,
                     p.brick.radius,
                     p.brick.force,
                     p.brick.max_volume,

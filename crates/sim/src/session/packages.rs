@@ -681,6 +681,9 @@ pub(super) fn archetype(
     if let Some(v) = &def.deaths {
         archetype.look.deaths = v.clone();
     }
+    if let Some(v) = &def.ragdoll {
+        archetype.look.ragdoll = Some(v.clone());
+    }
     if let Some(v) = def.max_time_scale {
         archetype.look.max_time_scale = v;
     }
@@ -796,6 +799,21 @@ fn apply_sounds(
     }
     if from.takeoff_on_surface {
         sounds.takeoff_on_surface = true;
+    }
+    if !from.posture_steps.is_empty() {
+        sounds.posture_steps = from
+            .posture_steps
+            .iter()
+            .map(|(posture, p)| {
+                (
+                    posture.clone(),
+                    crate::archetype::PostureSteps {
+                        footsteps: p.footsteps.clone(),
+                        surfaces: p.surfaces.clone(),
+                    },
+                )
+            })
+            .collect();
     }
     if !from.contacts.is_empty() {
         sounds.contacts = from

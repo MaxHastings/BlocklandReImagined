@@ -280,7 +280,7 @@ travel divided by the cycle's length.
 `back`, `side`, `side_right`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
 `crouch_side_right`, `prone`, `prone_run`, `prone_back`, `prone_side`, `prone_side_right`,
 `jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
-`look`, `look_crouch`, `look_prone`, `head_up`, `head_side`, `seat_aim`, `swim` and `death`. `seat_aim`
+`look`, `look_crouch`, `look_prone`, `head_up`, `head_side`, `seat_aim`, `ladder_up`, `ladder_down`, `swim` and `death`. `seat_aim`
 is a seated gunner's pose from aiming the gun at its highest (the clip's
 start) to its lowest (its end): it holds at the gun's pitch across the
 vehicle's `look_pitch` range in place of `look`, so the whole seated body,
@@ -299,7 +299,48 @@ must list `crouched`, and one with `movement.prone` must list `prone` (the
 Add-On does not load without them, so a posture never falls in a standing
 clip). A listed clip the model lacks is named in the Add-On faults log.
 Without `deaths` the body plays its `death`
-role. A dead body lies 5 seconds (v20's `$CorpseTimeoutValue`) and then goes in a
+role. `ragdoll` makes the body go limp instead when it dies, drawn on each
+player's screen only (nothing about it reaches the host or gameplay, and
+every screen simulates its own, so they do not tumble identically):
+`"ragdoll": {"bones": [{"node": "pelvis", "shapes": [{"kind": "capsule",
+"radius": 0.12, "half_length": 0.1, "axis": "y", "offset": [0, 0, 0]}],
+"mass": 0.22}, {"node": "thigh_l", "shapes": [{...}], "mass": 0.1,
+"linear_damping": 1, "angular_damping": 0.5, "joint": {"swing": 0.5,
+"swing_second": 0.2, "twist": 0.2, "damping": 1}},
+{"node": "shin_l", "shapes": [{...}], "mass": 0.1, "joint": {"swing": 0,
+"twist": 0, "hinge": [-1.5, 0]}}], "friction": 0.8, "max_speed": 40,
+"max_spin": 10, "freeze": 10, "kick": {...}, "carry": [0.6, 1],
+"falling": 0.2, "inertia": 4, "spin_scale": 13, "prone_scale": 0.35, "random_spin": 9}`. Each bone becomes a rigid body made of up to
+8 `shapes` (a `capsule` lying along the node's `axis`, a `box` (optionally
+turned by `rotation`, radians about x, y then z), a `ball`, each centred
+`offset` from the node, or a `limb`: `{"kind": "limb", "radius": 0.05,
+"length": 0.25}`, a capsule that spans the bone itself, from its node toward
+the nearest listed bone that hangs from it, else its first child in the rig,
+else on the way its parent ran, so the model supplies only sizes; `length` is
+the straight middle's, and left out it is the bone's span, a bone with
+nothing below it needing one) weighing `mass`, jointed at the bone's
+node to the nearest bone above it in the skeleton that is listed. The first
+bone is the root and has no joint; the others have a ball joint (`swing`,
+optional `swing_second`, `twist`, radians, 0 to pi, round the pose it died in)
+or a hinge (`hinge: [low, high]`), both about the node's x axis unless
+`axis` (`"y"` or `"z"`) says otherwise, with `damping` (how much it resists
+swinging or turning) and `twist_damping` (twisting; `damping` when left out).
+Limits are hard: there is no spring pulling back from them. The body goes limp at once. `max_speed` and
+`max_spin` cap every bone, `bounce` and each bone's `linear_damping` and
+`angular_damping` shape its fall, and `freeze` seconds after it goes limp
+hold it where it lies (0: never). The killing hit sets it moving:
+`"kick": {"impulse": 10, "speed": 2, "up_kick": 0.1}` (speeds, units/s, along
+the way the hit travelled: `impulse` given at the point struck, which turns
+the body, `speed` to the whole body, `up_kick` added upward when it was not
+already falling) unless the damage type carries its own `death_kick` in the
+weapons pack. `carry` is how much of the speed it died at the body keeps
+(along the ground, up or down); `inertia` and `spin_scale` turn the offset of
+the hit from the body's centre into spin (`spin_scale` counts the offset
+across the ground that much more than the height); `prone_scale` (0 to 1) is
+what a shot that kills a prone body gives of all that, with no upward kick;
+`falling` (units/s) is how fast down it must be going to get no `up_kick`; `random_spin` (radians/s) is the spin of a death with no direction. It lies as long as `corpse_seconds` and fades as `corpse_fade` says.
+A body over the physics budget, or whose skeleton lacks a listed node, plays
+its death clip as before and the Add-On faults log says why. A dead body lies 5 seconds (v20's `$CorpseTimeoutValue`) and then goes in a
 puff; `corpse_seconds` (0 to 600) lets it lie longer, and `corpse_fade` (up to
 `corpse_seconds`) makes it fade out over the last of those seconds instead of
 puffing away. The client names what a
@@ -427,6 +468,25 @@ The host follows the clip itself (`bri-sim`'s `gait`: the same pick and the
 same rate from `ground_speeds` as the client), so bots hear a footfall when a
 client would see it land; scripted threads, intent clips, seats and water are
 not followed. Who hears how far is the listener's own (its kind's hearing).
+
+A mark's `volume` and `radius` apply to a surface footfall too, so one clip
+can be as quiet as a crouched walk and another as loud as a sprint while they
+share their sounds (a sound's own volume times `volume`, heard out to `radius`;
+none leaves them as authored). `posture_steps` gives a posture footfalls of
+its own, by posture (`stand`, `crouch`, `prone`, `climb`), as `footsteps` and
+`surfaces` give the body's others: `"posture_steps": {"prone": {"footsteps":
+["your-id:crawl"], "surfaces": {"metal": ["your-id:crawl_metal"]}}}`. Every
+footfall of a body in that posture (a mark, the stride timer, a landing, a
+take-off) picks from those for the surface underfoot, falling back to the
+standing ones where the posture names none for it. `climb` is a body holding
+a ladder: its `ladder_up` and `ladder_down` clips (played at the rate the
+body gains height, `ground_speeds` `ladder_up` and `ladder_down` in units a
+second, so one holding still holds its pose) mark their steps like any
+clip, and they sound on the surface kind the map's climb volume names
+(`surface`), say `"posture_steps": {"climb": {"surfaces": {"wood":
+["your-id:ladder_wood1", "your-id:ladder_wood2"], "metal": [...]}}}`; a ladder
+that names none sounds like the floor under the foot. Grabbing a ladder
+sounds the `postures` entry for `climb`.
 
 `takeoff_on_surface: true` makes the take-off of a jump sound once like a
 footfall on the surface underfoot, as `land_on_surface` does the landing.

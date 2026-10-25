@@ -1655,7 +1655,7 @@ impl Session {
         brain.dry = if gasping.is_some() { brain.dry + 1 } else { 0 };
         if gasping.is_some_and(|seconds| brain.dry as f32 >= seconds * 120.0) {
             brain.dry = 0;
-            self.kill(bot, None, combat::DamageKind::Suicide)?;
+            self.kill(bot, None, combat::DamageKind::Suicide, None)?;
             return Ok(true);
         }
         // Harm on touch, whatever it is doing (`ability`).

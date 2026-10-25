@@ -447,6 +447,9 @@ pub(super) fn write(
     let decals = map_decals::decals(
         opts,
         id,
+        doc,
+        &shape,
+        &globals,
         &mut |rel, bytes, report| put(rel, bytes, report),
         &mut report,
     )?;

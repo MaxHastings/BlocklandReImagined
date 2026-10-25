@@ -1458,6 +1458,11 @@ than 256 changes are told a tick; the rest follow on the next.
   what lies within that cone from the centre (a launcher's back-blast).
 - A weapon image state may set `"lock": {"movement": true, "look": true}` to
   hold its holder's walk and view still while it runs.
+- `mount_image(p, image, slot)` puts an image in worn slot 2 or 3 (a sling,
+  a flag on the back); `mount_image(p, (), slot)` takes that slot's image
+  off again, and `unmount_image(p)` empties the hand (slot 0). A weapon
+  slung on a bone is worn in slot 2 or 3 while another is in hand, and
+  taken off with `mount_image(p, (), slot)` when it is raised.
 - A weapon image state may set `"aimed": <state>` and `"not_aimed": <state>`:
   where it goes while its holder aims the image (the right button of a
   `zoom` with `on_jet`) or does not, checked after `loaded` and before ammo

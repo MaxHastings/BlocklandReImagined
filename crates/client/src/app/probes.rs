@@ -343,6 +343,11 @@ impl App {
             .as_ref()
             .map(|a| a.progress.snapshot().revision)
     }
+    /// The local player's held gun: its rounds ready, magazine size,
+    /// reserve and whether it is reloading, as the HUD counts them.
+    pub fn held_ammo(&self) -> Option<&bri_sim::session::HeldAmmo> {
+        self.net.held_ammo.as_ref()
+    }
     pub fn network_view(&self) -> Option<&network::View> {
         self.net
             .attempt

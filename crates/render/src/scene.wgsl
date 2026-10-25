@@ -199,10 +199,13 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
         sum+=material[1].x*camera.sun_color.rgb*max(dot(n,toward_sun),0.0);
     } else {
         // The suns of the body's own zone: a run of the camera's table (first + 256 * count).
+        // first sun in bits 0-7, how many in 8-15, and in 16-23 which of them can see the body.
         let packed=u32(own.w+0.5);
         let first=packed&255u;
-        let count=min(packed>>8u,8u);
+        let count=min((packed>>8u)&255u,8u);
+        let seen=packed>>16u;
         for(var i=0u;i<count;i+=1u) {
+            if (seen&(1u<<i))==0u {continue;}
             let s=first+i;
             if s>=u32(camera.actor_sun_count.x+0.5) {break;}
             let toward=-camera.actor_suns[2u*s].xyz/max(length(camera.actor_suns[2u*s].xyz),0.0001);

@@ -178,9 +178,13 @@ pub enum Role {
     HeadSide,
     HeadUp,
     SeatAim,
+    /// Climbing a ladder, up and down: the climb clip plays at the rate the
+    /// body gains height (a body holding still on the ladder holds its pose).
+    LadderUp,
+    LadderDown,
 }
 impl Role {
-    pub const ALL: [Role; 29] = [
+    pub const ALL: [Role; 31] = [
         Role::Idle,
         Role::Run,
         Role::Back,
@@ -210,6 +214,8 @@ impl Role {
         Role::HeadSide,
         Role::HeadUp,
         Role::SeatAim,
+        Role::LadderUp,
+        Role::LadderDown,
     ];
     /// The role's name in an archetype's `animations`.
     pub fn name(self) -> &'static str {
@@ -243,6 +249,8 @@ impl Role {
             Role::HeadSide => "head_side",
             Role::HeadUp => "head_up",
             Role::SeatAim => "seat_aim",
+            Role::LadderUp => "ladder_up",
+            Role::LadderDown => "ladder_down",
         }
     }
     /// The Blockhead's clip for the role (m.dts sequence names, lower case):
@@ -278,6 +286,8 @@ impl Role {
             Role::HeadSide => "headside",
             Role::HeadUp => "headup",
             Role::SeatAim => "seataim",
+            Role::LadderUp => "ladderup",
+            Role::LadderDown => "ladderdown",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {
@@ -326,6 +336,8 @@ impl Role {
             Role::HeadSide => &[],
             Role::HeadUp => &[],
             Role::SeatAim => &[],
+            Role::LadderUp => &[(Role::Idle, false)],
+            Role::LadderDown => &[(Role::LadderUp, true), (Role::Idle, false)],
         }
     }
     /// The way a locomotion role's clip carries the body, facing -Z (v20's
@@ -342,6 +354,8 @@ impl Role {
             Role::ProneBack => Some([0.0, 0.0, 1.0]),
             Role::ProneSide => Some([-1.0, 0.0, 0.0]),
             Role::ProneSideRight => Some([1.0, 0.0, 0.0]),
+            Role::LadderUp => Some([0.0, 1.0, 0.0]),
+            Role::LadderDown => Some([0.0, -1.0, 0.0]),
             _ => None,
         }
     }
@@ -359,6 +373,8 @@ impl Role {
                 | Role::ProneBack
                 | Role::ProneSide
                 | Role::ProneSideRight
+                | Role::LadderUp
+                | Role::LadderDown
         )
     }
     /// The role whose ground speed stands in for this one's when the
@@ -432,6 +448,278 @@ pub struct Deaths {
     /// The same for a body that died lying prone, needed by a body that can lie prone.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub prone: Vec<String>,
+}
+/// Most bones one body's [`Ragdoll`] may name.
+pub const MAX_RAGDOLL_BONES: usize = 32;
+/// Most shapes one ragdoll bone may be built of.
+pub const MAX_RAGDOLL_SHAPES: usize = 8;
+/// Smallest and largest a ragdoll bone's shape may be, in units: thinner
+/// ones tunnel through the world.
+pub const RAGDOLL_SIZE: std::ops::RangeInclusive<f32> = 0.01..=32.0;
+/// Fastest a ragdoll may move, at most (units/s).
+pub const MAX_RAGDOLL_SPEED: f32 = 200.0;
+/// A body that goes limp when it dies, drawn on each player's screen only
+/// (nothing about it reaches the host or gameplay): one rigid body per bone
+/// of its skeleton, jointed to the nearest bone above it that has one, so it
+/// tumbles down stairs and over rails. A body without one plays its death
+/// clip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ragdoll {
+    /// The bones that become bodies, root first (it has no joint).
+    pub bones: Vec<RagdollBone>,
+    /// Friction of every bone against the world and the others.
+    pub friction: f32,
+    /// How much of its speed a bone keeps rebounding, 0 to 1.
+    #[serde(default, skip_serializing_if = "zero_f32")]
+    pub bounce: f32,
+    /// Fastest a bone may move (units/s, up to [`MAX_RAGDOLL_SPEED`]).
+    pub max_speed: f32,
+    /// Fastest a bone may spin (radians/s).
+    pub max_spin: f32,
+    /// Seconds after the body goes limp before it is held where it lies; 0
+    /// never.
+    #[serde(default, skip_serializing_if = "zero_f32")]
+    pub freeze: f32,
+    /// What a killing hit gives the body when its damage type names no
+    /// [`DeathKick`] of its own.
+    pub kick: DeathKick,
+    /// How much of the speed the body died at it keeps: along the ground
+    /// and up or down.
+    pub carry: [f32; 2],
+    /// Downward speed (units/s) past which the body counts as already
+    /// falling and gets no `up_kick`.
+    pub falling: f32,
+    /// Turns the hit's offset from the body's centre and its push into
+    /// spin (the inverse of how hard the body is to turn).
+    pub inertia: f32,
+    /// How much further across the ground than up the hit's offset counts
+    /// toward that spin.
+    pub spin_scale: f32,
+    /// What a shot that kills a prone body gives it, of its kick, its spin
+    /// and its turning: 0 to 1, with no upward kick at all.
+    pub prone_scale: f32,
+    /// The spin (radians/s) of a death with no direction to it, in a random
+    /// direction.
+    pub random_spin: f32,
+}
+/// What a killing hit gives a [`Ragdoll`], in speeds (units/s) along the
+/// way the hit travelled. A damage type may carry its own (the weapons
+/// pack's `death_kick`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeathKick {
+    /// Given to the body at the point the hit struck: it turns the body as
+    /// it moves it.
+    pub impulse: f32,
+    /// Given to the whole body.
+    pub speed: f32,
+    /// Added upward when the body is not already falling.
+    pub up_kick: f32,
+}
+impl DeathKick {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            [self.impulse, self.speed, self.up_kick]
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=MAX_RAGDOLL_SPEED).contains(v)),
+            "a death kick's impulse, speed and up_kick are 0 to {MAX_RAGDOLL_SPEED} units/s"
+        );
+        Ok(())
+    }
+}
+fn zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+/// One bone of a [`Ragdoll`]: the skeleton node it moves with and the
+/// shapes that stand for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RagdollBone {
+    /// The skeleton node (a glTF node name).
+    pub node: String,
+    /// What it is built of, up to [`MAX_RAGDOLL_SHAPES`].
+    pub shapes: Vec<RagdollShape>,
+    /// Its weight.
+    pub mass: f32,
+    /// How quickly it loses speed and spin to the air.
+    #[serde(default, skip_serializing_if = "zero_f32")]
+    pub linear_damping: f32,
+    #[serde(default, skip_serializing_if = "zero_f32")]
+    pub angular_damping: f32,
+    /// How it hangs from the bone above: none for the root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joint: Option<RagdollJoint>,
+}
+/// One shape of a [`RagdollBone`], in the node's frame; `offset` is where
+/// its centre sits.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RagdollShape {
+    /// Lying along the node's `axis` (`x`, `y` or `z`): the radius, then half
+    /// the length of its straight middle.
+    Capsule {
+        radius: f32,
+        half_length: f32,
+        axis: char,
+        #[serde(default)]
+        offset: [f32; 3],
+    },
+    /// A capsule spanning the bone itself: from its node toward the bone
+    /// below it (the nearest listed bone that hangs from it, else its first
+    /// child in the rig; a bone with neither goes on the way its parent
+    /// ran), centred between them, so the model supplies only the sizes.
+    /// `length` is the straight middle's (the capsule is that and a
+    /// `radius` cap beyond each end); left out, the bone's own span.
+    Limb {
+        radius: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        length: Option<f32>,
+    },
+    /// `rotation` turns it about the node's x, y then z axes (radians).
+    Box {
+        half: [f32; 3],
+        #[serde(default)]
+        offset: [f32; 3],
+        #[serde(default)]
+        rotation: [f32; 3],
+    },
+    Ball {
+        radius: f32,
+        #[serde(default)]
+        offset: [f32; 3],
+    },
+}
+/// A [`RagdollBone`]'s joint, pinned at the bone's node and limited round
+/// the pose the body died in. A ball swings by `swing` (and `swing_second`)
+/// and twists by `twist`; a hinge only turns about the node's x axis
+/// between `hinge[0]` and `hinge[1]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RagdollJoint {
+    /// Radians, 0 to pi.
+    pub swing: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swing_second: Option<f32>,
+    pub twist: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hinge: Option<[f32; 2]>,
+    /// The node's axis (`x`, `y` or `z`) a ball twists and a hinge turns
+    /// about; `x` when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<char>,
+    /// How much it resists swinging (a hinge: turning); 0 swings freely.
+    #[serde(default, skip_serializing_if = "zero_f32")]
+    pub damping: f32,
+    /// How much it resists twisting; `damping` when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twist_damping: Option<f32>,
+}
+impl RagdollShape {
+    fn valid(&self) -> bool {
+        let size = |v: f32| RAGDOLL_SIZE.contains(&v);
+        let near = |o: &[f32; 3]| o.iter().all(|v| v.is_finite() && v.abs() <= 32.0);
+        match self {
+            Self::Capsule {
+                radius,
+                half_length,
+                axis,
+                offset,
+            } => {
+                size(*radius)
+                    && size(*half_length)
+                    && matches!(axis, 'x' | 'y' | 'z')
+                    && near(offset)
+            }
+            Self::Limb { radius, length } => size(*radius) && length.is_none_or(size),
+            Self::Box {
+                half,
+                offset,
+                rotation,
+            } => {
+                half.iter().all(|h| size(*h))
+                    && near(offset)
+                    && rotation
+                        .iter()
+                        .all(|a| a.is_finite() && a.abs() <= std::f32::consts::TAU)
+            }
+            Self::Ball { radius, offset } => size(*radius) && near(offset),
+        }
+    }
+}
+impl Ragdoll {
+    pub fn validate(&self) -> Result<()> {
+        let finite = |v: f32, low: f32, high: f32| v.is_finite() && (low..=high).contains(&v);
+        ensure!(
+            (1..=MAX_RAGDOLL_BONES).contains(&self.bones.len()),
+            "a ragdoll names 1 to {MAX_RAGDOLL_BONES} bones"
+        );
+        ensure!(
+            finite(self.friction, 0.0, 4.0)
+                && finite(self.bounce, 0.0, 1.0)
+                && finite(self.max_speed, 0.1, MAX_RAGDOLL_SPEED)
+                && finite(self.max_spin, 0.1, 1000.0)
+                && finite(self.freeze, 0.0, 600.0)
+                && self.carry.iter().all(|c| finite(*c, 0.0, 1.0))
+                && finite(self.falling, 0.0, MAX_RAGDOLL_SPEED)
+                && finite(self.inertia, 0.0, 1000.0)
+                && finite(self.spin_scale, 0.0, 1000.0)
+                && finite(self.prone_scale, 0.0, 1.0)
+                && finite(self.random_spin, 0.0, 1000.0),
+            "ragdoll friction (0 to 4), bounce (0 to 1), max_speed (0.1 to {MAX_RAGDOLL_SPEED}), max_spin (0.1 to 1000), freeze (0 to 600 s), carry (0 to 1), inertia, spin_scale or random_spin (0 to 1000) or prone_scale (0 to 1) is out of range"
+        );
+        self.kick.validate()?;
+        for (index, bone) in self.bones.iter().enumerate() {
+            ensure!(
+                !bone.node.is_empty()
+                    && bone.node.len() <= 64
+                    && !bone.node.chars().any(char::is_control),
+                "ragdoll bone {index} needs a node name of up to 64 characters"
+            );
+            ensure!(
+                self.bones[..index].iter().all(|b| b.node != bone.node),
+                "ragdoll bone {} is named twice",
+                bone.node
+            );
+            ensure!(
+                bone.joint.is_none() == (index == 0),
+                "ragdoll bone {}: the first bone is the root and has no joint; every other has one",
+                bone.node
+            );
+            ensure!(
+                finite(bone.mass, 0.001, 1000.0)
+                    && finite(bone.linear_damping, 0.0, 100.0)
+                    && finite(bone.angular_damping, 0.0, 100.0),
+                "ragdoll bone {}: mass (0.001 to 1000) or damping (0 to 100) is out of range",
+                bone.node
+            );
+            ensure!(
+                (1..=MAX_RAGDOLL_SHAPES).contains(&bone.shapes.len())
+                    && bone.shapes.iter().all(RagdollShape::valid),
+                "ragdoll bone {}: 1 to {MAX_RAGDOLL_SHAPES} shapes of {} to {} units, a capsule's axis x, y or z, offsets within 32 units, a box turned within a full turn",
+                bone.node,
+                RAGDOLL_SIZE.start(),
+                RAGDOLL_SIZE.end()
+            );
+            if let Some(joint) = &bone.joint {
+                let pi = std::f32::consts::PI;
+                ensure!(
+                    finite(joint.swing, 0.0, pi)
+                        && joint.swing_second.is_none_or(|v| finite(v, 0.0, pi))
+                        && finite(joint.twist, 0.0, pi)
+                        && joint
+                            .hinge
+                            .is_none_or(|[low, high]| finite(low, -pi, pi) && finite(high, low, pi))
+                        && finite(joint.damping, 0.0, 1000.0)
+                        && joint.twist_damping.is_none_or(|v| finite(v, 0.0, 1000.0))
+                        && joint.axis.is_none_or(|a| matches!(a, 'x' | 'y' | 'z')),
+                    "ragdoll bone {}: joint angles are 0 to pi radians (a hinge from -pi, rising), damping 0 to 1000 and axis x, y or z",
+                    bone.node
+                );
+            }
+        }
+        Ok(())
+    }
 }
 /// `$CorpseTimeoutValue`: seconds a v20 corpse lies.
 pub const CORPSE_SECONDS: f32 = 5.0;
@@ -668,6 +956,81 @@ impl RoleClips {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ragdoll() -> Ragdoll {
+        serde_json::from_value(serde_json::json!({
+            "bones": [
+                {"node": "pelvis", "mass": 0.2,
+                 "shapes": [{"kind": "capsule", "radius": 0.12, "half_length": 0.1, "axis": "y"}]},
+                {"node": "shin", "mass": 0.1, "linear_damping": 1.0,
+                 "shapes": [{"kind": "box", "half": [0.05, 0.2, 0.05], "offset": [0.0, -0.2, 0.0]}],
+                 "joint": {"swing": 0.3, "twist": 0.2, "damping": 2.0}}
+            ],
+            "friction": 0.8, "max_speed": 40.0, "max_spin": 10.0, "freeze": 10.0,
+            "kick": {"impulse": 10.0, "speed": 2.0, "up_kick": 0.1},
+            "carry": [0.6, 1.0], "falling": 0.2, "inertia": 4.0, "spin_scale": 13.0, "prone_scale": 0.35,
+            "random_spin": 9.0
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_ragdoll_names_a_root_and_jointed_bones_within_limits() {
+        assert!(ragdoll().validate().is_ok());
+        let mut bad = ragdoll();
+        bad.bones[1].joint = None;
+        assert!(bad.validate().is_err(), "a second bone with no joint");
+        let mut bad = ragdoll();
+        bad.bones[0].joint = bad.bones[1].joint.clone();
+        assert!(bad.validate().is_err(), "a root with a joint");
+        let mut bad = ragdoll();
+        bad.bones[1].node = "pelvis".into();
+        assert!(bad.validate().is_err(), "a bone named twice");
+        let mut bad = ragdoll();
+        bad.max_speed = MAX_RAGDOLL_SPEED + 1.0;
+        assert!(bad.validate().is_err(), "too fast");
+        let mut bad = ragdoll();
+        bad.bones[0].shapes = vec![RagdollShape::Ball {
+            radius: 0.0,
+            offset: [0.0; 3],
+        }];
+        assert!(bad.validate().is_err(), "a shape too small to hold");
+        let mut bad = ragdoll();
+        bad.bones[1].joint.as_mut().unwrap().hinge = Some([1.0, 0.5]);
+        assert!(bad.validate().is_err(), "a hinge running backward");
+        let mut bad = ragdoll();
+        bad.bones = Vec::new();
+        assert!(bad.validate().is_err(), "no bones");
+        let mut ok = ragdoll();
+        ok.bones[0].shapes = vec![
+            RagdollShape::Limb {
+                radius: 0.1,
+                length: None,
+            },
+            RagdollShape::Box {
+                half: [0.1; 3],
+                offset: [0.0; 3],
+                rotation: [0.5, 0.0, 0.0],
+            },
+        ];
+        ok.bones[1].joint.as_mut().unwrap().axis = Some('y');
+        ok.bones[1].joint.as_mut().unwrap().twist_damping = Some(3.0);
+        assert!(
+            ok.validate().is_ok(),
+            "a limb, a turned box, a hinge about y"
+        );
+        let mut bad = ok.clone();
+        bad.bones[1].joint.as_mut().unwrap().axis = Some('w');
+        assert!(bad.validate().is_err(), "no such axis");
+        let mut bad = ok.clone();
+        bad.bones[0].shapes = vec![RagdollShape::Limb {
+            radius: 0.0,
+            length: None,
+        }];
+        assert!(bad.validate().is_err(), "a limb too thin");
+        let typo = serde_json::json!({"bones": [], "friction": 1.0, "max_speed": 1.0, "max_spin": 1.0, "typo": 1});
+        assert!(serde_json::from_value::<Ragdoll>(typo).is_err());
+    }
 
     #[test]
     fn a_death_takes_its_sides_clip_else_any_else_the_role() {

@@ -316,6 +316,7 @@ impl App {
                 flash_cues: Vec::new(),
                 flash_showing: None,
                 brick_debris: Default::default(),
+                ragdolls: Default::default(),
                 debris_models: Default::default(),
                 brick_fades: Default::default(),
                 fade_models: Default::default(),
