@@ -406,10 +406,10 @@ mod tests {
         let next = gaits.advance(1, 0.1, &me, &look, clips).unwrap();
         assert!(!next.restart);
         assert!((next.to - next.from - 0.1).abs() < 1e-5, "{next:?}");
-        // Twice as fast plays at twice the rate, up to the body's limit.
+        // Twice as fast plays faster, up to the body's limit (v20's 1.5).
         let quick = running(12.0);
         let span = gaits.advance(1, 0.1, &quick, &look, clips).unwrap();
-        assert!((span.to - span.from - 0.2).abs() < 1e-5, "{span:?}");
+        assert!((span.to - span.from - 0.15).abs() < 1e-5, "{span:?}");
         // A mark at 0.25 s is passed exactly once as the clip goes by it.
         let mut gaits = Gaits::default();
         gaits.advance(2, 0.0, &me, &look, clips);
