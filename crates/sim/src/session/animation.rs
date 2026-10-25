@@ -15,9 +15,9 @@ pub const MAX_ASSETS: usize = MAX_IMAGE_BINDINGS;
 /// Most weapon images a catalog binds to a resource.
 const MAX_IMAGE_BINDINGS: usize = 4096;
 /// Largest single resource kept.
-pub const MAX_ASSET_BYTES: usize = 64 << 20;
+pub const MAX_ASSET_BYTES: usize = 256 << 20;
 /// Largest total of the resources kept.
-pub const MAX_TOTAL_BYTES: usize = 256 << 20;
+pub const MAX_TOTAL_BYTES: usize = 1 << 30;
 /// Most clips one resource has, its own or joined from its libraries (a UE2
 /// soldier has 409).
 const MAX_CLIPS: usize = 1024;

@@ -1143,15 +1143,18 @@ fn valid_sha256(value: &str) -> bool {
 }
 fn bounded_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
     ensure!(
-        file.metadata()?.len() <= limit,
-        "Oversized native item metadata"
+        size <= limit,
+        "{} is {size} bytes, over the limit of {limit}",
+        path.display()
     );
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
     ensure!(
         bytes.len() as u64 <= limit,
-        "Native item metadata grew beyond limit"
+        "{} grew past the limit of {limit} bytes while it was read",
+        path.display()
     );
     Ok(bytes)
 }
