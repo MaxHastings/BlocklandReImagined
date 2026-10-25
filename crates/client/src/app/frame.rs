@@ -1464,8 +1464,7 @@ impl App {
                                 .to_string()
                         },
                     ) {
-                        self.audio
-                            .profile(&fall.sound, bri_audio::Placement::World(fall.at));
+                        play_footfall(&mut self.audio, &fall);
                         leave_foot_contact(&mut self.fx, &self.item_assets, &fall);
                     }
                 }
@@ -1746,8 +1745,7 @@ impl App {
                         .to_string()
                 },
             ) {
-                self.audio
-                    .profile(&fall.sound, bri_audio::Placement::World(fall.at));
+                play_footfall(&mut self.audio, &fall);
                 leave_foot_contact(&mut self.fx, &self.item_assets, &fall);
             }
             for (sound, at) in self.fx.clip_sounds.advance(game_elapsed.as_secs_f32()) {
@@ -2041,6 +2039,19 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// A footfall's sound, at the volume and reach its mark gave it.
+fn play_footfall(audio: &mut crate::audio::ClientAudio, fall: &crate::footsteps::Footfall) {
+    audio.profile_shaped(
+        &fall.sound,
+        bri_audio::Placement::World(fall.at),
+        crate::audio::Voice {
+            volume: fall.volume,
+            radius: fall.radius,
+            ..crate::audio::Voice::AS_AUTHORED
+        },
+    );
 }
 
 /// What a footfall leaves where it landed ([`bri_sim::archetype::Sounds::contacts`]):

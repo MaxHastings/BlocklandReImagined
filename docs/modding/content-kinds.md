@@ -409,6 +409,13 @@ loop). A body with any `steps` makes no timer footfalls, so a clip that
 marks none is silent; a body without them (v20's Blockhead) keeps the
 timer.
 
+A mark can name `"sound": "your-id:climb"` (with `"volume"`, 0 to 4 times the
+sound's own, and `"radius"`, the distance it is heard out to) to play that
+sound source there in place of the surface's footfall, as a ladder's climb
+does; it leaves no mark. `"postures": {"crouch": "your-id:down", "stand":
+"your-id:up", "prone": "your-id:prone"}` sounds once where the body is
+when it enters that posture.
+
 `takeoff_on_surface: true` makes the take-off of a jump sound once like a
 footfall on the surface underfoot, as `land_on_surface` does the landing.
 `contacts` makes each footfall (a mark, the timer's step, a landing or
