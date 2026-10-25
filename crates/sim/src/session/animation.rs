@@ -1258,6 +1258,13 @@ impl Session {
             );
         }
     }
+    /// A body clip's duration and whether it loops, by lower-case name.
+    pub(super) fn body_clip(&self, model: &str, name: &str) -> Option<(f32, bool)> {
+        self.animations
+            .clips
+            .get(&(model.to_owned(), name.to_ascii_lowercase()))
+            .map(|c| (c.duration as f32, c.looping))
+    }
     pub(super) fn advance_animations(&mut self) {
         self.reconcile_animation_bindings();
         let tick = self.simulation.state().tick;

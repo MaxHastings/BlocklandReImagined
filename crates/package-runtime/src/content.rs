@@ -1935,6 +1935,13 @@ pub struct ArchetypeSounds {
     /// Frames a second of the clips, for steps marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// How loud each marked footfall is to bots, 0 to 1 (see the content
+    /// kinds document: `step_noise`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_noise: Option<f32>,
+    /// The noise of landing from a fall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land_noise: Option<LandNoiseDef>,
     /// A sound for entering each posture (`stand`, `crouch`, `prone`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub postures: BTreeMap<String, String>,
@@ -1945,6 +1952,14 @@ pub struct ArchetypeSounds {
     /// and a mark (see the content kinds document: `contacts`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub contacts: BTreeMap<String, FootContactDef>,
+}
+/// [`ArchetypeSounds::land_noise`]: `factor` times the speed fallen over the
+/// larger of the body's jump speed and `jump_floor`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandNoiseDef {
+    pub factor: f32,
+    pub jump_floor: f32,
 }
 /// [`ArchetypeSounds::contacts`]: what a footfall leaves on one surface kind.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1992,6 +2007,9 @@ pub struct StepEventDef {
     pub volume: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f32>,
+    /// How loud the mark is to bots, 0 to 1, in place of `step_noise`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise: Option<f32>,
 }
 /// [`ArchetypeSounds::clips`]: a sound at a moment of a clip.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2120,6 +2138,18 @@ impl ArchetypeDef {
                         && ids.iter().all(|s| text(s, 128))
                 }),
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds
+                .step_noise
+                .is_none_or(|n| n.is_finite() && (0.0..=1.0).contains(&n))
+                && self.sounds.land_noise.as_ref().is_none_or(|l| {
+                    l.factor.is_finite()
+                        && (0.0..=10.0).contains(&l.factor)
+                        && l.jump_floor.is_finite()
+                        && l.jump_floor > 0.0
+                }),
+            "sounds.step_noise is 0 to 1; sounds.land_noise has a factor of 0 to 10 and a positive jump_floor"
         );
         ensure!(
             self.sounds.postures.len() <= 3

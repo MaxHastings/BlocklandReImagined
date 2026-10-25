@@ -145,6 +145,17 @@ pub struct Sounds {
     /// Frames a second of the clips, for `steps` marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// How loud each marked footfall is to those who listen (bots hear it as
+    /// they hear fighting), 0 to 1: the same whatever the gait, since the gait
+    /// only shows in how often the clip's marks come. A mark can say its own
+    /// (`StepEvent::noise`). None: footfalls make no noise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_noise: Option<f32>,
+    /// The noise of landing from a fall: `factor` times the speed fallen
+    /// over the larger of the body's jump speed and `jump_floor`, so a fall
+    /// at jump speed is `factor` and faster ones are louder (capped at 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land_noise: Option<LandNoise>,
     /// A sound for entering each posture (`stand`, `crouch`, `prone`), heard
     /// where the body is when its posture changes.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -158,6 +169,13 @@ pub struct Sounds {
     /// listed nowhere leaves nothing.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub contacts: std::collections::BTreeMap<String, FootContact>,
+}
+/// [`Sounds::land_noise`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandNoise {
+    pub factor: f32,
+    pub jump_floor: f32,
 }
 /// What one footfall leaves on a surface ([`Sounds::contacts`]).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -210,6 +228,10 @@ pub struct StepEvent {
     pub volume: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f32>,
+    /// How loud this mark is to those who listen, 0 to 1, in place of
+    /// [`Sounds::step_noise`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise: Option<f32>,
 }
 /// A sound tied to the moment of a clip ([`Sounds::clips`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -269,6 +291,15 @@ impl Sounds {
                     && !c.sound.chars().any(char::is_control)
                     && c.seconds.is_finite()
                     && (0.0..=60.0).contains(&c.seconds)
+            })
+            && self
+                .step_noise
+                .is_none_or(|n| n.is_finite() && (0.0..=1.0).contains(&n))
+            && self.land_noise.as_ref().is_none_or(|l| {
+                l.factor.is_finite()
+                    && (0.0..=10.0).contains(&l.factor)
+                    && l.jump_floor.is_finite()
+                    && l.jump_floor > 0.0
             })
             && self.postures.len() <= Self::POSTURES.len()
             && self.postures.iter().all(|(posture, sound)| {
@@ -341,6 +372,13 @@ impl Sounds {
     /// The footfalls on surface `kind`.
     pub fn footsteps_on(&self, kind: &str) -> &[String] {
         self.surfaces.get(kind).unwrap_or(&self.footsteps)
+    }
+    /// How loud landing at `fall` units/s is for a body whose jump speed is
+    /// `jump`, 0 to 1 ([`Sounds::land_noise`]).
+    pub fn land_noise_for(&self, fall: f32, jump: f32) -> f32 {
+        self.land_noise.as_ref().map_or(0.0, |l| {
+            bri_console::Clamp::clamped(l.factor * fall / jump.max(l.jump_floor), 0.0, 1.0)
+        })
     }
     /// What a footfall on surface `kind` leaves, if anything.
     pub fn contact_on(&self, kind: &str) -> Option<&FootContact> {
