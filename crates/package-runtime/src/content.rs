@@ -1942,7 +1942,7 @@ pub struct ArchetypeSounds {
     /// The noise of landing from a fall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land_noise: Option<LandNoiseDef>,
-    /// A sound for entering each posture (`stand`, `crouch`, `prone`).
+    /// A sound for entering each posture (`stand`, `crouch`, `prone`, `climb`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub postures: BTreeMap<String, String>,
     /// Taking off in a jump sounds like a footfall on the surface underfoot.
@@ -2154,9 +2154,9 @@ impl ArchetypeDef {
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
         );
         ensure!(
-            self.sounds.posture_steps.len() <= 3
+            self.sounds.posture_steps.len() <= 4
                 && self.sounds.posture_steps.iter().all(|(posture, p)| {
-                    ["stand", "crouch", "prone"].contains(&posture.as_str())
+                    ["stand", "crouch", "prone", "climb"].contains(&posture.as_str())
                         && p.footsteps.len() <= 8
                         && p.footsteps.iter().all(|s| text(s, 128))
                         && p.surfaces.len() <= 16
@@ -2166,7 +2166,7 @@ impl ArchetypeDef {
                                 && ids.iter().all(|s| text(s, 128))
                         })
                 }),
-            "sounds.posture_steps names up to 3 postures (stand, crouch, prone), each with up to 8 footsteps and up to 16 surface kinds of 1 to 8 sound profiles"
+            "sounds.posture_steps names up to 4 postures (stand, crouch, prone, climb), each with up to 8 footsteps and up to 16 surface kinds of 1 to 8 sound profiles"
         );
         ensure!(
             self.sounds
@@ -2183,7 +2183,8 @@ impl ArchetypeDef {
         ensure!(
             self.sounds.postures.len() <= 3
                 && self.sounds.postures.iter().all(|(posture, sound)| {
-                    ["stand", "crouch", "prone"].contains(&posture.as_str()) && text(sound, 128)
+                    ["stand", "crouch", "prone", "climb"].contains(&posture.as_str())
+                        && text(sound, 128)
                 }),
             "sounds.postures names stand, crouch or prone, each with a sound profile"
         );

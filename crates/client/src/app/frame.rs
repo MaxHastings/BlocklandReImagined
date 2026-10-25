@@ -1456,6 +1456,12 @@ impl App {
                         },
                         |at| {
                             let at = Vec3::from(at);
+                            // On a ladder the rungs say what it sounds like.
+                            if player.posture.climbing
+                                && let Some(kind) = building.climb_surface_at(at + Vec3::Y * 0.5)
+                            {
+                                return kind.to_string();
+                            }
                             building
                                 .surface_at(at + Vec3::Y * 0.5, at - Vec3::Y)
                                 .ok()

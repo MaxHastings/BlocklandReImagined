@@ -126,6 +126,9 @@ pub struct MapSurfaces {
     /// What a traced shot may do at the colliders whose detail says
     /// (`bri_content::shape::Detail::shot`), by collider.
     pub shots: BTreeMap<usize, bri_content::shape::ShotShape>,
+    /// The surface kind a climber's steps sound like, by the index of each
+    /// climb volume among [`NativeMap::colliders`], where the map names one.
+    pub climbs: BTreeMap<usize, String>,
 }
 /// A triangle whose material has no identity.
 pub const NO_IDENTITY: u32 = u32::MAX;
@@ -139,7 +142,26 @@ pub use bri_content::surface::{
 };
 /// The most kinds a map may name.
 pub const MAX_SURFACE_KINDS: usize = 64;
+/// The climb volume of `physics` holding `point`, if any.
+pub fn climb_collider_at(
+    physics: &PhysicsWorld,
+    point: Vec3,
+) -> Option<rapier3d::prelude::ColliderHandle> {
+    use rapier3d::prelude::{Collider, QueryFilter, Vector};
+    let filter = QueryFilter::default()
+        .predicate(&|_, c: &Collider| bri_motor::climb::is_climb(c.user_data));
+    physics
+        .query_pipeline_with_filter(filter)
+        .intersect_point(Vector::from_array(point.to_array()))
+        .next()
+        .map(|(handle, _)| handle)
+}
 impl MapSurfaces {
+    /// The surface kind a climber's steps sound like on the climb volume at
+    /// collider index `collider`, when the map names one.
+    pub fn climb(&self, collider: usize) -> Option<&str> {
+        self.climbs.get(&collider).map(String::as_str)
+    }
     /// The kind of triangle `triangle` of collider `collider`, when the map
     /// names one.
     pub fn kind(&self, collider: usize, triangle: u32) -> Option<&str> {
@@ -681,6 +703,9 @@ impl NativeMap {
         }
         // Ladders: sensor boxes the player motor finds by a body's middle.
         for climb in scene.climbs()? {
+            if let Some(kind) = &climb.surface {
+                surfaces.climbs.insert(colliders.len(), kind.clone());
+            }
             colliders.push(bri_motor::climb::collider_with_facing(
                 climb.center,
                 climb.half,

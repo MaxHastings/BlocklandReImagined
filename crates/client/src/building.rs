@@ -270,6 +270,12 @@ impl Building {
     pub fn set_map_surfaces(&mut self, surfaces: bri_sim::map::MapSurfaces) {
         self.surfaces = surfaces;
     }
+    /// The surface kind a climber's steps sound like where `point` lies in a
+    /// climb volume (a ladder), when the map names one for it.
+    pub fn climb_surface_at(&self, point: Vec3) -> Option<&str> {
+        let handle = bri_sim::map::climb_collider_at(&self.map, point)?;
+        self.surfaces.climb(*self.map_colliders.get(&handle)?)
+    }
     /// The first solid thing between two points and its surface kind
     /// (`bri_sim::map::MapSurfaces`): what a body stands on or a shot
     /// strikes. Bricks are `brick`, terrain `terrain`, and a map triangle

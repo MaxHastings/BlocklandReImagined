@@ -79,8 +79,8 @@ pub enum Kind {
     Teleporter,
     /// A climb volume (a ladder): `properties` hold `half` (half extents
     /// "x y z" in the node's axes), `speed` (units a second along the
-    /// rungs), `strafe` (1 to let the strafe keys move sideways) and an
-    /// `id`. The climber faces the node's local +Z unless `facing_yaw` supplies an independent angle in radians.
+    /// rungs), `strafe` (1 to let the strafe keys move sideways), `surface`
+    /// (the surface kind a climber's steps on it sound like) and an `id`. The climber faces the node's local +Z unless `facing_yaw` supplies an independent angle in radians.
     Climb,
     /// A named box a rule can ask about ([`Volume`]): `properties` hold
     /// `half` (half extents "x y z" in the node's axes), an optional `id` and
@@ -507,6 +507,12 @@ impl Scene {
             } else {
                 0.0
             };
+            let surface = node.properties.get("surface").map(|v| v.trim());
+            ensure!(
+                surface.is_none_or(crate::surface::valid_name),
+                "Climb {}: surface is not a surface kind name",
+                node.name
+            );
             let facing = numbers("facing_yaw")?;
             ensure!(
                 facing.len() == usize::from(node.properties.contains_key("facing_yaw"))
@@ -530,6 +536,7 @@ impl Scene {
                     .properties
                     .get("strafe")
                     .is_some_and(|v| v.trim() == "1"),
+                surface: surface.map(str::to_owned),
             });
         }
         ensure!(
@@ -813,6 +820,15 @@ mod tests {
         scene.nodes[0].properties.remove("facing_yaw");
         let read = &scene.climbs().unwrap()[0];
         assert_eq!(read.yaw, read.facing_yaw);
+        assert_eq!(read.surface, None);
+        scene.nodes[0]
+            .properties
+            .insert("surface".into(), "metal".into());
+        assert_eq!(scene.climbs().unwrap()[0].surface.as_deref(), Some("metal"));
+        scene.nodes[0]
+            .properties
+            .insert("surface".into(), "not a kind".into());
+        assert!(scene.climbs().is_err());
     }
 
     #[test]
