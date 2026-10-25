@@ -74,6 +74,9 @@ pub struct NodeState {
     /// List items (ids) drawn in the warning colour: a row that needs the
     /// player's attention.
     pub flagged: Vec<i64>,
+    /// A host texture drawn at the left of each list row, by row; the
+    /// list's `columns` start after it.
+    pub row_icons: Vec<Option<u64>>,
     /// Optional local disclosure groups; item IDs and selected values stay intact.
     pub popup_groups: HashMap<i64, String>,
     /// Gameplay search words, without changing the displayed or authored identity.
@@ -458,6 +461,7 @@ impl View {
                 popup_groups: HashMap::new(),
                 popup_aliases: HashMap::new(),
                 flagged: Vec::new(),
+                row_icons: Vec::new(),
                 scroll_y: 0,
                 cursor: 0,
                 select_all: false,
@@ -1845,6 +1849,16 @@ impl View {
         }
     }
 
+    /// A text list row's height in pixels with `profile`'s font.
+    pub fn profile_row_height(pack: &Pack, profile: &str) -> i32 {
+        pack.data
+            .styles
+            .get(profile)
+            .and_then(|s| Self::font_id(pack, s))
+            .and_then(|f| pack.font(f))
+            .map_or(16, |f| f.line_height as i32 + 2)
+    }
+
     fn list_row_height(&self, pack: &Pack, id: NodeId) -> i32 {
         self.style(pack, id)
             .and_then(|s| Self::font_id(pack, s))
@@ -1903,6 +1917,16 @@ impl View {
             let row = Rect::new(r.x, r.y + i as i32 * rh, r.w, rh);
             if Some(*item) == sel {
                 dl.fill(row, style.fill_color_hl.unwrap_or([128, 128, 255, 255]));
+            }
+            if let Some(Some(key)) = n.state.row_icons.get(i) {
+                let side = (rh - 2) as f32;
+                dl.image(
+                    TexKey::External(*key),
+                    [0.0, 0.0, 1.0, 1.0],
+                    [r.x as f32 + 1.0, row.y as f32 + 1.0, side, side],
+                    crate::geom::WHITE,
+                    crate::draw::Filter::Linear,
+                );
             }
             for (c, field) in text.split('\t').enumerate() {
                 let x = cols.get(c).copied().unwrap_or(0);
