@@ -159,6 +159,17 @@ fn lamp_falloff(x:f32,radius:f32)->f32 {
     let t=x/radius;
     return 2.0*(1.0-3.0*t*t+2.0*t*t*t);
 }
+// A spot lamp's cone on a body, as Direct3D has it (D3DDrv SetLight): x = 1 - LightCone/256 (the cone words hold it as cos(outer)),
+// Phi = acos(x^2) * 1.15 across, Theta = 0.05 Phi, falling off linearly between. `away` runs from the lamp to the vertex.
+fn actor_cone(light:PointLight,away:vec3<f32>)->f32 {
+    let k=length(light.cone.xyz);
+    if k==0.0 {return 1.0;}
+    let x=clamp(light.cone.w/k,-1.0,1.0);
+    let phi=acos(x*x)*1.15;
+    let outer=cos(phi*0.5);
+    let inner=cos(phi*0.025);
+    return clamp((dot(away,light.cone.xyz/k)-outer)/max(inner-outer,0.0001),0.0,1.0);
+}
 // A lit body's lights as the original gives them to Direct3D (D3DDrv SetLight): lamps are ranked at the body's sphere
 // (`body`: radius, then centre; a zero radius makes the vertex its own sphere), the best four lit by 1/(A0 + A1 d), the straight
 // line through the reciprocal of the lamp's falloff at the sphere's near and far points, and the zone's suns at 1.75 times their colour.
@@ -211,7 +222,7 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>,body:vec4<f32>)
         let toward=light.position_radius.xyz-position;
         let dist=length(toward);
         if dist>(256.0-a0)/max(a1,0.01) {continue;}
-        sum+=material[1].y*light.color.rgb*(1.0/(a0+a1*dist))*max(dot(n,toward/max(dist,0.0001)),0.0)*point_cone(light,-toward/max(dist,0.0001));
+        sum+=material[1].y*light.color.rgb*(1.0/(a0+a1*dist))*max(dot(n,toward/max(dist,0.0001)),0.0)*actor_cone(light,-toward/max(dist,0.0001));
     }
     if baked {
         return sum;
