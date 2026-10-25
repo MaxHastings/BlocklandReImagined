@@ -987,8 +987,12 @@ impl BrickOutputDef {
 }
 /// Most touch zones one behaviour declares, and brick kinds one zone names.
 pub const MAX_ZONES: usize = 16;
+/// Most bodies one mini-game lists.
+pub const MAX_MINIGAME_BODIES: usize = 4096;
 /// Most commands one package declares.
-pub const MAX_COMMANDS: usize = 256;
+pub const MAX_COMMANDS: usize = 4096;
+/// Most state keys one behaviour declares, player and server-wide together.
+pub const MAX_STATE_KEYS: usize = 4096;
 /// Most extra script files one behaviour loads beside its main `script`.
 pub const MAX_SCRIPT_MODULES: usize = 32;
 pub const MAX_ZONE_KINDS: usize = 16;
@@ -1174,7 +1178,8 @@ impl Behaviour {
         }
         ensure!(
             self.commands.len() <= MAX_COMMANDS,
-            "at most {MAX_COMMANDS} commands"
+            "{} commands is over the limit of {MAX_COMMANDS}",
+            self.commands.len()
         );
         ensure!(self.zones.len() <= MAX_ZONES, "at most {MAX_ZONES} zones");
         for z in &self.zones {
@@ -1377,9 +1382,10 @@ impl Behaviour {
                 "player key `{key}` cannot be per mini-game; make it server-wide"
             );
         }
+        let keys = self.state.player.len() + self.state.global.len();
         ensure!(
-            self.state.player.len() + self.state.global.len() <= 256,
-            "at most 256 state keys"
+            keys <= MAX_STATE_KEYS,
+            "{keys} state keys is over the limit of {MAX_STATE_KEYS}"
         );
         if let Some(over) = self.undo_confirm_over {
             ensure!(
@@ -1533,8 +1539,9 @@ impl ModeMiniGame {
             self.player_type
         );
         ensure!(
-            self.bodies.len() <= 256,
-            "a minigame lists at most 256 bodies"
+            self.bodies.len() <= MAX_MINIGAME_BODIES,
+            "a minigame lists {} bodies, over the limit of {MAX_MINIGAME_BODIES}",
+            self.bodies.len()
         );
         for body in &self.bodies {
             ensure!(
