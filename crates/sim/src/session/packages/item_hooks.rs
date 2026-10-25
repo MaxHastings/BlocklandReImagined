@@ -485,7 +485,7 @@ impl Session {
         paint: Option<u8>,
         data: Option<serde_json::Value>,
         seconds: Option<u32>,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         self.package_check_drop_item(package, item, data.as_ref())?;
         let look = bri_weapons::DropLook {
             paint,
@@ -501,7 +501,7 @@ impl Session {
         if let Some(data) = data {
             hooks.drop_data.insert(drop, data);
         }
-        Ok(())
+        Ok(drop)
     }
 
     /// Whether `drop` is an item `package` put in the world and that still

@@ -58,6 +58,7 @@ fn room(floor: u8, walls: u8) -> SceneData {
             let start = scene.indices.len() as u32;
             scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
             scene.batches.push(MeshBatch {
+                zone: None,
                 indices: start..start + 6,
                 material: usize::from(!(axis == 1 && side < 0.0)),
                 center: [0.0; 3],
@@ -92,6 +93,7 @@ fn add_cube(scene: &mut SceneData, centre: Vec3, half: f32, inward: bool, materi
             let start = scene.indices.len() as u32;
             scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
             scene.batches.push(MeshBatch {
+                zone: None,
                 indices: start..start + 6,
                 material,
                 center: centre.to_array(),
@@ -335,6 +337,7 @@ fn player_stand_in() -> SceneData {
         indices: vec![0, 1, 2],
         materials: vec![Material::vertex_lit("stand-in", 0)],
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..3,
             material: 0,
             center: [0.0, 0.0, 0.5],
@@ -617,6 +620,7 @@ fn stand_in_box(centre: Vec3, size: Vec3) -> SceneData {
     scene.materials.push(Material::vertex_lit("stand-in", 0));
     scene.materials[0].double_sided = true;
     scene.batches.push(MeshBatch {
+        zone: None,
         indices: 0..scene.indices.len() as u32,
         material: 0,
         center: centre.to_array(),

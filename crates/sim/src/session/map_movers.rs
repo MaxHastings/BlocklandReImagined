@@ -60,6 +60,9 @@ pub(super) struct MapMovers {
     placed: Vec<Option<glam::Mat4>>,
     /// Frozen state of the last collision pose actually accepted by the host.
     accepted: Vec<MoverState>,
+    /// World items an Add-On placed on a mover (`place_item`), by drop: the
+    /// mover's index and the item's pose in the mover's frame.
+    pins: BTreeMap<u64, (usize, glam::Mat4)>,
 }
 
 fn pose(transform: glam::Mat4) -> rapier3d::prelude::Pose {
@@ -98,14 +101,28 @@ impl Session {
                     .is_some_and(|v| v == "1" || bot_door_command(v).is_some()),
             );
         }
+        let initial: Vec<MoverState> = movers
+            .iter()
+            .map(|m| MoverState {
+                hidden: m.def.hidden,
+                ..MoverState::default()
+            })
+            .collect();
+        for (mover, state) in movers.iter().zip(&initial) {
+            if state.hidden {
+                self.simulation
+                    .set_map_colliders(mover.colliders.clone(), false)?;
+            }
+        }
         let count = movers.len();
         self.map_movers = MapMovers {
             asked: BTreeMap::new(),
             refused: BTreeSet::new(),
             movers,
-            states: vec![MoverState::default(); count],
+            states: initial.clone(),
             placed: vec![None; count],
-            accepted: vec![MoverState::default(); count],
+            accepted: initial,
+            pins: BTreeMap::new(),
         };
         Ok(())
     }
@@ -221,6 +238,32 @@ impl Session {
             .map(|(_, id)| id)
             .collect()
     }
+    /// The shown movers whose collision lies within `radius` of `point`, with
+    /// how far and the nearest point of it, nearest first (what a blast at
+    /// `point` reaches).
+    pub fn movers_within(&self, point: Vec3, radius: f32) -> Vec<(String, f32, Vec3)> {
+        let mut found: Vec<(String, f32, Vec3)> = Vec::new();
+        for (index, mover) in self.map_movers.movers.iter().enumerate() {
+            if self.map_movers.states[index].hidden {
+                continue;
+            }
+            let nearest = mover
+                .colliders
+                .clone()
+                .filter_map(|c| {
+                    let closest = self.simulation.map_collider_closest(c, point)?;
+                    Some((closest.distance(point), closest))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((gap, closest)) = nearest
+                && gap <= radius
+            {
+                found.push((mover.def.id.clone(), gap, closest));
+            }
+        }
+        found.sort_by(|a, b| a.1.total_cmp(&b.1));
+        found
+    }
     /// The same movers with their gaps (a negative one: the body is in it),
     /// nearest first.
     pub(super) fn mover_gaps(&self, owner: OwnerId, reach: f32) -> Vec<(f32, String)> {
@@ -298,6 +341,57 @@ impl Session {
         let tick = self.simulation.state().tick;
         Ok(self.map_movers.states[index].go_to(tick, key, seconds))
     }
+    /// Hold world item `drop` at `position` turned to `rotation`; with
+    /// `mover` it rides that mover, keeping its place on it.
+    pub(super) fn pin_drop(
+        &mut self,
+        drop: u64,
+        position: Vec3,
+        rotation: glam::Quat,
+        mover: Option<&str>,
+    ) -> Result<()> {
+        let index = match mover {
+            Some(id) => Some(
+                self.mover_index(id)
+                    .with_context(|| format!("No map mover called {id}"))?,
+            ),
+            None => None,
+        };
+        self.weapons.pin_drop(drop, rotation)?;
+        self.weapons.set_drop_pose(drop, position, rotation);
+        if let Some(index) = index {
+            let tick = self.simulation.state().tick;
+            let world =
+                self.map_movers.movers[index].transform(&self.map_movers.states[index], tick);
+            let item = glam::Mat4::from_rotation_translation(rotation, position);
+            self.map_movers
+                .pins
+                .insert(drop, (index, world.inverse() * item));
+        }
+        Ok(())
+    }
+    /// Carry the items placed on movers along with them.
+    fn carry_pins(&mut self, tick: u64) {
+        let pins = &mut self.map_movers.pins;
+        pins.retain(|drop, _| self.weapons.drops().any(|d| d.id == *drop));
+        for (drop, (index, local)) in &self.map_movers.pins {
+            let mover = &self.map_movers.movers[*index];
+            let world = mover.transform(&self.map_movers.states[*index], tick) * *local;
+            let (_, rotation, position) = world.to_scale_rotation_translation();
+            self.weapons.set_drop_pose(*drop, position, rotation);
+        }
+    }
+    /// Show or hide mover `id`: hidden, it is not drawn and not solid
+    /// (to bodies, shots and bots alike), though its motion goes on.
+    pub fn mover_show(&mut self, id: &str, shown: bool) -> Result<()> {
+        let index = self
+            .mover_index(id)
+            .with_context(|| format!("No map mover called {id}"))?;
+        self.map_movers.states[index].hidden = !shown;
+        self.map_movers.accepted[index].hidden = !shown;
+        self.simulation
+            .set_map_colliders(self.map_movers.movers[index].colliders.clone(), shown)
+    }
     /// Hold mover `id` where it is.
     pub fn mover_stop(&mut self, id: &str) -> Result<()> {
         let index = self
@@ -355,6 +449,99 @@ impl Session {
             accepted.halt(tick, false);
             self.map_movers.accepted[index] = accepted;
         }
+        self.carry_pins(tick);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{definitions::Definitions, simulation::Simulation};
+    use bri_content::mover::{Glide, MoverDef, MoverKey};
+    use rapier3d::prelude::*;
+
+    /// A slab lying along +X, hinged at the origin, that swings 90 degrees.
+    fn door() -> MapMover {
+        MapMover {
+            node: 5,
+            def: MoverDef {
+                id: "door".into(),
+                keys: vec![
+                    MoverKey::default(),
+                    MoverKey {
+                        translation: [0.0; 3],
+                        rotation: [0.0, -std::f32::consts::FRAC_PI_2, 0.0],
+                    },
+                ],
+                glide: Glide::Linear,
+                encroach: Encroach::Ignore,
+                spin: None,
+                collide: true,
+                params: Default::default(),
+                sounds: None,
+                hidden: false,
+            },
+            placement: glam::Mat4::IDENTITY,
+            colliders: 1..2,
+        }
+    }
+
+    #[test]
+    fn an_item_placed_on_a_door_rides_it_open_and_stays_off_the_pickup_list() {
+        let mut s = Session::new(
+            Simulation::new(
+                bri_world::World::new("Doors".into(), "test".into(), vec![[1.0; 4]; 2]),
+                Definitions::default(),
+                vec![
+                    ColliderBuilder::cuboid(200.0, 0.5, 200.0)
+                        .translation(Vector::new(0.0, -0.5, 0.0)),
+                    ColliderBuilder::compound(vec![(
+                        Pose::translation(1.5, 3.0, 0.0),
+                        SharedShape::cuboid(1.5, 3.0, 0.1),
+                    )])
+                    .position(Pose::IDENTITY),
+                ],
+            )
+            .unwrap(),
+        );
+        s.set_weapon_pack(
+            bri_weapons::Pack::from_json(
+                &serde_json::to_vec(&serde_json::json!({
+                    "schema_version":5,"id":"charge",
+                    "items":{"charge:item/charge":{"ui_name":"Charge","image":"charge:image/charge"}},
+                    "images":{"charge:image/charge":{"states":[{"name":"Ready"}]}},
+                    "projectiles":{}
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        s.set_item_bounds(Default::default()).unwrap();
+        s.set_map_movers(vec![door()]).unwrap();
+        let at = Vec3::new(2.5, 1.0, 0.1);
+        let drop = s
+            .weapons
+            .spawn_drop("charge:item/charge", at, Vec3::ZERO)
+            .unwrap();
+        s.pin_drop(drop, at, glam::Quat::IDENTITY, Some("door"))
+            .unwrap();
+        for _ in 0..30 {
+            s.step().unwrap();
+        }
+        let held = s.weapons.drops().find(|d| d.id == drop).unwrap().position;
+        assert!(held.distance(at) < 0.01, "pinned, not fallen: {held:?}");
+        assert!(!s.weapons.pickup_ready(bri_weapons::ActorId(1), drop));
+        // Open the door a quarter turn in a second: the item goes with it.
+        assert!(s.mover_goto("door", 1, 1.0).unwrap());
+        for _ in 0..130 {
+            s.step().unwrap();
+        }
+        let carried = s.weapons.drops().find(|d| d.id == drop).unwrap().position;
+        assert!(
+            carried.distance(Vec3::new(-0.1, 1.0, 2.5)) < 0.1,
+            "swung with the door: {carried:?}"
+        );
     }
 }

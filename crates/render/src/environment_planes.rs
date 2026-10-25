@@ -198,6 +198,7 @@ fn quad(
         .indices
         .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     scene.batches.push(MeshBatch {
+        zone: None,
         indices: start..start + 6,
         material,
         center: [(min[0] + max[0]) * 0.5, y, (min[1] + max[1]) * 0.5],

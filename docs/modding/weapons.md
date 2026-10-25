@@ -163,6 +163,7 @@ The fields you are most likely to change:
 | `jets` | `false`: with `on_jet`, the right mouse button only aims and the player does not jet while holding it | default `true` |
 | `allowed_states` | Optional image-state names that permit visual aiming. Omitted allows all states; `[]` allows none. A restricted profile without a known current state does not aim. | Up to 64 unique ASCII names, 1 to 128 bytes each; each must name exactly one state of this image, matched without ASCII case |
 | `levels` | further fields of view the mouse wheel steps through while aiming (back on rolling the other way); each narrower than the last. The step resets when the aim ends | up to 8, 5 to 85 degrees |
+| `model_fov` | the field of view the held image is drawn with at each aim step (first for `fov`, then one per `levels` entry, the last repeating), so a scope does not magnify the gun. The image moves between this and its `first_person_view` field as the world zooms in and out. Images without a `first_person_view` are unchanged | up to 9, 1 to 150 degrees |
 | `sensitivity` | look speed while aimed, on top of the usual slowing with the field of view | 0.1 to 4, default 1 |
 | `overlay_fit` | optional: `height_black` (default, the fit below), `height` (fitted to the height and centred with the world showing either side) or `stretch` (over the whole screen whatever its shape) | one of the three words |
 | `overlay` | your own PNG (named without `.png`, relative to `assets/`) drawn over the whole view while aimed in first person, fitted to the screen's height with black either side, under the HUD. Its transparent middle is the lens; the held model is hidden meanwhile | up to 2048 px a side and 4 MB |
@@ -317,7 +318,7 @@ so a shot that was on target on their screen hits; a flying projectile
 meets them where they are; `explosion` names another projectile exploded there in
 place of its own, `player_sound` and `other_sound` play there by what it
 hit, `flown` names a projectile flown from the muzzle to that point, and
-`tracer` (`color`, `width`, `seconds`) draws a streak to it. A ray from
+`tracer` (`color`, `width`, `seconds`, and `every`, 1 to 1000, to draw only each Nth round fired since the image came up, as a belt with a tracer every fifth round does) draws a streak to it. A ray from
 the muzzle (`from_eye` false) starts at the eye instead when something
 stands within `eye_within` units in front of it, so a muzzle poking
 through a wall does not shoot past it; with `converge` it heads for the

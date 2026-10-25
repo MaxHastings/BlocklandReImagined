@@ -151,6 +151,20 @@ pub struct Definition {
     pub source: Evidence,
     pub fields: BTreeMap<String, String>,
 }
+/// What a state holds still in its holder ([`State::lock`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Lock {
+    /// The holder does not walk.
+    pub movement: bool,
+    /// The holder's view does not turn.
+    pub look: bool,
+}
+impl Lock {
+    pub fn is_none(&self) -> bool {
+        !self.movement && !self.look
+    }
+}
 /// One state of an image's state machine (`stateName[i]` and its fields).
 /// Every field may be left out of `weapons.json`: an Add-On writes only
 /// what it uses.
@@ -171,6 +185,10 @@ pub struct State {
     /// movement set of a grenade in hand, then of one with its pin pulled.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stance: BTreeMap<String, String>,
+    /// What the holder cannot do while the image is in this state: the
+    /// walk and the look both held still for a charge's pull.
+    #[serde(default, skip_serializing_if = "Lock::is_none")]
+    pub lock: Lock,
     /// Where the state goes while the image in hand is loaded or not
     /// (`stateTransitionOnLoaded`, `stateTransitionOnNotLoaded`), which a
     /// rule sets with `set_image_loaded` (v20's `setImageLoaded`). Checked
@@ -492,6 +510,16 @@ pub struct Zoom {
     /// its flash stay drawn (a model with real iron sights, no `overlay`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sights: Option<Sights>,
+    /// The horizontal field of view the held image is drawn with at each
+    /// aim step ([`Image::first_person_view`]'s `horizontal_fov` the rest of
+    /// the time): the first for `fov`, then one per entry of `levels`, the
+    /// last repeating for steps beyond the list. The world narrows as the
+    /// aim comes up while the image keeps its own field, so a scope does not
+    /// magnify the gun; the image's field moves between the two with the
+    /// world's. 1 to 150 degrees; images without a `first_person_view` are
+    /// drawn in the world's own and are unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_fov: Vec<f32>,
 }
 /// A point in a model node's own frame ([`Image::first_person_offsets`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -575,6 +603,14 @@ impl Zoom {
             n => self.levels[n - 1],
         }
     }
+    /// The held image's field of view at wheel step `level`
+    /// ([`Self::model_fov`]), or none when the aim sets none.
+    pub fn model_fov_at(&self, level: usize) -> Option<f32> {
+        self.model_fov
+            .get(level)
+            .or_else(|| self.model_fov.last())
+            .copied()
+    }
     /// [`Self::level_fov`], with a `magnification` applied to the field of
     /// view `unzoomed` the player has when not aiming.
     pub fn level_fov_from(&self, level: usize, unzoomed: f32) -> f32 {
@@ -609,6 +645,17 @@ impl Zoom {
             return Err(format!(
                 "levels: up to {} fields of view, 5 to 85 degrees, each narrower than the last",
                 Self::MAX_LEVELS
+            ));
+        }
+        if self.model_fov.len() > Self::MAX_LEVELS + 1
+            || !self
+                .model_fov
+                .iter()
+                .all(|f| f.is_finite() && (1.0..=150.0).contains(f))
+        {
+            return Err(format!(
+                "model_fov: up to {} fields of view, 1 to 150 degrees",
+                Self::MAX_LEVELS + 1
             ));
         }
         if self
@@ -2800,6 +2847,7 @@ impl Hitscan {
                         && t.width <= 1.0
                         && t.seconds > 0.0
                         && t.seconds <= 2.0
+                        && (1..=1000).contains(&t.every)
                 })
                 && self.ricochet.is_none_or(|r| {
                     (1..=8).contains(&r.times)
@@ -2809,7 +2857,7 @@ impl Hitscan {
                 && self.trace.as_ref().is_none_or(|t| t.valid())
                 && (self.trace.is_none() || self.ricochet.is_none()),
             "Invalid hitscan of {what}: range 1 to 8192, eye_within 0.1 to 50, damage -100 \
-             to 100, tracer colour 0 to 1, width to 1, seconds to 2, ricochet 1 to 8 times, \
+             to 100, tracer colour 0 to 1, width to 1, seconds to 2, every 1 to 1000, ricochet 1 to 8 times, \
              damage -100 to 100, shooter 0 to 1, trace 1 to 16 landings with loss, floor, scatter, \
              ricochet and penetration 0 to 1, at most 32 surfaces, not with ricochet"
         );
@@ -2856,6 +2904,20 @@ pub struct Tracer {
     /// Up to 2.
     #[serde(default = "default_tracer_seconds")]
     pub seconds: f32,
+    /// Only every this-many-th round fired since the image came up draws
+    /// its streak (a belt with a tracer every fifth round): 1 to 1000, 1
+    /// all of them.
+    #[serde(
+        default = "default_tracer_every",
+        skip_serializing_if = "is_every_round"
+    )]
+    pub every: u32,
+}
+fn default_tracer_every() -> u32 {
+    1
+}
+fn is_every_round(n: &u32) -> bool {
+    *n == 1
 }
 fn default_tracer_width() -> f32 {
     0.04
@@ -2899,6 +2961,10 @@ pub struct Item {
     /// do (a rifle a soldier put down in a mission).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub lingers: bool,
+    /// Where it lies it is taken only when a rule picks it up for the Use
+    /// key (`pick_up`), not by walking over it as v20's items are.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub use_only: bool,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -2916,6 +2982,7 @@ impl Default for Item {
             rotate: false,
             idle: String::new(),
             lingers: false,
+            use_only: false,
         }
     }
 }

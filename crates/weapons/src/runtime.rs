@@ -863,6 +863,10 @@ struct Equipped {
     /// ([`crate::Image::lower`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     lowering: bool,
+    /// Hitscan rounds fired since it came up, for a tracer that shows only
+    /// every Nth ([`crate::Tracer::every`]).
+    #[serde(default)]
+    rounds: std::cell::Cell<u32>,
 }
 /// Torque's `nextImage`: a right-hand image asked for while the held one's
 /// state forbids image changes. It mounts on the next state that allows one.
@@ -1152,6 +1156,18 @@ struct Ray<'a> {
     direction: Vec3,
     range: f32,
     hitscan: &'a crate::Hitscan,
+    /// Whether this round's streaks are drawn ([`crate::Tracer::every`]).
+    traced: bool,
+}
+/// Whether round number `round` (1 for the first since the image came up)
+/// of `image` draws its tracer.
+fn shot_traced(image: &Image, round: u32) -> bool {
+    let every = image
+        .shot
+        .as_ref()
+        .and_then(|s| s.hitscan.as_ref()?.tracer)
+        .map_or(1, |t| t.every);
+    round.is_multiple_of(every)
 }
 /// What one tick of an image's state machine asks of its holder.
 enum Advance {
@@ -1173,6 +1189,9 @@ pub struct WeaponsWorld {
     actors: BTreeMap<ActorId, Actor>,
     projectiles: BTreeMap<u64, Projectile>,
     drops: BTreeMap<u64, Drop>,
+    /// Drops an Add-On placed and holds where it put them (a charge on a
+    /// door): they do not fall, are not picked up and are not saved.
+    pinned: BTreeSet<u64>,
     /// Authored item boxes; a drop without one falls as a point.
     item_bounds: BTreeMap<String, ItemBounds>,
     next_id: u64,
@@ -1450,6 +1469,7 @@ impl WeaponsWorld {
             actors: BTreeMap::new(),
             projectiles: BTreeMap::new(),
             drops: BTreeMap::new(),
+            pinned: BTreeSet::new(),
             item_bounds: BTreeMap::new(),
             next_id: 1,
             events: vec![],
@@ -2630,6 +2650,7 @@ impl WeaponsWorld {
             magazine: None,
             fidget: None,
             lowering: false,
+            rounds: Default::default(),
         });
         if let Some(command) = self.pack.images[image].commands.mount.clone() {
             self.events.push(Event::ToolFire {
@@ -2810,6 +2831,7 @@ impl WeaponsWorld {
                 magazine,
                 fidget: None,
                 lowering: false,
+                rounds: Default::default(),
             });
             if self
                 .pack
@@ -3146,6 +3168,30 @@ impl WeaponsWorld {
         self.drops
             .get(&drop)
             .is_some_and(|d| id != d.source || self.tick >= d.pickup_after)
+            && !self.pinned.contains(&drop)
+    }
+    /// Hold drop `drop` where it is, facing `rotation`: it stops falling
+    /// and cannot be picked up, until it is removed. Only an Add-On's
+    /// world item (never a thrown tool) is placed so.
+    pub fn pin_drop(&mut self, drop: u64, rotation: Quat) -> Result<()> {
+        ensure!(rotation.is_finite(), "Invalid drop rotation");
+        let d = self.drops.get_mut(&drop).context("No such dropped item")?;
+        d.rotation = rotation.normalize();
+        d.velocity = Vec3::ZERO;
+        self.pinned.insert(drop);
+        Ok(())
+    }
+    /// Move a pinned drop (the mover it sits on moved).
+    pub fn set_drop_pose(&mut self, drop: u64, position: Vec3, rotation: Quat) {
+        if self.pinned.contains(&drop)
+            && position.is_finite()
+            && rotation.is_finite()
+            && position.abs().max_element() < 1e7
+            && let Some(d) = self.drops.get_mut(&drop)
+        {
+            d.position = position;
+            d.rotation = rotation.normalize();
+        }
     }
     /// Name a world drop, or take its name away (`setShapeName`).
     pub fn set_drop_name(&mut self, drop: u64, name: Option<DropName>) -> Result<()> {
@@ -3453,7 +3499,14 @@ impl WeaponsWorld {
         self.guard_hurt();
         // v20 `Item::updatePos`: the item's box falls under gravity 20 and
         // rests on its lowest face, bouncing with elasticity 0.2, friction 0.6.
+        if !self.pinned.is_empty() {
+            let lying = &self.drops;
+            self.pinned.retain(|id| lying.contains_key(id));
+        }
         for d in self.drops.values_mut() {
+            if self.pinned.contains(&d.id) {
+                continue;
+            }
             let shape = self.item_bounds.get(&d.item).map(|b| {
                 let min = Vec3::from(b.min) * d.scale;
                 let max = Vec3::from(b.max) * d.scale;
@@ -3548,6 +3601,7 @@ impl WeaponsWorld {
             .collect();
         for drop in expired {
             self.drops.remove(&drop);
+            self.pinned.remove(&drop);
             self.events.push(Event::DropRemoved { drop });
         }
         std::mem::take(&mut self.events)
@@ -4083,6 +4137,11 @@ impl WeaponsWorld {
                     None => (image.shot.clone(), image.volleys.as_slice()),
                 };
                 a.last_shot = Some(self.tick);
+                // The round's place in the image's run decides whether its
+                // tracer is drawn: every Nth, counting from the first.
+                let round = e.rounds.get().wrapping_add(1);
+                e.rounds.set(round);
+                let traced = shot_traced(image, round);
                 let mut origin = if image.melee {
                     a.frame.eye
                 } else {
@@ -4338,6 +4397,7 @@ impl WeaponsWorld {
                                 direction: turn * aim,
                                 range,
                                 hitscan,
+                                traced,
                             },
                             q,
                         );
@@ -5263,12 +5323,14 @@ impl WeaponsWorld {
                 .as_ref()
                 .map_or(from + direction * reach, |h| h.position);
             if landing == 0 {
-                self.events.push(Event::Tracer {
-                    actor: id,
-                    hand: ray.hand,
-                    image: ray.image.into(),
-                    to,
-                });
+                if ray.traced {
+                    self.events.push(Event::Tracer {
+                        actor: id,
+                        hand: ray.hand,
+                        image: ray.image.into(),
+                        to,
+                    });
+                }
                 if let Some(flown) = self.projectile_named(&ray.hitscan.flown)
                     && let Some(speed) = self.pack.projectiles.get(&flown).map(|f| f.speed)
                 {
@@ -5287,7 +5349,7 @@ impl WeaponsWorld {
                         });
                     }
                 }
-            } else if inside.is_none() {
+            } else if inside.is_none() && ray.traced {
                 self.events.push(Event::Ricochet {
                     actor: id,
                     image: ray.image.into(),

@@ -13,6 +13,8 @@ impl Perform for ops::Explode {
             damage,
             brick_radius,
             explosion,
+            kill_radius,
+            cone,
         } = self;
         session.explode(
             Vec3::from(position),
@@ -20,6 +22,8 @@ impl Perform for ops::Explode {
             damage,
             brick_radius,
             explosion.as_deref(),
+            kill_radius,
+            cone.map(|c| (Vec3::from(c.direction).normalize_or_zero(), c.cos)),
             package,
             caller,
         )

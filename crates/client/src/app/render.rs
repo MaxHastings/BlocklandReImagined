@@ -804,6 +804,7 @@ impl App {
         apply_environment(&mut camera);
         // The region the eye is in sets the fog (linear, the colour and distances the region names).
         let mut region_clear = None;
+        let mut eye_zone = None;
         if let Some(regions) = &self.scene.regions {
             let now = self.avatar.animation_time;
             let dt = (now - self.scene.fog_time).clamped(0.0, 1.0) as f32;
@@ -818,6 +819,7 @@ impl App {
                 .collect();
             camera.set_actor_suns(&suns);
             let zone = regions.locate(eye.to_array());
+            eye_zone = Some(zone);
             // Region ambient belongs to each actor's render box (actor_light),
             // not the viewer. Changing this shared scene light at a doorway
             // would relight every visible room and even the sky from the eye.
@@ -880,6 +882,19 @@ impl App {
             camera.atmosphere[1] = cap;
         }
         renderer.update_camera(frame.queue, &camera);
+        // Only the zones the eye can see into are drawn.
+        let zones = self
+            .scene
+            .zones
+            .as_ref()
+            .zip(eye_zone)
+            .map(|(graph, zone)| {
+                let planes = bri_render::scene::frustum_planes(glam::Mat4::from_cols_array(
+                    &camera.view_projection,
+                ));
+                graph.visible(zone, eye, &planes)
+            });
+        renderer.set_view_zones(0, zones);
         // Mirrors an Add-On's bricks carry: the planes that reflect live
         // this frame, each with its own view of the world.
         if self
@@ -1141,11 +1156,17 @@ impl App {
         );
         let eyes = crate::views::eyes(eye, &other_views);
         // Slots are disjoint from every mirror and the six probe faces.
-        let local_bindings = if !stock_third_person && shot.is_none() {
+        let local_bindings: Vec<_> = if !stock_third_person && shot.is_none() {
             self.world_items.local_views(view.owner)
         } else {
             Vec::new()
-        };
+        }
+        .into_iter()
+        .map(|(affinity, mut policy)| {
+            policy.horizontal_fov = controls.view_model_fov(policy.horizontal_fov);
+            (affinity, policy)
+        })
+        .collect();
         let mut local_views = Vec::with_capacity(local_bindings.len());
         // Where a held image appears to be in the world, for what leaves it.
         self.world_items
@@ -2186,6 +2207,8 @@ impl App {
             self.scene.cpu_scene = Some(visual.scene);
             self.scene.backdrop = visual.backdrop;
             self.scene.set_regions(visual.regions);
+            self.scene.zones = visual.zones;
+            self.scene.display_ramp = visual.display_ramp;
             self.scene.decals = visual.decals;
             self.scene.receiver_index = Some(visual.receiver_index);
             self.scene.cpu_terrain = visual.terrain.into_iter().map(Arc::new).collect();
@@ -2219,7 +2242,7 @@ impl App {
         // a map change needs renderers built for the new map.
         // Colour-vision assistance is a pipeline constant, too.
         let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
-        let ramp = bri_ui::screens::options::display_ramp(&self.ui.core.prefs);
+        let ramp = self.display_ramp();
         let restart = std::mem::take(&mut self.gpu.gpu_restart);
         if restart
             || bri_render::color::color_vision() != vision

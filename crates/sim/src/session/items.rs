@@ -231,29 +231,49 @@ impl Session {
                     if source.is_some_and(|s| s.0 == 0 || self.game_of(s.0) == game) {
                         let _ = self.weapons.pickup_ball(actor, id);
                     }
-                } else if !locked && self.weapons.pickup_ready(actor, id) {
-                    let item = self
-                        .weapons
-                        .drops()
-                        .find(|d| d.id == id)
-                        .map(|d| d.item.clone())
-                        .unwrap_or_default();
-                    match self.package_pickup(owner, &item, Some(id), None) {
-                        Pickup::Leave => {}
-                        Pickup::UseUp => {
-                            self.weapons.remove_drop(id);
-                            self.package_collected(owner, &item, Some(id), None);
-                        }
-                        Pickup::Take => {
-                            if self.weapons.pickup(actor, id).is_ok() {
-                                self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
-                                self.package_collected(owner, &item, Some(id), None);
-                            }
-                        }
-                    }
+                } else if !locked {
+                    self.take_drop(owner, id, false);
                 }
             }
         }
         Ok(())
+    }
+
+    /// `owner` takes dropped item `id` into their hands if they may: the
+    /// item's rules may leave it or use it up. Touching takes only the items
+    /// that are not `use_only`; the Use key (a rule's `pick_up`) takes any.
+    pub(super) fn take_drop(&mut self, owner: OwnerId, id: u64, by_use: bool) {
+        let actor = ActorId(owner);
+        if !self.weapons.pickup_ready(actor, id) {
+            return;
+        }
+        let item = self
+            .weapons
+            .drops()
+            .find(|d| d.id == id)
+            .map(|d| d.item.clone())
+            .unwrap_or_default();
+        let use_only = self
+            .weapons
+            .pack
+            .items
+            .get(&item)
+            .is_some_and(|i| i.use_only);
+        if use_only && !by_use {
+            return;
+        }
+        match self.package_pickup(owner, &item, Some(id), None) {
+            Pickup::Leave => {}
+            Pickup::UseUp => {
+                self.weapons.remove_drop(id);
+                self.package_collected(owner, &item, Some(id), None);
+            }
+            Pickup::Take => {
+                if self.weapons.pickup(actor, id).is_ok() {
+                    self.notify(owner, Notice::Sound(ITEM_SOUND.into()));
+                    self.package_collected(owner, &item, Some(id), None);
+                }
+            }
+        }
     }
 }

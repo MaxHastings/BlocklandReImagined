@@ -205,6 +205,8 @@ impl App {
         self.scene.cpu_scene = None;
         self.scene.backdrop = None;
         self.scene.set_regions(None);
+        self.scene.zones = None;
+        self.scene.display_ramp = None;
         self.scene.decals = None;
         self.scene.receiver_index = None;
         self.scene.decal_feed = Default::default();
@@ -692,6 +694,8 @@ impl App {
                         scatter: visual.scatter,
                         backdrop: visual.backdrop,
                         regions: visual.regions,
+                        zones: visual.zones,
+                        display_ramp: visual.display_ramp,
                         decals: visual.decals,
                         receiver_index: visual.receiver_index,
                         light_volume,
