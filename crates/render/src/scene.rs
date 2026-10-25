@@ -2980,7 +2980,14 @@ pub struct RenderStats {
     /// (the most any pixel adds up).
     pub point_lights: u32,
     pub lights_per_cell: u32,
+    /// Draws of the world pass by material kind, indexed by `MaterialKind as usize`
+    /// (Surface 0, Terrain 1, VertexLit 2, BrickOverlay 3, Sky 4, Cloud 5, Water 6,
+    /// UnlitOverlay 7, Unlit 8, BrickSurfaces 9, Metal 10, Physical 11, ...), so a frame
+    /// that draws the same count but looks different can be told apart.
+    pub kind_draws: [u32; KIND_SLOTS],
 }
+/// Room for every [`MaterialKind`] in [`RenderStats::kind_draws`].
+pub const KIND_SLOTS: usize = 24;
 
 /// The pass state last bound, so repeated binds are skipped.
 #[derive(Default)]
@@ -6332,6 +6339,8 @@ impl SceneRenderer {
             bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);
             for d in &order[start..end] {
                 stats.translucent_draws += u32::from(d.blend != 0);
+                let kind = d.scene.material_descriptors[d.batch.material].kind as usize;
+                stats.kind_draws[kind.min(KIND_SLOTS - 1)] += 1;
                 stats.triangles += u64::from(d.batch.indices.end - d.batch.indices.start) / 3
                     * u64::from(d.range.end - d.range.start);
             }
@@ -6397,6 +6406,9 @@ impl SceneRenderer {
             total.triangles += stats.triangles;
             total.translucent_draws += stats.translucent_draws;
             total.batched += stats.batched;
+            for (all, one) in total.kind_draws.iter_mut().zip(stats.kind_draws) {
+                *all += one;
+            }
         } else {
             total.reflection_passes += 1;
             total.reflection_draws += stats.draws;
