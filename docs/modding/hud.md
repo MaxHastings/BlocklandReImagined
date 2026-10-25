@@ -256,7 +256,16 @@ back to the stock HUD when nothing claims a region.
   is lit for `blink` seconds, then dark. A rule posts the lists with
   `set` (everyone sees the same) or `set_player` (one player, a team member's own list).
 - Any element takes `show` `{ "value", "above", "below" }` to appear only
-  while a value is in range: a low-health flash, a reload prompt.
+  while a value is in range: a low-health flash, a reload prompt. A `show`
+  may carry a second condition under `and` (itself a `show`, up to 4 in a
+  chain) that must hold too: `{ "value": "health", "above": 0, "and":
+  { "value": "aiming", "below": 0.5 } }` is alive and not aiming.
+- An `image` or `text` takes `shade` `{ "value", "colors" }`: the value
+  rounded picks one of up to 16 RGBA `colors` (the first for anything
+  below, the last for anything above), multiplied into its `tint` or
+  `color`. A crosshair that turns red over an enemy is a rule keeping 0 or
+  1 in its state and `"shade": { "value": "game:player/target", "colors":
+  [[1, 1, 1, 1], [1, 0, 0, 1]] }`.
 
 **Values** (`value`, `max`, `show`): `health`, `health_max`, `vehicle_health` (what is left of the hull of the vehicle the viewer rides, 0 to 1; missing on foot), `energy` (jet
 energy 0 to 1), `alive` (1 or 0), `center_print` and `bottom_print` (the

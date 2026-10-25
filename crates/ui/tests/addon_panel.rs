@@ -36,6 +36,7 @@ fn button(id: &str, label: &str) -> PanelButtonView {
         hover_picture: None,
         color: None,
         rect: None,
+        action: None,
     }
 }
 
@@ -47,13 +48,18 @@ fn shop() -> PanelView {
         width: 320,
         height: 300,
         items: vec![
-            PanelItemView::Text("Pick a gun.\nPay at the till.".into()),
+            PanelItemView::Text {
+                text: "Pick a gun.\nPay at the till.".into(),
+                style: PanelTextView::default(),
+            },
             PanelItemView::List {
                 id: "stock".into(),
                 rows: vec!["Pistol $5".into(), "Rifle $20".into()],
                 selected: Some(0),
                 height: 100,
                 drag: false,
+                columns: vec![],
+                icons: vec![],
             },
             PanelItemView::Field {
                 id: "note".into(),
@@ -222,6 +228,8 @@ fn backpack_and_chest() -> PanelView {
         selected: None,
         height: 80,
         drag: true,
+        columns: vec![],
+        icons: vec![],
     };
     PanelView {
         package: "rp".into(),
@@ -238,6 +246,8 @@ fn backpack_and_chest() -> PanelView {
                 selected: None,
                 height: 40,
                 drag: false,
+                columns: vec![],
+                icons: vec![],
             },
         ],
         border: true,
@@ -386,4 +396,103 @@ fn a_menu_panel_draws_its_pictures_with_no_frame_and_steps_aside_when_not_modal(
     assert!(!panel.modal() && panel.wants_mouse());
     event(&mut ui, "Panel_Button_buy", EventKind::Click);
     assert_eq!(actions(&mut ui).len(), 1);
+}
+
+fn menu() -> PanelView {
+    let mut buttons = vec![
+        button("options", "Settings"),
+        button("leave", "Disconnect"),
+        button("exit", "Quit"),
+        button("help", "Help"),
+    ];
+    buttons[0].action = Some(PanelAction::Settings);
+    buttons[1].action = Some(PanelAction::Disconnect);
+    buttons[2].action = Some(PanelAction::Quit);
+    PanelView {
+        package: "rp".into(),
+        id: "shop".into(),
+        title: "Menu".into(),
+        width: 320,
+        height: 300,
+        items: vec![
+            PanelItemView::Text {
+                text: "Orders <b>of the day</b>".into(),
+                style: PanelTextView {
+                    size: Some(18),
+                    font: Some("impact".into()),
+                    color: Some([1.0, 0.0, 0.0, 1.0]),
+                    align: PanelAlign::Center,
+                    height: Some(60),
+                },
+            },
+            PanelItemView::List {
+                id: "team".into(),
+                rows: vec!["Ann\tRifleman".into(), "Bo\tMedic".into()],
+                selected: None,
+                height: 80,
+                drag: false,
+                columns: vec![0, 100],
+                icons: vec![
+                    Some(PanelPicture {
+                        key: 7,
+                        size: [16, 16],
+                    }),
+                    None,
+                ],
+            },
+            PanelItemView::Buttons(buttons),
+        ],
+        border: true,
+        modal: true,
+        background: None,
+    }
+}
+
+#[test]
+fn panel_text_has_its_own_look_and_scrolls_and_lists_have_columns_and_row_pictures() {
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(menu())));
+    ui.update(0);
+    let v = view(&ui);
+    // The styled text sits in a scroll box of the asked height, its markup
+    // set by the engine and the rules' own text still escaped.
+    let text = v
+        .walk()
+        .find(|n| v.node(*n).ctrl.class == "GuiMLTextCtrl")
+        .unwrap();
+    assert_eq!(
+        v.node(text).ctrl.text.as_deref(),
+        Some("<font:impact:18><color:ff0000ff><just:center>Orders ‹b›of the day‹/b›")
+    );
+    let scroll = v.node(text).parent.unwrap();
+    assert_eq!(v.node(scroll).ctrl.class, "GuiScrollCtrl");
+    assert_eq!(v.node(scroll).rect.h, 60);
+    // Columns start after the row picture, which the list draws per row.
+    let list = v.id("Panel_List_team").unwrap();
+    let lead = View::profile_row_height(&ui.core.pack, "GuiTextListProfile");
+    assert_eq!(
+        v.node(list).ctrl.field("columns"),
+        Some(format!("{} {}", lead, 100 + lead).as_str())
+    );
+    assert_eq!(v.node(list).state.row_icons, [Some(7), None]);
+    assert_eq!(v.node(list).state.items[0].0, "Ann\tRifleman");
+}
+
+#[test]
+fn a_button_with_an_action_is_done_by_the_client_and_sends_no_event() {
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(menu())));
+    ui.update(0);
+    event(&mut ui, "Panel_Button_leave", EventKind::Click);
+    assert_eq!(actions(&mut ui), [UiAction::Disconnect]);
+    event(&mut ui, "Panel_Button_exit", EventKind::Click);
+    assert_eq!(actions(&mut ui), [UiAction::Quit]);
+    event(&mut ui, "Panel_Button_options", EventKind::Click);
+    assert!(actions(&mut ui).is_empty());
+    ui.update(0);
+    assert!(ui.is_open(ScreenId::Options));
+    // A button without one still tells the rules.
+    event(&mut ui, "Panel_Button_help", EventKind::Click);
+    let sent = actions(&mut ui);
+    assert!(matches!(&sent[..], [UiAction::PanelEvent { control, .. }] if control == "help"));
 }
