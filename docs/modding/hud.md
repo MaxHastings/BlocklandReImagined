@@ -296,3 +296,13 @@ sprite fonts, kill feeds, message feeds, trackers, stock texts), `crates/client/
 `crates/client/tests/hud_regions_render.rs` (including the Runner's ammo
 counter), and `crates/sim/tests/script_api.rs`
 `a_held_guns_ammo_reaches_its_holder_for_hud_counters`.
+
+**A layout's own frame.** A layout that sets `"basis": [800, 600]` is
+authored in a frame of that size instead of the region's box: every
+position, size and spacing in the file is in those units, from the frame's
+top left. The frame is as tall as the screen and sits against the edge its
+region touches (left for `top_left`, `left`, `bottom_left` and `chat`;
+right for `top_right`, `right`, `bottom_right`, `energy`, `ammo` and
+`tools`; the middle for the rest), so a game drawn at 800x600 keeps its
+numbers at any aspect. Left out, units are HUD units from the region's
+corner as above.

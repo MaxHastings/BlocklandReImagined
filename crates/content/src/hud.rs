@@ -13,6 +13,11 @@
 //! its region's top left corner, x right and y down. Elements may reach
 //! outside their box: the box is where they are placed from, not a clip.
 //!
+//! A layout with a [`Layout::basis`] is drawn in its own frame instead: the
+//! frame is as tall as the screen, `basis` units across and high, and sits
+//! against the screen edge its region touches ([`Region::anchor`]), so a
+//! game authored at 800x600 keeps its numbers.
+//!
 //! What wins when two Add-Ons claim one region ([`Claim::rank`]): the
 //! claim whose condition is the most specific (a vehicle seat, then a held
 //! item, then a body, then none), then the higher `priority`, then the
@@ -25,6 +30,8 @@ use std::collections::BTreeMap;
 
 /// The HUD's height in units.
 pub const HEIGHT: f32 = 480.0;
+/// Largest frame a layout's `basis` may name, units.
+pub const BASIS_MAX: f32 = 8192.0;
 /// Most elements in one layout.
 pub const MAX_ELEMENTS: usize = 64;
 
@@ -112,6 +119,20 @@ impl Region {
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|r| r.name() == name)
     }
+    /// The screen edge a layout frame ([`Layout::basis`]) sits against: the
+    /// edge the region's box touches, else the middle.
+    pub fn anchor(self) -> Anchor {
+        match self {
+            Region::TopLeft | Region::Left | Region::BottomLeft | Region::Chat => Anchor::Left,
+            Region::TopRight
+            | Region::Right
+            | Region::BottomRight
+            | Region::Energy
+            | Region::Ammo
+            | Region::Tools => Anchor::Right,
+            _ => Anchor::Center,
+        }
+    }
     /// The stock element a claim on this region hides, if any.
     pub fn stock(self) -> Option<&'static str> {
         match self {
@@ -157,6 +178,44 @@ impl Region {
     }
 }
 
+/// Which side of the screen a layout frame sits against ([`Region::anchor`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Anchor {
+    Left,
+    Center,
+    Right,
+}
+
+/// Where a layout's units start and how big they are on a screen
+/// `width` by `height` pixels: the pixel scale of one unit and the corner
+/// items are measured from, in units. Without a `basis` that is the
+/// region's box on a screen [`HEIGHT`] units tall; with one, the layout's
+/// frame, as tall as the screen, against the edge the region touches.
+pub fn placement(
+    region: Region,
+    basis: Option<[f32; 2]>,
+    width: f32,
+    height: f32,
+) -> (f32, [f32; 2]) {
+    match basis {
+        None => {
+            let unit = height / HEIGHT;
+            let [x, y, ..] = region.rect(width / unit);
+            (unit, [x, y])
+        }
+        Some([frame_w, frame_h]) => {
+            let unit = height / frame_h;
+            let spare = (width / unit - frame_w).max(0.0);
+            let left = match region.anchor() {
+                Anchor::Left => 0.0,
+                Anchor::Center => spare / 2.0,
+                Anchor::Right => spare,
+            };
+            (unit, [left, 0.0])
+        }
+    }
+}
+
 /// A HUD file that claims a region (`"region"`): when it applies and what
 /// it draws.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,6 +233,13 @@ pub struct Layout {
     /// smoothed: pixel art and sprite fonts.
     #[serde(default)]
     pub pixelated: bool,
+    /// The size, in the layout's own units, of the frame it is authored in
+    /// (`[800, 600]` for a game drawn at 800x600). Every position and size
+    /// in the layout is then in those units, from the frame's top left,
+    /// and the frame is as tall as the screen, against the edge the region
+    /// touches. Left out, units are HUD units from the region's corner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<[f32; 2]>,
     /// What it draws, back to front. Empty claims the region to hide the
     /// stock element there, or for the Add-On's own client code to draw
     /// into (`hud_region`).
@@ -1076,6 +1142,14 @@ impl Layout {
                     .color
                     .is_none_or(|c| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))),
                 "name_tags color must be RGBA from 0 to 1"
+            );
+        }
+        if let Some(basis) = self.basis {
+            ensure!(
+                basis
+                    .iter()
+                    .all(|v| v.is_finite() && (1.0..=BASIS_MAX).contains(v)),
+                "basis is a frame size from 1 to {BASIS_MAX} units each way"
             );
         }
         ensure!(
@@ -2328,6 +2402,27 @@ mod tests {
         assert_eq!(Region::parse("building"), Some(Region::Building));
         assert!(building.region.stock().is_some());
         assert_eq!(Region::Tools.rect(640.0), [576.0, 0.0, 64.0, HEIGHT]);
+    }
+
+    #[test]
+    fn a_basis_frame_is_as_tall_as_the_screen_against_its_regions_edge() {
+        // 800x600 on a 1800x900 screen: 1.5 pixels a unit, 400 units spare.
+        let place = |region, basis| placement(region, basis, 1800.0, 900.0);
+        let frame = Some([800.0, 600.0]);
+        assert_eq!(place(Region::BottomLeft, frame), (1.5, [0.0, 0.0]));
+        assert_eq!(place(Region::BottomCenter, frame), (1.5, [200.0, 0.0]));
+        assert_eq!(place(Region::TopRight, frame), (1.5, [400.0, 0.0]));
+        // Without a basis the region's box on the 480-unit screen.
+        let (unit, corner) = place(Region::BottomLeft, None);
+        assert!((unit - 900.0 / 480.0).abs() < 1e-6);
+        assert_eq!(corner, [0.0, 360.0]);
+        // Bad frames are refused.
+        for basis in [[0.0, 600.0], [800.0, -5.0], [800.0, 10_000.0]] {
+            let bad: Layout = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "region": "top_left", "basis": basis }))
+            .unwrap();
+            assert!(bad.validate().is_err(), "{basis:?}");
+        }
     }
 
     fn layout(json: serde_json::Value) -> Layout {

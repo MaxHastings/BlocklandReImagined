@@ -328,9 +328,10 @@ fn package_panels(pack: &Pack, dl: &mut DrawList, core: &Core) {
 }
 
 /// The HUD regions Add-Ons claim (`bri_content::hud`): each region's box
-/// on a screen 480 units tall, its items placed from the box's corner.
+/// on a screen 480 units tall, its items placed from the box's corner (or
+/// from its layout's own frame, `placement`).
 fn hud_regions(pack: &Pack, dl: &mut DrawList, core: &Core) {
-    use bri_content::hud::{Align, HEIGHT, Item};
+    use bri_content::hud::{Align, Item};
     if core.hud_regions.is_empty() {
         return;
     }
@@ -338,8 +339,6 @@ fn hud_regions(pack: &Pack, dl: &mut DrawList, core: &Core) {
     if w <= 0 || h <= 0 {
         return;
     }
-    let unit = h as f32 / HEIGHT;
-    let width = w as f32 / unit;
     let font = pack
         .data
         .styles
@@ -349,7 +348,8 @@ fn hud_regions(pack: &Pack, dl: &mut DrawList, core: &Core) {
     let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
     let rgba = |c: [f32; 4]| c.map(byte);
     for region in &core.hud_regions {
-        let [ox, oy, ..] = region.region.rect(width);
+        let (unit, [ox, oy]) =
+            bri_content::hud::placement(region.region, region.basis, w as f32, h as f32);
         let px = |x: f32, y: f32| ((ox + x) * unit, (oy + y) * unit);
         let filter = if region.pixelated {
             crate::draw::Filter::Nearest

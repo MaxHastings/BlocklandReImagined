@@ -631,6 +631,9 @@ pub struct HudRegionDraw {
     /// Images drawn with sharp pixels.
     pub pixelated: bool,
     pub items: Vec<bri_content::hud::Item>,
+    /// The layout's frame (`Layout::basis`): `items` are in its units, from
+    /// its top left. `None`: HUD units from the region's corner.
+    pub basis: Option<[f32; 2]>,
     /// A `name_tags` claim's style for the names over players' heads.
     pub name_tags: Option<bri_content::hud::NameTagStyle>,
 }

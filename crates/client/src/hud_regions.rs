@@ -310,6 +310,7 @@ impl HudRegions {
                 region,
                 pixelated: winner.layout.pixelated,
                 items,
+                basis: winner.layout.basis,
                 name_tags: winner.layout.name_tags.clone(),
             });
         }
