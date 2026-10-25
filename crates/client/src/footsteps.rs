@@ -3,7 +3,7 @@
 //! draws, from the poses it already has, so they cost nothing on the wire:
 //! a step each stride of ground covered while grounded, and a landing when
 //! a body that was falling fast touches down. v20's Blockhead has neither.
-use bri_sim::archetype::{ArchetypeId, Archetypes, Sounds, StepEvent};
+use bri_sim::archetype::{ArchetypeId, Archetypes, FootContact, Sounds, StepEvent};
 use bri_sim::player::PlayerState;
 use glam::Vec3;
 use std::collections::BTreeMap;
@@ -74,6 +74,24 @@ impl ClipSpan {
     }
 }
 
+/// One footfall to play: its sound, where, and what it leaves on the
+/// surface it landed on ([`Sounds::contacts`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Footfall {
+    pub sound: String,
+    pub at: [f32; 3],
+    pub contact: Option<FootContact>,
+}
+impl Footfall {
+    fn on(sounds: &Sounds, sound: &str, at: [f32; 3], surface: &str) -> Self {
+        Self {
+            sound: sound.to_owned(),
+            at,
+            contact: sounds.contact_on(surface).cloned(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Walker {
     /// Ground covered since the last footfall.
@@ -83,6 +101,8 @@ struct Walker {
     grounded: bool,
     /// The fastest it fell since it last stood.
     falling: f32,
+    /// Whether the last frame's jump take-off was already heard.
+    airborne: bool,
 }
 
 #[derive(Default)]
@@ -104,7 +124,7 @@ impl Footsteps {
         span: &ClipSpan,
         mut foot: impl FnMut(&StepEvent) -> [f32; 3],
         mut surface: impl FnMut([f32; 3]) -> String,
-    ) -> Vec<(String, [f32; 3])> {
+    ) -> Vec<Footfall> {
         let mut out = Vec::new();
         let Some(events) = sounds.steps.get(&span.clip) else {
             return out;
@@ -117,10 +137,11 @@ impl Footsteps {
                 continue;
             }
             let position = foot(event);
+            let kind = surface(position);
             let steps = if sounds.surfaces.is_empty() {
                 &sounds.footsteps[..]
             } else {
-                sounds.footsteps_on(&surface(position))
+                sounds.footsteps_on(&kind)
             };
             if steps.is_empty() {
                 continue;
@@ -132,7 +153,7 @@ impl Footsteps {
                 pick = (pick + 1) % steps.len();
             }
             walker.last = pick;
-            out.push((steps[pick].clone(), position));
+            out.push(Footfall::on(sounds, &steps[pick], position, &kind));
         }
         out
     }
@@ -145,7 +166,7 @@ impl Footsteps {
         players: impl IntoIterator<Item = Walk>,
         archetypes: &Archetypes,
         mut surface: impl FnMut([f32; 3]) -> String,
-    ) -> Vec<(String, [f32; 3])> {
+    ) -> Vec<Footfall> {
         let mut out = Vec::new();
         let mut seen = Vec::new();
         if !(seconds.is_finite() && seconds > 0.0) {
@@ -166,25 +187,49 @@ impl Footsteps {
                 if walker.falling >= Sounds::LAND_SPEED {
                     if let Some(land) = sounds.land.as_ref() {
                         if !land.is_empty() {
-                            out.push((land.clone(), player.feet));
+                            out.push(Footfall {
+                                sound: land.clone(),
+                                at: player.feet,
+                                contact: None,
+                            });
                         }
                     } else if sounds.land_on_surface {
                         // AA's PlayLanded: the floor material's foot-contact sound.
+                        let kind = surface(player.feet);
                         let steps = if sounds.surfaces.is_empty() {
                             &sounds.footsteps[..]
                         } else {
-                            sounds.footsteps_on(&surface(player.feet))
+                            sounds.footsteps_on(&kind)
                         };
                         if !steps.is_empty() {
                             self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
                             let pick = (self.turn >> 16) as usize % steps.len();
                             walker.last = pick;
-                            out.push((steps[pick].clone(), player.feet));
+                            out.push(Footfall::on(sounds, &steps[pick], player.feet, &kind));
                         }
                     }
                 }
                 // Feet down: the next step is a whole stride away.
                 walker.covered = 0.0;
+                walker.airborne = false;
+            }
+            // A jump's take-off: off the ground rising, heard once.
+            if !player.grounded && walker.grounded && !walker.airborne {
+                walker.airborne = true;
+                if sounds.takeoff_on_surface && velocity.y > 0.0 {
+                    let kind = surface(player.feet);
+                    let steps = if sounds.surfaces.is_empty() {
+                        &sounds.footsteps[..]
+                    } else {
+                        sounds.footsteps_on(&kind)
+                    };
+                    if !steps.is_empty() {
+                        self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                        let pick = (self.turn >> 16) as usize % steps.len();
+                        walker.last = pick;
+                        out.push(Footfall::on(sounds, &steps[pick], player.feet, &kind));
+                    }
+                }
             }
             walker.falling = if player.grounded {
                 0.0
@@ -208,10 +253,11 @@ impl Footsteps {
             let stride = sounds.stride_for(archetype.movement.stand_height, player.scale.max(0.01));
             if walker.covered >= stride {
                 walker.covered %= stride;
+                let kind = surface(player.feet);
                 let steps = if sounds.surfaces.is_empty() {
                     &sounds.footsteps[..]
                 } else {
-                    sounds.footsteps_on(&surface(player.feet))
+                    sounds.footsteps_on(&kind)
                 };
                 let count = steps.len();
                 if count == 0 {
@@ -223,7 +269,7 @@ impl Footsteps {
                     pick = (pick + 1) % count;
                 }
                 walker.last = pick;
-                out.push((steps[pick].clone(), player.feet));
+                out.push(Footfall::on(sounds, &steps[pick], player.feet, &kind));
             }
         }
         self.walkers.retain(|owner, _| seen.contains(owner));
@@ -353,7 +399,10 @@ mod tests {
             heard.extend(steps.update(1.0 / 60.0, [runner], &archetypes, |_| "default".into()));
         }
         assert!((5..=6).contains(&heard.len()), "{heard:?}");
-        assert!(heard.windows(2).all(|w| w[0].0 != w[1].0), "{heard:?}");
+        assert!(
+            heard.windows(2).all(|w| w[0].sound != w[1].sound),
+            "{heard:?}"
+        );
     }
 
     #[test]
@@ -373,14 +422,61 @@ mod tests {
         steps.update(1.0 / 60.0, [falling], &archetypes, |_| "metal".into());
         let heard = steps.update(1.0 / 60.0, [landed], &archetypes, |_| "metal".into());
         assert_eq!(heard.len(), 1, "{heard:?}");
-        assert_eq!(heard[0].0, "test:metal_step");
+        assert_eq!(heard[0].sound, "test:metal_step");
         // A body with no landing option stays silent.
         let mut quiet = Footsteps::default();
         let plain = player(walker, [0.0, -9.0, 0.0], false);
         let down = player(walker, [0.0, 0.0, 0.0], true);
         quiet.update(1.0 / 60.0, [plain], &archetypes, |_| "metal".into());
         let heard = quiet.update(1.0 / 60.0, [down], &archetypes, |_| "metal".into());
-        assert_eq!(heard.iter().filter(|h| h.0 == "test:metal_step").count(), 0);
+        assert_eq!(
+            heard
+                .iter()
+                .filter(|h| h.sound == "test:metal_step")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn a_jump_sounds_its_take_off_once_and_a_footfall_leaves_its_marks() {
+        let (mut archetypes, walker) = walker_body();
+        let mut body = archetypes.resolve(walker).clone();
+        body.id = "test:archetype/jumper".into();
+        body.sounds.land = None;
+        body.sounds.land_on_surface = true;
+        body.sounds.takeoff_on_surface = true;
+        body.sounds
+            .surfaces
+            .insert("sand".into(), vec!["test:sand_step".into()]);
+        body.sounds.contacts.insert(
+            "sand".into(),
+            FootContact {
+                effect: Some("test:dust".into()),
+                decal: None,
+            },
+        );
+        let jumper = archetypes.add(body).expect("valid body");
+        let mut steps = Footsteps::default();
+        let standing = player(jumper, [0.0, 0.0, 0.0], true);
+        let rising = player(jumper, [0.0, 6.0, 0.0], false);
+        steps.update(1.0 / 60.0, [standing], &archetypes, |_| "sand".into());
+        let heard = steps.update(1.0 / 60.0, [rising], &archetypes, |_| "sand".into());
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert_eq!(heard[0].sound, "test:sand_step");
+        let contact = heard[0].contact.as_ref().expect("sand leaves dust");
+        assert_eq!(contact.effect.as_deref(), Some("test:dust"));
+        // Still rising: not heard again.
+        assert!(
+            steps
+                .update(1.0 / 60.0, [rising], &archetypes, |_| "sand".into())
+                .is_empty()
+        );
+        // Stone leaves nothing.
+        let mut stone = Footsteps::default();
+        stone.update(1.0 / 60.0, [standing], &archetypes, |_| "stone".into());
+        let heard = stone.update(1.0 / 60.0, [rising], &archetypes, |_| "stone".into());
+        assert!(heard.iter().all(|h| h.contact.is_none()), "{heard:?}");
     }
 
     #[test]
@@ -397,7 +493,7 @@ mod tests {
             let kind = if i < 60 { "metal" } else { "dirt" };
             heard.extend(steps.update(1.0 / 60.0, [runner], &archetypes, |_| kind.into()));
         }
-        let names: Vec<_> = heard.iter().map(|h| h.0.as_str()).collect();
+        let names: Vec<_> = heard.iter().map(|h| h.sound.as_str()).collect();
         assert!(names.contains(&"test:clang"), "{names:?}");
         assert!(
             names.iter().any(|n| n.starts_with("test:step")),
@@ -425,7 +521,11 @@ mod tests {
         }
         let landed = player(id, [0.0, 0.0, 0.0], true);
         let heard = steps.update(1.0 / 60.0, [landed], &archetypes, |_| "default".into());
-        assert_eq!(heard, vec![("test:land".to_string(), landed.feet)]);
+        assert_eq!(heard.len(), 1);
+        assert_eq!(
+            (heard[0].sound.as_str(), heard[0].at),
+            ("test:land", landed.feet)
+        );
         assert!(
             steps
                 .update(1.0 / 60.0, [landed], &archetypes, |_| "default".into())
