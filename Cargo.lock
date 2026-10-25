@@ -874,6 +874,7 @@ dependencies = [
  "bri-package",
  "bri-package-runtime",
  "bri-physics",
+ "bri-ue2-rules",
  "bri-vehicles",
  "bri-weapons",
  "bri-world",

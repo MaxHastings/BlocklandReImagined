@@ -21,8 +21,8 @@ pub use animation::{
     ActiveAnimation, AnimationAsset, AnimationAssets, AnimationClip, AnimationImageAsset,
     AnimationOutcome, AnimationPose, AnimationPoseApplicability, AnimationPoseRetention,
     AnimationPoseState, AnimationPoseView, AnimationRecord, AnimationStart, AnimationTarget,
-    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, LibraryClip, PlaybackId,
-    PreparedAnimationStart,
+    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, LibraryClip,
+    MAX_ASSETS as MAX_ANIMATION_ASSETS, PlaybackId, PreparedAnimationStart,
 };
 pub use body_pose::{BodyPoseAssetInfo, BodyPoseBinding, BodyPoseBindings};
 mod bots;
@@ -863,6 +863,8 @@ struct Peer {
     body_command_tick: Option<u64>,
     /// Archetypes packages laid over this life's own (`push_archetype`).
     overlays: Option<Overlays>,
+    /// The archetype the image in the right hand laid over the body.
+    stance: Option<crate::archetype::ArchetypeId>,
     window_tick: u64,
     actions: u32,
     chats: u32,
@@ -1008,6 +1010,7 @@ impl Peer {
             chosen_body: None,
             body_command_tick: None,
             overlays: None,
+            stance: None,
             window_tick: tick,
             actions: 0,
             chats: 0,
@@ -1073,6 +1076,8 @@ pub struct Session {
     /// Installed only on the Tutorial map.
     tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
+    /// Where each body marking its footfalls is in its locomotion clip (`footfall_noise`).
+    gaits: crate::gait::Gaits,
     vehicles: vehicles::Vehicles,
     riding: riding::Riding,
     minigames: bri_minigames::MinigamesWorld,
@@ -1272,6 +1277,7 @@ impl Session {
             copy_jobs: Default::default(),
             tutorial: None,
             bots: Default::default(),
+            gaits: Default::default(),
             vehicles: Default::default(),
             riding: Default::default(),
             minigames: combat::new_world(
@@ -3495,6 +3501,7 @@ impl Session {
         self.player_mount_contacts();
         self.sync_seated();
         self.advance_animations();
+        self.footfall_noise();
         contain("weapons", self.step_weapons());
         contain("image speeds", self.step_image_speeds());
         self.step_temp_colors();

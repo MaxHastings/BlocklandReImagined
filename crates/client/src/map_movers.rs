@@ -4,7 +4,9 @@
 use crate::audio::PositionalSource;
 use anyhow::Result;
 use bri_content::mover::MoverState;
-use bri_render::scene::{GpuInstances, GpuScene, SceneData, SceneRenderer, SceneTransform};
+use bri_render::scene::{
+    ActorLight, GpuInstances, GpuScene, SceneData, SceneRenderer, SceneTransform,
+};
 use bri_sim::map::MapMover;
 
 /// How near a mover's looped sound is at full volume, and how far it
@@ -30,6 +32,8 @@ struct Model {
     /// None until the first, which only learns and never sounds (a
     /// player joining while a door swings hears nothing of the start).
     last: Option<(bool, u8)>,
+    /// Not drawn, and silent ([`MoverState::hidden`]).
+    hidden: bool,
 }
 
 /// Every mover of the current map.
@@ -53,6 +57,7 @@ impl ClientMovers {
                     transform: mover.placement,
                     tint: [1.0; 4],
                 };
+                let hidden = mover.def.hidden;
                 Some(Model {
                     mover,
                     data,
@@ -60,6 +65,7 @@ impl ClientMovers {
                     instances: None,
                     transform,
                     last: None,
+                    hidden,
                 })
             })
             .collect();
@@ -87,18 +93,23 @@ impl ClientMovers {
         for (index, model) in self.models.iter_mut().enumerate() {
             let state = states.get(index).copied().unwrap_or_default();
             model.transform.transform = model.mover.transform_at(&state, tick);
+            model.hidden = state.hidden;
             let moving = state.moving && state.alpha_at_f(tick) < 1.0;
             let now = (moving, state.to);
             let Some(before) = model.last.replace(now) else {
                 continue;
             };
+            if model.hidden {
+                continue;
+            }
             let Some(set) = &model.mover.def.sounds else {
                 continue;
             };
             let name = match (before, now) {
-                // Began, or turned back toward another key mid-swing.
-                ((was, to), (true, new_to)) if !was || to != new_to => set.start(new_to),
-                ((true, _), (false, rest)) => set.rest(rest),
+                ((false, _), (true, new_to)) => set.start(new_to),
+                // Turned back toward another key mid-swing.
+                ((true, to), (true, new_to)) if to != new_to => set.reverse(new_to),
+                ((true, _), (false, _)) => set.halt(&state, state.alpha_at_f(tick)),
                 _ => None,
             };
             if let Some(profile) = name {
@@ -118,6 +129,9 @@ impl ClientMovers {
             .enumerate()
             .filter_map(|(index, model)| {
                 let (true, _) = model.last? else { return None };
+                if model.hidden {
+                    return None;
+                }
                 let set = model.mover.def.sounds.as_ref()?;
                 Some(PositionalSource {
                     key: LOOP_KEY_BASE + index as u64,
@@ -150,6 +164,7 @@ impl ClientMovers {
         renderer: &SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        light_at: &dyn Fn([f32; 3]) -> Option<ActorLight>,
     ) -> Result<()> {
         for model in &mut self.models {
             if model.gpu.is_none() {
@@ -159,7 +174,20 @@ impl ClientMovers {
                 model.instances = Some(GpuInstances::new(device, 1)?);
             }
             if let Some(instances) = &mut model.instances {
-                instances.update(queue, std::slice::from_ref(&model.transform))?;
+                // A lit door (`MaterialKind::ActorLit`) takes the light of where it is, as dropped items do.
+                let light = light_at(model.transform.transform.w_axis.truncate().to_array())
+                    .unwrap_or(ActorLight {
+                        ambient: [0.0; 3],
+                        sun_first: 0,
+                        sun_count: 0,
+                        scene_sun: true,
+                    });
+                instances.update_lit(
+                    queue,
+                    std::slice::from_ref(&model.transform),
+                    &[],
+                    &[light],
+                )?;
             }
         }
         Ok(())
@@ -167,6 +195,7 @@ impl ClientMovers {
     pub fn draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
         self.models
             .iter()
+            .filter(|m| !m.hidden)
             .filter_map(|m| Some((m.gpu.as_ref()?, m.instances.as_ref()?)))
             .collect()
     }
@@ -190,6 +219,9 @@ mod tests {
             closing: Some("door.close".into()),
             closed: Some("door.shut".into()),
             moving: Some("door.creak".into()),
+            stopped: Some("door.stopped".into()),
+            partial_closing: Some("door.creak_shut".into()),
+            partial_opening: None,
             volume: 1.0,
         };
         MapMover {
@@ -203,6 +235,7 @@ mod tests {
                 collide: true,
                 params: Default::default(),
                 sounds: Some(sounds),
+                hidden: false,
             },
             placement: glam::Mat4::IDENTITY,
             colliders: 0..0,
@@ -220,6 +253,7 @@ mod tests {
                     tint: [1.0; 4],
                 },
                 last: None,
+                hidden: false,
             }],
         }
     }
@@ -260,5 +294,42 @@ mod tests {
             names(movers.update(&[MoverState::at_rest(1)], 100.0)),
             ["door.opened"]
         );
+    }
+
+    #[test]
+    fn a_door_held_part_way_sounds_stopped_not_opened() {
+        let mut movers = with_door();
+        let mut opening = MoverState::at_rest(0);
+        opening.to = 1;
+        opening.alpha = 0.0;
+        opening.rate = 0.01;
+        opening.moving = true;
+        movers.update(&[opening], 1.0);
+        let mut held = opening;
+        held.alpha = 0.5;
+        held.moving = false;
+        assert_eq!(names(movers.update(&[held], 2.0)), ["door.stopped"]);
+        assert!(movers.loops().is_empty());
+    }
+
+    #[test]
+    fn a_door_that_turns_back_part_way_sounds_its_partial_sound() {
+        let mut movers = with_door();
+        let mut opening = MoverState::at_rest(0);
+        opening.to = 1;
+        opening.alpha = 0.0;
+        opening.rate = 0.01;
+        opening.moving = true;
+        movers.update(&[opening], 1.0);
+        let mut back = opening;
+        back.from = 1;
+        back.to = 0;
+        back.alpha = 0.5;
+        assert_eq!(names(movers.update(&[back], 2.0)), ["door.creak_shut"]);
+        let mut again = back;
+        again.from = 0;
+        again.to = 1;
+        // No partial opening sound is set: the plain one plays.
+        assert_eq!(names(movers.update(&[again], 3.0)), ["door.open"]);
     }
 }

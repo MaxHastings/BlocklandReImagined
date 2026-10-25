@@ -250,6 +250,11 @@ pub trait World {
     fn movers_near(&self, _player: u64, _reach: f32) -> Vec<String> {
         Vec::new()
     }
+    /// The shown movers whose collision lies within `radius` of `at`, as
+    /// (id, distance, nearest point of it), nearest first.
+    fn movers_within(&self, _at: [f32; 3], _radius: f32) -> Vec<(String, f32, [f32; 3])> {
+        Vec::new()
+    }
     /// The map's volumes holding the world point `at`, highest priority
     /// first and then in map order.
     fn volumes_at(&self, _at: [f32; 3]) -> Vec<VolumeInfo> {
@@ -1766,6 +1771,8 @@ fn register_api(engine: &mut Engine) {
                 damage: float(&damage)?,
                 brick_radius: float(&brick_radius)?,
                 explosion: None,
+                kill_radius: 0.0,
+                cone: None,
             }))
         },
     );
@@ -1784,6 +1791,59 @@ fn register_api(engine: &mut Engine) {
                 damage: float(&damage)?,
                 brick_radius: float(&brick_radius)?,
                 explosion: Some(explosion.into()),
+                kill_radius: 0.0,
+                cone: None,
+            }))
+        },
+    );
+    // With the distance within which it kills outright.
+    engine.register_fn(
+        "explode",
+        |x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         radius: Dynamic,
+         damage: Dynamic,
+         brick_radius: Dynamic,
+         explosion: &str,
+         kill_radius: Dynamic| {
+            push(Op::Explode(ops::Explode {
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                radius: float(&radius)?,
+                damage: float(&damage)?,
+                brick_radius: float(&brick_radius)?,
+                explosion: Some(explosion.into()),
+                kill_radius: float(&kill_radius)?,
+                cone: None,
+            }))
+        },
+    );
+    // With a cone: only bodies within it of the centre are hurt.
+    engine.register_fn(
+        "explode",
+        |x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         radius: Dynamic,
+         damage: Dynamic,
+         brick_radius: Dynamic,
+         explosion: &str,
+         kill_radius: Dynamic,
+         dx: Dynamic,
+         dy: Dynamic,
+         dz: Dynamic,
+         cos: Dynamic| {
+            push(Op::Explode(ops::Explode {
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                radius: float(&radius)?,
+                damage: float(&damage)?,
+                brick_radius: float(&brick_radius)?,
+                explosion: Some(explosion.into()),
+                kill_radius: float(&kill_radius)?,
+                cone: Some(ops::Cone {
+                    direction: [float(&dx)?, float(&dy)?, float(&dz)?],
+                    cos: float(&cos)?,
+                }),
             }))
         },
     );
@@ -2632,6 +2692,39 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
+    // A world item held where it is put, on a map mover when `mover` names
+    // one (`()` for none): place_item(item, x, y, z, nx, ny, nz, mover,
+    // seconds).
+    engine.register_fn(
+        "place_item",
+        |item: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         nx: Dynamic,
+         ny: Dynamic,
+         nz: Dynamic,
+         mover: Dynamic,
+         seconds: i64| {
+            let mover = if mover.is_unit() {
+                None
+            } else {
+                Some(
+                    mover
+                        .into_string()
+                        .map_err(|_| "a mover is named by text")?,
+                )
+            };
+            push(Op::PlaceItem(ops::PlaceItem {
+                item: item.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                normal: [float(&nx)?, float(&ny)?, float(&nz)?],
+                mover,
+                data: None,
+                seconds: u32::try_from(seconds).map_err(|_| "seconds is 1 up to ten minutes")?,
+            }))
+        },
+    );
     engine.register_fn("heal", |player: Dynamic, amount: Dynamic| {
         push(Op::Heal(ops::Heal {
             player: id(&player)?,
@@ -2815,40 +2908,81 @@ fn register_api(engine: &mut Engine) {
         }))
     });
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
-        push(Op::Sound(ops::Sound {
-            profile: profile.into(),
-            at: SoundAt::Player(id(&player)?),
-            volume: 1.0,
-        }))
+        push(Op::Sound(sound(
+            profile,
+            SoundAt::Player(id(&player)?),
+            1.0,
+            1.0,
+            0.0,
+        )))
     });
     engine.register_fn(
         "play_sound",
         |player: Dynamic, profile: &str, volume: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Player(id(&player)?),
-                volume: float(&volume)?,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Player(id(&player)?),
+                float(&volume)?,
+                1.0,
+                0.0,
+            )))
+        },
+    );
+    // `PlaySound(sound, slot, volume, bNoOverride, radius, pitch)`: the
+    // volume, then the pitch (times the profile's own).
+    engine.register_fn(
+        "play_sound",
+        |player: Dynamic, profile: &str, volume: Dynamic, pitch: Dynamic| {
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Player(id(&player)?),
+                float(&volume)?,
+                float(&pitch)?,
+                0.0,
+            )))
         },
     );
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
-                volume: 1.0,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                1.0,
+                1.0,
+                0.0,
+            )))
         },
     );
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic, volume: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
-                volume: float(&volume)?,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                float(&volume)?,
+                1.0,
+                0.0,
+            )))
+        },
+    );
+    // With the volume, the pitch and the radius it is heard out to.
+    engine.register_fn(
+        "sound_at",
+        |profile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         volume: Dynamic,
+         pitch: Dynamic,
+         radius: Dynamic| {
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                float(&volume)?,
+                float(&pitch)?,
+                float(&radius)?,
+            )))
         },
     );
     physics::register(engine);
@@ -3399,6 +3533,35 @@ fn register_presentation(engine: &mut Engine) {
             ))
         })
     });
+    // The shown movers a blast at a point reaches: #[#{ id, gap, x, y, z }]
+    // with the nearest point of each, nearest first.
+    engine.register_fn(
+        "movers_within",
+        |x: Dynamic, y: Dynamic, z: Dynamic, radius: Dynamic| {
+            let at = [float(&x)?, float(&y)?, float(&z)?];
+            let radius = float(&radius)?;
+            if !(0.0..=64.0).contains(&radius) {
+                return fail("movers_within reaches 0 to 64 units");
+            }
+            with_world(|world, _| {
+                Ok(Dynamic::from_array(
+                    world
+                        .movers_within(at, radius)
+                        .into_iter()
+                        .map(|(id, gap, [px, py, pz])| {
+                            map([
+                                ("id", id.into()),
+                                float_entry("gap", gap),
+                                float_entry("x", px),
+                                float_entry("y", py),
+                                float_entry("z", pz),
+                            ])
+                        })
+                        .collect(),
+                ))
+            })
+        },
+    );
     engine.register_fn("map_region_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
         let at = [float(&x)?, float(&y)?, float(&z)?];
         with_world(|world, _| {
@@ -3438,6 +3601,12 @@ fn register_presentation(engine: &mut Engine) {
             id: name.to_owned(),
             key,
             seconds: float(&seconds)?,
+        }))
+    });
+    engine.register_fn("mover_show", |name: &str, shown: bool| {
+        push(Op::MoverShow(ops::MoverShow {
+            id: name.to_owned(),
+            shown,
         }))
     });
     engine.register_fn("mover_stop", |name: &str| {
@@ -3749,6 +3918,29 @@ fn register_presentation(engine: &mut Engine) {
         push(Op::SetImageState(ops::SetImageState {
             player: id(&player)?,
             state: state.into(),
+        }))
+    });
+    // Pick a world item up as walking onto it would.
+    engine.register_fn("pick_up", |player: Dynamic, drop: Dynamic| {
+        push(Op::PickUp(ops::PickUp {
+            player: id(&player)?,
+            drop: u64::try_from(drop.as_int().map_err(|_| "a drop is a number")?)
+                .map_err(|_| "a drop is not negative")?,
+        }))
+    });
+    // Take the tool in a slot out, or () to put tools away.
+    engine.register_fn("select_tool", |player: Dynamic, slot: Dynamic| {
+        let slot = if slot.is_unit() {
+            None
+        } else {
+            Some(
+                u8::try_from(slot.as_int().map_err(|_| "a slot is a number")?)
+                    .map_err(|_| "a slot is 0 to 15")?,
+            )
+        };
+        push(Op::SelectTool(ops::SelectTool {
+            player: id(&player)?,
+            slot,
         }))
     });
     engine.register_fn("quick_use", |player: Dynamic, item: &str| {
@@ -4343,27 +4535,57 @@ impl Runtime {
             let Some(behaviour) = &package.behaviour else {
                 continue;
             };
-            let Some(source) = package.script_source() else {
+            let sources = package.script_sources();
+            if sources.is_empty() {
+                continue;
+            }
+            // Each file compiles on its own, so a problem names its file and
+            // line; the files then load as one script.
+            let mut combined: Option<AST> = None;
+            let mut defined: BTreeMap<(String, usize), &str> = BTreeMap::new();
+            for (file, source) in sources {
+                let part = match runtime.engine.compile(source) {
+                    Ok(ast) => ast,
+                    Err(e) => {
+                        let at = match e.1.line() {
+                            Some(line) => format!("{}:{line}", location(id, file)),
+                            None => location(id, file),
+                        };
+                        problems.push(Diagnostic::error("script.syntax", e.0.to_string()).at(at));
+                        continue;
+                    }
+                };
+                if !part.statements().is_empty() {
+                    problems.push(
+                        Diagnostic::error("script.top_level", "scripts may only define functions")
+                            .at(location(id, file))
+                            .hint("move top-level statements into a function; keep constants in behaviour state"),
+                    );
+                }
+                for f in part.iter_functions() {
+                    if let Some(first) = defined.insert((f.name.to_string(), f.params.len()), file)
+                    {
+                        problems.push(
+                            Diagnostic::error(
+                                "script.duplicate_function",
+                                format!(
+                                    "`fn {}` with {} parameter(s) is defined in both {first} and {file}",
+                                    f.name,
+                                    f.params.len()
+                                ),
+                            )
+                            .at(location(id, file)),
+                        );
+                    }
+                }
+                combined = Some(match combined {
+                    Some(whole) => whole.merge(&part),
+                    None => part,
+                });
+            }
+            let Some(ast) = combined else {
                 continue;
             };
-            let ast = match runtime.engine.compile(source) {
-                Ok(ast) => ast,
-                Err(e) => {
-                    let at = match e.1.line() {
-                        Some(line) => format!("{}:{line}", location(id, &behaviour.script)),
-                        None => location(id, &behaviour.script),
-                    };
-                    problems.push(Diagnostic::error("script.syntax", e.0.to_string()).at(at));
-                    continue;
-                }
-            };
-            if !ast.statements().is_empty() {
-                problems.push(
-                    Diagnostic::error("script.top_level", "scripts may only define functions")
-                        .at(location(id, &behaviour.script))
-                        .hint("move top-level statements into a function; keep constants in behaviour state"),
-                );
-            }
             let has = |name: &str, arity: usize| {
                 ast.iter_functions()
                     .any(|f| f.name == name && f.params.len() == arity)
@@ -4859,6 +5081,16 @@ pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i6
         out.push(item);
     }
     Ok(out)
+}
+
+fn sound(profile: &str, at: SoundAt, volume: f32, pitch: f32, radius: f32) -> ops::Sound {
+    ops::Sound {
+        profile: profile.into(),
+        at,
+        volume,
+        pitch,
+        radius,
+    }
 }
 
 #[cfg(test)]

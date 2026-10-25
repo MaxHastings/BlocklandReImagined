@@ -105,6 +105,14 @@ A region may also list `suns` (up to 8; 64 per map), each a `direction`, `color`
 (see "Lit moving bodies") takes its region's `ambient` and the suns of the region it stands in, the one standing nearest its centre
 first.
 
+**Zones that hide what cannot be seen.** `--mapdata DIR` names a folder with one `*-mapdata.json` (a `zones` table with `indoor` and
+`bounds`, and `portals` with `kind`, `points`, `plane`, `front_zone`, `back_zone`) and one `*-zone-sections.json` (`groups.world[i].runs` =
+`[first_triangle, count, zone, ..]` for primitive `i` of the node `aa25_pipeline_generated`). Zone numbers are the region numbers. The importer
+splits that node's primitives by zone and lists the zone graph (`bri_content::zones`) in the bundle's `zones` table; in the game, a zone the
+eye cannot see into through the openings (`kind` `zone` portals) is not drawn. Data that does not fit the mesh stops the import.
+The mapdata file's `display_ramp` (`brightness`, `contrast`, `gamma`; Unreal Engine 2's, 0..1, 0..1, 0.5..2.5) becomes the map's default display
+ramp (bundle `display_ramps`): the player's own `$pref::Video::Brightness`, `Contrast` and `Gamma` win for any value they set.
+
 **How sound carries.** A regions file can also say how the map's sounds reach the listener. Top level `sound` is
 `{ "zone_decay": 0..1, "blocked_reference": 0..1 }`; per region, `connects` lists the regions sound passes into from it (a
 doorway, a window left open) and `reverb` is `{ "wet": 0..1, "decay_seconds": seconds }`, the room effects ring in while the
@@ -135,13 +143,16 @@ POSITIONs. A layer-blended surface is lit by its vertex colours alone, so the im
 the mesh's vertex colour (0.5 is neutral), fogged, lit by nothing else, in every lighting setting: a mesh whose light was baked
 into its vertices. The importer keeps the mesh's `COLOR_0` for such materials.
 
-**Lit moving bodies.** A glTF material with the custom property `bri_actor_lit: true` (or `{ "sun_gain": 1.0, "light_gain": 1.0 }`,
-each 0 to 8) is drawn as a body lit when it is drawn, vertex by vertex: the scene's ambient plus the sun and the best four lights
+**Lit moving bodies.** A glTF material with the custom property `bri_actor_lit: true` (or `{ "sun_gain": 1.0, "light_gain": 1.0, "glow": 0.0 }`,
+the gains 0 to 8, the glow 0 to 1: light added on every channel, the engine's AmbientGlow / 255) is drawn as a body lit when it is drawn, vertex by vertex: the scene's ambient plus the sun and the best four lights
 that reach the vertex, times the picture and twice. The gains scale the sun and the lights. For a character or any body that moves, whose light cannot be
 baked into its vertices; it works on a body, an item or a map's own models. Every such body, held or dropped item and worn image takes
 the same light, worked out in one place (`LightVolumeState::actor_light` and `actor_lamps` in the client, `actor_light` in the scene
 shaders): its zone's ambient and suns, the map's baked room light as a floor under the ambient, and the best four of the map's lamps
 and the effect lights that reach each vertex. There are no visibility traces, so a lamp lights a body through a wall.
+A material that is also `bri_vertex_light: true` is a mover whose room light is baked into its vertex colours: the vertex colour stands
+as the light (0.5 neutral), and the body takes on top of it only its glow and the live lights (a muzzle flash, a lamp that moves), never a
+zone's ambient or suns or the map lamps the bake already holds. Doors and other map movers use this path.
 
 **The original engine's lighting (`--lighting DIR`).** For a map the original engine lit (an asset lane's inputs: `*-instances.json`,
 `*-lights.json`, `*-instances.npz`, `*-vertex-map.npz`; `--regions` for each zone's ambient) the importer does not bake the light. The

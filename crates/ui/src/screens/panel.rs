@@ -8,14 +8,20 @@
 //! reorders its own: the drop goes to the rules too, which move the row
 //! (or refuse) by showing the panel again.
 use super::*;
-use crate::api::{PanelDropView, PanelItemView, PanelPicture, PanelView, UiAction};
+use crate::api::{
+    PanelAction, PanelAlign, PanelDropView, PanelItemView, PanelPicture, PanelTextView, PanelView,
+    UiAction,
+};
 use crate::view::EventKind;
+use bri_console::Clamp;
 
 const MARGIN: i32 = 12;
 const GAP: i32 = 8;
 const LINE: i32 = 22;
 const BUTTON: (i32, i32) = (98, 28);
 const LABEL_WIDTH: i32 = 110;
+/// Width a scroll box keeps for its bar.
+const SCROLL_BAR: i32 = 16;
 const LIST: &str = "Panel_List_";
 const FIELD: &str = "Panel_Field_";
 const BUTTON_NAME: &str = "Panel_Button_";
@@ -44,6 +50,48 @@ fn plain_lines(text: &str) -> String {
         .join("<br>")
 }
 
+/// The markup that sets a text item's face, size, colour and alignment, in
+/// front of its (escaped) lines. `face` is the panel text's own face when
+/// the item names only a size.
+fn text_style_markup(style: &PanelTextView, face: &str) -> String {
+    let mut out = String::new();
+    if style.size.is_some() || style.font.is_some() {
+        let face = style.font.as_deref().unwrap_or(face);
+        let size = style.size.map_or_else(String::new, |s| s.to_string());
+        if !size.is_empty() {
+            out += &format!("<font:{face}:{size}>");
+        }
+    }
+    if let Some(color) = style.color {
+        let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
+        out += &format!(
+            "<color:{:02x}{:02x}{:02x}{:02x}>",
+            byte(color[0]),
+            byte(color[1]),
+            byte(color[2]),
+            byte(color[3])
+        );
+    }
+    match style.align {
+        PanelAlign::Left => {}
+        PanelAlign::Center => out += "<just:center>",
+        PanelAlign::Right => out += "<just:right>",
+    }
+    out
+}
+
+/// The face of a profile's font (`arial_14` is `arial`), for a text item that
+/// names a size and no face.
+fn profile_face(core: &Core, profile: &str) -> String {
+    core.pack
+        .data
+        .styles
+        .get(profile)
+        .and_then(|s| s.font.as_deref())
+        .map(|f| f.rsplit_once('_').map_or(f, |(face, _)| face).to_string())
+        .unwrap_or_else(|| "arial".into())
+}
+
 /// A node by name, its picture, its hover picture and its tint.
 type Pictured = (String, PanelPicture, Option<PanelPicture>, Option<[f32; 4]>);
 /// Every field's text, by id.
@@ -55,6 +103,15 @@ pub struct AddOnPanel {
     view: View,
     /// The panel shown: its package, id and controls, for events.
     shown: PanelView,
+}
+
+/// Where a text or list item stands: its own place if the rules gave one,
+/// else the left margin at the flow's `y`; and the width it has.
+fn stand(place: Option<crate::api::PanelPlace>, y: i32, inner: i32) -> (i32, i32, i32) {
+    match place {
+        Some(p) => (p.x, p.y, p.width.map_or(inner, i32::from)),
+        None => (MARGIN, y, inner),
+    }
 }
 
 impl AddOnPanel {
@@ -93,24 +150,66 @@ impl AddOnPanel {
         let mut pictures: Vec<Pictured> = Vec::new();
         for (n, item) in shown.items.iter().enumerate() {
             match item {
-                PanelItemView::Text(t) => {
-                    let markup = plain_lines(t);
-                    let height =
-                        View::ml_height(&core.pack, "GuiMLTextProfile", &markup, inner).max(16);
-                    let mut c = text("GuiMLTextProfile", Rect::new(MARGIN, y, inner, height), "");
-                    c.class = "GuiMLTextCtrl".into();
-                    c.text = Some(markup);
-                    win.children.push(c);
-                    y += height + GAP;
+                PanelItemView::Text { text: t, style } => {
+                    let (x0, mut ly, inner) = stand(style.place, y, inner);
+                    let face = profile_face(core, "GuiMLTextProfile");
+                    let markup = text_style_markup(style, &face) + &plain_lines(t);
+                    match style.height {
+                        // A box of its own height; the lines scroll inside it.
+                        Some(box_height) => {
+                            let box_height = i32::from(box_height);
+                            let mut scroll = ctrl(
+                                "GuiScrollCtrl",
+                                "BlockScrollProfile",
+                                Rect::new(x0, ly, inner, box_height),
+                            );
+                            scroll
+                                .fields
+                                .insert("hScrollBar".into(), "alwaysOff".into());
+                            scroll.fields.insert("vScrollBar".into(), "dynamic".into());
+                            let width = inner - SCROLL_BAR;
+                            let height =
+                                View::ml_height(&core.pack, "GuiMLTextProfile", &markup, width)
+                                    .max(16);
+                            let mut c =
+                                text("GuiMLTextProfile", Rect::new(0, 0, width, height), "");
+                            c.class = "GuiMLTextCtrl".into();
+                            c.text = Some(markup);
+                            scroll.children.push(c);
+                            win.children.push(scroll);
+                            ly += box_height + GAP;
+                        }
+                        None => {
+                            let height =
+                                View::ml_height(&core.pack, "GuiMLTextProfile", &markup, inner)
+                                    .max(16);
+                            let mut c =
+                                text("GuiMLTextProfile", Rect::new(x0, ly, inner, height), "");
+                            c.class = "GuiMLTextCtrl".into();
+                            c.text = Some(markup);
+                            win.children.push(c);
+                            ly += height + GAP;
+                        }
+                    }
+                    if style.place.is_none() {
+                        y = ly;
+                    }
                 }
                 PanelItemView::List {
-                    id, height, drag, ..
+                    id,
+                    height,
+                    drag,
+                    columns,
+                    icons,
+                    place,
+                    ..
                 } => {
+                    let (x0, ly, inner) = stand(*place, y, inner);
                     let height = i32::from(*height);
                     let mut scroll = ctrl(
                         "GuiScrollCtrl",
                         "BlockScrollProfile",
-                        Rect::new(MARGIN, y, inner, height),
+                        Rect::new(x0, ly, inner, height),
                     );
                     scroll
                         .fields
@@ -124,9 +223,27 @@ impl AddOnPanel {
                     if *drag {
                         list.fields.insert("dragRows".into(), "1".into());
                     }
+                    // Cells start where the rules said, after a row's picture.
+                    let lead = if icons.iter().any(Option::is_some) {
+                        View::profile_row_height(&core.pack, "GuiTextListProfile")
+                    } else {
+                        0
+                    };
+                    if !columns.is_empty() || lead > 0 {
+                        let starts = if columns.is_empty() {
+                            vec![0]
+                        } else {
+                            columns.iter().map(|c| i32::from(*c)).collect()
+                        };
+                        let starts: Vec<String> =
+                            starts.iter().map(|c| (c + lead).to_string()).collect();
+                        list.fields.insert("columns".into(), starts.join(" "));
+                    }
                     scroll.children.push(named(list, format!("{LIST}{id}")));
                     win.children.push(scroll);
-                    y += height + GAP;
+                    if place.is_none() {
+                        y += height + GAP;
+                    }
                 }
                 PanelItemView::Field {
                     id,
@@ -232,10 +349,21 @@ impl AddOnPanel {
         }
         for item in &shown.items {
             if let PanelItemView::List {
-                id, rows, selected, ..
+                id,
+                rows,
+                selected,
+                icons,
+                color,
+                back,
+                ..
             } = item
                 && let Some(n) = view.id(&format!("{LIST}{id}"))
             {
+                view.state(n).text_color = color.map(crate::screens::rgba);
+                if let Some(scroll) = view.node(n).parent {
+                    view.state(scroll).back = back.map(crate::screens::rgba);
+                }
+                view.state(n).row_icons = icons.iter().map(|i| i.map(|p| p.key)).collect();
                 view.state(n).items = rows
                     .iter()
                     .enumerate()
@@ -280,6 +408,17 @@ impl AddOnPanel {
             }
         }
         (fields, lists)
+    }
+
+    /// What the client does for a button, instead of an event.
+    fn action(&self, button: &str) -> Option<PanelAction> {
+        self.shown.items.iter().find_map(|item| match item {
+            PanelItemView::Buttons(buttons) => buttons
+                .iter()
+                .find(|b| b.id == button)
+                .and_then(|b| b.action),
+            _ => None,
+        })
     }
 
     fn send(&self, control: &str, core: &mut Core) {
@@ -351,7 +490,16 @@ impl Screen for AddOnPanel {
             EventKind::Close => self.close(core),
             EventKind::Click => {
                 if let Some(id) = name.strip_prefix(BUTTON_NAME) {
-                    self.send(id, core);
+                    match self.action(id) {
+                        Some(PanelAction::Settings) => core.push(ScreenId::Options),
+                        Some(PanelAction::Disconnect) => {
+                            core.request(UiAction::Disconnect);
+                        }
+                        Some(PanelAction::Quit) => {
+                            core.request(UiAction::Quit);
+                        }
+                        None => self.send(id, core),
+                    }
                 }
             }
             EventKind::Changed => {

@@ -121,6 +121,42 @@ const COLOR_VISION_CHOICES: [&str; 4] = ["Off", "Red-weak", "Green-weak", "Blue-
 pub fn color_vision(p: &Prefs) -> u32 {
     p.i64_or(COLOR_VISION, 0).clamp(0, 3) as u32
 }
+/// Not a v20 setting: the display ramp of games that set one through the
+/// video driver (Unreal Engine 2's Brightness, Contrast and Gamma, as in Army
+/// Operations' `Default.ini`), applied to the 3D view. The neutral values
+/// are the identity ramp, so a game that sets nothing looks as it always has;
+/// an Add-On's defaults script sets them for its own game.
+pub const BRIGHTNESS: &str = "$pref::Video::Brightness";
+pub const CONTRAST: &str = "$pref::Video::Contrast";
+pub const GAMMA: &str = "$pref::Video::Gamma";
+/// Brightness, Contrast and Gamma of the identity ramp (the renderer's
+/// `bri_render::color::RAMP_NEUTRAL`; a client test keeps the two equal).
+pub const DISPLAY_RAMP_NEUTRAL: [f32; 3] = [0.5, 0.5, 1.2];
+const BRIGHTNESS_RANGE: (f32, f32) = (0.0, 1.0);
+const CONTRAST_RANGE: (f32, f32) = (0.0, 1.0);
+const GAMMA_RANGE: (f32, f32) = (0.5, 2.5);
+/// The display ramp `$pref::Video::{Brightness,Contrast,Gamma}` ask for, as
+/// `[brightness, contrast, gamma]`.
+pub fn display_ramp(p: &Prefs) -> [f32; 3] {
+    display_ramp_or(p, DISPLAY_RAMP_NEUTRAL)
+}
+/// As [`display_ramp`], with `fallback` (a map's own default) for each value the player has not set.
+pub fn display_ramp_or(p: &Prefs, fallback: [f32; 3]) -> [f32; 3] {
+    let [brightness, contrast, gamma] = fallback;
+    let read = |pref, neutral: f32, range: (f32, f32)| {
+        let v = p.f32_or(pref, neutral);
+        if v.is_finite() {
+            v.clamped(range.0, range.1)
+        } else {
+            neutral
+        }
+    };
+    [
+        read(BRIGHTNESS, brightness, BRIGHTNESS_RANGE),
+        read(CONTRAST, contrast, CONTRAST_RANGE),
+        read(GAMMA, gamma, GAMMA_RANGE),
+    ]
+}
 /// The UI Size menu (`$pref::Gui::Scale`, percent; 0 is Auto).
 const UI_SCALE_MENU: &str = "OptGraphicsUiScaleMenu";
 pub const UI_SCALE_CHOICES: &[i64] = &[0, 100, 125, 150, 200, 250, 300];
@@ -3792,6 +3828,28 @@ mod tests {
         ui.core.prefs.set(crate::ui::UI_SCALE, "0");
         ui.update(0);
         assert_eq!(ui.scale(), 2.0);
+    }
+
+    #[test]
+    fn display_ramp_is_neutral_until_a_game_sets_it() {
+        let mut p = Prefs::default();
+        assert_eq!(display_ramp(&p), DISPLAY_RAMP_NEUTRAL);
+        p.set(BRIGHTNESS, "0.8");
+        p.set(CONTRAST, "0.7");
+        p.set(GAMMA, "1.0");
+        assert_eq!(display_ramp(&p), [0.8, 0.7, 1.0]);
+        p.set(GAMMA, "0");
+        p.set(CONTRAST, "nan");
+        assert_eq!(display_ramp(&p), [0.8, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn a_maps_display_ramp_fills_only_what_the_player_has_not_set() {
+        let map = [0.8, 0.7, 1.0];
+        let mut p = Prefs::default();
+        assert_eq!(display_ramp_or(&p, map), map);
+        p.set(CONTRAST, "0.4");
+        assert_eq!(display_ramp_or(&p, map), [0.8, 0.4, 1.0]);
     }
 
     #[test]

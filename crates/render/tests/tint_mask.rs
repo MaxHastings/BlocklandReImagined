@@ -76,6 +76,7 @@ fn plane(mask: u8, tint: [f32; 4], masked: bool, kind: MaterialKind) -> SceneDat
         .to_vec(),
         indices: vec![0, 1, 2, 0, 2, 3],
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..6,
             material: 0,
             center: [0.; 3],

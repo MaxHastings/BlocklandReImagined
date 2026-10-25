@@ -708,32 +708,41 @@ pub(super) fn archetype(
             module: module.to_vec(),
         });
     }
-    let sounds = &mut archetype.sounds;
+    apply_sounds(&mut archetype.sounds, &def.sounds);
+    archetype.validate()?;
+    Ok(archetype)
+}
+
+/// Lay an archetype definition's sounds over the base's: what it names
+/// replaces, what it leaves out stays.
+fn apply_sounds(
+    sounds: &mut crate::archetype::Sounds,
+    from: &bri_package_runtime::content::ArchetypeSounds,
+) {
     for (to, from) in [
-        (&mut sounds.jump, &def.sounds.jump),
-        (&mut sounds.pain, &def.sounds.pain),
-        (&mut sounds.death, &def.sounds.death),
-        (&mut sounds.land, &def.sounds.land),
+        (&mut sounds.jump, &from.jump),
+        (&mut sounds.pain, &from.pain),
+        (&mut sounds.death, &from.death),
+        (&mut sounds.land, &from.land),
     ] {
         if from.is_some() {
             to.clone_from(from);
         }
     }
-    if def.sounds.land_on_surface {
+    if from.land_on_surface {
         sounds.land_on_surface = true;
     }
-    if !def.sounds.footsteps.is_empty() {
-        sounds.footsteps.clone_from(&def.sounds.footsteps);
+    if !from.footsteps.is_empty() {
+        sounds.footsteps.clone_from(&from.footsteps);
     }
-    if !def.sounds.surfaces.is_empty() {
-        sounds.surfaces.clone_from(&def.sounds.surfaces);
+    if !from.surfaces.is_empty() {
+        sounds.surfaces.clone_from(&from.surfaces);
     }
-    if def.sounds.stride.is_some() {
-        sounds.stride = def.sounds.stride;
+    if from.stride.is_some() {
+        sounds.stride = from.stride;
     }
-    if !def.sounds.clips.is_empty() {
-        sounds.clips = def
-            .sounds
+    if !from.clips.is_empty() {
+        sounds.clips = from
             .clips
             .iter()
             .map(|(clip, c)| {
@@ -747,8 +756,67 @@ pub(super) fn archetype(
             })
             .collect();
     }
-    archetype.validate()?;
-    Ok(archetype)
+    if !from.steps.is_empty() {
+        sounds.steps = from
+            .steps
+            .iter()
+            .map(|(clip, events)| {
+                (
+                    clip.to_ascii_lowercase(),
+                    events
+                        .iter()
+                        .map(|e| crate::archetype::StepEvent {
+                            seconds: e.seconds,
+                            frame: e.frame,
+                            foot: e.foot.clone(),
+                            sound: e.sound.clone(),
+                            volume: e.volume,
+                            radius: e.radius,
+                            noise: e.noise,
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+    }
+    if from.fps.is_some() {
+        sounds.fps = from.fps;
+    }
+    if from.step_noise.is_some() {
+        sounds.step_noise = from.step_noise;
+    }
+    if let Some(l) = &from.land_noise {
+        sounds.land_noise = Some(crate::archetype::LandNoise {
+            factor: l.factor,
+            jump_floor: l.jump_floor,
+        });
+    }
+    if !from.postures.is_empty() {
+        sounds.postures.clone_from(&from.postures);
+    }
+    if from.takeoff_on_surface {
+        sounds.takeoff_on_surface = true;
+    }
+    if !from.contacts.is_empty() {
+        sounds.contacts = from
+            .contacts
+            .iter()
+            .map(|(kind, c)| {
+                (
+                    kind.clone(),
+                    crate::archetype::FootContact {
+                        effect: c.effect.clone(),
+                        decal: c.decal.as_ref().map(|d| crate::archetype::FootDecal {
+                            texture: d.texture.clone(),
+                            size: d.size,
+                            seconds: d.seconds,
+                            color: d.color,
+                        }),
+                    },
+                )
+            })
+            .collect();
+    }
 }
 
 /// Eye heights from the body: an archetype whose `eye` socket is an offset
@@ -2348,6 +2416,8 @@ impl Session {
         damage: f32,
         brick_radius: f32,
         look: Option<&str>,
+        kill_radius: f32,
+        cone: Option<(Vec3, f32)>,
         source: &str,
         caller: Option<OwnerId>,
     ) -> Result<()> {
@@ -2355,7 +2425,8 @@ impl Session {
             center.is_finite()
                 && radius.is_finite()
                 && damage.is_finite()
-                && brick_radius.is_finite(),
+                && brick_radius.is_finite()
+                && kill_radius.is_finite(),
             "Invalid explosion"
         );
         let look = match look {
@@ -2371,12 +2442,20 @@ impl Session {
             }
             None => None,
         };
+        // Whether a body at `at` lies in the blast's cone, if it has one.
+        let in_cone = |at: Vec3| {
+            cone.is_none_or(|(direction, cos)| {
+                (at - center).normalize_or_zero().dot(direction) >= cos
+            })
+        };
         let victims: Vec<(OwnerId, f32)> = self
             .peers
             .iter()
             .filter_map(|(owner, p)| {
-                let d = (Vec3::from(p.player.state().feet) + Vec3::Y).distance(center);
-                (d < radius).then(|| (*owner, damage * (1.0 - d / radius)))
+                let at = Vec3::from(p.player.state().feet) + Vec3::Y;
+                let d = at.distance(center);
+                (d < radius.max(kill_radius) && in_cone(at))
+                    .then(|| (*owner, blast_damage(d, radius, damage, kill_radius)))
             })
             // A player's blast obeys the minigame's radius damage rule, as
             // their weapons' blasts do.
@@ -2403,8 +2482,10 @@ impl Session {
                 h.entities
                     .iter()
                     .filter_map(|(id, e)| {
-                        let d = Vec3::from(e.body.state().feet).distance(center);
-                        (d < radius).then(|| (*id, damage * (1.0 - d / radius)))
+                        let at = Vec3::from(e.body.state().feet);
+                        let d = at.distance(center);
+                        (d < radius.max(kill_radius) && in_cone(at))
+                            .then(|| (*id, blast_damage(d, radius, damage, kill_radius)))
                     })
                     .collect()
             })
@@ -4182,12 +4263,14 @@ impl Session {
         let mut changed = Vec::new();
         let mut problems = Vec::new();
         for (id, package) in &mut catalog.packages {
-            match package.reread_script() {
-                Ok(Some(source)) => {
-                    package.set_script(source);
+            match package.reread_scripts() {
+                Ok(files) if files.is_empty() => {}
+                Ok(files) => {
+                    for (file, source) in files {
+                        package.set_script(&file, source);
+                    }
                     changed.push(id.clone());
                 }
-                Ok(None) => {}
                 Err(problem) => {
                     problems.push(Diagnostic::error("script.reload", problem).at(id.clone()));
                 }
@@ -4493,6 +4576,20 @@ fn required_failed(
     .hint("check player(p).tools or the brick before charging, or tell the player why not")
 }
 
+/// The most a blast's kill radius deals: more than any health.
+const LETHAL: f32 = 10_000.0;
+/// What a blast `d` from its centre deals: `damage` falling off to nothing
+/// at `radius`, and a lethal hit within `kill_radius`.
+fn blast_damage(d: f32, radius: f32, damage: f32, kill_radius: f32) -> f32 {
+    if d < kill_radius {
+        LETHAL
+    } else if radius > 0.0 {
+        (damage * (1.0 - d / radius)).max(0.0)
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod allowance_tests {
     use super::Allowance;
@@ -4568,5 +4665,49 @@ mod archetype_tests {
             }))?;
         assert!(bad.validate().is_err());
         Ok(())
+    }
+
+    #[test]
+    fn a_blast_kills_within_its_kill_radius_and_falls_off_beyond_it() {
+        assert_eq!(super::blast_damage(1.0, 10.0, 150.0, 2.0), super::LETHAL);
+        assert_eq!(super::blast_damage(5.0, 10.0, 150.0, 2.0), 75.0);
+        assert_eq!(super::blast_damage(12.0, 10.0, 150.0, 2.0), 0.0);
+        assert_eq!(super::blast_damage(1.0, 0.0, 150.0, 2.0), super::LETHAL);
+    }
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::*;
+
+    #[test]
+    fn an_archetypes_footfall_marks_reach_its_sounds() {
+        let from: bri_package_runtime::content::ArchetypeSounds =
+            serde_json::from_value(serde_json::json!({
+                "footsteps": ["a:step"], "fps": 30.0, "takeoff_on_surface": true, "postures": { "crouch": "a:down" },
+                "step_noise": 0.1, "land_noise": { "factor": 0.5, "jump_floor": 150.0 },
+                "contacts": { "*": { "effect": "a:dust", "decal": { "texture": "a:foot", "size": 0.4, "seconds": 20 } } },
+                "steps": { "Run_F": [ { "frame": 4, "foot": "foot_l", "sound": "a:climb", "volume": 0.9, "radius": 150 }, { "seconds": 0.5 } ] }
+            }))
+            .unwrap();
+        let mut sounds = crate::archetype::Sounds::default();
+        apply_sounds(&mut sounds, &from);
+        assert_eq!(sounds.fps, Some(30.0));
+        let marks = &sounds.steps["run_f"];
+        assert_eq!(marks.len(), 2);
+        assert_eq!(sounds.step_time(&marks[0]), Some(4.0 / 30.0));
+        assert_eq!(marks[0].foot.as_deref(), Some("foot_l"));
+        assert!(sounds.takeoff_on_surface);
+        assert_eq!(sounds.postures["crouch"], "a:down");
+        assert_eq!(sounds.step_noise, Some(0.1));
+        // Falling at the jump speed is the factor; the floor keeps slow jumpers honest.
+        assert_eq!(sounds.land_noise_for(300.0, 300.0), 0.5);
+        assert_eq!(sounds.land_noise_for(150.0, 10.0), 0.5);
+        assert_eq!(sounds.land_noise_for(900.0, 300.0), 1.0);
+        assert_eq!(marks[0].sound.as_deref(), Some("a:climb"));
+        assert_eq!((marks[0].volume, marks[0].radius), (Some(0.9), Some(150.0)));
+        let contact = sounds.contact_on("sand").expect("any other surface");
+        assert_eq!(contact.effect.as_deref(), Some("a:dust"));
+        assert_eq!(contact.decal.as_ref().map(|d| d.color), Some([1.0; 4]));
     }
 }

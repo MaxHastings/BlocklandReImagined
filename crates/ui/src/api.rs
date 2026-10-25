@@ -1622,6 +1622,8 @@ pub struct PanelButtonView {
     pub color: Option<[f32; 4]>,
     /// x, y, w, h in the panel, when the button has its own place.
     pub rect: Option<[i32; 4]>,
+    /// Done by the client when pressed, instead of an event to the rules.
+    pub action: Option<PanelAction>,
 }
 /// A panel list's row dragged from list `from` (row `row`, from 0) and let
 /// go over row `at` of the list an event names (none: below its rows).
@@ -1634,14 +1636,25 @@ pub struct PanelDropView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PanelItemView {
     /// Lines of plain text.
-    Text(String),
+    Text { text: String, style: PanelTextView },
     /// Rows to pick one of; with `drag`, rows drag to other such lists.
     List {
         id: String,
+        /// A row's cells are separated by tabs when there are `columns`.
         rows: Vec<String>,
         selected: Option<u16>,
         height: u16,
         drag: bool,
+        /// Where each cell column starts, in pixels from the list's left.
+        columns: Vec<u16>,
+        /// A picture at the left of each row, by row (missing: none).
+        icons: Vec<Option<PanelPicture>>,
+        /// Where it stands in the panel; none: it flows down the panel.
+        place: Option<PanelPlace>,
+        /// The rows' text colour; none: the stock one.
+        color: Option<[f32; 4]>,
+        /// The field behind the rows; none: the stock white one.
+        back: Option<[f32; 4]>,
     },
     /// A line to type in, with a label.
     Field {
@@ -1659,6 +1672,42 @@ pub enum PanelItemView {
         rect: [i32; 4],
         tint: [f32; 4],
     },
+}
+/// How a panel's text item looks. Left out, the panel's own.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PanelTextView {
+    pub size: Option<u8>,
+    /// A font face of the game's fonts (`arial`).
+    pub font: Option<String>,
+    pub color: Option<[f32; 4]>,
+    pub align: PanelAlign,
+    /// A scrolling box this tall; none: the text's own height.
+    pub height: Option<u16>,
+    /// Where it stands in the panel; none: it flows down the panel.
+    pub place: Option<PanelPlace>,
+}
+/// A text or list item's top-left corner in the panel and, if given, its
+/// width (default the panel's inner width).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelPlace {
+    pub x: i32,
+    pub y: i32,
+    pub width: Option<u16>,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PanelAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+/// What the client itself does when a panel button is pressed, with no
+/// event to the rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PanelAction {
+    Settings,
+    Disconnect,
+    Quit,
 }
 /// A score report the host showed (Slayer's End of Round Report): plain
 /// text, laid out by the Report window.

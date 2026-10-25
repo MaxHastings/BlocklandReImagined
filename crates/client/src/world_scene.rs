@@ -133,6 +133,7 @@ pub fn build_placement_preview(
             .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     scene.batches.push(bri_render::scene::MeshBatch {
+        zone: None,
         indices: 0..36,
         material: 0,
         center: ((min + max) * 0.5).to_array(),

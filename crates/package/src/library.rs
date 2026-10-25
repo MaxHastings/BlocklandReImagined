@@ -32,7 +32,9 @@ use std::path::{Path, PathBuf};
 pub const DISABLED_FILE: &str = "packages-disabled.json";
 /// A mod package's own manifest.
 pub const MANIFEST_FILE: &str = "package.json";
-const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
+/// Largest `package.json` read anywhere; a package with thousands of
+/// provided files has a manifest well over a few hundred KiB.
+pub const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 /// How deep under the content root discovery looks for manifests
 /// (`packages/stresslab/stresslab-hud` is three levels).
 pub const MAX_SCAN_DEPTH: usize = 3;
@@ -1329,7 +1331,15 @@ pub fn package_info(dir: &Path) -> Option<PackageInfo> {
 
 pub(crate) fn read_info(path: &Path) -> Option<PackageInfo> {
     let meta = std::fs::symlink_metadata(path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_MANIFEST_BYTES {
+    if !meta.is_file() {
+        return None;
+    }
+    if meta.len() > MAX_MANIFEST_BYTES {
+        eprintln!(
+            "{} is {} bytes, over the manifest limit of {MAX_MANIFEST_BYTES}; the package is left out",
+            path.display(),
+            meta.len()
+        );
         return None;
     }
     let info: PackageInfo = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;

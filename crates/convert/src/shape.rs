@@ -616,6 +616,7 @@ fn mesh(
             _ => bail!("Unknown primitive topology"),
         }
         primitives.push(Primitive {
+            zone: None,
             material: if flags & 0x10000000 != 0 {
                 None
             } else {

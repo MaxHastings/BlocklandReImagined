@@ -43,6 +43,12 @@ impl ViewShake {
     }
 }
 
+/// See [`Controls::view_model_fov`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ModelZoom {
+    fov: f32,
+    world: f32,
+}
 /// A rule's camera shake (`camera_shake`): the view alone jittered, up to
 /// `translation` units and `rotation` radians, fading over `seconds`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,6 +77,7 @@ pub struct CameraJolt {
 
 #[derive(Clone, Default)]
 pub struct Controls {
+    look_locked: bool,
     /// Rules' camera shakes running, and the jitter they give this frame.
     camera_shakes: Vec<CameraShake>,
     camera_jolt: CameraJolt,
@@ -105,6 +112,10 @@ pub struct Controls {
     /// The FOV shown (`$cameraFov`), ramping toward the normal or zoom FOV.
     /// `None` until the first frame, which starts at its target.
     fov_shown: Option<f32>,
+    /// The held image's field of view at the aim step showing, and the world
+    /// field the aim is heading for, kept while the view comes back out so
+    /// the image's field returns with it ([`Self::view_model_fov`]).
+    model_zoom: Option<ModelZoom>,
     /// `GameConnection::mCameraPos`: 0 in first person, 1 fully out in
     /// third person; slides between them when the view is toggled.
     camera_pos: f32,
@@ -165,6 +176,8 @@ pub struct Controls {
     aim_level: usize,
     /// The aim's sway (`Zoom::sway`), eased in while aiming and out after.
     sway: SwayState,
+    /// The weapon coming up to its sights (`Zoom::sights`) and back.
+    sights: SightsState,
     /// The roll an opening in a floor or ceiling turned the view by, and
     /// how it turned the body's eye and camera pivot about its middle
     /// (upside down, for a floor onto a floor) past the turn of its
@@ -222,6 +235,14 @@ struct SwayState {
 }
 /// Seconds a sway takes to ease fully in or out.
 const SWAY_EASE_SECONDS: f32 = 0.6;
+/// How far the held model has come up to its sights.
+#[derive(Clone, Copy, Debug, Default)]
+struct SightsState {
+    /// The sights last aimed with, kept to lower the weapon after the aim ends.
+    def: Option<bri_weapons::Sights>,
+    /// 0 at rest, 1 on the sights.
+    blend: f32,
+}
 /// A mouse driver's `mHead.x` returning after Free Look as v20 runs it:
 /// in first person each 32 ms tick halves it (blocklandv20.exe 0x5aeb0b),
 /// and the view shows it between the last two ticks
@@ -439,7 +460,14 @@ impl Controls {
         }
         true
     }
+    /// The held image's state keeps the view still ([`bri_weapons::Lock::look`]).
+    pub fn set_look_locked(&mut self, locked: bool) {
+        self.look_locked = locked;
+    }
     fn look(&mut self, yaw: f32, pitch: f32) {
+        if self.look_locked && self.observer.is_none() {
+            return;
+        }
         if let Some(observer) = &mut self.observer {
             if self.death_view && observer.from == ControlObject::Corpse {
                 return;
@@ -1271,6 +1299,48 @@ impl Controls {
         let shown = self.fov_shown.get_or_insert(target);
         let step = ZOOM_DEGREES_PER_SECOND * seconds.clamped(0.0, 0.25);
         *shown += (target - *shown).clamped(-step, step);
+        let shown = *shown;
+        let model = self
+            .aim_while_aiming()
+            .and_then(|a| a.model_fov_at(self.aim_level));
+        match model {
+            Some(fov) => {
+                self.model_zoom = Some(ModelZoom { fov, world: target });
+            }
+            // Zoomed with no field of its own, or the view is back out.
+            None if self.aim_while_aiming().is_some()
+                || (shown - self.unzoomed_fov()).abs() < 1e-3 =>
+            {
+                self.model_zoom = None;
+            }
+            // The view is still coming back out: the image's goes with it.
+            None => {}
+        }
+    }
+    /// The horizontal field of view the player has when not zoomed.
+    fn unzoomed_fov(&self) -> f32 {
+        self.server_fov.unwrap_or_else(|| {
+            self.body_camera
+                .profile
+                .fov_for(self.normal_fov.unwrap_or(90.0))
+        })
+    }
+    /// The field of view to draw a held image with, given the `base` its
+    /// `first_person_view` sets: `base` unzoomed, the aim's `model_fov` for
+    /// the step showing once the view has zoomed all the way in, and between
+    /// in step with the world's field.
+    pub fn view_model_fov(&self, base: f32) -> f32 {
+        let Some(zoom) = self.model_zoom else {
+            return base;
+        };
+        let unzoomed = self.unzoomed_fov();
+        let span = unzoomed - zoom.world;
+        let t = if span.abs() < 1e-3 {
+            1.0
+        } else {
+            ((unzoomed - self.fov()) / span).clamped(0.0, 1.0)
+        };
+        base + (zoom.fov - base) * t
     }
     /// The held weapon's aim, or `None` when it has none: holding Zoom (or
     /// Jet, when the aim is `on_jet`) then aims at its FOV in place of the
@@ -1378,6 +1448,7 @@ impl Controls {
             return;
         }
         let seconds = seconds.clamped(0.0, 0.25);
+        self.advance_sights(seconds);
         let on_foot = self.observer.is_none()
             && !self.mounted
             && self.vehicle_view.is_none()
@@ -1426,6 +1497,43 @@ impl Controls {
         if self.sway.gain == 0.0 {
             self.sway = SwayState::default();
         }
+    }
+    /// Bring the held model up to its sights while aiming, and back after.
+    fn advance_sights(&mut self, seconds: f32) {
+        let aimed = self
+            .aim_while_aiming()
+            .and_then(|a| a.sights)
+            .filter(|_| self.at_eye());
+        if let Some(def) = aimed {
+            self.sights.def = Some(def);
+        }
+        let Some(def) = self.sights.def else {
+            return;
+        };
+        let target = if aimed.is_some() { 1.0 } else { 0.0 };
+        let step = if def.seconds > 0.0 {
+            seconds / def.seconds
+        } else {
+            1.0
+        };
+        self.sights.blend += (target - self.sights.blend).clamped(-step, step);
+        if self.sights.blend == 0.0 && aimed.is_none() {
+            self.sights = SightsState::default();
+        }
+    }
+    /// How far the weapon has moved from its rest to its sights, in the
+    /// view's frame (x right, y up, looking down -z), for the view frame
+    /// the weapon is drawn in. `None` when it is at rest.
+    pub fn view_model_sights(&self) -> Option<glam::Mat4> {
+        let def = self.sights.def?;
+        let t = self.sights.blend.clamped(0.0, 1.0);
+        let eased = t * t * (3.0 - 2.0 * t);
+        let [x, y, z] = def.rotation_degrees.map(|d| d.to_radians() * eased);
+        let m = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_euler(glam::EulerRot::XYZ, x, y, z),
+            glam::Vec3::from(def.offset) * eased,
+        );
+        m.is_finite().then_some(m)
     }
     /// The active body's camera (`Look::camera`) at its `scale`. A
     /// different profile starts from rest, so switching bodies hands the
@@ -1544,11 +1652,7 @@ impl Controls {
     }
     fn target_fov(&self) -> f32 {
         if let Some(aim) = self.aim_while_aiming() {
-            let unzoomed = self.server_fov.unwrap_or_else(|| {
-                self.body_camera
-                    .profile
-                    .fov_for(self.normal_fov.unwrap_or(90.0))
-            });
+            let unzoomed = self.unzoomed_fov();
             aim.level_fov_from(self.aim_level, unzoomed)
                 .clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
         } else if self.held(HeldControl::Zoom) && (self.aim.is_none() || self.aim_state_allowed) {
@@ -2515,6 +2619,33 @@ mod tests {
         settle(&mut c);
         assert!((c.fov() - 10.0).abs() < 0.01);
     }
+    #[test]
+    fn the_held_image_keeps_its_own_field_through_a_zoom_and_back() {
+        let mut zoom = scope();
+        zoom.model_fov = vec![60.0, 50.0];
+        let mut c = Controls::default();
+        held(&mut c, HeldControl::Jet, true);
+        c.set_aim_in_state(Some(zoom), Some("Ready"));
+        assert_eq!(c.view_model_fov(70.0), 70.0, "not zoomed yet");
+        c.advance_zoom(1.0 / 60.0);
+        let early = c.view_model_fov(70.0);
+        assert!((60.0..70.0).contains(&early), "part way: {early}");
+        settle(&mut c);
+        assert!((c.view_model_fov(70.0) - 60.0).abs() < 1e-3);
+        assert!(c.aim_wheel(1));
+        settle(&mut c);
+        assert!(
+            (c.view_model_fov(70.0) - 50.0).abs() < 1e-3,
+            "the level's own"
+        );
+        // Letting go brings it back out with the world's field.
+        held(&mut c, HeldControl::Jet, false);
+        c.advance_zoom(1.0 / 60.0);
+        let back = c.view_model_fov(70.0);
+        assert!(back < 70.0, "still drawn zoomed while it comes out: {back}");
+        settle(&mut c);
+        assert_eq!(c.view_model_fov(70.0), 70.0);
+    }
     fn restricted_scope() -> bri_weapons::Zoom {
         let mut profile = scope();
         profile.allowed_states = Some(vec!["Ready".into(), "Fire".into(), "WaitRelease".into()]);
@@ -2703,6 +2834,37 @@ mod tests {
         assert_eq!(c.scope_overlay(), None);
         settle(&mut c);
         assert_eq!(c.scope_overlay(), Some("scope/scope"));
+    }
+    /// A weapon with real sights comes up to them over its time while aimed
+    /// and goes back as the aim ends, and stays put with no sights.
+    #[test]
+    fn the_weapon_comes_up_to_its_sights_and_back() {
+        let mut zoom = scope();
+        zoom.overlay = None;
+        zoom.sway = None;
+        zoom.sights = Some(bri_weapons::Sights {
+            offset: [0.1, 0.2, 0.0],
+            rotation_degrees: [0.0; 3],
+            seconds: 0.5,
+        });
+        let mut c = Controls::default();
+        c.set_aim(Some(zoom));
+        assert!(c.view_model_sights().is_none());
+        held(&mut c, HeldControl::Jet, true);
+        for _ in 0..15 {
+            c.advance_sway(1.0 / 60.0);
+        }
+        let half = c.view_model_sights().unwrap().w_axis.y;
+        assert!(half > 0.0 && half < 0.2, "on its way: {half}");
+        for _ in 0..30 {
+            c.advance_sway(1.0 / 60.0);
+        }
+        assert!((c.view_model_sights().unwrap().w_axis.y - 0.2).abs() < 1e-5);
+        held(&mut c, HeldControl::Jet, false);
+        for _ in 0..60 {
+            c.advance_sway(1.0 / 60.0);
+        }
+        assert!(c.view_model_sights().is_none(), "back at rest");
     }
     fn swayed(c: &mut Controls, frames: usize) -> Vec<(f32, f32)> {
         (0..frames)

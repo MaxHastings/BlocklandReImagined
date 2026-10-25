@@ -36,6 +36,7 @@ fn button(id: &str, label: &str) -> PanelButtonView {
         hover_picture: None,
         color: None,
         rect: None,
+        action: None,
     }
 }
 
@@ -47,13 +48,21 @@ fn shop() -> PanelView {
         width: 320,
         height: 300,
         items: vec![
-            PanelItemView::Text("Pick a gun.\nPay at the till.".into()),
+            PanelItemView::Text {
+                text: "Pick a gun.\nPay at the till.".into(),
+                style: PanelTextView::default(),
+            },
             PanelItemView::List {
                 id: "stock".into(),
                 rows: vec!["Pistol $5".into(), "Rifle $20".into()],
                 selected: Some(0),
                 height: 100,
                 drag: false,
+                columns: vec![],
+                icons: vec![],
+                place: None,
+                color: None,
+                back: None,
             },
             PanelItemView::Field {
                 id: "note".into(),
@@ -222,6 +231,11 @@ fn backpack_and_chest() -> PanelView {
         selected: None,
         height: 80,
         drag: true,
+        columns: vec![],
+        icons: vec![],
+        place: None,
+        color: None,
+        back: None,
     };
     PanelView {
         package: "rp".into(),
@@ -238,6 +252,11 @@ fn backpack_and_chest() -> PanelView {
                 selected: None,
                 height: 40,
                 drag: false,
+                columns: vec![],
+                icons: vec![],
+                place: None,
+                color: None,
+                back: None,
             },
         ],
         border: true,
@@ -386,4 +405,179 @@ fn a_menu_panel_draws_its_pictures_with_no_frame_and_steps_aside_when_not_modal(
     assert!(!panel.modal() && panel.wants_mouse());
     event(&mut ui, "Panel_Button_buy", EventKind::Click);
     assert_eq!(actions(&mut ui).len(), 1);
+}
+
+fn menu() -> PanelView {
+    let mut buttons = vec![
+        button("options", "Settings"),
+        button("leave", "Disconnect"),
+        button("exit", "Quit"),
+        button("help", "Help"),
+    ];
+    buttons[0].action = Some(PanelAction::Settings);
+    buttons[1].action = Some(PanelAction::Disconnect);
+    buttons[2].action = Some(PanelAction::Quit);
+    PanelView {
+        package: "rp".into(),
+        id: "shop".into(),
+        title: "Menu".into(),
+        width: 320,
+        height: 300,
+        items: vec![
+            PanelItemView::Text {
+                text: "Orders <b>of the day</b>".into(),
+                style: PanelTextView {
+                    size: Some(18),
+                    font: Some("impact".into()),
+                    color: Some([1.0, 0.0, 0.0, 1.0]),
+                    align: PanelAlign::Center,
+                    height: Some(60),
+                    place: None,
+                },
+            },
+            PanelItemView::List {
+                id: "team".into(),
+                rows: vec!["Ann\tRifleman".into(), "Bo\tMedic".into()],
+                selected: None,
+                height: 80,
+                drag: false,
+                columns: vec![0, 100],
+                icons: vec![
+                    Some(PanelPicture {
+                        key: 7,
+                        size: [16, 16],
+                    }),
+                    None,
+                ],
+                place: None,
+                color: None,
+                back: None,
+            },
+            PanelItemView::Buttons(buttons),
+        ],
+        border: true,
+        modal: true,
+        background: None,
+    }
+}
+
+#[test]
+fn panel_text_has_its_own_look_and_scrolls_and_lists_have_columns_and_row_pictures() {
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(menu())));
+    ui.update(0);
+    let v = view(&ui);
+    // The styled text sits in a scroll box of the asked height, its markup
+    // set by the engine and the rules' own text still escaped.
+    let text = v
+        .walk()
+        .find(|n| v.node(*n).ctrl.class == "GuiMLTextCtrl")
+        .unwrap();
+    assert_eq!(
+        v.node(text).ctrl.text.as_deref(),
+        Some("<font:impact:18><color:ff0000ff><just:center>Orders ‹b›of the day‹/b›")
+    );
+    let scroll = v.node(text).parent.unwrap();
+    assert_eq!(v.node(scroll).ctrl.class, "GuiScrollCtrl");
+    assert_eq!(v.node(scroll).rect.h, 60);
+    // Columns start after the row picture, which the list draws per row.
+    let list = v.id("Panel_List_team").unwrap();
+    let lead = View::profile_row_height(&ui.core.pack, "GuiTextListProfile");
+    assert_eq!(
+        v.node(list).ctrl.field("columns"),
+        Some(format!("{} {}", lead, 100 + lead).as_str())
+    );
+    assert_eq!(v.node(list).state.row_icons, [Some(7), None]);
+    assert_eq!(v.node(list).state.items[0].0, "Ann\tRifleman");
+}
+
+#[test]
+fn a_button_with_an_action_is_done_by_the_client_and_sends_no_event() {
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(menu())));
+    ui.update(0);
+    event(&mut ui, "Panel_Button_leave", EventKind::Click);
+    assert_eq!(actions(&mut ui), [UiAction::Disconnect]);
+    event(&mut ui, "Panel_Button_exit", EventKind::Click);
+    assert_eq!(actions(&mut ui), [UiAction::Quit]);
+    event(&mut ui, "Panel_Button_options", EventKind::Click);
+    assert!(actions(&mut ui).is_empty());
+    ui.update(0);
+    assert!(ui.is_open(ScreenId::Options));
+    // A button without one still tells the rules.
+    event(&mut ui, "Panel_Button_help", EventKind::Click);
+    let sent = actions(&mut ui);
+    assert!(matches!(&sent[..], [UiAction::PanelEvent { control, .. }] if control == "help"));
+}
+
+#[test]
+fn a_placed_text_or_list_stands_where_asked_and_leaves_the_flow_alone() {
+    use bri_ui::api::PanelPlace;
+    let button_y = |panel: PanelView| {
+        let mut ui = ui();
+        ui.apply(UiUpdate::Panel(Some(panel)));
+        ui.update(0);
+        let v = view(&ui);
+        v.node(v.id("Panel_Button_leave").unwrap()).rect.y
+    };
+    let mut panel = menu();
+    let flowed = button_y(panel.clone());
+    let PanelItemView::Text { style, .. } = &mut panel.items[0] else {
+        panic!("the first item is text")
+    };
+    style.place = Some(PanelPlace {
+        x: 200,
+        y: 250,
+        width: Some(90),
+    });
+    let PanelItemView::List { place, .. } = &mut panel.items[1] else {
+        panic!("the second item is the list")
+    };
+    *place = Some(PanelPlace {
+        x: 10,
+        y: 260,
+        width: None,
+    });
+    // The 320x300 panel stands centred in 640x480.
+    let (left, top) = (160, 90);
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(panel.clone())));
+    ui.update(0);
+    let v = view(&ui);
+    let text = v
+        .walk()
+        .find(|n| v.node(*n).ctrl.class == "GuiMLTextCtrl")
+        .unwrap();
+    let scroll = v.node(text).parent.unwrap();
+    let r = v.node(scroll).rect;
+    assert_eq!((r.x, r.y, r.w), (left + 200, top + 250, 90));
+    let list = v.node(v.id("Panel_List_team").unwrap()).parent.unwrap();
+    let r = v.node(list).rect;
+    assert_eq!((r.x, r.y), (left + 10, top + 260));
+    // The buttons flow up into the room the placed items left.
+    assert!(button_y(panel) < flowed);
+}
+
+#[test]
+fn a_list_can_have_a_dark_field_and_its_own_text_colour() {
+    let mut panel = menu();
+    let PanelItemView::List { color, back, .. } = &mut panel.items[1] else {
+        panic!("the second item is the list")
+    };
+    *color = Some([0.9, 0.9, 0.9, 1.0]);
+    *back = Some([0.05, 0.05, 0.05, 0.8]);
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(panel)));
+    ui.update(0);
+    let v = view(&ui);
+    let list = v.id("Panel_List_team").unwrap();
+    assert_eq!(
+        v.node(list).state.text_color,
+        Some(bri_ui::screens::rgba([0.9, 0.9, 0.9, 1.0]))
+    );
+    let scroll = v.node(list).parent.unwrap();
+    assert_eq!(
+        v.node(scroll).state.back,
+        Some(bri_ui::screens::rgba([0.05, 0.05, 0.05, 0.8]))
+    );
 }

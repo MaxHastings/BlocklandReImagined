@@ -1219,6 +1219,7 @@ fn ghost_matches_v20_temp_brick_shells() {
     }
     scene.indices = vec![0, 1, 2];
     scene.batches.push(bri_render::scene::MeshBatch {
+        zone: None,
         indices: 0..3,
         material: 0,
         center: [0.0; 3],

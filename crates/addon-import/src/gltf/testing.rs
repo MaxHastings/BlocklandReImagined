@@ -447,6 +447,11 @@ pub fn rifle() -> Vec<u8> {
 /// `KHR_lights_punctual` with `bri_` custom properties, and, with
 /// `col_floor`, a separate collision floor.
 pub fn room(col_floor: bool) -> Vec<u8> {
+    room_named(col_floor, "Floor")
+}
+
+/// [`room`] with its floor's node under another name (a map's world mesh).
+pub fn room_named(col_floor: bool, floor: &str) -> Vec<u8> {
     let mut g = Gltf::new();
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     let part = |g: &mut Gltf, name: &str, center: Vec3, size: Vec3, material: usize| {
@@ -480,7 +485,7 @@ pub fn room(col_floor: bool) -> Vec<u8> {
     );
     part(
         &mut g,
-        "Floor",
+        floor,
         Vec3::new(0.0, -0.25, 0.0),
         Vec3::new(20.0, 0.5, 20.0),
         wood,

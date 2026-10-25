@@ -437,6 +437,9 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 }
             }
             native.push(State {
+                aimed: None,
+                not_aimed: None,
+                lock: Default::default(),
                 name,
                 ticks: ticks(num(d, &format!("stateTimeoutValue[{n}]"), 0.0)),
                 wait: flag(d, &format!("stateWaitForTimeout[{n}]"), true),
@@ -446,6 +449,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 up: target("stateTransitionOnTriggerUp"),
                 ammo: target("stateTransitionOnAmmo"),
                 no_ammo: target("stateTransitionOnNoAmmo"),
+                stance: Default::default(),
                 loaded: target("stateTransitionOnLoaded"),
                 not_loaded: target("stateTransitionOnNotLoaded"),
                 spin: match f("stateSpinThread").to_ascii_lowercase().as_str() {
@@ -546,6 +550,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 shell_mesh: None,
                 first_person_nodes: BTreeMap::new(),
                 first_person_effects: BTreeMap::new(),
+                first_person_offsets: Default::default(),
                 id,
                 name: d.name.clone(),
                 model: resource(d, "shapeFile"),
@@ -579,6 +584,9 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 both_arms: false,
                 paint_tint: false,
                 left_image: None,
+                stance: Default::default(),
+                lower: None,
+                redraw: None,
                 magazine: None,
                 volleys: vec![],
                 last_shot: None,

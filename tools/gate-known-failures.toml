@@ -267,3 +267,12 @@ reason = "The rename test covers the name reaching the server; release gate only
 
 [[port_bound]]
 target = "bri-client/night_qa"
+
+# The pull-request tier runs every test target except the slow packages': the
+# end-to-end, GPU and soak suites (PR 317: shards of 32-62 minutes). Those run
+# on main after each merge and nightly, and a failure there is reported, not
+# gating. `keep` names targets of a slow package that still run on pull
+# requests.
+[ci_quick]
+slow_packages = ["bri-client", "bri-render", "bri-chaos", "bri-net"]
+keep = ["bri-client/lib", "bri-net/lib"]

@@ -216,6 +216,13 @@ impl World for ScriptWorld<'_> {
     fn movers_near(&self, player: u64, reach: f32) -> Vec<String> {
         self.session.movers_near_player(player, reach)
     }
+    fn movers_within(&self, at: [f32; 3], radius: f32) -> Vec<(String, f32, [f32; 3])> {
+        self.session
+            .movers_within(Vec3::from(at), radius)
+            .into_iter()
+            .map(|(id, gap, closest)| (id, gap, closest.to_array()))
+            .collect()
+    }
     fn drops(&self) -> Vec<bri_package_runtime::script::DropView> {
         self.session.package_drop_views(self.package)
     }

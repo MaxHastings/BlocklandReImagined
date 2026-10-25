@@ -67,12 +67,19 @@ impl App {
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Sound(profile)) => {
                     self.audio.profile(&profile, bri_audio::Placement::Listener);
                 }
-                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::SoundScaled {
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::SoundShaped {
                     profile,
                     volume,
+                    pitch,
+                    radius,
                 }) => {
+                    let voice = crate::audio::Voice {
+                        volume,
+                        pitch,
+                        radius,
+                    };
                     self.audio
-                        .profile_scaled(&profile, bri_audio::Placement::Listener, volume);
+                        .profile_shaped(&profile, bri_audio::Placement::Listener, voice);
                 }
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Music(play)) => {
                     self.audio.play_music(&play);
@@ -780,11 +787,21 @@ impl App {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
                         }
-                        bri_sim::session::Notice::SoundScaled { profile, volume } => {
-                            self.audio.profile_scaled(
+                        bri_sim::session::Notice::SoundShaped {
+                            profile,
+                            volume,
+                            pitch,
+                            radius,
+                        } => {
+                            let voice = crate::audio::Voice {
+                                volume,
+                                pitch,
+                                radius,
+                            };
+                            self.audio.profile_shaped(
                                 &profile,
                                 bri_audio::Placement::Listener,
-                                volume,
+                                voice,
                             );
                             continue;
                         }
@@ -1093,6 +1110,8 @@ impl App {
             self.scene.cpu_scene = Some(prepared.scene);
             self.scene.backdrop = prepared.backdrop;
             self.scene.set_regions(prepared.regions);
+            self.scene.zones = prepared.zones;
+            self.scene.display_ramp = prepared.display_ramp;
             self.scene.decals = prepared.decals;
             self.scene.receiver_index = Some(prepared.receiver_index);
             self.scene.fog_blend = Default::default();
@@ -1440,7 +1459,7 @@ fn panel_view(
     catalog: Option<&bri_package_runtime::Catalog>,
     textures: &mut crate::panel_textures::PanelTextures,
 ) -> bri_ui::api::PanelView {
-    use bri_package_runtime::panel::PanelKind;
+    use bri_package_runtime::panel::{PanelAction, PanelAlign, PanelKind};
     use bri_ui::api::{PanelBackgroundView, PanelButtonView, PanelItemView};
     let panel = shown.panel;
     let package = shown.package;
@@ -1457,19 +1476,46 @@ fn panel_view(
         slice: b.slice,
         tint: b.tint.unwrap_or([1.0; 4]),
     });
+    // A text or list item's own place, when the rules gave one.
+    let place = |x: Option<i16>, y: Option<i16>, width: Option<u16>| {
+        Some(bri_ui::api::PanelPlace {
+            x: i32::from(x?),
+            y: i32::from(y?),
+            width,
+        })
+    };
     let items = panel
         .items
         .into_iter()
         .map(|item| {
             let max = item.max_chars();
             match item.kind {
-                PanelKind::Text => PanelItemView::Text(item.text),
+                PanelKind::Text => PanelItemView::Text {
+                    text: item.text,
+                    style: bri_ui::api::PanelTextView {
+                        size: item.size,
+                        font: Some(item.font).filter(|f| !f.is_empty()),
+                        color: item.color,
+                        align: match item.align.unwrap_or_default() {
+                            PanelAlign::Left => bri_ui::api::PanelAlign::Left,
+                            PanelAlign::Center => bri_ui::api::PanelAlign::Center,
+                            PanelAlign::Right => bri_ui::api::PanelAlign::Right,
+                        },
+                        height: item.height,
+                        place: place(item.x, item.y, item.w),
+                    },
+                },
                 PanelKind::List => PanelItemView::List {
                     id: item.id,
                     rows: item.rows,
                     selected: item.selected,
                     height: item.height.unwrap_or(120),
                     drag: item.drag,
+                    columns: item.columns,
+                    icons: item.icons.iter().map(|i| picture(i)).collect(),
+                    place: place(item.x, item.y, item.w),
+                    color: item.color,
+                    back: item.back,
                 },
                 PanelKind::Field => PanelItemView::Field {
                     id: item.id,
@@ -1495,6 +1541,11 @@ fn panel_view(
                                 picture: normal,
                                 hover_picture: hover,
                                 color: b.color,
+                                action: b.action.map(|a| match a {
+                                    PanelAction::Settings => bri_ui::api::PanelAction::Settings,
+                                    PanelAction::Disconnect => bri_ui::api::PanelAction::Disconnect,
+                                    PanelAction::Quit => bri_ui::api::PanelAction::Quit,
+                                }),
                             }
                         })
                         .collect(),

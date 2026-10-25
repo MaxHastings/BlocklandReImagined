@@ -46,6 +46,11 @@ pub struct MapScene {
     pub backdrop: Option<BackdropScene>,
     /// The map's regions with their own fog, when it has them.
     pub regions: Option<bri_content::regions::RegionMap>,
+    /// How the map's zones open onto each other, when it has them: what the
+    /// viewer cannot see into is not drawn ([`bri_content::zones`]).
+    pub zones: Option<bri_content::zones::ZoneGraph>,
+    /// The map's own display ramp `[brightness, contrast, gamma]` (Unreal Engine 2's), which a player's own setting overrides.
+    pub display_ramp: Option<[f32; 3]>,
     /// The map's decals and their pictures (in order), when it has them.
     pub decals: Option<crate::decals::LoadedDecals>,
     /// The map's triangles by place, for decals added while the game runs.
@@ -183,6 +188,43 @@ fn load_regions(
         serde_json::from_slice(&read(root, name)?).context("Reading the map's regions")?;
     map.validate()?;
     Ok(Some(map))
+}
+
+/// The zone graph `bundle` lists for `scene`, checked against the map's regions
+/// it shares zone numbers with.
+fn load_zones(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+) -> Result<Option<bri_content::zones::ZoneGraph>> {
+    let Some(name) = bundle
+        .get("zones")
+        .and_then(|s| s.get(&scene.id))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let graph: bri_content::zones::ZoneGraph =
+        serde_json::from_slice(&read(root, name)?).context("Reading the map's zones")?;
+    graph.validate()?;
+    Ok(Some(graph))
+}
+
+/// The display ramp `bundle` lists for `scene`: three finite numbers.
+fn load_display_ramp(bundle: &Value, scene: &Scene) -> Result<Option<[f32; 3]>> {
+    let Some(v) = bundle.get("display_ramps").and_then(|s| s.get(&scene.id)) else {
+        return Ok(None);
+    };
+    if v.is_null() {
+        return Ok(None);
+    }
+    let ramp: [f32; 3] =
+        serde_json::from_value(v.clone()).context("Reading the map's display ramp")?;
+    ensure!(
+        ramp.iter().all(|c| c.is_finite()),
+        "The map's display ramp is not finite"
+    );
+    Ok(Some(ramp))
 }
 
 /// One scatter layer: the model about its own origin and where it is placed.
@@ -836,6 +878,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         crate::environment_choices::strip_sky(&mut out);
     }
     let regions = load_regions(&root, &bundle, &scene)?;
+    let zones = load_zones(&root, &bundle, &scene)?;
+    let display_ramp = load_display_ramp(&bundle, &scene)?;
     let receiver_index = std::sync::Arc::new(crate::decals::ReceiverIndex::build(&out));
     let decals = load_decals(&root, &bundle, &scene, &out, &receiver_index)?;
     Ok(MapScene {
@@ -848,6 +892,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         scatter,
         backdrop,
         regions,
+        zones,
+        display_ramp,
         decals,
         receiver_index,
         modern_lights,
@@ -1204,7 +1250,7 @@ fn load_static_shape(
                 [0.0; 4],
             ]);
         }
-        if authored.vertex_light && authored.layers.is_none() {
+        if authored.vertex_light && authored.layers.is_none() && authored.actor_lit.is_none() {
             material.kind = MaterialKind::VertexLight;
             // A metal detail set above took the kind's uniforms with it.
             material.parameters = None;
@@ -1347,6 +1393,7 @@ fn load_static_shape(
     for i in first_batch..out.batches.len() {
         if let Some(&edges) = soft_edges.get(&out.batches[i].material) {
             out.batches.push(MeshBatch {
+                zone: None,
                 material: edges,
                 ..out.batches[i].clone()
             });
@@ -1559,6 +1606,7 @@ fn load_interior(
         let start = out.indices.len() as u32;
         out.indices.extend(indices);
         out.batches.push(MeshBatch {
+            zone: None,
             indices: start..out.indices.len() as u32,
             material,
             center,

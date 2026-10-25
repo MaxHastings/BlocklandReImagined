@@ -185,9 +185,11 @@ pub enum CueKind {
     },
     /// `WeaponSound` at `volume` times the profile's own (an Add-On's
     /// `sound_at` with a volume): a shout carries, a whisper does not.
-    SoundScaled {
+    SoundShaped {
         profile: String,
         volume: f32,
+        pitch: f32,
+        radius: f32,
     },
     /// `actor`'s holder sees `image`'s `screen_flash` (`State::screen_flash`).
     ScreenFlash {
@@ -433,7 +435,7 @@ impl Cue {
             }
             _ => {}
         }
-        if let CueKind::WeaponSound { profile } | CueKind::SoundScaled { profile, .. } = &self.kind
+        if let CueKind::WeaponSound { profile } | CueKind::SoundShaped { profile, .. } = &self.kind
         {
             ensure!(
                 !profile.is_empty()
@@ -442,10 +444,18 @@ impl Cue {
                 "Invalid weapon sound profile"
             );
         }
-        if let CueKind::SoundScaled { volume, .. } = &self.kind {
+        if let CueKind::SoundShaped {
+            volume,
+            pitch,
+            radius,
+            ..
+        } = &self.kind
+        {
             ensure!(
-                (0.0..=bri_package_runtime::ops::MAX_SOUND_VOLUME).contains(volume),
-                "Invalid sound volume"
+                (0.0..=bri_package_runtime::ops::MAX_SOUND_VOLUME).contains(volume)
+                    && bri_package_runtime::ops::SOUND_PITCH.contains(pitch)
+                    && (0.0..=bri_package_runtime::ops::MAX_SOUND_RADIUS).contains(radius),
+                "Invalid sound volume, pitch or radius"
             );
         }
         ensure!(
@@ -548,9 +558,11 @@ mod tests {
             id: 1,
             tick: 1,
             position: [0.; 3],
-            kind: CueKind::SoundScaled {
+            kind: CueKind::SoundShaped {
                 profile: "radioBlip".into(),
                 volume,
+                pitch: 1.0,
+                radius: 0.0,
             },
         };
         assert!(cue(0.25).validate().is_ok());

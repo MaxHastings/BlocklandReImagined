@@ -151,6 +151,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
         Image {
             first_person_nodes: Default::default(),
             first_person_effects: Default::default(),
+            first_person_offsets: Default::default(),
             shell_effect: String::new(),
             shell_mesh: None,
             id,
@@ -186,6 +187,9 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             both_arms: false,
             paint_tint: false,
             left_image: None,
+            stance: Default::default(),
+            lower: None,
+            redraw: None,
             magazine: None,
             volleys: vec![],
             last_shot: None,

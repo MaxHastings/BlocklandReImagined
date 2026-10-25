@@ -257,11 +257,13 @@ fn ambiguous_optional_image_clock_does_not_discard_stock_metadata_or_break_hosti
         .unwrap()
         .0;
     admit(&mut session, sequence)?;
-    // More optional image resources than the clock catalog can admit must not
-    // remove the verified stock rig or make legacy hosting fail.
+    // More optional image resources than the clock catalog can admit (the
+    // stock rig takes one of its places, and a weapon pack holds no more than
+    // the catalog's size) must not remove the verified stock rig or make
+    // legacy hosting fail.
     let mut pack_images = serde_json::Map::new();
     let mut presentation_images = serde_json::Map::new();
-    for index in 0..257 {
+    for index in 0..bri_sim::session::MAX_ANIMATION_ASSETS {
         let id = format!("metadata:image/extra{index}");
         pack_images.insert(
             id.clone(),

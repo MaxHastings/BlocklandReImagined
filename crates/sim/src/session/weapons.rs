@@ -312,11 +312,16 @@ impl Session {
         let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
         for owner in owners {
             let actor = ActorId(owner);
+            let aiming = self.peers[&owner].input.jet
+                && self
+                    .weapons
+                    .image_state(actor, 0)
+                    .is_some_and(|(image, _)| image.zoom.as_ref().is_some_and(|z| z.on_jet));
+            self.weapons.set_aiming(actor, aiming);
             let scale = match self.weapons.image_state(actor, 0) {
+                Some((_, state)) if state.lock.movement => 0.0,
                 Some((image, _)) => image.movement.as_ref().map_or(1.0, |m| {
                     let reloading = self.weapons.ammo(actor).is_some_and(|a| a.reloading);
-                    let aiming = self.peers[&owner].input.jet
-                        && image.zoom.as_ref().is_some_and(|z| z.on_jet);
                     m.scale(reloading, aiming)
                 }),
                 None => 1.0,
@@ -607,9 +612,11 @@ impl Session {
         let mut ammo = std::collections::BTreeSet::new();
         for event in events {
             match event {
-                WeaponEvent::Ammo { actor }
-                | WeaponEvent::Mounted { actor, hand: 0, .. }
+                WeaponEvent::Mounted { actor, hand: 0, .. }
                 | WeaponEvent::Unmounted { actor, hand: 0 } => {
+                    ammo.insert(actor.0);
+                }
+                WeaponEvent::Ammo { actor } => {
                     ammo.insert(actor.0);
                 }
                 // An Add-On's `local` sound is for its holder's ears only.
@@ -1096,6 +1103,11 @@ impl Session {
         }
         for owner in ammo {
             self.show_ammo(owner);
+        }
+        // A stance follows the state the right-hand image is in, so it is
+        // looked at every tick for everyone.
+        for owner in self.peers.keys().copied().collect::<Vec<_>>() {
+            self.sync_stance(owner)?;
         }
         // Inventory mutations need not mount an image (pickup, quick use,
         // loadout replacement). Compare the bounded projection, never equip

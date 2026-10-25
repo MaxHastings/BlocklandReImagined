@@ -192,6 +192,25 @@ impl SoundAsset {
             data: self.data.clone(),
         }
     }
+    /// This sound played at `pitch` times its own, heard out to `radius`
+    /// (the distance beyond which it is silent; 0 keeps its own reach).
+    pub fn shaped(&self, pitch: f32, radius: f32) -> Self {
+        let mut playback = self.playback.clone();
+        playback.pitch *= pitch;
+        if radius > 0.0
+            && let Some(spatial) = &mut playback.spatial
+        {
+            let share = spatial.reference_distance / spatial.max_distance.max(0.01);
+            spatial.max_distance = radius;
+            spatial.reference_distance = (radius * share).max(0.01);
+        }
+        Self {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            playback,
+            data: self.data.clone(),
+        }
+    }
     pub fn as_ambient(&self, range: Option<f32>) -> Self {
         let mut playback = self.playback.clone();
         playback.spatial = range.map(|range| crate::schema::Spatial {

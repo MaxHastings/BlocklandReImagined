@@ -645,6 +645,8 @@ fn every_operation_needs_its_declared_capability() {
             damage: 10.0,
             brick_radius: 2.0,
             explosion: None,
+            kill_radius: 0.0,
+            cone: None,
         }),
         Op::Damage(ops::Damage {
             target: ObjectRef::Player(1),
@@ -718,6 +720,8 @@ fn every_operation_needs_its_declared_capability() {
             damage: 10.0,
             brick_radius: 0.0,
             explosion: Some("rocketExplosion".into()),
+            kill_radius: 0.0,
+            cone: None,
         }),
         Op::SetImageAmmo(ops::SetImageAmmo {
             player: 1,
@@ -860,6 +864,8 @@ fn extreme_operation_parameters_are_refused() {
             damage: d,
             brick_radius: b,
             explosion: None,
+            kill_radius: 0.0,
+            cone: None,
         })
     };
     let bad = [
@@ -994,6 +1000,8 @@ fn extreme_operation_parameters_are_refused() {
             damage: 10.0,
             brick_radius: 0.0,
             explosion: Some("no spaces".into()),
+            kill_radius: 0.0,
+            cone: None,
         }),
         Op::MountImage(ops::MountImage {
             player: 1,
@@ -1171,6 +1179,83 @@ fn huge_script_files_are_refused() {
         problems.contains(&"package.file.too_large".to_string()),
         "{problems:?}"
     );
+}
+
+fn modular_pkg(main: &str, parts: &[(&str, String)]) -> Spec {
+    let modules: Vec<&str> = parts.iter().map(|(file, _)| *file).collect();
+    let mut spec = Spec::server("probe", vec![])
+        .provide(
+            "behaviour",
+            "main",
+            "behaviour.json",
+            serde_json::to_vec(
+                &json!({ "schema_version": 1, "script": "main.rhai", "modules": modules }),
+            )
+            .unwrap(),
+        )
+        .provide("script", "main", "main.rhai", main);
+    for (file, text) in parts {
+        spec = spec.provide("script", file, file, text.as_str());
+    }
+    spec
+}
+
+/// A behaviour's modules load with its main script as one script, so the
+/// files call each other, and each file keeps the per-file size limit while
+/// the whole is larger than one file may be.
+#[test]
+fn modules_load_together_and_each_keeps_the_size_limit() {
+    let filler = |n: usize| format!("//{}\n", "x".repeat(n));
+    let spec = modular_pkg(
+        &format!("fn f() {{ g() + 1 }}\n{}", filler(200 * 1024)),
+        &[(
+            "more.rhai",
+            format!("fn g() {{ 41 }}\n{}", filler(200 * 1024)),
+        )],
+    );
+    let (_root, catalog) = load(&[spec]);
+    let catalog = catalog.unwrap_or_else(|e| panic!("{e:#?}"));
+    let rt = Runtime::compile(&catalog).unwrap_or_else(|e| panic!("{e:#?}"));
+    let out = rt.call("probe", call("f", Budget::Think)).unwrap();
+    assert_eq!(out.returned.as_int().unwrap(), 42);
+
+    let big = modular_pkg(
+        "fn f() { }",
+        &[("more.rhai", format!("fn g() {{ }}\n{}", filler(300 * 1024)))],
+    );
+    let problems = load_err(&[big]);
+    assert!(
+        problems.contains(&"package.file.too_large".to_string()),
+        "{problems:?}"
+    );
+}
+
+/// The same function in two files is refused naming both, and a module the
+/// manifest does not provide is refused.
+#[test]
+fn modules_cannot_define_a_function_twice_or_be_missing() {
+    let twice = modular_pkg("fn f() { 1 }", &[("more.rhai", "fn f() { 2 }".into())]);
+    let (_root, catalog) = load(&[twice]);
+    let catalog = catalog.unwrap_or_else(|e| panic!("{e:#?}"));
+    let problems = match Runtime::compile(&catalog) {
+        Ok(_) => panic!("a function defined twice compiled"),
+        Err(p) => p,
+    };
+    assert_eq!(codes(&problems), ["script.duplicate_function"]);
+    assert!(problems[0].message.contains("main.rhai"), "{problems:?}");
+
+    let spec = Spec::server("probe", vec![])
+        .provide(
+            "behaviour",
+            "main",
+            "behaviour.json",
+            serde_json::to_vec(
+                &json!({ "schema_version": 1, "script": "main.rhai", "modules": ["gone.rhai"] }),
+            )
+            .unwrap(),
+        )
+        .provide("script", "main", "main.rhai", "fn f() { }");
+    assert!(load_err(&[spec]).contains(&"content.behaviour.script".to_string()));
 }
 
 /// A script at the size limit made of thousands of functions compiles in

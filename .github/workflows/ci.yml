@@ -1,9 +1,11 @@
 # Content-free checks. Tests that need the generated v20 content are
 # #[ignore]d or listed as ci_skip_target in tools/gate-known-failures.toml;
-# the local push gate (tools/gate.py) runs them all. Pull requests and pushes
-# run the "pr" tier, which leaves the slow offscreen renders
-# (ci_nightly_target) to the nightly and manual runs; the push gate runs
-# those too, on a real GPU, before anything reaches main.
+# the local push gate (tools/gate.py) runs them all. Pull requests run the
+# quick "pr" tier: every target except the slow packages' end-to-end, GPU and
+# soak suites ([ci_quick] in gate-known-failures.toml). Pushes to main run the
+# "main" tier, everything but the slow offscreen renders (ci_nightly_target);
+# the nightly and manual runs run it all. The push gate runs those too, on a
+# real GPU, before anything reaches main.
 name: ci
 
 on:
@@ -33,7 +35,7 @@ env:
   # outlives its idle limit reports nothing at the end of the job.
   SCCACHE_IDLE_TIMEOUT: '0'
   RUSTC_WRAPPER: sccache
-  TEST_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full' || 'pr' }}
+  TEST_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full' || (github.event_name == 'push' && 'main' || 'pr') }}
 
 jobs:
   linux-wheel:
@@ -77,12 +79,26 @@ jobs:
         run: python tools/check_docs.py
       - name: Tool tests
         run: python -m unittest discover -s tools -p "test_*.py"
-      - name: Build
-        run: cargo build --workspace --all-targets --locked
-      - name: No Visual C++ Redistributable needed
-        run: python tools/check_windows_imports.py target/debug/bri-client.exe target/debug/bri-server.exe target/debug/bri-import-addon.exe target/debug/bri-addon-check.exe target/debug/bri-addon-run.exe
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # The shipped executables, built and import-checked beside the lint job.
+  # The test targets are built (and linked, 140 MB each) by the test shards;
+  # clippy above type-checks them all, so no job builds every target twice.
+  binaries:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Build
+        run: cargo build --locked --bin bri-client --bin bri-server --bin bri-import-addon --bin bri-addon-check --bin bri-addon-run
+      - name: No Visual C++ Redistributable needed
+        run: python tools/check_windows_imports.py target/debug/bri-client.exe target/debug/bri-server.exe target/debug/bri-import-addon.exe target/debug/bri-addon-check.exe target/debug/bri-addon-run.exe
 
   # Serial software-GPU coverage runs past two hours on one hosted Windows
   # runner, so the test targets are split into even shares, one runner

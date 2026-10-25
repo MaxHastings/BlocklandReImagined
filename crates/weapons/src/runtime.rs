@@ -859,6 +859,14 @@ struct Equipped {
     /// as the state is entered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fidget: Option<u32>,
+    /// Being put down for the image `next` waits to bring up
+    /// ([`crate::Image::lower`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lowering: bool,
+    /// Hitscan rounds fired since it came up, for a tracer that shows only
+    /// every Nth ([`crate::Tracer::every`]).
+    #[serde(default)]
+    rounds: std::cell::Cell<u32>,
 }
 /// Torque's `nextImage`: a right-hand image asked for while the held one's
 /// state forbids image changes. It mounts on the next state that allows one.
@@ -884,6 +892,10 @@ pub struct Actor {
     /// states' `loaded` and `not_loaded` transitions read.
     #[serde(default = "loaded")]
     pub loaded: bool,
+    /// Whether the holder aims the image in hand ([`set_aiming`]), which its
+    /// states' `aimed` and `not_aimed` transitions read.
+    #[serde(default)]
+    pub aiming: bool,
     pub skiing: bool,
     /// Torque's four image slots: 0 the right hand, 1 the left (an akimbo
     /// gun's), 2 and 3 worn on the body (a carried flag on the back). Tool
@@ -906,6 +918,9 @@ pub struct Actor {
     spray: u8,
     ball_ready: u64,
     spawn_tick: u64,
+    /// The images drawn since the last spawn ([`crate::Image::redraw`]).
+    #[serde(default)]
+    drawn: BTreeSet<String>,
     tackle_until: u64,
     /// Rounds in each carried gun's magazine ([`crate::Magazine`]), by
     /// [`slot_key`]: two of one gun each keep their own, as the tactical
@@ -955,6 +970,11 @@ struct PendingCue {
     due: u64,
     cue: crate::Cue,
     position: Vec3,
+    /// The image and hand whose state set it, for a shell it ejects.
+    #[serde(default)]
+    image: String,
+    #[serde(default)]
+    hand: u8,
 }
 /// The most cues one holder has waiting.
 const MAX_PENDING_CUES: usize = 64;
@@ -1140,6 +1160,18 @@ struct Ray<'a> {
     direction: Vec3,
     range: f32,
     hitscan: &'a crate::Hitscan,
+    /// Whether this round's streaks are drawn ([`crate::Tracer::every`]).
+    traced: bool,
+}
+/// Whether round number `round` (1 for the first since the image came up)
+/// of `image` draws its tracer.
+fn shot_traced(image: &Image, round: u32) -> bool {
+    let every = image
+        .shot
+        .as_ref()
+        .and_then(|s| s.hitscan.as_ref()?.tracer)
+        .map_or(1, |t| t.every);
+    round.is_multiple_of(every)
 }
 /// What one tick of an image's state machine asks of its holder.
 enum Advance {
@@ -1161,6 +1193,9 @@ pub struct WeaponsWorld {
     actors: BTreeMap<ActorId, Actor>,
     projectiles: BTreeMap<u64, Projectile>,
     drops: BTreeMap<u64, Drop>,
+    /// Drops an Add-On placed and holds where it put them (a charge on a
+    /// door): they do not fall, are not picked up and are not saved.
+    pinned: BTreeSet<u64>,
     /// Authored item boxes; a drop without one falls as a point.
     item_bounds: BTreeMap<String, ItemBounds>,
     next_id: u64,
@@ -1438,6 +1473,7 @@ impl WeaponsWorld {
             actors: BTreeMap::new(),
             projectiles: BTreeMap::new(),
             drops: BTreeMap::new(),
+            pinned: BTreeSet::new(),
             item_bounds: BTreeMap::new(),
             next_id: 1,
             events: vec![],
@@ -1585,6 +1621,7 @@ impl WeaponsWorld {
                 frame: Frame::default(),
                 ammo: true,
                 loaded: true,
+                aiming: false,
                 skiing: false,
                 images: Default::default(),
                 trigger: false,
@@ -1595,6 +1632,7 @@ impl WeaponsWorld {
                 spray: 0,
                 ball_ready: 0,
                 spawn_tick: self.tick,
+                drawn: BTreeSet::new(),
                 tackle_until: 0,
                 rounds: BTreeMap::new(),
                 reserve: BTreeMap::new(),
@@ -1680,6 +1718,13 @@ impl WeaponsWorld {
         ensure!(scale.is_finite() && scale >= 0.0, "Invalid aim scale");
         self.actors.get_mut(&id).context("Unknown actor")?.aim_scale = scale;
         Ok(())
+    }
+    /// Whether the actor aims the image in hand, which its states'
+    /// `aimed` and `not_aimed` transitions read.
+    pub fn set_aiming(&mut self, id: ActorId, aiming: bool) {
+        if let Some(a) = self.actors.get_mut(&id) {
+            a.aiming = aiming;
+        }
     }
     pub fn set_loaded(&mut self, id: ActorId, loaded: bool) -> Result<()> {
         self.actors.get_mut(&id).context("Unknown actor")?.loaded = loaded;
@@ -1868,17 +1913,37 @@ impl WeaponsWorld {
             image: image.into(),
             paint,
         };
-        match &a.images[0] {
-            Some(e) if e.image == wanted.image && e.paint == wanted.paint => a.next = None,
-            Some(e)
-                if !self.pack.images[&e.image]
-                    .states
-                    .get(e.state)
-                    .is_none_or(|s| s.allow_change) =>
-            {
-                a.next = Some(wanted)
+        match &mut a.images[0] {
+            // The tool asked for again while it is being put down comes
+            // back up.
+            Some(e) if e.image == wanted.image && e.paint == wanted.paint => {
+                a.next = None;
+                if std::mem::take(&mut e.lowering) {
+                    let image = &self.pack.images[&e.image];
+                    if let Some(up) = image.redraw.filter(|s| *s < image.states.len()) {
+                        e.state = up;
+                        e.entered = false;
+                    }
+                }
             }
-            _ => self.swap_images(id, a, wanted),
+            Some(e) => {
+                let image = &self.pack.images[&e.image];
+                let allows = image.states.get(e.state).is_none_or(|s| s.allow_change);
+                match image.lower {
+                    // Put down first: the image plays out its lowering and
+                    // the change comes when it reaches a state that allows
+                    // one.
+                    Some(lower) if allows && !e.lowering => {
+                        e.lowering = true;
+                        e.state = lower;
+                        e.entered = false;
+                        a.next = Some(wanted);
+                    }
+                    _ if e.lowering || !allows => a.next = Some(wanted),
+                    _ => self.swap_images(id, a, wanted),
+                }
+            }
+            None => self.swap_images(id, a, wanted),
         }
     }
     /// Replace whatever is held with `next`; the akimbo gun brings its left
@@ -2557,6 +2622,7 @@ impl WeaponsWorld {
         // The new body wears nothing in its emote slot, and a guard it
         // takes up starts whole.
         a.emote = None;
+        a.drawn.clear();
         a.guard_left = None;
         a.cues.retain(|c| !c.cue.sound.is_empty());
         for c in &mut a.cues {
@@ -2595,6 +2661,8 @@ impl WeaponsWorld {
             paint: None,
             magazine: None,
             fidget: None,
+            lowering: false,
+            rounds: Default::default(),
         });
         if let Some(command) = self.pack.images[image].commands.mount.clone() {
             self.events.push(Event::ToolFire {
@@ -2755,10 +2823,18 @@ impl WeaponsWorld {
                 None
             };
             let shown = magazine.is_some();
+            // A draw after the first starts where the image says.
+            let state = match self.pack.images.get(image).and_then(|i| i.redraw) {
+                Some(redraw) if hand == 0 && a.drawn.contains(image) => redraw,
+                _ => 0,
+            };
+            if hand == 0 {
+                a.drawn.insert(image.into());
+            }
             a.images[hand as usize] = Some(Equipped {
                 animation_generation: self.animation_serial(),
                 image: image.into(),
-                state: 0,
+                state,
                 remaining: 0,
                 entered: false,
                 trigger: hand == 0 && a.trigger,
@@ -2766,6 +2842,8 @@ impl WeaponsWorld {
                 paint: None,
                 magazine,
                 fidget: None,
+                lowering: false,
+                rounds: Default::default(),
             });
             if self
                 .pack
@@ -3102,6 +3180,30 @@ impl WeaponsWorld {
         self.drops
             .get(&drop)
             .is_some_and(|d| id != d.source || self.tick >= d.pickup_after)
+            && !self.pinned.contains(&drop)
+    }
+    /// Hold drop `drop` where it is, facing `rotation`: it stops falling
+    /// and cannot be picked up, until it is removed. Only an Add-On's
+    /// world item (never a thrown tool) is placed so.
+    pub fn pin_drop(&mut self, drop: u64, rotation: Quat) -> Result<()> {
+        ensure!(rotation.is_finite(), "Invalid drop rotation");
+        let d = self.drops.get_mut(&drop).context("No such dropped item")?;
+        d.rotation = rotation.normalize();
+        d.velocity = Vec3::ZERO;
+        self.pinned.insert(drop);
+        Ok(())
+    }
+    /// Move a pinned drop (the mover it sits on moved).
+    pub fn set_drop_pose(&mut self, drop: u64, position: Vec3, rotation: Quat) {
+        if self.pinned.contains(&drop)
+            && position.is_finite()
+            && rotation.is_finite()
+            && position.abs().max_element() < 1e7
+            && let Some(d) = self.drops.get_mut(&drop)
+        {
+            d.position = position;
+            d.rotation = rotation.normalize();
+        }
     }
     /// Name a world drop, or take its name away (`setShapeName`).
     pub fn set_drop_name(&mut self, drop: u64, name: Option<DropName>) -> Result<()> {
@@ -3409,7 +3511,14 @@ impl WeaponsWorld {
         self.guard_hurt();
         // v20 `Item::updatePos`: the item's box falls under gravity 20 and
         // rests on its lowest face, bouncing with elasticity 0.2, friction 0.6.
+        if !self.pinned.is_empty() {
+            let lying = &self.drops;
+            self.pinned.retain(|id| lying.contains_key(id));
+        }
         for d in self.drops.values_mut() {
+            if self.pinned.contains(&d.id) {
+                continue;
+            }
             let shape = self.item_bounds.get(&d.item).map(|b| {
                 let min = Vec3::from(b.min) * d.scale;
                 let max = Vec3::from(b.max) * d.scale;
@@ -3504,6 +3613,7 @@ impl WeaponsWorld {
             .collect();
         for drop in expired {
             self.drops.remove(&drop);
+            self.pinned.remove(&drop);
             self.events.push(Event::DropRemoved { drop });
         }
         std::mem::take(&mut self.events)
@@ -3635,6 +3745,8 @@ impl WeaponsWorld {
                         due: self.tick + cue.ticks(),
                         cue: cue.clone(),
                         position: a.frame.position,
+                        image: image.id.clone(),
+                        hand: e.hand,
                     };
                     if cue.ticks() == 0 {
                         self.play_cue(id, pending);
@@ -3723,6 +3835,13 @@ impl WeaponsWorld {
             } else {
                 state.not_loaded
             }
+            .or(if e.hand != 0 {
+                None
+            } else if a.aiming {
+                state.aimed
+            } else {
+                state.not_aimed
+            })
             .or(if !a.ammo { state.no_ammo } else { state.ammo })
             .or(if e.trigger { state.down } else { state.up })
             .or(if e.remaining == 0 {
@@ -3836,6 +3955,19 @@ impl WeaponsWorld {
                 source: TargetId::Actor(id),
                 profile: c.cue.sound,
                 position: c.position,
+            });
+        }
+        if c.cue.eject_shell
+            && self
+                .pack
+                .images
+                .get(&c.image)
+                .is_some_and(|image| image.throws_shell())
+        {
+            self.events.push(Event::Shell {
+                actor: id,
+                image: c.image,
+                hand: c.hand,
             });
         }
     }
@@ -4024,6 +4156,11 @@ impl WeaponsWorld {
                     None => (image.shot.clone(), image.volleys.as_slice()),
                 };
                 a.last_shot = Some(self.tick);
+                // The round's place in the image's run decides whether its
+                // tracer is drawn: every Nth, counting from the first.
+                let round = e.rounds.get().wrapping_add(1);
+                e.rounds.set(round);
+                let traced = shot_traced(image, round);
                 let mut origin = if image.melee {
                     a.frame.eye
                 } else {
@@ -4279,6 +4416,7 @@ impl WeaponsWorld {
                                 direction: turn * aim,
                                 range,
                                 hitscan,
+                                traced,
                             },
                             q,
                         );
@@ -5204,12 +5342,14 @@ impl WeaponsWorld {
                 .as_ref()
                 .map_or(from + direction * reach, |h| h.position);
             if landing == 0 {
-                self.events.push(Event::Tracer {
-                    actor: id,
-                    hand: ray.hand,
-                    image: ray.image.into(),
-                    to,
-                });
+                if ray.traced {
+                    self.events.push(Event::Tracer {
+                        actor: id,
+                        hand: ray.hand,
+                        image: ray.image.into(),
+                        to,
+                    });
+                }
                 if let Some(flown) = self.projectile_named(&ray.hitscan.flown)
                     && let Some(speed) = self.pack.projectiles.get(&flown).map(|f| f.speed)
                 {
@@ -5228,7 +5368,7 @@ impl WeaponsWorld {
                         });
                     }
                 }
-            } else if inside.is_none() {
+            } else if inside.is_none() && ray.traced {
                 self.events.push(Event::Ricochet {
                     actor: id,
                     image: ray.image.into(),

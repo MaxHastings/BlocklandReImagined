@@ -11,6 +11,7 @@ pub mod cpu_time;
 pub mod crouch;
 pub mod definitions;
 pub mod drop_later;
+pub mod gait;
 pub mod ghost;
 pub mod grid;
 pub mod id_map;

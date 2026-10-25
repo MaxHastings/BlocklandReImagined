@@ -37,6 +37,9 @@ pub enum DecalEdit {
 
 const OPAQUE_SURFACE: u8 = 1;
 const OPAQUE_GROUND: u8 = 2;
+/// Glass and other alpha-blended surfaces. Decals draw after the translucent pass and these write no depth, so a mark lands on the
+/// pane, hidden by anything in front of it.
+const BLENDED_SURFACE: u8 = 3;
 
 /// The scene's triangles in a grid of cells, so a decal finds the few it touches without reading them all.
 pub struct ReceiverIndex {
@@ -44,7 +47,7 @@ pub struct ReceiverIndex {
     cells: HashMap<u64, Vec<u32>>,
     /// Triangles too large for the grid, tested by box.
     big: Vec<u32>,
-    /// Per triangle: 0 takes no decal (translucent), 1 flat surface, 2 ground.
+    /// Per triangle: 0 takes no decal (additive and other effect surfaces), 1 flat surface, 2 ground, 3 alpha-blended surface.
     class: Vec<u8>,
 }
 
@@ -71,16 +74,19 @@ impl ReceiverIndex {
             let Some(material) = scene.materials.get(batch.material) else {
                 continue;
             };
-            if !matches!(material.alpha, AlphaMode::Opaque | AlphaMode::Mask(_)) {
-                continue;
-            }
-            let class = if matches!(
-                material.kind,
-                MaterialKind::Terrain | MaterialKind::LayerBlend
-            ) {
-                OPAQUE_GROUND
-            } else {
-                OPAQUE_SURFACE
+            let class = match material.alpha {
+                AlphaMode::Blend => BLENDED_SURFACE,
+                AlphaMode::Opaque | AlphaMode::Mask(_) => {
+                    if matches!(
+                        material.kind,
+                        MaterialKind::Terrain | MaterialKind::LayerBlend
+                    ) {
+                        OPAQUE_GROUND
+                    } else {
+                        OPAQUE_SURFACE
+                    }
+                }
+                _ => continue,
             };
             for t in (batch.indices.start / 3)..(batch.indices.end / 3) {
                 let t = t as usize;
@@ -148,7 +154,7 @@ impl ReceiverIndex {
     }
 }
 
-/// The triangles of `scene` a decal draws on, three vertices each. Translucent surfaces take none; ground is the terrain materials.
+/// The triangles of `scene` a decal draws on, three vertices each. Alpha-blended surfaces take the flat-surface rule; additive and other effect surfaces take none; ground is the terrain materials.
 /// Reads every triangle; [`gather_indexed`] reads the few near the decal.
 pub fn gather(scene: &SceneData, decal: &Decal) -> (Vec<SurfaceVertex>, Vec<u32>) {
     let index = ReceiverIndex::build(scene);
@@ -186,7 +192,7 @@ fn gather_from(
     for &t in candidates {
         let t = t as usize;
         let rule: &Receivers = match index.class[t] {
-            OPAQUE_SURFACE => &decal.surfaces,
+            OPAQUE_SURFACE | BLENDED_SURFACE => &decal.surfaces,
             OPAQUE_GROUND => &decal.ground,
             _ => continue,
         };

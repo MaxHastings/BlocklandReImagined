@@ -427,6 +427,29 @@ pub enum Edge {
     Bottom,
     Left,
     Right,
+    /// The diagonal sectors: ahead and left, and so on. A layout uses
+    /// either the four edges or the four diagonals.
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+impl Edge {
+    /// Whether a hit `ahead` and `right` of the viewer (negative: behind,
+    /// left) comes from this edge or sector: the nearest axis for an edge,
+    /// the quadrant for a diagonal.
+    pub fn holds(self, ahead: f32, right: f32) -> bool {
+        match self {
+            Edge::Top => ahead.abs() >= right.abs() && ahead > 0.0,
+            Edge::Bottom => ahead.abs() >= right.abs() && ahead <= 0.0,
+            Edge::Right => ahead.abs() < right.abs() && right > 0.0,
+            Edge::Left => ahead.abs() < right.abs() && right <= 0.0,
+            Edge::TopLeft => ahead > 0.0 && right <= 0.0,
+            Edge::TopRight => ahead > 0.0 && right > 0.0,
+            Edge::BottomLeft => ahead <= 0.0 && right <= 0.0,
+            Edge::BottomRight => ahead <= 0.0 && right > 0.0,
+        }
+    }
 }
 
 /// One thing a layout draws.
@@ -446,6 +469,9 @@ pub enum Element {
         /// compass rose that swings as the viewer turns.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn: Option<Turn>,
+        /// A colour a value picks, multiplied into `tint`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shade: Option<Shade>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
@@ -485,6 +511,9 @@ pub enum Element {
         color: [f32; 4],
         #[serde(default, skip_serializing_if = "Option::is_none")]
         glyphs: Option<Glyphs>,
+        /// A colour a value picks, multiplied into `color`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shade: Option<Shade>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         show: Option<Show>,
     },
@@ -1135,7 +1164,42 @@ pub struct Show {
     pub above: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub below: Option<f32>,
+    /// A second condition that must hold too; it may carry another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub and: Option<Box<Show>>,
 }
+/// Most conditions one `show` chains with `and`.
+pub const MAX_SHOW_CHAIN: usize = 4;
+impl Show {
+    /// Whether every condition in the chain holds, reading values with
+    /// `number` (a value that cannot be read is 0).
+    fn holds(&self, number: &dyn Fn(&str) -> Option<f32>) -> bool {
+        let v = number(&self.value).unwrap_or(0.0);
+        self.above.is_none_or(|a| v > a)
+            && self.below.is_none_or(|b| v < b)
+            && self.and.as_ref().is_none_or(|next| next.holds(number))
+    }
+    /// The value names the chain reads.
+    fn names<'a>(&'a self, names: &mut Vec<&'a str>) {
+        names.push(&self.value);
+        if let Some(next) = &self.and {
+            next.names(names);
+        }
+    }
+}
+
+/// A colour picked by a value: its rounded number indexes `colors` (clamped
+/// to the first and last), and the pick multiplies the element's own
+/// colour. A crosshair that turns red over an enemy is `colors` of white
+/// and red under a rule's 0 or 1.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shade {
+    pub value: String,
+    pub colors: Vec<[f32; 4]>,
+}
+/// Most colours a [`Shade`] picks from.
+pub const MAX_SHADES: usize = 16;
 
 /// Where a value comes from.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1306,11 +1370,29 @@ fn texture_ok(t: &str) -> Result<()> {
     Ok(())
 }
 fn show_ok(s: &Option<Show>) -> Result<()> {
-    if let Some(s) = s {
+    let mut link = s.as_ref();
+    let mut length = 0;
+    while let Some(s) = link {
+        length += 1;
+        ensure!(
+            length <= MAX_SHOW_CHAIN,
+            "a show chains at most {MAX_SHOW_CHAIN} conditions with `and`"
+        );
         source_ok(&s.value)?;
         ensure!(
             s.above.is_none_or(f32::is_finite) && s.below.is_none_or(f32::is_finite),
             "show limits must be finite"
+        );
+        link = s.and.as_deref();
+    }
+    Ok(())
+}
+fn shade_ok(s: &Option<Shade>) -> Result<()> {
+    if let Some(s) = s {
+        source_ok(&s.value)?;
+        ensure!(
+            (1..=MAX_SHADES).contains(&s.colors.len()) && s.colors.iter().all(color_ok),
+            "a shade picks from 1 to {MAX_SHADES} RGBA colours (0..1)"
         );
     }
     Ok(())
@@ -1374,8 +1456,10 @@ impl Layout {
                     frames,
                     tint,
                     turn,
+                    shade,
                     show,
                 } => {
+                    shade_ok(shade)?;
                     if let Some(turn) = turn {
                         source_ok(&turn.value)?;
                         ensure!(
@@ -1433,9 +1517,11 @@ impl Layout {
                     digits,
                     color,
                     glyphs,
+                    shade,
                     show,
                     ..
                 } => {
+                    shade_ok(shade)?;
                     ensure!(
                         at.iter().all(|v| v.is_finite() && v.abs() <= 4096.0),
                         "text position must be finite"
@@ -1950,25 +2036,39 @@ impl Layout {
         for e in &self.elements {
             match e {
                 Element::Image {
-                    frames, turn, show, ..
+                    frames,
+                    turn,
+                    shade,
+                    show,
+                    ..
                 } => {
+                    names.extend(shade.as_ref().map(|s| s.value.as_str()));
                     if let Some(f) = frames {
                         names.push(&f.value);
                         amount(&f.max, &mut names);
                     }
                     names.extend(turn.as_ref().map(|t| t.value.as_str()));
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
                 Element::Bar {
                     value, max, show, ..
                 } => {
                     names.push(value);
                     amount(max, &mut names);
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
-                Element::Text { value, show, .. } => {
+                Element::Text {
+                    value, shade, show, ..
+                } => {
                     names.extend(value.as_deref());
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    names.extend(shade.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
                 Element::EdgeArrow {
                     x,
@@ -1978,7 +2078,9 @@ impl Layout {
                     ..
                 } => {
                     names.extend([x.as_str(), z.as_str(), strength.as_str()]);
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
                 Element::Strip {
                     heading,
@@ -1990,7 +2092,9 @@ impl Layout {
                     if let Amount::Source(s) = span {
                         names.push(s.as_str());
                     }
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
                 Element::StripMarker {
                     heading,
@@ -2004,7 +2108,9 @@ impl Layout {
                     if let Amount::Source(s) = span {
                         names.push(s.as_str());
                     }
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
                 Element::DialMarker {
                     heading,
@@ -2015,7 +2121,9 @@ impl Layout {
                 } => {
                     names.extend(heading.as_deref());
                     names.extend([x.as_str(), z.as_str()]);
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
                 Element::Radar {
                     zoom,
@@ -2028,12 +2136,16 @@ impl Layout {
                     names.extend(expand.as_ref().map(|e| e.value.as_str()));
                     names.extend(markers.iter().map(String::as_str));
                     names.push("heading");
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
                 Element::KillFeed { show, .. }
                 | Element::MessageFeed { show, .. }
                 | Element::Tracker { show, .. } => {
-                    names.extend(show.as_ref().map(|s| s.value.as_str()));
+                    if let Some(s) = show {
+                        s.names(&mut names);
+                    }
                 }
             }
         }
@@ -2140,11 +2252,18 @@ pub fn resolve_live(
             (v / m).clamped(0.0, 1.0)
         }
     };
-    let shown = |show: &Option<Show>| {
-        show.as_ref().is_none_or(|s| {
-            let v = number(&s.value).unwrap_or(0.0);
-            s.above.is_none_or(|a| v > a) && s.below.is_none_or(|b| v < b)
-        })
+    let shown = |show: &Option<Show>| show.as_ref().is_none_or(|s| s.holds(&number));
+    // `color` multiplied by the colour a shade's value picks.
+    let shaded = |color: [f32; 4], shade: &Option<Shade>| -> [f32; 4] {
+        let Some(shade) = shade else {
+            return color;
+        };
+        let last = shade.colors.len().saturating_sub(1);
+        let pick = number(&shade.value)
+            .map_or(0, |n| n.round().max(0.0) as usize)
+            .min(last);
+        let picked = shade.colors.get(pick).copied().unwrap_or([1.0; 4]);
+        [0, 1, 2, 3].map(|i| color[i] * picked[i])
     };
     let mut out = Vec::new();
     for (index, e) in layout.elements.iter().enumerate() {
@@ -2155,6 +2274,7 @@ pub fn resolve_live(
                 frames,
                 tint,
                 turn,
+                shade,
                 show,
             } => {
                 let Some((key, _)) = texture(id).filter(|_| shown(show)) else {
@@ -2172,7 +2292,7 @@ pub fn resolve_live(
                     texture: key,
                     uv,
                     rect: *rect,
-                    tint: *tint,
+                    tint: shaded(*tint, shade),
                     turn: turn
                         .as_ref()
                         .and_then(|t| number(&t.value).map(|v| v * t.scale))
@@ -2214,11 +2334,13 @@ pub fn resolve_live(
                 align,
                 color,
                 glyphs,
+                shade,
                 show,
             } => {
                 if !shown(show) {
                     continue;
                 }
+                let color = &shaded(*color, shade);
                 let shown_value = source.as_deref().map(|s| match read(s) {
                     Some(Value::Number(n)) if n.is_finite() => {
                         let n = n.round() as i64;
@@ -2580,18 +2702,7 @@ pub fn resolve_live(
                 };
                 let to_ahead = dx * ahead[0] + dz * ahead[1];
                 let to_right = -dx * ahead[1] + dz * ahead[0];
-                let nearest = if to_ahead.abs() >= to_right.abs() {
-                    if to_ahead > 0.0 {
-                        Edge::Top
-                    } else {
-                        Edge::Bottom
-                    }
-                } else if to_right > 0.0 {
-                    Edge::Right
-                } else {
-                    Edge::Left
-                };
-                if nearest == *edge {
+                if edge.holds(to_ahead, to_right) {
                     out.push(Item::Image {
                         turn: 0.0,
                         texture: key,
@@ -3154,6 +3265,98 @@ mod tests {
             image(&items, 3).is_some()
         };
         assert!(lit(0.5) && !lit(1.5) && lit(2.5));
+    }
+
+    #[test]
+    fn a_show_chains_conditions_and_a_shade_picks_a_colour_by_value() {
+        let layout = layout(
+            serde_json::json!({ "schema_version": 1, "region": "crosshair",
+            "elements": [
+                { "type": "image", "texture": "pack:texture/meter", "rect": [0, 0, 8, 8],
+                  "tint": [1, 1, 1, 0.5],
+                  "shade": { "value": "game:player/target", "colors": [[1, 1, 1, 1], [1, 0, 0, 1]] },
+                  "show": { "value": "health", "above": 0,
+                            "and": { "value": "aiming", "below": 0.5 } } },
+                { "type": "text", "at": [0, 0], "text": "x", "color": [0.5, 1, 1, 1],
+                  "shade": { "value": "game:player/target", "colors": [[1, 1, 1, 1], [1, 0, 0, 1]] } }] }),
+        );
+        let draw = |health: f32, aiming: f32, target: f32| {
+            resolve(
+                &layout,
+                &|source: &Source| match source {
+                    Source::Health => Some(Value::Number(health)),
+                    Source::Aiming => Some(Value::Number(aiming)),
+                    Source::State(s) if s == "game:player/target" => Some(Value::Number(target)),
+                    _ => None,
+                },
+                &textures,
+            )
+        };
+        let tints = |items: &[Item]| -> Vec<[f32; 4]> {
+            items
+                .iter()
+                .map(|i| match i {
+                    Item::Image { tint, .. } => *tint,
+                    Item::Text { color, .. } => *color,
+                    _ => unreachable!(),
+                })
+                .collect()
+        };
+        // Alive and not aiming: both conditions hold. Over a foe (1) the
+        // image's half-opaque white and the text go red.
+        assert_eq!(
+            tints(&draw(50.0, 0.0, 0.0)),
+            [[1.0, 1.0, 1.0, 0.5], [0.5, 1.0, 1.0, 1.0]]
+        );
+        assert_eq!(
+            tints(&draw(50.0, 0.0, 1.0)),
+            [[1.0, 0.0, 0.0, 0.5], [0.5, 0.0, 0.0, 1.0]]
+        );
+        // A value past the last colour keeps the last; one missing the first.
+        assert_eq!(tints(&draw(50.0, 0.0, 9.0))[0], [1.0, 0.0, 0.0, 0.5]);
+        // Aiming, or dead: the image goes, the text stays.
+        assert_eq!(draw(50.0, 1.0, 0.0).len(), 1);
+        assert_eq!(draw(0.0, 0.0, 0.0).len(), 1);
+        assert!(layout.sources().contains(&Source::Aiming));
+        assert!(
+            layout
+                .sources()
+                .contains(&Source::State("game:player/target".into()))
+        );
+        // Chains and shades are bounded.
+        let mut deep = serde_json::json!({ "value": "health" });
+        for _ in 0..MAX_SHOW_CHAIN {
+            deep = serde_json::json!({ "value": "health", "and": deep });
+        }
+        let too_long: Layout = serde_json::from_value(serde_json::json!({ "schema_version": 1,
+            "region": "crosshair", "elements": [{ "type": "text", "at": [0, 0], "text": "x", "show": deep }] }))
+        .unwrap();
+        assert!(too_long.validate().is_err());
+        let empty: Layout = serde_json::from_value(serde_json::json!({ "schema_version": 1,
+            "region": "crosshair", "elements": [{ "type": "text", "at": [0, 0], "text": "x",
+            "shade": { "value": "health", "colors": [] } }] }))
+        .unwrap();
+        assert!(empty.validate().is_err());
+    }
+
+    #[test]
+    fn diagonal_hit_sectors_split_the_view_into_quadrants() {
+        let at = |ahead, right| {
+            [
+                Edge::TopLeft,
+                Edge::TopRight,
+                Edge::BottomLeft,
+                Edge::BottomRight,
+            ]
+            .map(|e| e.holds(ahead, right))
+        };
+        assert_eq!(at(5.0, -1.0), [true, false, false, false]);
+        assert_eq!(at(5.0, 9.0), [false, true, false, false]);
+        assert_eq!(at(-5.0, -9.0), [false, false, true, false]);
+        assert_eq!(at(-5.0, 1.0), [false, false, false, true]);
+        // The edges keep their nearest-axis meaning.
+        assert!(Edge::Top.holds(5.0, 1.0) && Edge::Right.holds(1.0, 5.0));
+        assert!(Edge::Bottom.holds(-5.0, 1.0) && Edge::Left.holds(1.0, -5.0));
     }
 
     #[test]

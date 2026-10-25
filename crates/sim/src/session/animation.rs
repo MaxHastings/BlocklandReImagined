@@ -8,9 +8,19 @@ use bri_content::{
 use bri_weapons::{ActorId, AnimationBinding, AnimationImage, AnimationOwner, AnimationProvenance};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const MAX_ASSETS: usize = 256;
-const MAX_ASSET_BYTES: usize = 64 << 20;
-const MAX_TOTAL_BYTES: usize = 256 << 20;
+/// Resources one host keeps clip metadata for: a body, or a weapon image (each
+/// of a game's gun and grenade images has its own), so this is as many as
+/// there can be image bindings. What bounds memory is the bytes below.
+pub const MAX_ASSETS: usize = MAX_IMAGE_BINDINGS;
+/// Most weapon images a catalog binds to a resource.
+const MAX_IMAGE_BINDINGS: usize = 4096;
+/// Largest single resource kept.
+pub const MAX_ASSET_BYTES: usize = 256 << 20;
+/// Largest total of the resources kept.
+pub const MAX_TOTAL_BYTES: usize = 1 << 30;
+/// Most clips one resource has, its own or joined from its libraries (a UE2
+/// soldier has 409).
+const MAX_CLIPS: usize = 1024;
 const MAX_ACTIVE: usize = 128;
 const MAX_RECORDS: usize = 512;
 const MAX_RECEIPTS: usize = 256;
@@ -69,10 +79,23 @@ impl AnimationAssets {
     pub fn within_resource_budget(count: usize, bytes: usize) -> bool {
         count <= MAX_ASSETS && bytes <= MAX_TOTAL_BYTES
     }
+    /// Why a catalog of `count` resources holding `bytes` is over budget, for
+    /// the log: the limit passed and the actual value.
+    pub fn budget_overrun(count: usize, bytes: usize) -> String {
+        if count > MAX_ASSETS {
+            format!("{count} resources, over the limit of {MAX_ASSETS}")
+        } else {
+            format!(
+                "{bytes} bytes of metadata, over the limit of {MAX_TOTAL_BYTES} (at most {MAX_ASSET_BYTES} each)"
+            )
+        }
+    }
     fn index(&self) -> Result<ValidatedAnimationAssets> {
         ensure!(
-            self.assets.len() <= MAX_ASSETS && self.images.len() <= 4096,
-            "Animation catalog bounds"
+            self.assets.len() <= MAX_ASSETS && self.images.len() <= MAX_IMAGE_BINDINGS,
+            "Animation catalog bounds: {} resources (limit {MAX_ASSETS}), {} image bindings (limit {MAX_IMAGE_BINDINGS})",
+            self.assets.len(),
+            self.images.len()
         );
         let mut total = 0usize;
         let mut resources = BTreeSet::new();
@@ -83,12 +106,26 @@ impl AnimationAssets {
                 .checked_add(asset.bytes.len())
                 .context("Animation catalog size overflow")?;
             ensure!(
-                !asset.resource.is_empty()
-                    && asset.resource.len() <= 256
-                    && resources.insert(asset.resource.clone())
-                    && asset.bytes.len() <= MAX_ASSET_BYTES
-                    && total <= MAX_TOTAL_BYTES,
-                "Animation resource bounds/duplicate"
+                !asset.resource.is_empty() && asset.resource.len() <= 256,
+                "Animation resource name `{}` is {} bytes (1 to 256)",
+                asset.resource,
+                asset.resource.len()
+            );
+            ensure!(
+                resources.insert(asset.resource.clone()),
+                "Animation resource `{}` is listed twice",
+                asset.resource
+            );
+            ensure!(
+                asset.bytes.len() <= MAX_ASSET_BYTES,
+                "Animation resource `{}` is {} bytes, over the limit of {MAX_ASSET_BYTES}",
+                asset.resource,
+                asset.bytes.len()
+            );
+            ensure!(
+                total <= MAX_TOTAL_BYTES,
+                "Animation catalog is {total} bytes at `{}`, over the limit of {MAX_TOTAL_BYTES}",
+                asset.resource
             );
             ensure!(
                 bri_package::environment::hash_bytes(&asset.bytes) == asset.digest,
@@ -121,7 +158,12 @@ impl AnimationAssets {
                 }
             };
             let sequences = &rig.sequences;
-            ensure!(sequences.len() <= 256, "Animation sequence count");
+            ensure!(
+                sequences.len() <= MAX_CLIPS,
+                "Animation resource `{}` has {} clips, over the limit of {MAX_CLIPS}",
+                asset.resource,
+                sequences.len()
+            );
             for (name, animation) in sequences {
                 animation.validate()?;
                 ensure!(
@@ -140,8 +182,10 @@ impl AnimationAssets {
                 );
             }
             ensure!(
-                asset.library_clips.len() <= 1024,
-                "Animation library clip count"
+                asset.library_clips.len() <= MAX_CLIPS,
+                "Animation resource `{}` has {} library clips, over the limit of {MAX_CLIPS}",
+                asset.resource,
+                asset.library_clips.len()
             );
             for clip in &asset.library_clips {
                 let name = clip.name.to_ascii_lowercase();
@@ -1213,6 +1257,13 @@ impl Session {
                 "binding invalidated",
             );
         }
+    }
+    /// A body clip's duration and whether it loops, by lower-case name.
+    pub(super) fn body_clip(&self, model: &str, name: &str) -> Option<(f32, bool)> {
+        self.animations
+            .clips
+            .get(&(model.to_owned(), name.to_ascii_lowercase()))
+            .map(|c| (c.duration as f32, c.looping))
     }
     pub(super) fn advance_animations(&mut self) {
         self.reconcile_animation_bindings();

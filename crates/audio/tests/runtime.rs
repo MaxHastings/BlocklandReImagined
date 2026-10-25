@@ -667,3 +667,17 @@ fn a_room_gives_effects_a_tail_and_a_dry_room_none() {
     });
     assert!(wet > 0.001, "tail {wet}");
 }
+
+#[test]
+fn a_sound_shaped_by_pitch_and_radius_plays_higher_and_carries_that_far() {
+    let clip = bri_audio::wav::encode_pcm16(22050, 1, &sine(22050, 1, 1.0, 220.0, 0.5));
+    let plain = SoundAsset::decoded("voice", &clip, "wav", 10.0, 60.0).unwrap();
+    let shaped = plain.shaped(2.0, 30.0);
+    assert_eq!(shaped.playback.pitch, 2.0 * plain.playback.pitch);
+    let spatial = shaped.playback.spatial.as_ref().unwrap();
+    assert_eq!(spatial.max_distance, 30.0);
+    // The share of the reach that is full volume stays what it was.
+    assert!((spatial.reference_distance - 5.0).abs() < 1e-4);
+    let unshaped = plain.shaped(1.0, 0.0);
+    assert_eq!(unshaped.playback.spatial, plain.playback.spatial);
+}

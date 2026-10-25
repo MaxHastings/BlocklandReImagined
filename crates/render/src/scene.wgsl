@@ -75,6 +75,11 @@ fn point_sums(position:vec3<f32>,normal:vec3<f32>)->PointSums {
     }
     return sums;
 }
+// What a baked surface (one with a lightmap) takes from the point lights: effect and vehicle lights only. The map's own lights,
+// shaded or overflow, are in its lightmap already, in every lighting mode, and light only what has no lightmap.
+fn baked_point_light(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    return point_sums(position,normal).others;
+}
 fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let sums=point_sums(position,normal);
     return sums.others+sums.overflow;
@@ -149,7 +154,10 @@ fn dynamic_bsp_light(base:vec3<f32>,pigment:vec3<f32>,alpha:f32,brighten:bool,po
 // ranked by `(1 - d^2/R^2) * brightness`, each light `Colour * reach(d/R) * N.L` with the smooth radial reach used for effect lights.
 // `material[1].x` scales the sun and `material[1].y` the lights (the body's authored gains). Returns the multiplier before the
 // stage's doubling. No visibility traces are made.
+// `baked` (`material[1].z`): the vertex colour already holds the room's light, so the body takes neither a zone's ambient nor its
+// suns nor the map lamps whose light the baking has: only its glow (`material[1].w`) and the live lights, which add on top.
 fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
+    let baked=material[1].z>0.5;
     let n=normal/max(length(normal),0.0001);
     var chosen=array<u32,4>(0u,0u,0u,0u);
     var score=array<f32,4>(0.0,0.0,0.0,0.0);
@@ -159,7 +167,7 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
         let delta=light.position_radius.xyz-position;
         let d2=dot(delta,delta);
         let radius=light.position_radius.w;
-        if d2>=radius*radius {continue;}
+        if d2>=radius*radius || (baked && light.color.w>2.5) {continue;}
         let s=(1.0-d2/(radius*radius))*max(light.color.r,max(light.color.g,light.color.b));
         if s<=score[3] {continue;}
         var k=3u;
@@ -172,6 +180,8 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
     }
     // A zone's own ambient, or the scene's with the room's light as a floor under it.
     var sum=select(max(camera.ambient.rgb,own.rgb),own.rgb,own.w>=0.0);
+    if baked {sum=vec3<f32>(0.0);}
+    sum+=vec3<f32>(material[1].w);
     for(var k=0u;k<4u;k+=1u) {
         if score[k]<=0.0 {continue;}
         let light=listed_light(list,chosen[k]);
@@ -180,6 +190,9 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
         let t=min(d/max(light.position_radius.w,0.0001),1.0);
         let reach=2.0*(1.0-3.0*t*t+2.0*t*t*t);
         sum+=material[1].y*light.color.rgb*reach*max(dot(n,delta/max(d,0.0001)),0.0)*point_cone(light,-delta/max(d,0.0001));
+    }
+    if baked {
+        return sum;
     }
     if own.w<0.0 {
         let toward_sun=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
@@ -1362,7 +1375,8 @@ struct VertexOut {
     if material[0].x==15.0 {
         // A moving body lit by the scene: its zone's ambient and suns when it has them, else the scene's, and the nearest lights.
         let lit=actor_light(out.world_position,out.normal,own_light);
-        out.color=vec4<f32>(clamp(lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0))*color.rgb,color.a);
+        // Baked: the vertex colour is the room's light (0.5 neutral), the live lights and the glow add to it.
+        out.color=vec4<f32>(select(clamp(lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0))*color.rgb,clamp(color.rgb+lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0)),material[1].z>0.5),color.a);
     }
     out.point_light=vec3<f32>(0.0);
     if material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0 || material[0].x==11.0 {
@@ -1618,7 +1632,7 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         var terrain_lit:vec3<f32>;
         if lighting_mode()==3 {terrain_lit=dynamic_illumination(v.world_position,v.normal).diffuse;}
         else {terrain_lit=terrain_light(textureSampleLevel(lightmap,tiled_exact,light_uv,0.0).rgb,v.world_position,v.normal);}
-        var point_lit=point_illumination(v.world_position,v.normal);
+        var point_lit=baked_point_light(v.world_position,v.normal);
         if lighting_mode()==3 {point_lit=map_surface_point_light(v.world_position,v.normal,terrain_lit);}
         return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_lit+point_lit),v.world_position),v.color.a);
     }
@@ -1764,10 +1778,10 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         specular=live.specular;
     } else if material[1].x==1.0 {
         illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.lightmap_uv,v.world_position,v.normal)
-            +point_illumination(v.world_position,v.normal);
+            +baked_point_light(v.world_position,v.normal);
     } else {
         illumination=shadowed_lightmap(illumination,v.world_position,v.normal)
-            +point_illumination(v.world_position,v.normal);
+            +baked_point_light(v.world_position,v.normal);
         // A lightmap without its decomposition: only the ambient light
         // changes with the live environment.
         if relit() {illumination=max(illumination*sky_follow()+(camera.ambient.rgb-baked_ambient())*(1.0-sky_share()),vec3<f32>(0.0));}
@@ -1867,9 +1881,18 @@ fn probe_uv(d:vec3<f32>)->vec2<f32> {
     }
     return p*0.5+vec2<f32>(0.5);
 }
+// What a mirror sees along `r` with no probe to ask: the sky where it is
+// open overhead, the room's own ambient where something covers it.
+fn covered_sky_along(position:vec3<f32>,r:vec3<f32>)->vec3<f32> {
+    let sky=sky_along(r);
+    if !MODERN_SKY_SHADING {return sky;}
+    let e=sky_exposure_at(position,r);
+    let room=linear_color(clamp(select(camera.ambient.rgb,camera.enclosed.rgb,camera.enclosed.w>=0.5),vec3<f32>(0.0),vec3<f32>(1.0)));
+    return mix(sky,room,e.y*(1.0-e.x));
+}
 // What a mirror at `position` sees along `r`, blurred for `roughness`.
 fn environment_along(position:vec3<f32>,r:vec3<f32>,roughness:f32)->vec3<f32> {
-    let sky=sky_along(r);
+    let sky=covered_sky_along(position,r);
     if probe.state.x<0.5 {return sky;}
     // Blurrier mips for rougher metal (Unity's perceptual mapping).
     let lod=probe.state.y*roughness*(1.7-0.7*roughness);
@@ -2022,13 +2045,7 @@ fn physical_light(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     let p=v.world_position;
     let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w*camera.lightmap.x;
     var light=shadowed_lightmap(baked*sky_follow(),p,n);
-    if lighting_mode()==3 {
-        let live=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse;
-        light+=live+map_surface_point_light(p,n,light+live);
-    } else {
-        light+=v.point_light;
-    }
-    return light;
+    return light+baked_point_light(p,n);
 }
 fn physical_surface(v:VertexOut)->vec4<f32> {
     let albedo=textureSample(layer0,tiled,v.uv);
