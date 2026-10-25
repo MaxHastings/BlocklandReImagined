@@ -51,6 +51,9 @@ mod extras;
 mod fire;
 mod harm;
 use fire::{Hand, Shot};
+#[cfg(test)]
+#[path = "bots/anchor_tests.rs"]
+mod anchor_tests;
 #[path = "bots/combat.rs"]
 mod hand_combat;
 mod hearing;
@@ -77,6 +80,8 @@ pub use surprise::{BotCandidate, BotDecision, BotDrive, BotSurpriseView};
 mod tactics;
 mod tuning;
 pub use tuning::{BotReload, BotTuning};
+#[cfg(test)]
+mod respawn_tests;
 mod team;
 mod why;
 pub use team::BotTeamView;
@@ -107,6 +112,8 @@ pub struct BotThought {
     pub next: Option<[f32; 3]>,
     pub path_steps: usize,
     pub searching: bool,
+    pub route_provider: &'static str,
+    pub repairing: bool,
     /// Evidence-based search progress; never an unseen actor position.
     pub search_phase: &'static str,
     pub objective: Option<BrickId>,
@@ -257,23 +264,6 @@ const ERROR_FLOOR: f32 = 1.0 / 3.0;
 const LEAD_STRAY: f32 = 0.15;
 /// Ticks between the lead's seeded points.
 const LEAD_TICKS: u64 = 120;
-/// Within this of where it began trying to get away, a bot has got
-/// nowhere (`trapped`).
-const PINNED: f32 = 2.0;
-/// Seconds of trying and getting nowhere before it thinks of respawning
-/// itself, and how many more before it is sure: its own unsticking (a
-/// hop, plans again, a new goal) has had its turn by then.
-const TRAPPED_AFTER: f32 = 10.0;
-const TRAPPED_RAMP: f32 = 10.0;
-/// Ticks without a try to get away after which it is not trapped.
-const TRY_GAP: u64 = 120 * 10;
-/// How sure it is that it is trapped, 0 to 1, from how long it has kept
-/// trying to get away from one spot (`Brain::pinned`).
-fn trapped(pinned: Option<(Vec3, u64, u64)>) -> f32 {
-    pinned.map_or(0.0, |(_, since, last)| {
-        ((last.saturating_sub(since) as f32 / 120.0 - TRAPPED_AFTER) / TRAPPED_RAMP).clamp(0.0, 1.0)
-    })
-}
 /// How far either way a search sweeps its view (all round), and the
 /// ticks between the points it looks to.
 const SWEEP: f32 = std::f32::consts::PI;
@@ -427,6 +417,15 @@ struct Knowledge {
     observed: u64,
     expires: u64,
 }
+/// Exactly one provider owns the current plan. Prepared walking corridors
+/// are executed by the ordinary motor; they are not reconstructed by the grid.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum RouteSource {
+    #[default]
+    Pending,
+    Local,
+    Prepared,
+}
 struct Brain {
     /// The vehicle spawn brick that made it; `None` for a bot the rules
     /// added (`Bots::by_rules`).
@@ -459,14 +458,17 @@ struct Brain {
     /// on (the next search spot, a chase's runner) never stops it dead.
     bridge: Option<Waypoint>,
     search: Option<Search>,
+    route_source: RouteSource,
+    /// A bounded repair rejoins the retained prepared corridor at this index.
+    repair_join: Option<usize>,
     /// The goal's plan is walked (or none exists): no new search until the
     /// goal changes or the bot gets stuck.
     settled: bool,
     partial_route: bool,
     /// Where the best route home ended short of home and the bot stood at its
-    /// end: going home from there is no use until it has been moved
-    /// (`HOME_GIVEN_UP`), so `Return` stands instead of searching again.
-    home_given_up: Option<Vec3>,
+    /// end, and the anchor it tried. Retry when either the bot is moved
+    /// (`HOME_GIVEN_UP`) or its rules/leader move the anchor.
+    home_given_up: Option<(Vec3, Vec3)>,
     /// A chase point whose best route ends beyond its reach (`reach`):
     /// that enemy is not worth chasing while they stay there.
     out_of_reach: Option<Vec3>,
@@ -487,12 +489,6 @@ struct Brain {
     pressed: MoveInput,
     /// The way it faced as it began sweeping the spot it searches.
     sweep_from: Option<f32>,
-    /// Where it has been trying to get away from, since when, and when it
-    /// last tried (`trapped`).
-    pinned: Option<(Vec3, u64, u64)>,
-    /// Where this life began, and whether it began by respawning itself:
-    /// trapped again there, a respawn would only bring it back (`trapped`).
-    life: Option<(Vec3, bool)>,
     /// Current aim, turned toward the wanted one at the kind's rate.
     yaw: f32,
     pitch: f32,
@@ -656,10 +652,11 @@ enum Goal {
     Stand(Vec3),
     /// Away from what it runs from (`intents`).
     Flee(Vec3),
-    Home,
+    /// The anchor this route was requested for. The live anchor may move.
+    Home(Vec3),
 }
 impl Goal {
-    fn point(self, home: Vec3) -> Vec3 {
+    fn point(self) -> Vec3 {
         match self {
             Self::Wander(p)
             | Self::Chase(p)
@@ -669,8 +666,8 @@ impl Goal {
             | Self::Objective(p)
             | Self::Arm(p)
             | Self::Stand(p)
-            | Self::Flee(p) => p,
-            Self::Home => home,
+            | Self::Flee(p)
+            | Self::Home(p) => p,
         }
     }
 }
@@ -732,6 +729,8 @@ impl Brain {
             plan: Vec::new(),
             bridge: None,
             search: None,
+            route_source: RouteSource::Pending,
+            repair_join: None,
             settled: false,
             partial_route: false,
             home_given_up: None,
@@ -745,8 +744,6 @@ impl Brain {
             acted: Default::default(),
             pressed: MoveInput::default(),
             sweep_from: None,
-            pinned: None,
-            life: None,
             yaw: 0.0,
             pitch: 0.0,
             target: None,
@@ -851,6 +848,8 @@ impl Brain {
                 });
             self.plan.clear();
             self.search = None;
+            self.route_source = RouteSource::Pending;
+            self.repair_join = None;
             self.replans = 0;
             self.progress.reset();
             self.settled = false;
@@ -863,7 +862,7 @@ impl Brain {
     fn set_goal_near(&mut self, goal: Goal) {
         let same = self.goal.is_some_and(|now| {
             std::mem::discriminant(&now) == std::mem::discriminant(&goal)
-                && now.point(Vec3::ZERO).distance(goal.point(Vec3::ZERO)) < GOAL_SLACK
+                && now.point().distance(goal.point()) < GOAL_SLACK
         });
         if !same {
             self.set_goal(Some(goal));
@@ -1089,14 +1088,6 @@ impl Bots {
     /// The vehicle spawn brick that made this bot.
     pub(super) fn spawn_brick(&self, owner: OwnerId) -> Option<BrickId> {
         self.brains.get(&owner).and_then(|b| b.brick)
-    }
-    /// Where a brick's bot spawns: by its brick. A rules bot spawns where
-    /// its game's members do.
-    pub(super) fn home(&self, owner: OwnerId) -> Option<Vec3> {
-        self.brains
-            .get(&owner)
-            .filter(|b| b.tethered())
-            .map(|b| b.home)
     }
     /// A bot a mini-game's rules added, and the package that added it: it
     /// plays as a member, so the rules' player hooks hear of it.
@@ -1554,7 +1545,14 @@ impl Session {
         };
         let delay = cadence::spread(bot, cadence::salt::RESPAWN, respawn_tick, lo, hi);
         let wait = ticks(delay);
-        if self.bots.brains[&bot].auto_respawn && tick >= respawn_tick + wait {
+        // A round/lives hold already forbids automatic respawn. Wait for
+        // the rules to lift it instead of rebuilding script snapshots to
+        // ask an action the authoritative life state refuses every tick.
+        let released = self
+            .minigames
+            .player(self.peers[&bot].combat.player)
+            .is_ok_and(|player| !player.respawn_held);
+        if self.bots.brains[&bot].auto_respawn && released && tick >= respawn_tick + wait {
             // A bot a bite turned comes back as its own kind.
             if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
                 self.bots.brains.get_mut(&bot).unwrap().kind = born.clone();
@@ -1585,12 +1583,6 @@ impl Session {
             brain.objective_tool = false;
             brain.surprise.new_life();
             brain.chase_offset = Vec3::ZERO;
-            brain.pinned = None;
-            // A life it ended itself begins where respawning brought it.
-            brain.life = brain
-                .life
-                .filter(|(_, ended)| *ended)
-                .map(|_| (Vec3::NAN, true));
         }
         Ok(())
     }
@@ -1840,6 +1832,10 @@ impl Session {
             input.pitch.sin(),
             -input.yaw.cos() * input.pitch.cos(),
         );
+        let (input, waiting_for_door) = self.bot_door_control(bot, input, tick);
+        if waiting_for_door {
+            self.bots.brains.get_mut(&bot).unwrap().progress.reset();
+        }
         self.bots.brains.get_mut(&bot).unwrap().pressed = input;
         let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
         self.movement(bot, sequence, input)?;
@@ -1970,19 +1966,20 @@ impl Session {
         tick: u64,
     ) -> Option<Waypoint> {
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let home = brain.home;
         let mut wanted = None;
         if let Some(height) = swim {
             // In water it swims straight there, keeping to the water.
             brain.plan.clear();
+            brain.route_source = RouteSource::Pending;
+            brain.repair_join = None;
             brain.search = None;
             if let Some(goal) = brain.goal
                 && let Some((water, _)) = self.simulation.liquid_at(state.feet, height)
             {
-                let to = crate::water::swim_point(water, goal.point(home), height);
+                let to = crate::water::swim_point(water, goal.point(), height);
                 if to.distance(feet) < 0.8 {
                     brain.settled = true;
-                    if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
+                    if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home(_))) {
                         brain.goal = None;
                     }
                 } else {
@@ -1990,8 +1987,54 @@ impl Session {
                 }
             }
         } else if let Some(goal) = brain.goal {
-            let point = goal.point(home);
-            if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
+            let point = goal.point();
+            if brain.plan.is_empty()
+                && brain.search.is_none()
+                && !brain.settled
+                && brain.route_source == RouteSource::Pending
+            {
+                brain.route_source = RouteSource::Local;
+                if let Some(route) = self
+                    .simulation
+                    .map_navigation()
+                    .and_then(|navigation| navigation.route(body, feet, point))
+                    && !route.is_empty()
+                {
+                    brain.plan = route.into_iter().map(Waypoint::walk).collect();
+                    brain.partial_route = false;
+                    brain.route_source = RouteSource::Prepared;
+                }
+            }
+            // The global corridor excludes operable doors, not their accepted
+            // open poses. Keep the corridor; search only around an actual leaf
+            // obstruction, rejoining beyond it instead of rebuilding every leg.
+            let repair = brain.route_source == RouteSource::Prepared
+                && brain.search.is_none()
+                && brain
+                    .plan
+                    .first()
+                    .is_some_and(|w| matches!(w.mode, Mode::Walk) && w.through.is_none());
+            if repair {
+                let next = brain.plan[0].feet;
+                if self.bot_open_leaf_blocks(bot, next) {
+                    let brain = self.bots.brains.get_mut(&bot).unwrap();
+                    let join =
+                        crate::navigation::repair_join(&mut brain.plan, feet, body.width * 4.);
+                    brain.search = Some(Search::with(
+                        feet,
+                        brain.plan[join].feet,
+                        body.width * 6.,
+                        costs.clone(),
+                    ));
+                    brain.repair_join = Some(join);
+                }
+            }
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            if brain.plan.is_empty()
+                && brain.search.is_none()
+                && !brain.settled
+                && brain.route_source == RouteSource::Local
+            {
                 // On a long way to an objective each bot (each life of it)
                 // leans its own way (`Costs::veer`), so a side spreads over
                 // the ways there instead of filing down one. A near one (a
@@ -2064,6 +2107,36 @@ impl Session {
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
                     let explored = brain.search.as_ref().map_or(0, Search::explored);
                     brain.search = None;
+                    if let Some(join) = brain.repair_join.take() {
+                        if let Found::Path(path) = found {
+                            let tail = brain.plan.split_off(join + 1);
+                            brain.plan = crate::nav::pull(&ground, nav, body, feet, path);
+                            brain.plan.extend(tail);
+                        } else {
+                            if self
+                                .bots
+                                .dead_end_told
+                                .get(&bot)
+                                .is_none_or(|at| tick >= at + STALL_TELL_TICKS)
+                            {
+                                self.bots.dead_end_told.insert(bot, tick);
+                                let (kind, end) = match &found {
+                                    Found::Partial(path) => {
+                                        ("partial", path.last().map(|w| w.feet))
+                                    }
+                                    _ => ("nowhere", None),
+                                };
+                                bri_console::warn(format!(
+                                    "bot {bot} door repair {kind}: from {feet:?} toward {:?}, end {end:?}, {explored} grid nodes",
+                                    brain.plan[join].feet
+                                ));
+                            }
+                            // The local repair failed; retain the evidence and
+                            // let the ordinary progress judge invalidate it.
+                            brain.route_source = RouteSource::Local;
+                        }
+                        return brain.plan.first().copied();
+                    }
                     if let Found::Partial(path) = &found
                         && let Some(goal) = brain.goal
                         && self
@@ -2089,10 +2162,10 @@ impl Session {
                             feet.y,
                             feet.z,
                             goal,
-                            goal.point(brain.home),
+                            goal.point(),
                             path.len(),
                             path.last()
-                                .map_or(f32::NAN, |w| w.feet.distance(goal.point(brain.home))),
+                                .map_or(f32::NAN, |w| w.feet.distance(goal.point())),
                             path.last().map(|w| w.feet),
                             if ground.fits(body, feet, false) {
                                 "does"
@@ -2130,9 +2203,16 @@ impl Session {
                         other => {
                             brain.partial_route = matches!(other, Found::Partial(_));
                             brain.plan.clear();
+                            brain.route_source = RouteSource::Pending;
+                            brain.repair_join = None;
                         }
                     }
                 }
+            }
+            if self.bots.brains[&bot].repair_join.is_some() {
+                // Keep the retained corridor stable while its bounded repair
+                // is pending. Advancing it would change the stored join index.
+                return None;
             }
             // A door it may open stands across the way on from where the
             // route ends: the enemy is in reach once it is clicked open.
@@ -2164,9 +2244,14 @@ impl Session {
                 // by standing on it after the landing.
                 let reached = match next.mode {
                     Mode::Walk => {
+                        let height = if brain.plan.len() == 1 && !body.conservative {
+                            crate::nav::FLOOR_HEIGHT_TOLERANCE
+                        } else {
+                            body.step + 0.5
+                        };
                         next.through.is_none()
                             && (flat(d).length() < near || wedged)
-                            && d.y.abs() < body.step + 0.5
+                            && d.y.abs() < height
                     }
                     Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
                     Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. } => {
@@ -2183,7 +2268,7 @@ impl Session {
             }
             if brain.plan.is_empty() && brain.search.is_none() {
                 // Walked the whole plan: arrived, or as near as it goes.
-                if matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home))
+                if matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home(_)))
                     && brain.partial_route
                 {
                     // A search reaches only so far across and expands only so
@@ -2195,8 +2280,8 @@ impl Session {
                         brain.settled = false;
                     } else {
                         brain.settled = true;
-                        if matches!(brain.goal, Some(Goal::Home)) {
-                            brain.home_given_up = Some(feet);
+                        if matches!(brain.goal, Some(Goal::Home(_))) {
+                            brain.home_given_up = Some((feet, point));
                         } else {
                             brain
                                 .objective
@@ -2206,7 +2291,7 @@ impl Session {
                 } else {
                     brain.settled = true;
                 }
-                if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
+                if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home(_))) {
                     brain.goal = None;
                 }
             }
@@ -2638,29 +2723,6 @@ impl Session {
             && self.bot_enemies_about(bot, &self.bots.brains[&bot].kind))
         .then(|| self.bot_explore_target(bot, feet, eye, &body, &intents, tick))
         .flatten();
-        // Whether it may respawn itself, trapped: not while it rides, nor
-        // where a respawn it chose brought it (it would only come back),
-        // and only as the game's rules let a player (`allow_suicide`).
-        let respawn_worth = {
-            let brain = self.bots.brains.get_mut(&bot).unwrap();
-            let (began, ended) = match brain.life {
-                Some((at, ended)) if at.is_finite() => (at, ended),
-                Some((_, ended)) => (feet, ended),
-                None => (feet, false),
-            };
-            let ended = ended && flat(feet - began).length() <= 2.0 * PINNED;
-            brain.life = Some((began, ended));
-            let worth = trapped(brain.pinned);
-            if worth > 0.0
-                && !ended
-                && self.mounted(bot).is_none()
-                && self.package_policy("suicide", bot).is_ok()
-            {
-                worth
-            } else {
-                0.0
-            }
-        };
         let simulation = &self.simulation;
         let clear = move |a: Vec3, b: Vec3| {
             let d = b - a;
@@ -2843,26 +2905,16 @@ impl Session {
                 } else {
                     brain.stroll_radius()
                 };
-                (away - radius) / STRAY
+                // This is arrival at an anchor, rather than the horizontal
+                // combat leash above. A leader or post on another floor is
+                // still somewhere the bot must walk to.
+                (feet.distance(leash.at) - radius) / STRAY
             } else {
                 0.0
             },
             pursuing: brain.objective.pursuing(),
             explore: explore_to.is_some(),
             flee: flee_from.is_some(),
-            // Never a way out of a fight: not with an enemy in sight or
-            // one that hurt it, nor while it carries something.
-            trapped: if brain.auto_respawn
-                && sight.target.is_none()
-                && threat.is_none()
-                && hurt_by.is_none()
-                && !holding
-                && !objective.is_some_and(|view| view.committed)
-            {
-                respawn_worth
-            } else {
-                0.0
-            },
         };
         // Across its band; up, what a jump brings within its band.
         brain.reach = (situation.far.max(2.0), body.jump + 1.0 + situation.reach_up);
@@ -3173,13 +3225,16 @@ impl Session {
             Behaviour::Return => {
                 // Where the way home ended short of it, it stands there.
                 // Searching again from the same spot finds the same end.
-                if brain
-                    .home_given_up
-                    .is_some_and(|at| at.distance(feet) > HOME_GIVEN_UP)
-                {
+                if brain.home_given_up.is_some_and(|(at, anchor)| {
+                    at.distance(feet) > HOME_GIVEN_UP || anchor.distance(brain.home) >= GOAL_SLACK
+                }) {
                     brain.home_given_up = None;
                 }
-                brain.set_goal(brain.home_given_up.is_none().then_some(Goal::Home));
+                if brain.home_given_up.is_none() {
+                    brain.set_goal_near(Goal::Home(brain.home));
+                } else {
+                    brain.set_goal(None);
+                }
                 false
             }
             Behaviour::Flee => {
@@ -3188,10 +3243,9 @@ impl Session {
                 }
                 false
             }
-            Behaviour::Respawn => {
-                brain.set_goal(None);
-                false
-            }
+            // Retired option: the zero score preserves deterministic
+            // chooser identities without permitting navigation suicide.
+            Behaviour::Respawn => false,
             Behaviour::Explore => {
                 // A route that ends short of the place is as far as it goes
                 // that way: it looks elsewhere next.
@@ -3212,17 +3266,6 @@ impl Session {
         if behaviour != Behaviour::Wander {
             brain.idle = None;
         }
-        // Respawning: the command a player gives (Ctrl+K), with what it
-        // costs them in this game.
-        if behaviour == Behaviour::Respawn {
-            if let Some((at, _)) = brain.life {
-                brain.life = Some((at, true));
-            }
-            let sequence = self.peers.get(&bot).map_or(1, |p| p.last_sequence + 1);
-            let _ = self.command(bot, sequence, Command::Suicide);
-            return Ok(());
-        }
-
         // Its kind's own attack (`ability`): wound up in range of the enemy
         // it fights or chases, then the Add-On's hooks run.
         let quarry = sight
@@ -3250,7 +3293,6 @@ impl Session {
             brain.set_goal(None);
         }
         // Path.
-        let home = brain.home;
         let mut wanted = self.bot_path(bot, feet, &body, costs, swim, &state, tick);
         // Standing on a body (a vehicle's roof, a crate, a head): the
         // world has no floor anywhere under its feet (its middle can stand
@@ -3283,7 +3325,7 @@ impl Session {
         // it: it steps off to the nearest free floor instead, toward the
         // goal where that side is open.
         if wanted.is_none() && on_body && self.bots.brains[&bot].search.is_none() {
-            let to = match self.bots.brains[&bot].goal.map(|g| g.point(home)) {
+            let to = match self.bots.brains[&bot].goal.map(|g| g.point()) {
                 Some(point) if flat(point - feet).length() > 1.5 => Some(point),
                 Some(point) if point.y >= feet.y - body.step - 0.5 => None,
                 point => self.bot_step_off(bot, feet, &body, point.unwrap_or(feet), f32::INFINITY),
@@ -3319,7 +3361,7 @@ impl Session {
             .target
             .filter(|_| matches!(behaviour, Behaviour::Fight | Behaviour::Chase))
             .map(|seen| seen.owner);
-        let goal_at = self.bots.brains[&bot].goal.map(|g| g.point(home));
+        let goal_at = self.bots.brains[&bot].goal.map(|g| g.point());
         let walk_direction = wanted.map(|p| {
             self.bot_walk_direction(
                 bot,
@@ -3836,6 +3878,8 @@ impl Session {
                 if leg.failed(feet, state.grounded, body.step, seconds, tick) {
                     brain.jet_leg = None;
                     brain.plan.clear();
+                    brain.route_source = RouteSource::Pending;
+                    brain.repair_join = None;
                     brain.search = None;
                     brain.settled = false;
                     brain.replans += 1;
@@ -3870,6 +3914,8 @@ impl Session {
                     missed = Some((from, to));
                     brain.leap_leg = None;
                     brain.plan.clear();
+                    brain.route_source = RouteSource::Pending;
+                    brain.repair_join = None;
                     brain.search = None;
                     brain.settled = false;
                     brain.replans += 1;
@@ -3906,6 +3952,8 @@ impl Session {
                     missed = Some((from, to));
                     brain.climb_since = None;
                     brain.plan.clear();
+                    brain.route_source = RouteSource::Pending;
+                    brain.repair_join = None;
                     brain.search = None;
                     brain.settled = false;
                     brain.replans += 1;
@@ -4013,28 +4061,6 @@ impl Session {
         if !walking {
             brain.progress.reset();
         }
-        // Trapped: trying again and again to get somewhere beyond
-        // `2 * PINNED` (walking at it, or wanting a goal it has no route
-        // to), and still within `PINNED` of where it began. A stroll that
-        // gets there leaves the spot, which clears it, as does no try for
-        // `TRY_GAP`. An objective's step is the step's to give up (its own
-        // deadline), not a trap.
-        let far_goal = brain.goal.is_some_and(|g| {
-            !matches!(g, Goal::Objective(_))
-                && flat(g.point(brain.home) - feet).length() > 2.0 * PINNED
-        });
-        let tries = far_goal
-            && driving.is_none()
-            && pushing.is_none()
-            && !at_work
-            && (walking || wanted.is_none());
-        brain.pinned = brain
-            .pinned
-            .filter(|(at, _, last)| flat(feet - *at).length() <= PINNED && tick < last + TRY_GAP);
-        if tries {
-            let (at, since, _) = brain.pinned.unwrap_or((feet, tick, tick));
-            brain.pinned = Some((at, since, tick));
-        }
         // A goof's, an extra's, an objective's (into a body) or the stall
         // judge's hop, which safety lets through where it comes down on
         // floor. The first window gone nowhere hops (off a body it stands
@@ -4124,6 +4150,8 @@ impl Session {
                     .outcome(cfg, surprise::Domain::Route, route, false, tick);
             }
             brain.plan.clear();
+            brain.route_source = RouteSource::Pending;
+            brain.repair_join = None;
             brain.search = None;
             brain.settled = false;
             // What blocked it may be newer than the grid: look again. Not

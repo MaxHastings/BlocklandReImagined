@@ -20,6 +20,7 @@ pub mod map;
 pub mod map_catalog;
 pub mod mirror;
 pub mod nav;
+pub mod navigation;
 pub mod parking;
 pub mod player;
 pub mod player_types;

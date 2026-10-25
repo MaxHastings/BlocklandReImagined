@@ -337,8 +337,8 @@ impl MoverState {
     /// `Mover::InterpolateTo` does: turning back toward the key it left
     /// carries the distance already covered (`PhysAlpha = 1 - PhysAlpha`),
     /// so a door shut halfway closes in the time it had opened. A mover
-    /// already heading to some other key, or between two keys it is not
-    /// heading to, cannot be redirected: false.
+    /// paused partway may resume toward the same target. An unrelated key
+    /// cannot redirect a path between two keys: false.
     pub fn go_to(&mut self, tick: u64, key: u8, seconds: f32) -> bool {
         let alpha = self.alpha_at(tick);
         let moving = self.is_moving_at(tick);
@@ -350,6 +350,10 @@ impl MoverState {
             Some((self.to, key, 0.0))
         } else if !moving && alpha <= 0.0 && key != self.from {
             Some((self.from, key, 0.0))
+        } else if !moving && key == self.to && alpha < 1.0 {
+            // Continue a stopped interpolation from its accepted pose. A
+            // passage request must not have to close the door to reopen it.
+            Some((self.from, self.to, alpha))
         } else if heading == Some(key) || (!moving && self.resting_key(tick) == Some(key)) {
             // Already there, or on its way.
             return true;
@@ -503,6 +507,27 @@ mod tests {
         assert!(state.go_to(500, 0, 1.0));
         assert!(!state.blocked);
         assert!((state.alpha - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_stopped_opening_can_resume_toward_its_existing_target() {
+        let mut state = MoverState::default();
+        assert!(state.go_to(0, 1, 1.));
+        state.halt(30, true);
+        let stopped = state.alpha;
+        assert!(state.go_to(300, 1, 1.), "resume the interrupted path");
+        assert_eq!(
+            state.alpha_at(300),
+            stopped,
+            "resuming must not jump the leaf"
+        );
+        assert!(!state.blocked && state.is_moving_at(300));
+        assert!(
+            !state.go_to(310, 2, 1.),
+            "cannot redirect across an unrelated key"
+        );
+        state.settle(390);
+        assert_eq!(state.resting_key(390), Some(1));
     }
 
     #[test]

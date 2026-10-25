@@ -113,6 +113,12 @@ impl Session {
             .iter()
             .map(|(bot, b)| BotThought {
                 bot: *bot,
+                route_provider: match b.route_source {
+                    RouteSource::Pending => "pending",
+                    RouteSource::Local => "local",
+                    RouteSource::Prepared => "prepared",
+                },
+                repairing: b.repair_join.is_some(),
                 sight_starved: self
                     .bots
                     .sightlines
@@ -122,7 +128,7 @@ impl Session {
                 route_short: b
                     .partial_route
                     .then(|| {
-                        let (goal, end) = (b.goal?.point(b.leash), b.plan.last()?.feet);
+                        let (goal, end) = (b.goal?.point(), b.plan.last()?.feet);
                         Some([flat(goal - end).length(), goal.y - end.y])
                     })
                     .flatten(),
@@ -171,7 +177,7 @@ impl Session {
                 // Standing still for a goof it wants to go nowhere: its
                 // route waits for it.
                 goal: (!b.surprise.standing())
-                    .then(|| b.goal.map(|g| g.point(b.leash).to_array()))
+                    .then(|| b.goal.map(|g| g.point().to_array()))
                     .flatten(),
                 next: (!b.surprise.standing())
                     .then(|| b.plan.first().map(|p| p.feet.to_array()))
@@ -274,6 +280,8 @@ mod tests {
             next: None,
             path_steps: 0,
             searching: false,
+            route_provider: "pending",
+            repairing: false,
             search_phase: "",
             objective: None,
             objective_diagnostic: None,

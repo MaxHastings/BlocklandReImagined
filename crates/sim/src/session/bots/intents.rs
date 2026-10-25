@@ -59,7 +59,7 @@ impl Brain {
             return None;
         };
         let mut at = Vec3::from(points[held.next % points.len()]);
-        if flat(at - feet).length() <= PATROL_REACHED {
+        if at.distance(feet) <= PATROL_REACHED {
             held.next = (held.next + 1) % points.len();
             at = Vec3::from(points[held.next]);
         }

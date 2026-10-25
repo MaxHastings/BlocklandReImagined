@@ -455,7 +455,7 @@ impl Session {
                 .liquid_at(state.feet, tuning.stand_height * state.scale)
                 .is_some();
         let on_foot = !self.seated(bot) && !swimming;
-        let goal = brain.goal.map(|g| g.point(brain.home));
+        let goal = brain.goal.map(|g| g.point());
         let feet = scene.feet;
         // Standing in a live blast (a grenade lying where it waits to go
         // off, its own included): straight out of it is all it does, ahead

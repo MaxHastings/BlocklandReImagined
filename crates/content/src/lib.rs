@@ -21,6 +21,7 @@ pub mod hud;
 pub mod interior;
 pub mod light_animation;
 pub mod mover;
+pub mod navigation;
 pub mod passage;
 pub mod regions;
 pub mod scatter;

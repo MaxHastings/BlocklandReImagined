@@ -259,6 +259,7 @@ pub struct Simulation {
     body_bones: BTreeMap<bri_world::OwnerId, std::sync::Arc<bri_motor::bones::Body>>,
     map_surfaces: crate::map::MapSurfaces,
     map_regions: Option<bri_content::regions::RegionMap>,
+    map_navigation: Option<std::sync::Arc<crate::navigation::Guidance>>,
     /// The map colliders of static shapes (trees, props), which a plant
     /// never asks about ([`Ground::interior`]).
     map_statics: rustc_hash::FxHashSet<ColliderHandle>,
@@ -574,6 +575,7 @@ impl Simulation {
             body_bones: Default::default(),
             map_surfaces: Default::default(),
             map_regions: None,
+            map_navigation: None,
             map_statics,
             terrain: None,
             refreshes: 0,
@@ -725,6 +727,20 @@ impl Simulation {
     pub fn set_map_surfaces(&mut self, surfaces: crate::map::MapSurfaces) {
         self.map_surfaces = surfaces;
     }
+    /// Install optional coarse walking guidance for this map only.
+    pub fn set_map_navigation(
+        &mut self,
+        graph: Option<bri_content::navigation::WalkingMap>,
+    ) -> Result<()> {
+        self.map_navigation = graph
+            .map(crate::navigation::Guidance::new)
+            .transpose()?
+            .map(std::sync::Arc::new);
+        Ok(())
+    }
+    pub fn map_navigation(&self) -> Option<&crate::navigation::Guidance> {
+        self.map_navigation.as_deref()
+    }
     /// Install the map's validated partition. A replacement clears the old map.
     pub fn set_map_regions(
         &mut self,
@@ -832,7 +848,16 @@ impl Simulation {
         }
         for handle in handles {
             if let Some(collider) = self.physics.colliders.get_mut(*handle) {
+                // Route samples must not retain a solid mover's old pose.
+                // Passable doors do not obstruct navigation until opened.
+                let solid = !self.bot_passable.contains(handle);
+                if solid {
+                    self.chunks.note_changed(&collider.compute_aabb());
+                }
                 collider.set_position(pose);
+                if solid {
+                    self.chunks.note_changed(&collider.compute_aabb());
+                }
             }
         }
         self.support_epoch = self.support_epoch.wrapping_add(1);
@@ -847,6 +872,16 @@ impl Simulation {
         shape: &dyn rapier3d::prelude::Shape,
         reach: f32,
     ) -> Option<f32> {
+        self.map_collider_contact(collider, pose, shape, reach)
+            .map(|c| c.dist)
+    }
+    pub(crate) fn map_collider_contact(
+        &self,
+        collider: usize,
+        pose: &rapier3d::prelude::Pose,
+        shape: &dyn rapier3d::prelude::Shape,
+        reach: f32,
+    ) -> Option<rapier3d::parry::query::Contact> {
         let mover = self
             .physics
             .colliders
@@ -854,7 +889,6 @@ impl Simulation {
         rapier3d::parry::query::contact(mover.position(), mover.shape(), pose, shape, reach)
             .ok()
             .flatten()
-            .map(|contact| contact.dist)
     }
     /// How far `point` is from map collider `collider`'s surface (zero
     /// on it or inside it).
@@ -897,10 +931,13 @@ impl Simulation {
     /// again: a door the rules open for whoever comes to it.
     pub fn set_bot_passable(&mut self, colliders: std::ops::Range<usize>, passable: bool) {
         for handle in self.map_handles.get(colliders).unwrap_or_default() {
-            if passable {
-                self.bot_passable.insert(*handle);
+            let changed = if passable {
+                self.bot_passable.insert(*handle)
             } else {
-                self.bot_passable.remove(handle);
+                self.bot_passable.remove(handle)
+            };
+            if changed && let Some(collider) = self.physics.colliders.get(*handle) {
+                self.chunks.note_changed(&collider.compute_aabb());
             }
         }
     }

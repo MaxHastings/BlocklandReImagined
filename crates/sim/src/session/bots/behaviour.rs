@@ -40,8 +40,8 @@ pub(crate) enum Behaviour {
     /// No fight known and enemies in its game: go and find them
     /// (`explore`).
     Explore,
-    /// Trapped (bricks round it, no way out it can find): respawn itself,
-    /// as a player does (Ctrl+K).
+    /// Retired self-respawn slot. Always scores zero; retained so other
+    /// choices keep their deterministic identities.
     Respawn,
     /// Nothing to do: stroll about.
     #[default]
@@ -81,11 +81,6 @@ pub(crate) struct Situation {
     /// through the next opening on its route, 0 to 1 (`bot_exposure`): a
     /// planned objective is worth that much less.
     pub exposed: f32,
-    /// How long it has tried to get somewhere and got nowhere, past
-    /// what its own unsticking (a hop, a new plan, a new goal) can mend,
-    /// 0 to 1 (`Session::bot_trapped`); 0 with an enemy in sight, hurt, or
-    /// carrying.
-    pub trapped: f32,
     /// The far edge of its weapon's band.
     pub far: f32,
     /// How high it steps.
@@ -114,9 +109,6 @@ pub(crate) struct Situation {
 
 /// Going to find the game, against strolling's 0.1 and a search's 0.4.
 const EXPLORE: f32 = 0.2;
-/// Respawning itself once sure it is trapped, against a committed play's
-/// 0.92.
-const TRAPPED: f32 = 0.95;
 /// Height an enemy may stand above or below it, beyond a step, and still
 /// be fought at full score.
 const RISE_SLACK: f32 = 1.0;
@@ -210,9 +202,7 @@ impl Behaviour {
             ),
             // Above strolling, below every purpose.
             Behaviour::Explore => fits(s.explore, EXPLORE),
-            // The last resort, rising the longer it stays trapped: above
-            // any play once it is sure.
-            Behaviour::Respawn => TRAPPED * s.trapped,
+            Behaviour::Respawn => 0.0,
             Behaviour::Wander => 0.1,
         }
     }

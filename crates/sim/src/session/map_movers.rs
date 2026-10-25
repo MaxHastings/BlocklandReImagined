@@ -8,6 +8,10 @@ use super::*;
 use crate::map::MapMover;
 use bri_content::mover::{Encroach, MoverState};
 
+#[cfg(test)]
+#[path = "map_movers_tests.rs"]
+mod tests;
+
 /// What `movers()` tells a script about a mover.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MoverView {
@@ -33,7 +37,7 @@ pub struct MoverView {
     pub params: BTreeMap<String, String>,
 }
 
-/// How near a bot's body must be to a shut door it may open (units).
+/// How near a bot's body must be to a door it may ask to pass (units).
 const BOT_DOOR_REACH: f32 = 0.6;
 /// Ticks before a bot asks again for a door that is still shut.
 const BOT_DOOR_RETRY: u64 = 120 * 2;
@@ -48,6 +52,8 @@ fn bot_door_command(value: &str) -> Option<(&str, &str)> {
 
 #[derive(Default)]
 pub(super) struct MapMovers {
+    /// An ordinary passage action: hold the approach while the leaf moves.
+    waiting: BTreeMap<OwnerId, (usize, Vec3, u64)>,
     /// When each bot last asked for each door, by mover index.
     asked: BTreeMap<(OwnerId, usize), u64>,
     /// Refusals of a bot's door command already printed, by door and
@@ -100,6 +106,7 @@ impl Session {
         }
         let count = movers.len();
         self.map_movers = MapMovers {
+            waiting: BTreeMap::new(),
             asked: BTreeMap::new(),
             refused: BTreeSet::new(),
             movers,
@@ -109,9 +116,9 @@ impl Session {
         };
         Ok(())
     }
-    /// A bot at a shut door whose `bots_open` names a rules command sends it,
-    /// as the player's Use key would, once and again every few seconds while
-    /// the door stays shut. Whether it opens is the rules' own policy.
+    /// A bot at a closed or interrupted door whose `bots_open` names a rules
+    /// command asks to pass, retrying every few seconds. Moving doors and doors
+    /// resting open are left alone; packages decide how to recover obstruction.
     pub(super) fn bot_opens_door(&mut self, bot: OwnerId, tick: u64) {
         if self.map_movers.movers.iter().all(|m| {
             m.def
@@ -127,7 +134,11 @@ impl Session {
             return;
         }
         let mut asks = Vec::new();
-        for id in self.movers_near_player(bot, BOT_DOOR_REACH) {
+        let nearby = match self.map_movers.waiting.get(&bot) {
+            Some((index, _, _)) => vec![self.map_movers.movers[*index].def.id.clone()],
+            None => self.movers_near_player(bot, BOT_DOOR_REACH),
+        };
+        for id in nearby {
             let Some(index) = self.mover_index(&id) else {
                 continue;
             };
@@ -140,7 +151,8 @@ impl Session {
             else {
                 continue;
             };
-            if self.map_movers.states[index].resting_key(tick) != Some(0) {
+            let state = &self.map_movers.states[index];
+            if state.is_moving_at(tick) || state.resting_key(tick).is_some_and(|key| key != 0) {
                 continue;
             }
             if self
@@ -151,9 +163,14 @@ impl Session {
             {
                 continue;
             }
-            asks.push((index, package.to_string(), command.to_string()));
+            let targeted = mover
+                .def
+                .params
+                .get("bots_open_target")
+                .is_some_and(|v| v == "1");
+            asks.push((index, package.to_string(), command.to_string(), targeted));
         }
-        for (index, package, command) in asks {
+        for (index, package, command, targeted) in asks {
             self.map_movers.asked.insert((bot, index), tick);
             let sequence = self.peers[&bot].last_sequence.saturating_add(1);
             // The rules may refuse (a door they keep locked): that is theirs.
@@ -165,10 +182,16 @@ impl Session {
                 Command::Package(PackageCommand {
                     package,
                     command,
-                    args: Vec::new(),
+                    args: if targeted {
+                        vec![PackageArg::String(
+                            self.map_movers.movers[index].def.id.clone(),
+                        )]
+                    } else {
+                        Vec::new()
+                    },
                 }),
             );
-            if let Err(error) = sent
+            if let Err(ref error) = sent
                 && self
                     .map_movers
                     .refused
@@ -178,8 +201,110 @@ impl Session {
                     "bot {bot} could not send {full} at door {}: {error:#}",
                     self.map_movers.movers[index].def.id
                 ));
+            } else if targeted
+                && sent.is_ok()
+                && let Some(peer) = self.peers.get(&bot)
+            {
+                let at = Vec3::from(peer.player.state().feet);
+                self.map_movers
+                    .waiting
+                    .entry(bot)
+                    .or_insert((index, at, tick));
             }
         }
+    }
+    /// Open, wait outside the moving leaf, then cross. A passage request does
+    /// not grant permission to keep walking into the door while it opens.
+    /// Retreat from actual contact if a body already obstructs its motion.
+    pub(super) fn bot_door_control(
+        &mut self,
+        bot: OwnerId,
+        mut input: MoveInput,
+        tick: u64,
+    ) -> (MoveInput, bool) {
+        let Some((index, mut hold, since)) = self.map_movers.waiting.get(&bot).copied() else {
+            return (input, false);
+        };
+        let state = &self.map_movers.states[index];
+        if state.resting_key(tick).is_some_and(|key| key != 0)
+            || (state.resting_key(tick) == Some(0) && tick > since + BOT_DOOR_RETRY)
+        {
+            self.map_movers.waiting.remove(&bot);
+            return (input, false);
+        }
+        let peer = &self.peers[&bot];
+        let feet = Vec3::from(peer.player.state().feet);
+        if feet.distance(hold) > peer.player.tuning().width * 4. + BOT_DOOR_REACH {
+            self.map_movers.waiting.remove(&bot);
+            return (input, false);
+        }
+        let body = &self.simulation.physics.colliders[peer.player.collider()];
+        let contact = self.map_movers.movers[index]
+            .colliders
+            .clone()
+            .filter_map(|c| {
+                self.simulation
+                    .map_collider_contact(c, body.position(), body.shape(), 0.2)
+            })
+            .min_by(|a, b| a.dist.total_cmp(&b.dist));
+        if let Some(contact) = contact {
+            let n = Vec3::from_array(contact.normal1.to_array());
+            if let Some(away) = Vec3::new(n.x, 0., n.z).try_normalize() {
+                hold = feet + away * peer.player.tuning().width;
+                self.map_movers.waiting.insert(bot, (index, hold, since));
+            }
+        }
+        let to = Vec3::new(hold.x - feet.x, 0., hold.z - feet.z);
+        let direction = if to.length() > 0.2 {
+            to.normalize()
+        } else {
+            Vec3::ZERO
+        };
+        let forward = Vec3::new(input.yaw.sin(), 0., -input.yaw.cos());
+        let right = Vec3::new(input.yaw.cos(), 0., input.yaw.sin());
+        input.forward = direction.dot(forward);
+        input.right = direction.dot(right);
+        input.jump = false;
+        input.jet = false;
+        (input, true)
+    }
+    /// Prepared topology omits operable doors. An open leaf remains a physical
+    /// obstacle: repair only a segment actually intersecting its current pose.
+    pub(super) fn bot_open_leaf_blocks(&self, bot: OwnerId, to: Vec3) -> bool {
+        use rapier3d::{parry::query::ShapeCastOptions, prelude::QueryFilter};
+        let player = &self.peers[&bot].player;
+        let feet = Vec3::from(player.state().feet);
+        let body = &self.simulation.physics.colliders[player.collider()];
+        let tick = self.simulation.state().tick;
+        let leaf = |handle, _: &rapier3d::prelude::Collider| {
+            self.simulation
+                .map_collider_index(handle)
+                .is_some_and(|index| {
+                    self.map_movers.movers.iter().enumerate().any(|(i, m)| {
+                        m.colliders.contains(&index)
+                            && m.def.params.contains_key("bots_open")
+                            && self.map_movers.states[i]
+                                .resting_key(tick)
+                                .is_some_and(|k| k != 0)
+                    })
+                })
+        };
+        self.simulation
+            .physics
+            .query_pipeline_with_filter(
+                QueryFilter::only_fixed().exclude_sensors().predicate(&leaf),
+            )
+            .cast_shape(
+                body.position(),
+                Vec3::new(to.x - feet.x, 0., to.z - feet.z),
+                body.shape(),
+                ShapeCastOptions {
+                    max_time_of_impact: 1.,
+                    stop_at_penetration: false,
+                    ..Default::default()
+                },
+            )
+            .is_some()
     }
     /// Every mover's state, in map order, for replication.
     pub fn map_mover_states(&self) -> Vec<MoverState> {
@@ -317,6 +442,9 @@ impl Session {
             return Ok(());
         }
         let tick = self.simulation.state().tick;
+        self.map_movers
+            .waiting
+            .retain(|bot, _| self.peers.get(bot).is_some_and(|p| p.combat.alive));
         for index in 0..self.map_movers.movers.len() {
             let state = self.map_movers.states[index];
             let mover = &self.map_movers.movers[index];
@@ -333,9 +461,30 @@ impl Session {
                     // The attempted pose intersects a player. Publishing it as the
                     // stopped state would apply it without the moving check next
                     // tick, and clients would immediately predict that bad pose.
+                    // Keep the requested path while expressing the accepted pose
+                    // on it. Copying the old state's endpoints loses an opening
+                    // requested after the previous mover step (rest 0 -> target 0).
+                    let accepted = self.map_movers.accepted[index];
+                    let alpha = if accepted.resting_key(tick) == Some(state.from) {
+                        0.
+                    } else if accepted.resting_key(tick) == Some(state.to) {
+                        1.
+                    } else if (accepted.from, accepted.to) == (state.from, state.to) {
+                        accepted.alpha
+                    } else if (accepted.from, accepted.to) == (state.to, state.from) {
+                        1. - accepted.alpha
+                    } else {
+                        anyhow::bail!(
+                            "Mover {} accepted pose is outside its requested path",
+                            mover.def.id
+                        );
+                    };
                     self.map_movers.states[index] = MoverState {
+                        alpha,
+                        since: tick,
+                        moving: false,
                         blocked: true,
-                        ..self.map_movers.accepted[index]
+                        ..state
                     };
                     continue;
                 }
@@ -346,6 +495,20 @@ impl Session {
                 self.map_movers.placed[index] = Some(target);
             }
             self.map_movers.states[index].settle(tick);
+            // Closed/interrupted doors are passage affordances. Once open,
+            // their actual leaf is an obstacle to walk around, not through.
+            let opens = mover
+                .def
+                .params
+                .get("bots_open")
+                .is_some_and(|value| value == "1" || bot_door_command(value).is_some());
+            self.simulation.set_bot_passable(
+                mover.colliders.clone(),
+                opens
+                    && self.map_movers.states[index]
+                        .resting_key(tick)
+                        .is_none_or(|key| key == 0),
+            );
             let mut accepted = self.map_movers.states[index];
             accepted.halt(tick, false);
             self.map_movers.accepted[index] = accepted;

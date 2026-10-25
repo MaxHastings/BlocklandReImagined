@@ -55,6 +55,7 @@ pub struct NativeMap {
     pub scene: Scene,
     /// The authored spatial partition, shared with presentation and package rules.
     pub regions: Option<bri_content::regions::RegionMap>,
+    pub navigation: Option<bri_content::navigation::WalkingMap>,
     /// Interior and static model collision. Terrain is streamed separately.
     pub colliders: Vec<ColliderBuilder>,
     /// Exact, unbounded terrain placements shared by collision, queries and rendering.
@@ -735,9 +736,25 @@ impl NativeMap {
                 Ok(regions)
             })
             .transpose()?;
+        let navigation = bundle
+            .get("navigation")
+            .and_then(|v| v.get(&scene.id))
+            .filter(|v| !v.is_null())
+            .map(|name| -> Result<bri_content::navigation::WalkingMap> {
+                let name = name.as_str().context("Invalid map navigation filename")?;
+                let mut graph: bri_content::navigation::WalkingMap =
+                    serde_json::from_slice(&std::fs::read(native_file(root, name)?)?)
+                        .context("Reading map walking connections")?;
+                graph.validate()?;
+                graph.mesh.min[1] += lift;
+                graph.mesh.max[1] += lift;
+                Ok(graph)
+            })
+            .transpose()?;
         Ok(Self {
             scene,
             regions,
+            navigation,
             colliders,
             terrain,
             waters,

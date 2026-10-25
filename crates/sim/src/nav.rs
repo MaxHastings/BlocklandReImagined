@@ -69,6 +69,10 @@ const MAX_SAMPLES: usize = 1 << 18;
 /// How far over a body's step a rise still counts as a step: a floor found
 /// by a ray can sit a hair above the brick top it stands for.
 const STEP_SLACK: f32 = 0.05;
+/// Half the grid's 0.1 height quantum plus floor-placement slack. A route's
+/// final walking point is a floor destination, rather than another riser
+/// which may be skipped while following the middle of a stair route.
+pub(crate) const FLOOR_HEIGHT_TOLERANCE: f32 = 0.1 * 0.5 + STEP_SLACK;
 /// How far under the crouched step measured in open air a crawlspace floor
 /// must be to be walked up: the measure has no roof over the lip, and at the
 /// limit the motor under one does not climb it (a bot pressed against it
@@ -82,6 +86,8 @@ const HINT_BAND: f32 = 0.25;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Body {
     pub width: f32,
+    pub round: bool,
+    pub wall_step: Option<bri_motor::player::WallStep>,
     pub height: f32,
     /// Height crouched: what fits through a crawlspace.
     pub crouch_height: f32,
@@ -120,6 +126,8 @@ impl Body {
         };
         Self {
             width: tuning.width * scale,
+            round: tuning.body == bri_motor::player::Body::Cylinder,
+            wall_step: tuning.wall_step,
             height: tuning.stand_height * scale,
             crouch_height: tuning.crouch_height * scale,
             step: tuning.step_height,
@@ -737,6 +745,10 @@ pub struct Nav {
     /// The floors of a cell's column a body at a height hint reaches,
     /// highest first.
     floors: FxHashMap<(i32, i32, i32), Floors>,
+    /// Placing the same body on the same physical floor is independent of
+    /// the height from which a search discovered it. Hint bands share this
+    /// narrow-phase result, including floors where no posture fits.
+    placements: FxHashMap<(i32, i32), ColumnPlacements>,
     /// New samples left this tick.
     budget: u32,
     /// Node expansions left this tick.
@@ -899,6 +911,7 @@ impl Nav {
     }
     pub fn clear(&mut self) {
         self.floors.clear();
+        self.placements.clear();
         self.arcs.clear();
         self.leapt.clear();
     }
@@ -995,6 +1008,13 @@ impl Nav {
             });
         }
         self.forgotten += (before - self.floors.len()) as u64;
+        // A changed column forgets placement results on every storey. This
+        // is conservative; unlike floor discovery, placement has no hint.
+        self.placements.retain(|(x, z), _| {
+            !cells
+                .iter()
+                .any(|(xs, zs, _, _)| xs.contains(x) && zs.contains(z))
+        });
         // An arc's box: from its takeoff to its landing, a body wide, up to
         // the top of its jump and a body over.
         let grown: Vec<_> = boxes
@@ -1173,7 +1193,11 @@ impl Nav {
         if self.floors.len() >= MAX_SAMPLES {
             self.floors.clear();
         }
-        let found = sample(ground, body, x, z, band as f32 * HINT_BAND);
+        if self.placements.len() >= MAX_SAMPLES {
+            self.placements.clear();
+        }
+        let placements = self.placements.entry((x, z)).or_default();
+        let found = sample_cached(ground, body, x, z, band as f32 * HINT_BAND, placements);
         self.settled += found.iter().filter(|f| f.spot != (0, 0)).count() as u64;
         self.floors.insert((x, z, band), found.clone());
         Some(found)
@@ -1577,7 +1601,22 @@ struct Floor {
 /// crouching in the air, as high as it was measured to:
 /// `Body::crawl_jump`). A column can hold several: a stair tread over the
 /// floor beneath it, a roof over the crawlspace under it.
+#[cfg(test)]
 fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
+    sample_cached(ground, body, x, z, from, &mut Vec::new())
+}
+
+/// Exact ray-hit height bits and the corresponding posture classification.
+type ColumnPlacements = Vec<(u32, Option<Floor>)>;
+
+fn sample_cached(
+    ground: &Ground,
+    body: &Body,
+    x: i32,
+    z: i32,
+    from: f32,
+    placements: &mut ColumnPlacements,
+) -> Floors {
     let (px, pz) = (x as f32 * CELL, z as f32 * CELL);
     // Nothing is reached above a jump, or above the ceiling over the cell
     // a body stands under at `from` (the roof of the room it is in): an
@@ -1610,6 +1649,12 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
         // ray that starts right on a floor's top (a chassis's short reach
         // from its hint) is not inside it: that floor is found.
         if normal.y >= body.floor_cos && !ground.inside(origin + Vec3::Y * SETTLE_GAP) {
+            let key = hit.to_bits();
+            if let Some((_, placed)) = placements.iter().find(|(height, _)| *height == key) {
+                floors.extend(*placed);
+                top = hit - 0.02;
+                continue;
+            }
             let centre = Vec3::new(px, hit + 0.01, pz);
             // Upright, or else crouched; at the centre, or else wherever in
             // the cell the body fits.
@@ -1618,23 +1663,25 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
                     .place(body, centre, crouched)
                     .map(|feet| (feet, crouched))
             });
-            if let Some((feet, low)) = placed {
+            let classified = placed.map(|(feet, low)| {
                 let offset = |v: f32| (v / SPOT_UNIT).round() as i8;
-                floors.push(Floor {
+                Floor {
                     y: hit,
                     spot: (offset(feet.x - px), offset(feet.z - pz)),
                     snug: !ground.fits(body, feet, low),
                     low,
                     wet: ground.floats(body, feet).is_some(),
-                });
-            }
+                }
+            });
+            floors.extend(classified);
+            placements.push((key, classified));
         }
         top = hit - 0.02;
     }
     floors.into()
 }
 
-/// How far across from its column's centre a [`sample`] looks: the full
+/// How far across from its column's centre a [`sample_cached`] looks: the full
 /// body's half width (`Ground::fits`), off a centre pushed by up to half a
 /// cell (`Ground::place`), past touching by `SETTLE_GAP`, and a margin.
 fn sample_reach(body: &Body) -> f32 {
@@ -1705,6 +1752,9 @@ const MAX_JET_TESTS: u32 = 24;
 /// ([`Costs`]).
 pub struct Search {
     pub goal: Vec3,
+    /// The requested point's walkable floor in the grid's height units.
+    /// Outer None has not been sampled; inner None has no nearby floor.
+    goal_floor: Option<Option<i32>>,
     start: Option<Node>,
     started: Vec3,
     open: BinaryHeap<Open>,
@@ -1740,6 +1790,7 @@ impl Search {
     pub fn with(from: Vec3, goal: Vec3, bound: f32, costs: Costs) -> Self {
         Self {
             goal,
+            goal_floor: None,
             start: None,
             started: from,
             open: BinaryHeap::new(),
@@ -1810,7 +1861,8 @@ impl Search {
         let swum = self.came.get(&node).is_some_and(|c| c.mode == Mode::Swim);
         Vec3::new(d.x, 0.0, d.z).length() <= ARRIVAL_RADIUS
             // Over a swum floor the goal may be anywhere up the water.
-            && (d.y.abs() <= 2.0 || swum && d.y < 0.0)
+            && (self.goal_floor.flatten().map_or(d.y.abs() <= 2.0, |floor| node.y == floor)
+                || swum && d.y < 0.0)
             // Beside someone standing on the goal is as near as it gets.
             || self.landing == Some(Some(node))
     }
@@ -2017,6 +2069,12 @@ impl Search {
     }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {
+        // A nearby stair can be within the old height tolerance while still
+        // being a different destination. Resolve the goal's own floor once,
+        // using the same placement and per-tick budget as the walk grid.
+        if self.goal_floor.is_none() {
+            self.goal_floor = Some(nav.node_at(ground, body, self.goal)?.map(|node| node.y));
+        }
         // Where a jet leg would land: the goal's own floor, or, where
         // someone stands on it (a chased enemy), the nearest floor beside
         // them at that height, so it does not come down on their head. A
@@ -2733,6 +2791,41 @@ mod tests {
         assert!(matches!(found, Found::Path(_)), "{found:?}");
     }
 
+    #[test]
+    fn floor_placement_reuse_preserves_hints_and_collision_changes() {
+        let body = body();
+        let ceiling = (
+            Vec3::new(-3.0, body.crouch_height * 0.5, -3.0),
+            Vec3::new(3.0, body.crouch_height * 0.5 + 0.2, 3.0),
+        );
+        let base = world(&[floor()]);
+        let blocked = world(&[floor(), ceiling]);
+        let ground = |physics| Ground {
+            physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+            solid: &all_solid,
+        };
+        let mut nav = Nav::default();
+        for physics in [&base, &blocked, &base] {
+            nav.invalidate(ceiling.0, ceiling.1, &body);
+            for hint in [-0.25, 0.0, 0.25, 0.5, 0.0] {
+                nav.unmetered();
+                let actual = nav.floor(&ground(physics), &body, 0, 0, hint).unwrap();
+                let expected = sample(&ground(physics), &body, 0, 0, hint);
+                assert_eq!(actual, expected, "hint {hint} after collision changed");
+            }
+        }
+        assert!(
+            !nav.floor(&ground(&base), &body, 0, 0, 0.0)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// One brick's box forgets the columns over it, whatever the cache
     /// holds: the keys it names are removed one by one rather than by a
     /// walk over every column (v0.2.10 performance waste audit, finding
@@ -3349,6 +3442,34 @@ mod tests {
             }
         }
         assert!(ticks > 1, "a long path takes several ticks");
+    }
+
+    #[test]
+    fn a_stair_goal_is_reached_on_its_floor() {
+        let mut boxes = vec![floor()];
+        for i in 0..5 {
+            let x = 0.5 + 4. * i as f32;
+            boxes.push((
+                Vec3::new(x, 0., -3.),
+                Vec3::new(x + 4., 0.6 * (i + 1) as f32, 3.),
+            ));
+        }
+        boxes.push((Vec3::new(20.5, 0., -3.), Vec3::new(25., 3., 3.)));
+        let physics = world(&boxes);
+        // This point fits on the second step. Nearby cells touching the
+        // following riser stand higher; proximity across must not substitute
+        // that other floor for the one requested.
+        // Cover different sub-cell positions, all physically clear of the
+        // next riser (8.5 minus this body's 0.625 half-width).
+        for x in [7.5, 7.6, 7.7, 7.75, 7.8, 7.85] {
+            let goal = Vec3::new(x, 1.2, 0.);
+            let a = path(search(&physics, Vec3::new(23., 3., 0.), goal).0);
+            let end = a.last().expect("stair route").feet;
+            assert!(
+                (end.y - goal.y).abs() < 0.11,
+                "search completed on another stair: {end:?} vs {goal:?}"
+            );
+        }
     }
 
     #[test]

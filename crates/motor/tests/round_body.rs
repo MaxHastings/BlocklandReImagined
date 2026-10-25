@@ -124,3 +124,81 @@ fn a_walking_cylinder_goes_down_a_stair_of_touching_blocks_to_the_end() {
         "stops on the stair: {feet:?}"
     );
 }
+
+#[test]
+fn a_cylinder_can_move_out_of_shallow_wall_overlap_without_crossing_through_it() {
+    let attempt = |yaw, mesh| {
+        let mut w = bri_physics::new_world();
+        w.insert(
+            RigidBodyBuilder::fixed(),
+            ColliderBuilder::cuboid(20., 0.5, 20.).translation(Vector::new(0., -0.5, 0.)),
+        );
+        let wall = if mesh {
+            let vertices = [
+                [0., 0., -4.],
+                [0.16, 0., -4.],
+                [0.16, 6., -4.],
+                [0., 6., -4.],
+                [0., 0., 4.],
+                [0.16, 0., 4.],
+                [0.16, 6., 4.],
+                [0., 6., 4.],
+            ]
+            .map(Vector::from_array);
+            let mut faces = Vec::new();
+            for q in [
+                [0, 1, 2, 3],
+                [4, 7, 6, 5],
+                [0, 4, 5, 1],
+                [1, 5, 6, 2],
+                [2, 6, 7, 3],
+                [3, 7, 4, 0],
+            ] {
+                for t in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] {
+                    faces.push(t);
+                    faces.push([t[2], t[1], t[0]]);
+                }
+            }
+            ColliderBuilder::trimesh(vertices.to_vec(), faces).unwrap()
+        } else {
+            ColliderBuilder::cuboid(0.08, 3., 4.).translation(Vector::new(0.08, 3., 0.))
+        };
+        w.insert(RigidBodyBuilder::fixed(), wall);
+        bri_physics::detect_collisions(&mut w);
+        let tuning = PlayerTuning {
+            body: Body::Cylinder,
+            width: 1.714,
+            stand_height: 3.634,
+            unstick: None,
+            ..Default::default()
+        };
+        // Authored slab spans X=0..0.16. The body's right edge reaches 0.16,
+        // reproducing the observed overlap without a moving-door dependency.
+        let mut p =
+            Player::spawn_overlapping(&mut w, 1, Vec3::new(-0.697, 0.005, 0.), tuning).unwrap();
+        for _ in 0..120 {
+            p.step(
+                &mut w,
+                MoveInput {
+                    forward: 1.,
+                    yaw,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        Vec3::from(p.state().feet)
+    };
+    for mesh in [false, true] {
+        let out = attempt(-std::f32::consts::FRAC_PI_2, mesh);
+        assert!(
+            out.x < -1.7,
+            "ordinary movement must separate from contact (mesh={mesh}): {out:?}"
+        );
+        let into = attempt(std::f32::consts::FRAC_PI_2, mesh);
+        assert!(
+            into.x < -0.6,
+            "moving into the slab must remain blocked (mesh={mesh}): {into:?}"
+        );
+    }
+}

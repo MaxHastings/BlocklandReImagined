@@ -56,6 +56,10 @@ def copy_guides(repo: Path, destination: Path, version: str = 'development') -> 
         (licenses / filename).write_bytes((repo / 'vendor' / 'winit' / source).read_bytes())
         # Platform packagers may already have copied the notice at the root.
         (destination / filename).unlink(missing_ok=True)
+    navigation_notices = licenses / 'recastnavigation-rs'
+    navigation_notices.mkdir(exist_ok=True)
+    for name in ('NOTICE.md', 'LICENSE.txt', 'RECAST-LICENSE.txt'):
+        (navigation_notices / name).write_bytes((repo / 'third-party/recastnavigation-rs' / name).read_bytes())
     for source, filename in GUIDES.items():
         text = (repo / 'docs' / source).read_text(encoding='utf-8')
         text = release_links(text, source, available)
