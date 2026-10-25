@@ -177,3 +177,21 @@ fn a_segment_is_blocked_by_a_triangle_between_its_ends_and_only_then() {
     ));
     assert!(index.extent() > 100.0);
 }
+
+#[test]
+fn leaf_cards_and_glass_do_not_block_a_sun_sight_but_solid_surfaces_do() {
+    use bri_render::decals::ReceiverIndex;
+    use bri_render::scene::AlphaMode;
+    use glam::Vec3;
+    let (above, below) = (Vec3::new(0.2, 3.0, 0.2), Vec3::new(0.2, -3.0, 0.2));
+    let mut scene = scene();
+    let index = ReceiverIndex::build(&scene);
+    assert!(index.segment_blocked_by_solid(&scene, above, below, 0.0));
+    for alpha in [AlphaMode::Mask(0.5), AlphaMode::Blend] {
+        scene.materials[0].alpha = alpha;
+        let index = ReceiverIndex::build(&scene);
+        // A decal still lands on the card, and a ray still meets it, but light passes through its clear parts.
+        assert!(index.segment_blocked(&scene, above, below, 0.0));
+        assert!(!index.segment_blocked_by_solid(&scene, above, below, 0.0));
+    }
+}

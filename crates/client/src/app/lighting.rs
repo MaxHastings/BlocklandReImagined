@@ -390,8 +390,12 @@ impl LightVolumeState {
             return seen;
         }
         let from = (cell.as_vec3() + Vec3::splat(0.5)) * SUN_SIGHT_CELL;
-        let seen =
-            !index.segment_blocked(scene, from, from + toward * index.extent(), SUN_SIGHT_SKIN);
+        let seen = !index.segment_blocked_by_solid(
+            scene,
+            from,
+            from + toward * index.extent(),
+            SUN_SIGHT_SKIN,
+        );
         if let Ok(mut cache) = self.sun_sight.lock() {
             if cache.len() >= SUN_SIGHT_CACHE {
                 cache.clear();
