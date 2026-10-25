@@ -427,6 +427,29 @@ pub enum Edge {
     Bottom,
     Left,
     Right,
+    /// The diagonal sectors: ahead and left, and so on. A layout uses
+    /// either the four edges or the four diagonals.
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+impl Edge {
+    /// Whether a hit `ahead` and `right` of the viewer (negative: behind,
+    /// left) comes from this edge or sector: the nearest axis for an edge,
+    /// the quadrant for a diagonal.
+    pub fn holds(self, ahead: f32, right: f32) -> bool {
+        match self {
+            Edge::Top => ahead.abs() >= right.abs() && ahead > 0.0,
+            Edge::Bottom => ahead.abs() >= right.abs() && ahead <= 0.0,
+            Edge::Right => ahead.abs() < right.abs() && right > 0.0,
+            Edge::Left => ahead.abs() < right.abs() && right <= 0.0,
+            Edge::TopLeft => ahead > 0.0 && right <= 0.0,
+            Edge::TopRight => ahead > 0.0 && right > 0.0,
+            Edge::BottomLeft => ahead <= 0.0 && right <= 0.0,
+            Edge::BottomRight => ahead <= 0.0 && right > 0.0,
+        }
+    }
 }
 
 /// One thing a layout draws.
@@ -2679,18 +2702,7 @@ pub fn resolve_live(
                 };
                 let to_ahead = dx * ahead[0] + dz * ahead[1];
                 let to_right = -dx * ahead[1] + dz * ahead[0];
-                let nearest = if to_ahead.abs() >= to_right.abs() {
-                    if to_ahead > 0.0 {
-                        Edge::Top
-                    } else {
-                        Edge::Bottom
-                    }
-                } else if to_right > 0.0 {
-                    Edge::Right
-                } else {
-                    Edge::Left
-                };
-                if nearest == *edge {
+                if edge.holds(to_ahead, to_right) {
                     out.push(Item::Image {
                         turn: 0.0,
                         texture: key,
@@ -3325,6 +3337,26 @@ mod tests {
             "shade": { "value": "health", "colors": [] } }] }))
         .unwrap();
         assert!(empty.validate().is_err());
+    }
+
+    #[test]
+    fn diagonal_hit_sectors_split_the_view_into_quadrants() {
+        let at = |ahead, right| {
+            [
+                Edge::TopLeft,
+                Edge::TopRight,
+                Edge::BottomLeft,
+                Edge::BottomRight,
+            ]
+            .map(|e| e.holds(ahead, right))
+        };
+        assert_eq!(at(5.0, -1.0), [true, false, false, false]);
+        assert_eq!(at(5.0, 9.0), [false, true, false, false]);
+        assert_eq!(at(-5.0, -9.0), [false, false, true, false]);
+        assert_eq!(at(-5.0, 1.0), [false, false, false, true]);
+        // The edges keep their nearest-axis meaning.
+        assert!(Edge::Top.holds(5.0, 1.0) && Edge::Right.holds(1.0, 5.0));
+        assert!(Edge::Bottom.holds(-5.0, 1.0) && Edge::Left.holds(1.0, -5.0));
     }
 
     #[test]
