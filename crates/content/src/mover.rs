@@ -97,6 +97,9 @@ pub struct MoverSounds {
     /// Once, as it comes to rest at key 0.
     #[serde(default)]
     pub closed: Option<String>,
+    /// Once, as it is held between keys (a door stopped part way open).
+    #[serde(default)]
+    pub stopped: Option<String>,
     /// Looped for as long as it moves.
     #[serde(default)]
     pub moving: Option<String>,
@@ -120,6 +123,7 @@ impl MoverSounds {
                 &self.opened,
                 &self.closing,
                 &self.closed,
+                &self.stopped,
                 &self.moving
             ]
             .into_iter()
@@ -142,6 +146,18 @@ impl MoverSounds {
     pub fn rest(&self, key: u8) -> Option<&str> {
         let name = if key == 0 { &self.closed } else { &self.opened };
         name.as_deref()
+    }
+    /// The one-shot for a mover that stops with `state`'s motion at `alpha`
+    /// progress: the sound of the key it reached, or `stopped` when it is
+    /// held between keys.
+    pub fn halt(&self, state: &MoverState, alpha: f32) -> Option<&str> {
+        if alpha >= 1.0 {
+            self.rest(state.to)
+        } else if alpha <= 0.0 {
+            self.rest(state.from)
+        } else {
+            self.stopped.as_deref()
+        }
     }
 }
 
