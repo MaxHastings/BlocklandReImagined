@@ -353,10 +353,16 @@ impl AddOnPanel {
                 rows,
                 selected,
                 icons,
+                color,
+                back,
                 ..
             } = item
                 && let Some(n) = view.id(&format!("{LIST}{id}"))
             {
+                view.state(n).text_color = color.map(crate::screens::rgba);
+                if let Some(scroll) = view.node(n).parent {
+                    view.state(scroll).back = back.map(crate::screens::rgba);
+                }
                 view.state(n).row_icons = icons.iter().map(|i| i.map(|p| p.key)).collect();
                 view.state(n).items = rows
                     .iter()

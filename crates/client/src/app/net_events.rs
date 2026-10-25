@@ -1514,6 +1514,8 @@ fn panel_view(
                     columns: item.columns,
                     icons: item.icons.iter().map(|i| picture(i)).collect(),
                     place: place(item.x, item.y, item.w),
+                    color: item.color,
+                    back: item.back,
                 },
                 PanelKind::Field => PanelItemView::Field {
                     id: item.id,
