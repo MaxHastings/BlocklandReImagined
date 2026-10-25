@@ -795,6 +795,7 @@ fn ambient_at(reach:f32)->vec3<f32> {
 // length.
 override MODERN_SKY_SHADING:bool=false;
 // Diagnostic: 0 off. 1 sky exposure (r open, g fade); 2 hemisphere multiplier; 3 reflection radiance; 4 diffuse only;
+// 8 material kind code/16; 9 picture only; 10 twice vertex colour; 11 picture x twice vertex colour (all before the lit kinds' early return).
 // 5 (r lighting mode / 3, g shading strength, b probe ready); 6 sun-less ambient_at; 7 enclosed ambient.
 override DEBUG_TERM:u32=0u;
 const HEMISPHERE_DOWN:f32=0.75;
@@ -1686,6 +1687,15 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         alpha=offset+range*min(t,period-t)/(period*0.5);
     }
     if alpha<=material[0].y {discard;}
+    // Diagnostic 8: the material kind as a grey level (code/16); 9: the picture alone; 10: twice the vertex colour alone;
+    // 11: picture times twice the vertex colour, before fog.
+    switch DEBUG_TERM {
+        case 8u: {return vec4<f32>(vec3<f32>(material[0].x/16.0),1.0);}
+        case 9u: {return vec4<f32>(clamp(display_color(textureSample(layer0,tiled,v.uv).rgb),vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+        case 10u: {return vec4<f32>(clamp(v.color.rgb*2.0,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+        case 11u: {return vec4<f32>(clamp(display_color(textureSample(layer0,tiled,v.uv).rgb)*v.color.rgb*2.0,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+        default: {}
+    }
     if material[0].x==13.0 {
         // LayerBlend: layers weighted by one RGBA map, times twice the vertex light.
         // Alpha is the weights' total, so a one-layer pass whose map is that layer's alpha blends over what is behind it.
