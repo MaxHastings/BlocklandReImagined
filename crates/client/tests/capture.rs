@@ -354,7 +354,7 @@ fn control(name: &str) -> Result<HeldControl> {
 /// decide: the Use key opens a door), {"aim": [x, z]} (turn to face a point), {"goto": [x, z]} (walk there), {"aim_at": {"name": part of a
 /// player's or bot's name, "height": 0.7}} (turn the crosshair onto it; fire with `hold`) and {"until": "dead", "name": ..} (wait for it to die),
 /// {"measure": 120} records bounded synchronized frame timings without image readback.
-/// {"panel": {"control": id, "lists": {id: row}}} (a press or pick in the open Add-On panel), {"report": true} (prints every body's place and health), {"shot": name}, {"burst": {"name": n, "count": c, "every_ms": ms}} (steps the game `every_ms` and captures `count` times).
+/// {"panel": {"control": id, "lists": {id: row}}} (a press or pick in the open Add-On panel), {"report": true} (prints every body's place and health), {"ammo": true} (prints the held gun's rounds, magazine, reserve and the state of each held image), {"shot": name}, {"burst": {"name": n, "count": c, "every_ms": ms}} (steps the game `every_ms` and captures `count` times).
 fn play(
     app: &mut App,
     gpu: &Headless,
@@ -685,6 +685,28 @@ fn play(
                         vitals.map(|v| v.alive),
                         vitals.map(|v| v.health),
                     );
+                }
+            }
+        } else if step.get("ammo").is_some() {
+            // The local player's held gun and the state each image of theirs is in: with `hold` fire before and after, whether a
+            // round was spent and, when none was, which state held the gun.
+            if let Some(view) = app.network_view() {
+                let images: Vec<_> = view
+                    .weapons
+                    .images
+                    .get(&view.owner)
+                    .map(|v| {
+                        v.iter()
+                            .map(|i| format!("{}:{}", i.image, i.state))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match app.held_ammo() {
+                    Some(a) => println!(
+                        "CAPTURE ammo tick {} {} rounds {:?} size {} reserve {:?} reloading {} images {images:?}",
+                        view.tick, a.item, a.rounds, a.size, a.reserve, a.reloading
+                    ),
+                    None => println!("CAPTURE ammo tick {} none images {images:?}", view.tick),
                 }
             }
         } else {
