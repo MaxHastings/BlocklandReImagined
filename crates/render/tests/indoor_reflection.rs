@@ -52,6 +52,7 @@ fn floor(normal: [u8; 4], surface: &Surface) -> SceneData {
         indices: 0..6,
         material: 0,
         center: [0.0; 3],
+        zone: None,
     });
     data
 }
