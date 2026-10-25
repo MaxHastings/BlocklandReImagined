@@ -145,6 +145,10 @@ pub struct Sounds {
     /// Frames a second of the clips, for `steps` marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// A sound for entering each posture (`stand`, `crouch`, `prone`), heard
+    /// where the body is when its posture changes.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub postures: std::collections::BTreeMap<String, String>,
     /// Taking off in a jump sounds like a footfall on the surface underfoot,
     /// once, as landing does with `land_on_surface`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -184,7 +188,7 @@ impl FootDecal {
 }
 /// One footfall a clip marks ([`Sounds::steps`]): exactly one of `seconds`
 /// or `frame` says when.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepEvent {
     /// Seconds into the clip.
@@ -197,6 +201,15 @@ pub struct StepEvent {
     /// and on the surface under it. None: at the body's feet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foot: Option<String>,
+    /// Another sound source in place of the surface's footfall: a ladder's
+    /// climb sound, say. Heard at `volume` times its own out to `radius`
+    /// (0 or none: its own), and it leaves no mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
 }
 /// A sound tied to the moment of a clip ([`Sounds::clips`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -218,6 +231,8 @@ impl Sounds {
     pub const MAX_STEP_EVENTS: usize = 16;
     /// Most surface kinds with their own footfalls.
     pub const MAX_SURFACES: usize = 16;
+    /// The postures a body enters, as `postures` names them.
+    pub const POSTURES: [&'static str; 3] = ["stand", "crouch", "prone"];
     /// Most surface kinds (and `*`) with footfall marks and dust.
     pub const MAX_CONTACTS: usize = 17;
     /// The falling speed (units/s) a landing must reach to be heard.
@@ -255,6 +270,13 @@ impl Sounds {
                     && c.seconds.is_finite()
                     && (0.0..=60.0).contains(&c.seconds)
             })
+            && self.postures.len() <= Self::POSTURES.len()
+            && self.postures.iter().all(|(posture, sound)| {
+                Self::POSTURES.contains(&posture.as_str())
+                    && !sound.is_empty()
+                    && sound.len() <= Self::MAX_NAME
+                    && !sound.chars().any(char::is_control)
+            })
             && self.contacts.len() <= Self::MAX_CONTACTS
             && self.contacts.iter().all(|(kind, c)| {
                 (kind == "*" || bri_content::surface::valid_name(kind))
@@ -289,11 +311,21 @@ impl Sounds {
                     && events.iter().all(|e| {
                         e.foot.as_ref().is_none_or(|f| {
                             !f.is_empty() && f.len() <= 64 && !f.chars().any(char::is_control)
-                        }) && match (e.seconds, e.frame) {
-                            (Some(s), None) => s.is_finite() && (0.0..=60.0).contains(&s),
-                            (None, Some(_)) => self.fps.is_some(),
-                            _ => false,
-                        }
+                        }) && e.sound.as_ref().is_none_or(|s| {
+                            !s.is_empty()
+                                && s.len() <= Self::MAX_NAME
+                                && !s.chars().any(char::is_control)
+                        }) && e
+                            .volume
+                            .is_none_or(|v| v.is_finite() && (0.0..=4.0).contains(&v))
+                            && e.radius
+                                .is_none_or(|r| r.is_finite() && (0.0..=10_000.0).contains(&r))
+                            && (e.sound.is_some() || (e.volume.is_none() && e.radius.is_none()))
+                            && match (e.seconds, e.frame) {
+                                (Some(s), None) => s.is_finite() && (0.0..=60.0).contains(&s),
+                                (None, Some(_)) => self.fps.is_some(),
+                                _ => false,
+                            }
                     })
             })
     }

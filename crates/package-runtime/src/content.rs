@@ -1928,6 +1928,9 @@ pub struct ArchetypeSounds {
     /// Frames a second of the clips, for steps marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// A sound for entering each posture (`stand`, `crouch`, `prone`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub postures: BTreeMap<String, String>,
     /// Taking off in a jump sounds like a footfall on the surface underfoot.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub takeoff_on_surface: bool,
@@ -1974,6 +1977,14 @@ pub struct StepEventDef {
     /// The body node that lands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foot: Option<String>,
+    /// Another sound source in place of the surface's footfall, with its
+    /// `volume` (0 to 4) and `radius`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
 }
 /// [`ArchetypeSounds::clips`]: a sound at a moment of a clip.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2102,6 +2113,13 @@ impl ArchetypeDef {
                         && ids.iter().all(|s| text(s, 128))
                 }),
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds.postures.len() <= 3
+                && self.sounds.postures.iter().all(|(posture, sound)| {
+                    ["stand", "crouch", "prone"].contains(&posture.as_str()) && text(sound, 128)
+                }),
+            "sounds.postures names stand, crouch or prone, each with a sound profile"
         );
         ensure!(
             self.sounds.contacts.len() <= 17

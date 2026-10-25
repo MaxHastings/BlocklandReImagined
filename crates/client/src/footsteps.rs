@@ -22,6 +22,8 @@ pub struct Walk {
     pub velocity: [f32; 3],
     pub grounded: bool,
     pub scale: f32,
+    /// The posture it holds: `stand`, `crouch` or `prone`.
+    pub posture: &'static str,
 }
 impl From<&PlayerState> for Walk {
     fn from(p: &PlayerState) -> Self {
@@ -32,47 +34,18 @@ impl From<&PlayerState> for Walk {
             velocity: p.velocity,
             grounded: p.grounded,
             scale: p.scale,
+            posture: if p.posture.prone {
+                "prone"
+            } else if p.crouched {
+                "crouch"
+            } else {
+                "stand"
+            },
         }
     }
 }
 
-/// The stretch of its base clip a body played this frame: `from` to `to` in
-/// seconds, not wrapped, so a looping clip that came round runs past
-/// `duration`. A clip played backward has `to` below `from`; one that just
-/// started (`restart`) also covers its first instant.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ClipSpan {
-    /// The clip's lower-case name.
-    pub clip: String,
-    pub from: f32,
-    pub to: f32,
-    pub duration: f32,
-    pub looping: bool,
-    pub restart: bool,
-}
-impl ClipSpan {
-    /// Whether a moment `at` seconds into the clip went by in this span.
-    fn passes(&self, at: f32) -> bool {
-        let (lo, hi) = (self.from.min(self.to), self.from.max(self.to));
-        let forward = self.to >= self.from;
-        let hit = |t: f32| {
-            if self.restart {
-                t >= lo && t <= hi
-            } else if forward {
-                t > lo && t <= hi
-            } else {
-                t >= lo && t < hi
-            }
-        };
-        if !(self.looping && self.duration > 0.0) {
-            return hit(at);
-        }
-        // Every lap the span reaches into, a few at most.
-        let first = (lo / self.duration).floor() as i64;
-        let last = (hi / self.duration).floor() as i64;
-        (first..=last.min(first + 3)).any(|lap| hit(at + lap as f32 * self.duration))
-    }
-}
+pub use bri_sim::gait::ClipSpan;
 
 /// One footfall to play: its sound, where, and what it leaves on the
 /// surface it landed on ([`Sounds::contacts`]).
@@ -81,13 +54,29 @@ pub struct Footfall {
     pub sound: String,
     pub at: [f32; 3],
     pub contact: Option<FootContact>,
+    /// Times the sound's own volume, and the distance it is heard out to (0
+    /// keeps its own).
+    pub volume: f32,
+    pub radius: f32,
 }
 impl Footfall {
+    /// A sound at `at` as authored, leaving nothing.
+    fn plain(sound: &str, at: [f32; 3]) -> Self {
+        Self {
+            sound: sound.to_owned(),
+            at,
+            contact: None,
+            volume: 1.0,
+            radius: 0.0,
+        }
+    }
     fn on(sounds: &Sounds, sound: &str, at: [f32; 3], surface: &str) -> Self {
         Self {
             sound: sound.to_owned(),
             at,
             contact: sounds.contact_on(surface).cloned(),
+            volume: 1.0,
+            radius: 0.0,
         }
     }
 }
@@ -103,6 +92,8 @@ struct Walker {
     falling: f32,
     /// Whether the last frame's jump take-off was already heard.
     airborne: bool,
+    /// The posture it held last frame, once seen.
+    posture: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -137,6 +128,15 @@ impl Footsteps {
                 continue;
             }
             let position = foot(event);
+            // Another sound source in place of the surface's footfall.
+            if let Some(sound) = &event.sound {
+                out.push(Footfall {
+                    volume: event.volume.unwrap_or(1.0),
+                    radius: event.radius.unwrap_or(0.0),
+                    ..Footfall::plain(sound, position)
+                });
+                continue;
+            }
             let kind = surface(position);
             let steps = if sounds.surfaces.is_empty() {
                 &sounds.footsteps[..]
@@ -182,16 +182,19 @@ impl Footsteps {
             if !velocity.is_finite() {
                 continue;
             }
+            // A change of posture sounds where the body is.
+            if walker.posture.is_some_and(|last| last != player.posture)
+                && let Some(sound) = sounds.postures.get(player.posture)
+            {
+                out.push(Footfall::plain(sound, player.feet));
+            }
+            walker.posture = Some(player.posture);
             // A landing: on the ground now, falling fast a moment ago.
             if player.grounded && !walker.grounded {
                 if walker.falling >= Sounds::LAND_SPEED {
                     if let Some(land) = sounds.land.as_ref() {
                         if !land.is_empty() {
-                            out.push(Footfall {
-                                sound: land.clone(),
-                                at: player.feet,
-                                contact: None,
-                            });
+                            out.push(Footfall::plain(land, player.feet));
                         }
                     } else if sounds.land_on_surface {
                         // AA's PlayLanded: the floor material's foot-contact sound.
@@ -300,6 +303,7 @@ mod tests {
             velocity,
             grounded,
             scale: 1.0,
+            posture: "stand",
         }
     }
 
@@ -315,11 +319,13 @@ mod tests {
                     seconds: None,
                     frame: Some(3),
                     foot: Some("foot_l".into()),
+                    ..Default::default()
                 },
                 StepEvent {
                     seconds: Some(0.5),
                     frame: None,
                     foot: None,
+                    ..Default::default()
                 },
             ],
         );
@@ -477,6 +483,50 @@ mod tests {
         stone.update(1.0 / 60.0, [standing], &archetypes, |_| "stone".into());
         let heard = stone.update(1.0 / 60.0, [rising], &archetypes, |_| "stone".into());
         assert!(heard.iter().all(|h| h.contact.is_none()), "{heard:?}");
+    }
+
+    #[test]
+    fn a_mark_can_name_another_sound_and_a_posture_change_sounds_once() {
+        let (mut archetypes, walker) = walker_body();
+        let mut body = archetypes.resolve(walker).clone();
+        body.id = "test:archetype/climber".into();
+        body.sounds.fps = Some(30.0);
+        body.sounds.steps.insert(
+            "run".into(),
+            vec![StepEvent {
+                seconds: Some(0.5),
+                sound: Some("test:climb".into()),
+                volume: Some(0.9),
+                radius: Some(150.0),
+                ..Default::default()
+            }],
+        );
+        body.sounds
+            .postures
+            .insert("crouch".into(), "test:down".into());
+        let climber = archetypes.add(body).expect("valid body");
+        let mut steps = Footsteps::default();
+        let sounds = &archetypes.resolve(climber).sounds;
+        let heard = steps.on_clip(7, sounds, &span(0.4, 0.6), |_| [0.0; 3], |_| "dirt".into());
+        assert_eq!(heard.len(), 1);
+        assert_eq!(heard[0].sound, "test:climb");
+        assert_eq!((heard[0].volume, heard[0].radius), (0.9, 150.0));
+        assert!(heard[0].contact.is_none());
+        let mut standing = player(climber, [0.0; 3], true);
+        assert!(
+            steps
+                .update(1.0 / 60.0, [standing], &archetypes, |_| "dirt".into())
+                .is_empty()
+        );
+        standing.posture = "crouch";
+        let heard = steps.update(1.0 / 60.0, [standing], &archetypes, |_| "dirt".into());
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert_eq!(heard[0].sound, "test:down");
+        assert!(
+            steps
+                .update(1.0 / 60.0, [standing], &archetypes, |_| "dirt".into())
+                .is_empty()
+        );
     }
 
     #[test]

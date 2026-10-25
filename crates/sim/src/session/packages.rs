@@ -769,6 +769,9 @@ fn apply_sounds(
                             seconds: e.seconds,
                             frame: e.frame,
                             foot: e.foot.clone(),
+                            sound: e.sound.clone(),
+                            volume: e.volume,
+                            radius: e.radius,
                         })
                         .collect(),
                 )
@@ -777,6 +780,9 @@ fn apply_sounds(
     }
     if from.fps.is_some() {
         sounds.fps = from.fps;
+    }
+    if !from.postures.is_empty() {
+        sounds.postures.clone_from(&from.postures);
     }
     if from.takeoff_on_surface {
         sounds.takeoff_on_surface = true;
@@ -4668,9 +4674,9 @@ mod sound_tests {
     fn an_archetypes_footfall_marks_reach_its_sounds() {
         let from: bri_package_runtime::content::ArchetypeSounds =
             serde_json::from_value(serde_json::json!({
-                "footsteps": ["a:step"], "fps": 30.0, "takeoff_on_surface": true,
+                "footsteps": ["a:step"], "fps": 30.0, "takeoff_on_surface": true, "postures": { "crouch": "a:down" },
                 "contacts": { "*": { "effect": "a:dust", "decal": { "texture": "a:foot", "size": 0.4, "seconds": 20 } } },
-                "steps": { "Run_F": [ { "frame": 4, "foot": "foot_l" }, { "seconds": 0.5 } ] }
+                "steps": { "Run_F": [ { "frame": 4, "foot": "foot_l", "sound": "a:climb", "volume": 0.9, "radius": 150 }, { "seconds": 0.5 } ] }
             }))
             .unwrap();
         let mut sounds = crate::archetype::Sounds::default();
@@ -4681,6 +4687,9 @@ mod sound_tests {
         assert_eq!(sounds.step_time(&marks[0]), Some(4.0 / 30.0));
         assert_eq!(marks[0].foot.as_deref(), Some("foot_l"));
         assert!(sounds.takeoff_on_surface);
+        assert_eq!(sounds.postures["crouch"], "a:down");
+        assert_eq!(marks[0].sound.as_deref(), Some("a:climb"));
+        assert_eq!((marks[0].volume, marks[0].radius), (Some(0.9), Some(150.0)));
         let contact = sounds.contact_on("sand").expect("any other surface");
         assert_eq!(contact.effect.as_deref(), Some("a:dust"));
         assert_eq!(contact.decal.as_ref().map(|d| d.color), Some([1.0; 4]));
