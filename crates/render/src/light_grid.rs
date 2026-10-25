@@ -27,17 +27,23 @@ pub struct LightGrid {
     pub words: Vec<u32>,
 }
 
-fn reach(light: &PointLight) -> Option<(Vec3, Vec3)> {
+/// A light's box, widened by `body` (a lit body's radius adds to the light's when the body is ranked and reached).
+fn reach(light: &PointLight, body: f32) -> Option<(Vec3, Vec3)> {
     let [x, y, z, radius] = light.position_radius;
     (radius > 0.).then(|| {
         let p = Vec3::new(x, y, z);
-        (p - radius, p + radius)
+        (p - (radius + body), p + (radius + body))
     })
 }
 
 impl LightGrid {
     pub fn build(lights: &[PointLight]) -> Self {
-        let reaches: Vec<_> = lights.iter().map(reach).collect();
+        Self::build_for_bodies(lights, 0.0)
+    }
+    /// As [`Self::build`], with every light's reach widened by `body`, the largest lit body's radius, so a body at the edge of a lamp's
+    /// reach still finds it in its cell.
+    pub fn build_for_bodies(lights: &[PointLight], body: f32) -> Self {
+        let reaches: Vec<_> = lights.iter().map(|l| reach(l, body)).collect();
         let Some((min, max)) = reaches
             .iter()
             .flatten()
@@ -212,6 +218,18 @@ mod tests {
             listed / checked < 16,
             "{} lights per point",
             listed / checked
+        );
+    }
+
+    #[test]
+    fn a_body_finds_a_lamp_within_its_own_radius_past_the_lamps() {
+        let lights = [light(0., 0., 0., 10.)];
+        let past = Vec3::new(20., 0., 0.);
+        assert!(!LightGrid::build(&lights).lights_at(past).contains(&0));
+        assert!(
+            LightGrid::build_for_bodies(&lights, 15.)
+                .lights_at(past)
+                .contains(&0)
         );
     }
 

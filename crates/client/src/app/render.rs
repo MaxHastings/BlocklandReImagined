@@ -1475,6 +1475,7 @@ impl App {
             lights.len(),
         );
         lights.extend(overflow);
+        renderer.set_body_reach(self.lighting.light_volume.body_reach());
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
             .gpu
