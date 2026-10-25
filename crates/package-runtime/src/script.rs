@@ -1772,6 +1772,7 @@ fn register_api(engine: &mut Engine) {
                 brick_radius: float(&brick_radius)?,
                 explosion: None,
                 kill_radius: 0.0,
+                cone: None,
             }))
         },
     );
@@ -1791,6 +1792,7 @@ fn register_api(engine: &mut Engine) {
                 brick_radius: float(&brick_radius)?,
                 explosion: Some(explosion.into()),
                 kill_radius: 0.0,
+                cone: None,
             }))
         },
     );
@@ -1812,6 +1814,36 @@ fn register_api(engine: &mut Engine) {
                 brick_radius: float(&brick_radius)?,
                 explosion: Some(explosion.into()),
                 kill_radius: float(&kill_radius)?,
+                cone: None,
+            }))
+        },
+    );
+    // With a cone: only bodies within it of the centre are hurt.
+    engine.register_fn(
+        "explode",
+        |x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         radius: Dynamic,
+         damage: Dynamic,
+         brick_radius: Dynamic,
+         explosion: &str,
+         kill_radius: Dynamic,
+         dx: Dynamic,
+         dy: Dynamic,
+         dz: Dynamic,
+         cos: Dynamic| {
+            push(Op::Explode(ops::Explode {
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                radius: float(&radius)?,
+                damage: float(&damage)?,
+                brick_radius: float(&brick_radius)?,
+                explosion: Some(explosion.into()),
+                kill_radius: float(&kill_radius)?,
+                cone: Some(ops::Cone {
+                    direction: [float(&dx)?, float(&dy)?, float(&dz)?],
+                    cos: float(&cos)?,
+                }),
             }))
         },
     );

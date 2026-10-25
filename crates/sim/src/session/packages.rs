@@ -2349,6 +2349,7 @@ impl Session {
         brick_radius: f32,
         look: Option<&str>,
         kill_radius: f32,
+        cone: Option<(Vec3, f32)>,
         source: &str,
         caller: Option<OwnerId>,
     ) -> Result<()> {
@@ -2373,12 +2374,19 @@ impl Session {
             }
             None => None,
         };
+        // Whether a body at `at` lies in the blast's cone, if it has one.
+        let in_cone = |at: Vec3| {
+            cone.is_none_or(|(direction, cos)| {
+                (at - center).normalize_or_zero().dot(direction) >= cos
+            })
+        };
         let victims: Vec<(OwnerId, f32)> = self
             .peers
             .iter()
             .filter_map(|(owner, p)| {
-                let d = (Vec3::from(p.player.state().feet) + Vec3::Y).distance(center);
-                (d < radius.max(kill_radius))
+                let at = Vec3::from(p.player.state().feet) + Vec3::Y;
+                let d = at.distance(center);
+                (d < radius.max(kill_radius) && in_cone(at))
                     .then(|| (*owner, blast_damage(d, radius, damage, kill_radius)))
             })
             // A player's blast obeys the minigame's radius damage rule, as
@@ -2406,8 +2414,9 @@ impl Session {
                 h.entities
                     .iter()
                     .filter_map(|(id, e)| {
-                        let d = Vec3::from(e.body.state().feet).distance(center);
-                        (d < radius.max(kill_radius))
+                        let at = Vec3::from(e.body.state().feet);
+                        let d = at.distance(center);
+                        (d < radius.max(kill_radius) && in_cone(at))
                             .then(|| (*id, blast_damage(d, radius, damage, kill_radius)))
                     })
                     .collect()

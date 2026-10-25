@@ -646,6 +646,7 @@ fn every_operation_needs_its_declared_capability() {
             brick_radius: 2.0,
             explosion: None,
             kill_radius: 0.0,
+            cone: None,
         }),
         Op::Damage(ops::Damage {
             target: ObjectRef::Player(1),
@@ -720,6 +721,7 @@ fn every_operation_needs_its_declared_capability() {
             brick_radius: 0.0,
             explosion: Some("rocketExplosion".into()),
             kill_radius: 0.0,
+            cone: None,
         }),
         Op::SetImageAmmo(ops::SetImageAmmo {
             player: 1,
@@ -863,6 +865,7 @@ fn extreme_operation_parameters_are_refused() {
             brick_radius: b,
             explosion: None,
             kill_radius: 0.0,
+            cone: None,
         })
     };
     let bad = [
@@ -998,6 +1001,7 @@ fn extreme_operation_parameters_are_refused() {
             brick_radius: 0.0,
             explosion: Some("no spaces".into()),
             kill_radius: 0.0,
+            cone: None,
         }),
         Op::MountImage(ops::MountImage {
             player: 1,

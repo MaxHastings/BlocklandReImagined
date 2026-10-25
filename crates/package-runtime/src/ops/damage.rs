@@ -19,6 +19,24 @@ pub struct Explode {
     /// charge's kill radius.
     #[serde(default)]
     pub kill_radius: f32,
+    /// Only what lies in this cone from the centre is hurt (a rocket's
+    /// back-blast); bricks are not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cone: Option<Cone>,
+}
+/// The way a cone points and how wide it is: a body is inside when the
+/// cosine of its angle to `direction` is at least `cos`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Cone {
+    pub direction: [f32; 3],
+    pub cos: f32,
+}
+impl Cone {
+    pub fn valid(&self) -> bool {
+        self.direction.iter().all(|v| v.is_finite())
+            && (0.01..=1000.0).contains(&glam_length(&self.direction))
+            && (-1.0..=1.0).contains(&self.cos)
+    }
 }
 impl ScriptOp for Explode {
     const CAPABILITY: &str = "damage";
@@ -31,6 +49,7 @@ impl ScriptOp for Explode {
             brick_radius,
             explosion,
             kill_radius,
+            cone,
         } = self;
         explosion.as_deref().is_none_or(|e| {
             (1..=64).contains(&e.len()) && e.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -39,6 +58,7 @@ impl ScriptOp for Explode {
             && (0.0..=1000.0).contains(damage)
             && (0.0..=16.0).contains(brick_radius)
             && (0.0..=32.0).contains(kill_radius)
+            && cone.as_ref().is_none_or(Cone::valid)
     }
 }
 
