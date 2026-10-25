@@ -58,6 +58,7 @@ fn sphere(strength: f32) -> SceneData {
         vertices,
         indices,
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..count,
             material: 0,
             center: [0.; 3],

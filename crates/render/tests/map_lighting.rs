@@ -65,6 +65,7 @@ fn lit_room(light: MapLight) -> SceneData {
             let start = scene.indices.len() as u32;
             scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
             scene.batches.push(MeshBatch {
+                zone: None,
                 indices: start..start + 6,
                 material: scene.materials.len(),
                 center: [0.0; 3],
@@ -297,6 +298,7 @@ fn add_floor(scene: &mut SceneData, y: f32, half: f32, texel: impl Fn(u32, u32) 
     let start = scene.indices.len() as u32;
     scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
     scene.batches.push(MeshBatch {
+        zone: None,
         indices: start..start + 6,
         material: scene.materials.len(),
         center: [0.0; 3],
@@ -621,6 +623,7 @@ fn a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree() {
         let start = scene.indices.len() as u32;
         scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
         scene.batches.push(MeshBatch {
+            zone: None,
             indices: start..start + 6,
             material: scene.materials.len(),
             center: [0.0; 3],
@@ -742,6 +745,7 @@ fn a_switched_off_light_leaves_no_line_along_its_shadows_edges() {
     let start = scene.indices.len() as u32;
     scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
     scene.batches.push(MeshBatch {
+        zone: None,
         indices: start..start + 6,
         material: scene.materials.len(),
         center: [0.0; 3],

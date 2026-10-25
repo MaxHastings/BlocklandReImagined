@@ -146,6 +146,9 @@ struct Prepared {
     backdrop: Option<bri_render::scene_loader::BackdropScene>,
     /// The map's regions with their own fog.
     regions: Option<bri_content::regions::RegionMap>,
+    /// How the map's zones open onto each other.
+    zones: Option<bri_content::zones::ZoneGraph>,
+    display_ramp: Option<[f32; 3]>,
     /// The map's decals with the triangles they draw on.
     decals: Option<bri_render::decals::LoadedDecals>,
     receiver_index: Arc<bri_render::decals::ReceiverIndex>,
@@ -519,6 +522,8 @@ fn prepare_map(
         scatter: visual.scatter,
         backdrop: visual.backdrop,
         regions: visual.regions,
+        zones: visual.zones,
+        display_ramp: visual.display_ramp,
         decals: visual.decals,
         receiver_index: visual.receiver_index,
         light_volume,
@@ -645,6 +650,15 @@ pub(crate) fn copy_to_clipboard(text: &str) -> Result<()> {
 }
 
 impl App {
+    /// The display ramp in force: the player's own setting, else the map's default, else neutral.
+    pub(super) fn display_ramp(&self) -> [f32; 3] {
+        bri_ui::screens::options::display_ramp_or(
+            &self.ui.core.prefs,
+            self.scene
+                .display_ramp
+                .unwrap_or(bri_ui::screens::options::DISPLAY_RAMP_NEUTRAL),
+        )
+    }
     fn rebuild_effects_renderer(
         &mut self,
         device: &wgpu::Device,
@@ -1785,9 +1799,7 @@ impl PlatformApp for App {
         bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
             &self.ui.core.prefs,
         ));
-        bri_render::color::set_display_ramp(bri_ui::screens::options::display_ramp(
-            &self.ui.core.prefs,
-        ));
+        bri_render::color::set_display_ramp(self.display_ramp());
         let samples = self.graphics.samples;
         bri_console::echo(format!(
             "World renderer: format {format:?}, samples {samples}, lighting {}, soft shading {}, ambient occlusion {}",

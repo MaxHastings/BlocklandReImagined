@@ -354,7 +354,7 @@ fn control(name: &str) -> Result<HeldControl> {
 /// decide: the Use key opens a door), {"aim": [x, z]} (turn to face a point), {"goto": [x, z]} (walk there), {"aim_at": {"name": part of a
 /// player's or bot's name, "height": 0.7}} (turn the crosshair onto it; fire with `hold`) and {"until": "dead", "name": ..} (wait for it to die),
 /// {"measure": 120} records bounded synchronized frame timings without image readback.
-/// {"panel": {"control": id, "lists": {id: row}}} (a press or pick in the open Add-On panel), {"report": true} (prints every body's place and health), {"shot": name}, {"burst": {"name": n, "count": c, "every_ms": ms}} (steps the game `every_ms` and captures `count` times).
+/// {"panel": {"control": id, "lists": {id: row}}} (a press or pick in the open Add-On panel), {"report": true} (prints every body's place, health and mounted image states), {"shot": name}, {"burst": {"name": n, "count": c, "every_ms": ms}} (steps the game `every_ms` and captures `count` times).
 fn play(
     app: &mut App,
     gpu: &Headless,
@@ -685,6 +685,14 @@ fn play(
                         vitals.map(|v| v.alive),
                         vitals.map(|v| v.health),
                     );
+                    // What each hand holds and the state it is in: a gun that
+                    // does not fire is stuck in one, or never mounted.
+                    for m in view.weapons.images.get(id).into_iter().flatten() {
+                        println!(
+                            "CAPTURE report {name:?} hand {} image {} state {}",
+                            m.hand, m.image, m.state
+                        );
+                    }
                 }
             }
         } else {

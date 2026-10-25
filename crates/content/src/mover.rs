@@ -210,6 +210,10 @@ pub struct MoverDef {
     /// What it sounds like when it moves.
     #[serde(default)]
     pub sounds: Option<MoverSounds>,
+    /// Whether it starts hidden: not drawn and not solid, until a rule
+    /// shows it (`mover_show`). A door's breached twin waits this way.
+    #[serde(default)]
+    pub hidden: bool,
 }
 fn yes() -> bool {
     true
@@ -323,6 +327,9 @@ pub struct MoverState {
     pub moving: bool,
     /// Held by something in its way (see [`Encroach::Stop`]).
     pub blocked: bool,
+    /// Not drawn and not solid (see [`MoverDef::hidden`]); motion goes on.
+    #[serde(default)]
+    pub hidden: bool,
 }
 impl Default for MoverState {
     fn default() -> Self {
@@ -339,6 +346,7 @@ impl MoverState {
             rate: 0.0,
             moving: false,
             blocked: false,
+            hidden: false,
         }
     }
     /// Raw progress at `tick`.
@@ -406,6 +414,7 @@ impl MoverState {
             rate: 1.0 / (seconds.max(MIN_SECONDS) * TICKS_PER_SECOND),
             moving: true,
             blocked: false,
+            hidden: self.hidden,
         };
         true
     }
@@ -484,6 +493,7 @@ mod tests {
             spin: None,
             collide: true,
             params: BTreeMap::new(),
+            hidden: false,
             sounds: None,
         }
     }

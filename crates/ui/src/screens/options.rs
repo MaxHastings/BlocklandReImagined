@@ -138,7 +138,11 @@ const GAMMA_RANGE: (f32, f32) = (0.5, 2.5);
 /// The display ramp `$pref::Video::{Brightness,Contrast,Gamma}` ask for, as
 /// `[brightness, contrast, gamma]`.
 pub fn display_ramp(p: &Prefs) -> [f32; 3] {
-    let [brightness, contrast, gamma] = DISPLAY_RAMP_NEUTRAL;
+    display_ramp_or(p, DISPLAY_RAMP_NEUTRAL)
+}
+/// As [`display_ramp`], with `fallback` (a map's own default) for each value the player has not set.
+pub fn display_ramp_or(p: &Prefs, fallback: [f32; 3]) -> [f32; 3] {
+    let [brightness, contrast, gamma] = fallback;
     let read = |pref, neutral: f32, range: (f32, f32)| {
         let v = p.f32_or(pref, neutral);
         if v.is_finite() {
@@ -3837,6 +3841,15 @@ mod tests {
         p.set(GAMMA, "0");
         p.set(CONTRAST, "nan");
         assert_eq!(display_ramp(&p), [0.8, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn a_maps_display_ramp_fills_only_what_the_player_has_not_set() {
+        let map = [0.8, 0.7, 1.0];
+        let mut p = Prefs::default();
+        assert_eq!(display_ramp_or(&p, map), map);
+        p.set(CONTRAST, "0.4");
+        assert_eq!(display_ramp_or(&p, map), [0.8, 0.4, 1.0]);
     }
 
     #[test]

@@ -109,10 +109,12 @@ pub fn cuboid(centre: Vec3, half: Vec3, paint: Paint) -> Mesh {
         }
     }
     let mut primitives = vec![Primitive {
+        zone: None,
         material: Some(paint.rest),
         triangles: rest,
     }];
     primitives.push(Primitive {
+        zone: None,
         material: Some(paint.front),
         triangles: front,
     });

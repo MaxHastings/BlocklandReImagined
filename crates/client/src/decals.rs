@@ -345,6 +345,7 @@ fn unit_mark() -> SceneData {
         id: "decal".into(),
         name: "decal".into(),
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..indices.len() as u32,
             material: 0,
             center: [0.0; 3],

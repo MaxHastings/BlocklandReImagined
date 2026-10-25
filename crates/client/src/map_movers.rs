@@ -30,6 +30,8 @@ struct Model {
     /// None until the first, which only learns and never sounds (a
     /// player joining while a door swings hears nothing of the start).
     last: Option<(bool, u8)>,
+    /// Not drawn, and silent ([`MoverState::hidden`]).
+    hidden: bool,
 }
 
 /// Every mover of the current map.
@@ -53,6 +55,7 @@ impl ClientMovers {
                     transform: mover.placement,
                     tint: [1.0; 4],
                 };
+                let hidden = mover.def.hidden;
                 Some(Model {
                     mover,
                     data,
@@ -60,6 +63,7 @@ impl ClientMovers {
                     instances: None,
                     transform,
                     last: None,
+                    hidden,
                 })
             })
             .collect();
@@ -87,11 +91,15 @@ impl ClientMovers {
         for (index, model) in self.models.iter_mut().enumerate() {
             let state = states.get(index).copied().unwrap_or_default();
             model.transform.transform = model.mover.transform_at(&state, tick);
+            model.hidden = state.hidden;
             let moving = state.moving && state.alpha_at_f(tick) < 1.0;
             let now = (moving, state.to);
             let Some(before) = model.last.replace(now) else {
                 continue;
             };
+            if model.hidden {
+                continue;
+            }
             let Some(set) = &model.mover.def.sounds else {
                 continue;
             };
@@ -119,6 +127,9 @@ impl ClientMovers {
             .enumerate()
             .filter_map(|(index, model)| {
                 let (true, _) = model.last? else { return None };
+                if model.hidden {
+                    return None;
+                }
                 let set = model.mover.def.sounds.as_ref()?;
                 Some(PositionalSource {
                     key: LOOP_KEY_BASE + index as u64,
@@ -168,6 +179,7 @@ impl ClientMovers {
     pub fn draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
         self.models
             .iter()
+            .filter(|m| !m.hidden)
             .filter_map(|m| Some((m.gpu.as_ref()?, m.instances.as_ref()?)))
             .collect()
     }
@@ -207,6 +219,7 @@ mod tests {
                 collide: true,
                 params: Default::default(),
                 sounds: Some(sounds),
+                hidden: false,
             },
             placement: glam::Mat4::IDENTITY,
             colliders: 0..0,
@@ -224,6 +237,7 @@ mod tests {
                     tint: [1.0; 4],
                 },
                 last: None,
+                hidden: false,
             }],
         }
     }

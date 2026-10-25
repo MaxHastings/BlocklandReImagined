@@ -29,6 +29,7 @@ fn quad(data: &mut SceneData, corners: [[f32; 3]; 4], color: [f32; 4], double_si
     material.double_sided = double_sided;
     data.materials.push(material);
     data.batches.push(MeshBatch {
+        zone: None,
         indices: start..data.indices.len() as u32,
         material: data.materials.len() - 1,
         center: corners[0],
@@ -960,6 +961,7 @@ fn lit_box(data: &mut SceneData, min: Vec3, max: Vec3) {
         data.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
     }
     data.batches.push(MeshBatch {
+        zone: None,
         indices: start..data.indices.len() as u32,
         material,
         center: ((min + max) * 0.5).to_array(),

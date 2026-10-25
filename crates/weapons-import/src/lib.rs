@@ -437,6 +437,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 }
             }
             native.push(State {
+                lock: Default::default(),
                 name,
                 ticks: ticks(num(d, &format!("stateTimeoutValue[{n}]"), 0.0)),
                 wait: flag(d, &format!("stateWaitForTimeout[{n}]"), true),

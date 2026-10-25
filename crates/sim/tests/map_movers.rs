@@ -44,6 +44,7 @@ fn door_that(encroach: Encroach) -> MapMover {
             collide: true,
             params: BTreeMap::from([("kind".to_string(), "door".to_string())]),
             sounds: None,
+            hidden: false,
         },
         placement: Mat4::IDENTITY,
         colliders: 1..2,
@@ -301,4 +302,28 @@ fn a_door_that_returns_when_it_meets_a_player_goes_back_to_the_key_it_left() {
     let v = &s.mover_views()[0];
     assert_eq!(v.key, Some(0), "it went back and rests shut: {v:?}");
     assert!(!v.moving);
+}
+
+#[test]
+fn a_hidden_mover_is_not_solid_until_a_rule_shows_it() {
+    let mut hidden = door();
+    hidden.def.hidden = true;
+    let mut s = session_of(hidden);
+    assert!(s.map_mover_states()[0].hidden);
+    let owner = s
+        .join("Walker".into(), Vec3::new(1.5, 0.05, 4.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    walk(&mut s, owner, &mut sequence, 1.0, 240);
+    assert!(feet(&s).z < -1.0, "through the hidden door: {:?}", feet(&s));
+    walk(&mut s, owner, &mut sequence, -1.0, 600);
+    assert!(feet(&s).z > 1.0, "back on the near side: {:?}", feet(&s));
+    s.mover_show("door", true).unwrap();
+    assert!(!s.map_mover_states()[0].hidden);
+    walk(&mut s, owner, &mut sequence, 1.0, 240);
+    assert!(
+        feet(&s).z > 0.4,
+        "the shown door stops them: {:?}",
+        feet(&s)
+    );
 }

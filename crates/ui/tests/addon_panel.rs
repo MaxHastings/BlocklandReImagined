@@ -61,6 +61,8 @@ fn shop() -> PanelView {
                 columns: vec![],
                 icons: vec![],
                 place: None,
+                color: None,
+                back: None,
             },
             PanelItemView::Field {
                 id: "note".into(),
@@ -232,6 +234,8 @@ fn backpack_and_chest() -> PanelView {
         columns: vec![],
         icons: vec![],
         place: None,
+        color: None,
+        back: None,
     };
     PanelView {
         package: "rp".into(),
@@ -251,6 +255,8 @@ fn backpack_and_chest() -> PanelView {
                 columns: vec![],
                 icons: vec![],
                 place: None,
+                color: None,
+                back: None,
             },
         ],
         border: true,
@@ -444,6 +450,8 @@ fn menu() -> PanelView {
                     None,
                 ],
                 place: None,
+                color: None,
+                back: None,
             },
             PanelItemView::Buttons(buttons),
         ],
@@ -548,4 +556,28 @@ fn a_placed_text_or_list_stands_where_asked_and_leaves_the_flow_alone() {
     assert_eq!((r.x, r.y), (left + 10, top + 260));
     // The buttons flow up into the room the placed items left.
     assert!(button_y(panel) < flowed);
+}
+
+#[test]
+fn a_list_can_have_a_dark_field_and_its_own_text_colour() {
+    let mut panel = menu();
+    let PanelItemView::List { color, back, .. } = &mut panel.items[1] else {
+        panic!("the second item is the list")
+    };
+    *color = Some([0.9, 0.9, 0.9, 1.0]);
+    *back = Some([0.05, 0.05, 0.05, 0.8]);
+    let mut ui = ui();
+    ui.apply(UiUpdate::Panel(Some(panel)));
+    ui.update(0);
+    let v = view(&ui);
+    let list = v.id("Panel_List_team").unwrap();
+    assert_eq!(
+        v.node(list).state.text_color,
+        Some(bri_ui::screens::rgba([0.9, 0.9, 0.9, 1.0]))
+    );
+    let scroll = v.node(list).parent.unwrap();
+    assert_eq!(
+        v.node(scroll).state.back,
+        Some(bri_ui::screens::rgba([0.05, 0.05, 0.05, 0.8]))
+    );
 }
