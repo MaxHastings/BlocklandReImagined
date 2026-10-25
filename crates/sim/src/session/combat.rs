@@ -308,6 +308,12 @@ pub struct Vitals {
     pub sitting: bool,
     /// The unplanted ghost brick others see.
     pub ghost: Option<super::GhostBrick>,
+    /// The body the player is while archetypes are laid over it
+    /// (`push_archetype`: a stance, a carried-object pose): what a HUD or
+    /// control profile keyed to a body follows, as the overlay is only how
+    /// the body looks and moves for a while.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_body: Option<crate::archetype::ArchetypeId>,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -633,10 +639,13 @@ pub enum Notice {
         pitch: f32,
         yaw: f32,
     },
-    /// `Sound` at `volume` times its own: an Add-On's radio line, a whisper.
-    SoundScaled {
+    /// `Sound` at `volume` times its own and `pitch` times its own pitch,
+    /// heard out to `radius` (0: its own): an Add-On's radio line, a whisper.
+    SoundShaped {
         profile: String,
         volume: f32,
+        pitch: f32,
+        radius: f32,
     },
     /// A line for a HUD `message_feed` (rules' `hud_line`): shown for
     /// `seconds`, in `color` when given, with one of the feed's `icons`.
@@ -1137,6 +1146,7 @@ impl Session {
                         talking: peer.talking,
                         sitting: peer.sitting,
                         ghost: self.ghost_brick(*owner),
+                        base_body: peer.overlays.as_ref().map(|o| o.base),
                     },
                 )
             })
@@ -1560,6 +1570,7 @@ impl Session {
             peer.combat.death = Some(death_pose);
             // A corpse keeps no laid-on archetypes (`pushDatablock`).
             peer.overlays = None;
+            peer.stance = None;
             peer.combat.corpse_cleared = false;
             peer.discard_inputs();
             peer.control = super::ControlObject::Corpse;
@@ -2683,6 +2694,7 @@ impl Session {
             }
             peer.player.refill_energy();
             peer.overlays = None;
+            peer.stance = None;
             peer.combat.speed_rule = 1.0;
             peer.combat.speed_mods.clear();
             peer.combat.gun_slow = None;

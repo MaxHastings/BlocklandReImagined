@@ -23,6 +23,10 @@ fn door_collider() -> ColliderBuilder {
 }
 
 fn door() -> MapMover {
+    door_that(Encroach::Stop)
+}
+
+fn door_that(encroach: Encroach) -> MapMover {
     MapMover {
         node: 5,
         def: MoverDef {
@@ -35,7 +39,7 @@ fn door() -> MapMover {
                 },
             ],
             glide: Glide::Smooth,
-            encroach: Encroach::Stop,
+            encroach,
             spin: None,
             collide: true,
             params: BTreeMap::from([("kind".to_string(), "door".to_string())]),
@@ -47,6 +51,10 @@ fn door() -> MapMover {
 }
 
 fn session() -> Session {
+    session_of(door())
+}
+
+fn session_of(door: MapMover) -> Session {
     let mut s = Session::new(
         Simulation::new(
             World::new("Doors".into(), "test".into(), vec![[1.0; 4]; 2]),
@@ -61,7 +69,7 @@ fn session() -> Session {
         .unwrap(),
     );
     s.set_spawn_points(vec![Vec3::new(1.5, 0.05, 4.0)]).unwrap();
-    s.set_map_movers(vec![door()]).unwrap();
+    s.set_map_movers(vec![door]).unwrap();
     s
 }
 
@@ -279,4 +287,18 @@ fn a_blocked_door_publishes_its_last_nonpenetrating_pose() {
         return;
     }
     panic!("door did not meet the player");
+}
+
+#[test]
+fn a_door_that_returns_when_it_meets_a_player_goes_back_to_the_key_it_left() {
+    let mut s = session_of(door_that(Encroach::Return));
+    s.join("Stander".into(), Vec3::new(1.5, 0.05, 1.5), true)
+        .unwrap();
+    assert!(s.mover_goto("door", 1, 1.0).unwrap());
+    for _ in 0..300 {
+        s.step().unwrap();
+    }
+    let v = &s.mover_views()[0];
+    assert_eq!(v.key, Some(0), "it went back and rests shut: {v:?}");
+    assert!(!v.moving);
 }

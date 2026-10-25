@@ -859,6 +859,10 @@ struct Equipped {
     /// as the state is entered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fidget: Option<u32>,
+    /// Being put down for the image `next` waits to bring up
+    /// ([`crate::Image::lower`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lowering: bool,
 }
 /// Torque's `nextImage`: a right-hand image asked for while the held one's
 /// state forbids image changes. It mounts on the next state that allows one.
@@ -906,6 +910,9 @@ pub struct Actor {
     spray: u8,
     ball_ready: u64,
     spawn_tick: u64,
+    /// The images drawn since the last spawn ([`crate::Image::redraw`]).
+    #[serde(default)]
+    drawn: BTreeSet<String>,
     tackle_until: u64,
     /// Rounds in each carried gun's magazine ([`crate::Magazine`]), by
     /// [`slot_key`]: two of one gun each keep their own, as the tactical
@@ -955,6 +962,11 @@ struct PendingCue {
     due: u64,
     cue: crate::Cue,
     position: Vec3,
+    /// The image and hand whose state set it, for a shell it ejects.
+    #[serde(default)]
+    image: String,
+    #[serde(default)]
+    hand: u8,
 }
 /// The most cues one holder has waiting.
 const MAX_PENDING_CUES: usize = 64;
@@ -1595,6 +1607,7 @@ impl WeaponsWorld {
                 spray: 0,
                 ball_ready: 0,
                 spawn_tick: self.tick,
+                drawn: BTreeSet::new(),
                 tackle_until: 0,
                 rounds: BTreeMap::new(),
                 reserve: BTreeMap::new(),
@@ -1868,17 +1881,37 @@ impl WeaponsWorld {
             image: image.into(),
             paint,
         };
-        match &a.images[0] {
-            Some(e) if e.image == wanted.image && e.paint == wanted.paint => a.next = None,
-            Some(e)
-                if !self.pack.images[&e.image]
-                    .states
-                    .get(e.state)
-                    .is_none_or(|s| s.allow_change) =>
-            {
-                a.next = Some(wanted)
+        match &mut a.images[0] {
+            // The tool asked for again while it is being put down comes
+            // back up.
+            Some(e) if e.image == wanted.image && e.paint == wanted.paint => {
+                a.next = None;
+                if std::mem::take(&mut e.lowering) {
+                    let image = &self.pack.images[&e.image];
+                    if let Some(up) = image.redraw.filter(|s| *s < image.states.len()) {
+                        e.state = up;
+                        e.entered = false;
+                    }
+                }
             }
-            _ => self.swap_images(id, a, wanted),
+            Some(e) => {
+                let image = &self.pack.images[&e.image];
+                let allows = image.states.get(e.state).is_none_or(|s| s.allow_change);
+                match image.lower {
+                    // Put down first: the image plays out its lowering and
+                    // the change comes when it reaches a state that allows
+                    // one.
+                    Some(lower) if allows && !e.lowering => {
+                        e.lowering = true;
+                        e.state = lower;
+                        e.entered = false;
+                        a.next = Some(wanted);
+                    }
+                    _ if e.lowering || !allows => a.next = Some(wanted),
+                    _ => self.swap_images(id, a, wanted),
+                }
+            }
+            None => self.swap_images(id, a, wanted),
         }
     }
     /// Replace whatever is held with `next`; the akimbo gun brings its left
@@ -2557,6 +2590,7 @@ impl WeaponsWorld {
         // The new body wears nothing in its emote slot, and a guard it
         // takes up starts whole.
         a.emote = None;
+        a.drawn.clear();
         a.guard_left = None;
         a.cues.retain(|c| !c.cue.sound.is_empty());
         for c in &mut a.cues {
@@ -2595,6 +2629,7 @@ impl WeaponsWorld {
             paint: None,
             magazine: None,
             fidget: None,
+            lowering: false,
         });
         if let Some(command) = self.pack.images[image].commands.mount.clone() {
             self.events.push(Event::ToolFire {
@@ -2755,10 +2790,18 @@ impl WeaponsWorld {
                 None
             };
             let shown = magazine.is_some();
+            // A draw after the first starts where the image says.
+            let state = match self.pack.images.get(image).and_then(|i| i.redraw) {
+                Some(redraw) if hand == 0 && a.drawn.contains(image) => redraw,
+                _ => 0,
+            };
+            if hand == 0 {
+                a.drawn.insert(image.into());
+            }
             a.images[hand as usize] = Some(Equipped {
                 animation_generation: self.animation_serial(),
                 image: image.into(),
-                state: 0,
+                state,
                 remaining: 0,
                 entered: false,
                 trigger: hand == 0 && a.trigger,
@@ -2766,6 +2809,7 @@ impl WeaponsWorld {
                 paint: None,
                 magazine,
                 fidget: None,
+                lowering: false,
             });
             if self
                 .pack
@@ -3635,6 +3679,8 @@ impl WeaponsWorld {
                         due: self.tick + cue.ticks(),
                         cue: cue.clone(),
                         position: a.frame.position,
+                        image: image.id.clone(),
+                        hand: e.hand,
                     };
                     if cue.ticks() == 0 {
                         self.play_cue(id, pending);
@@ -3836,6 +3882,19 @@ impl WeaponsWorld {
                 source: TargetId::Actor(id),
                 profile: c.cue.sound,
                 position: c.position,
+            });
+        }
+        if c.cue.eject_shell
+            && self
+                .pack
+                .images
+                .get(&c.image)
+                .is_some_and(|image| image.throws_shell())
+        {
+            self.events.push(Event::Shell {
+                actor: id,
+                image: c.image,
+                hand: c.hand,
             });
         }
     }

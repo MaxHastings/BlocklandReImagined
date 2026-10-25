@@ -1529,8 +1529,12 @@ impl App {
                     let eye = if own_view {
                         // The body's weapon sway and bob ride the view.
                         crate::controls::view_frame(eye, yaw, pitch, roll).map(|frame| {
-                            match self.controls.view_model_sway() {
+                            let frame = match self.controls.view_model_sway() {
                                 Some(sway) => frame * sway,
+                                None => frame,
+                            };
+                            match self.controls.view_model_sights() {
+                                Some(sights) => frame * sights,
                                 None => frame,
                             }
                         })

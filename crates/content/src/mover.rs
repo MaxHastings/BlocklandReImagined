@@ -63,6 +63,9 @@ pub enum Encroach {
     Stop,
     /// It moves through whatever is there.
     Ignore,
+    /// It turns back toward the key it left, at the pace it was going
+    /// (Unreal's `ME_ReturnWhenEncroach`).
+    Return,
 }
 
 /// A continuous turn that needs no state: a fan.
@@ -97,6 +100,17 @@ pub struct MoverSounds {
     /// Once, as it comes to rest at key 0.
     #[serde(default)]
     pub closed: Option<String>,
+    /// Once, as it turns back toward key 0 part way through opening
+    /// (Unreal's `PartialClosingSound`); `closing` plays when this is unset.
+    #[serde(default)]
+    pub partial_closing: Option<String>,
+    /// Once, as it turns back toward another key part way through closing
+    /// (`PartialOpeningSound`); `opening` plays when this is unset.
+    #[serde(default)]
+    pub partial_opening: Option<String>,
+    /// Once, as it is held between keys (a door stopped part way open).
+    #[serde(default)]
+    pub stopped: Option<String>,
     /// Looped for as long as it moves.
     #[serde(default)]
     pub moving: Option<String>,
@@ -120,6 +134,9 @@ impl MoverSounds {
                 &self.opened,
                 &self.closing,
                 &self.closed,
+                &self.stopped,
+                &self.partial_closing,
+                &self.partial_opening,
                 &self.moving
             ]
             .into_iter()
@@ -138,10 +155,32 @@ impl MoverSounds {
         };
         name.as_deref()
     }
+    /// The one-shot for a motion that turns back toward `to` before it has
+    /// come to rest.
+    pub fn reverse(&self, to: u8) -> Option<&str> {
+        let partial = if to == 0 {
+            &self.partial_closing
+        } else {
+            &self.partial_opening
+        };
+        partial.as_deref().or_else(|| self.start(to))
+    }
     /// The one-shot for a mover that comes to rest at `key`.
     pub fn rest(&self, key: u8) -> Option<&str> {
         let name = if key == 0 { &self.closed } else { &self.opened };
         name.as_deref()
+    }
+    /// The one-shot for a mover that stops with `state`'s motion at `alpha`
+    /// progress: the sound of the key it reached, or `stopped` when it is
+    /// held between keys.
+    pub fn halt(&self, state: &MoverState, alpha: f32) -> Option<&str> {
+        if alpha >= 1.0 {
+            self.rest(state.to)
+        } else if alpha <= 0.0 {
+            self.rest(state.from)
+        } else {
+            self.stopped.as_deref()
+        }
     }
 }
 

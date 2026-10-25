@@ -48,10 +48,22 @@ pub struct Sound {
     pub at: SoundAt,
     #[serde(default = "full_volume")]
     pub volume: f32,
+    /// Times the profile's own pitch (`PlaySound`'s `pitch`): one soldier's
+    /// voice higher than the next.
+    #[serde(default = "full_volume")]
+    pub pitch: f32,
+    /// How far it is heard, in world units; 0 keeps the profile's own reach
+    /// (`PlaySound`'s `radius`). Not for a sound at a player's ears.
+    #[serde(default)]
+    pub radius: f32,
 }
 
 /// The loudest an Add-On may ask for: twice as authored.
 pub const MAX_SOUND_VOLUME: f32 = 2.0;
+/// The pitch range an Add-On may ask for: two octaves either way.
+pub const SOUND_PITCH: std::ops::RangeInclusive<f32> = 0.25..=4.0;
+/// The farthest an Add-On may ask a sound to carry.
+pub const MAX_SOUND_RADIUS: f32 = 1000.0;
 fn full_volume() -> f32 {
     1.0
 }
@@ -63,8 +75,12 @@ impl ScriptOp for Sound {
             profile,
             at,
             volume,
+            pitch,
+            radius,
         } = self;
         (0.0..=MAX_SOUND_VOLUME).contains(volume)
+            && SOUND_PITCH.contains(pitch)
+            && (0.0..=MAX_SOUND_RADIUS).contains(radius)
             && !profile.is_empty()
             && profile.len() <= 128
             && !profile.chars().any(char::is_control)

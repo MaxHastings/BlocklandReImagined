@@ -166,6 +166,11 @@ pub struct State {
     pub up: Option<usize>,
     pub ammo: Option<usize>,
     pub no_ammo: Option<usize>,
+    /// The archetype laid over the holder's body while the image is in this
+    /// state, in place of the image's own `stance` for that body: the
+    /// movement set of a grenade in hand, then of one with its pin pulled.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stance: BTreeMap<String, String>,
     /// Where the state goes while the image in hand is loaded or not
     /// (`stateTransitionOnLoaded`, `stateTransitionOnNotLoaded`), which a
     /// rule sets with `set_image_loaded` (v20's `setImageLoaded`). Checked
@@ -238,6 +243,11 @@ pub struct Cue {
     pub sequence: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sound: String,
+    /// The image throws its shell (casing) at this time, in place of at the
+    /// state's start (`eject_shell`): where the clip ejects it
+    /// (`AnimNotify_ShellEject`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub eject_shell: bool,
 }
 impl Cue {
     /// The most cues a state has.
@@ -250,8 +260,8 @@ impl Cue {
                 && self.thread.is_none_or(|t| t <= 3)
                 && self.thread.is_some() != self.sequence.is_empty()
                 && is_sequence_name(&self.sequence)
-                && (self.thread.is_some() || !self.sound.is_empty()),
-            "Invalid state cue: up to {} ms, thread 0 to 3 with a sequence, or a sound",
+                && (self.thread.is_some() || !self.sound.is_empty() || self.eject_shell),
+            "Invalid state cue: up to {} ms, thread 0 to 3 with a sequence, a sound, or a shell ejected",
             Self::MAX_AFTER_MS
         );
         Ok(())
@@ -476,6 +486,58 @@ pub struct Zoom {
     /// `inhale` alternate every half `period` (AA's `BreatheCycle`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub breath: Option<Breath>,
+    /// Aiming through the weapon's own sights: the held model, in the eye's
+    /// frame, moves to `sights` over its `seconds` as the aim comes up and
+    /// back as it goes, while the view zooms to `fov` and the weapon and
+    /// its flash stay drawn (a model with real iron sights, no `overlay`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sights: Option<Sights>,
+}
+/// A point in a model node's own frame ([`Image::first_person_offsets`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeOffset {
+    /// Moved by this much, world units.
+    #[serde(default)]
+    pub offset: [f32; 3],
+    /// Turned by this much, Euler degrees in x, y, z order.
+    #[serde(default)]
+    pub rotation_degrees: [f32; 3],
+}
+impl NodeOffset {
+    fn valid(&self) -> bool {
+        self.offset.iter().all(|v| v.is_finite() && v.abs() <= 100.)
+            && self.rotation_degrees.iter().all(|v| v.is_finite())
+    }
+}
+/// Where the held model sits to look down its sights ([`Zoom::sights`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sights {
+    /// Moved by this much in the view's frame (x right, y up, -z ahead), world units.
+    #[serde(default)]
+    pub offset: [f32; 3],
+    /// Turned by this much about the eye, Euler degrees in x, y, z order.
+    #[serde(default)]
+    pub rotation_degrees: [f32; 3],
+    /// Seconds to bring the weapon up to the sights, and back: 0 to 5.
+    pub seconds: f32,
+}
+impl Sights {
+    fn validate(&self) -> std::result::Result<(), String> {
+        let ok = self.offset.iter().all(|v| v.is_finite() && v.abs() <= 10.)
+            && self
+                .rotation_degrees
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 180.)
+            && self.seconds.is_finite()
+            && (0. ..=5.).contains(&self.seconds);
+        if ok {
+            Ok(())
+        } else {
+            Err("sights: offset within 10, rotation within 180 degrees, seconds 0 to 5".into())
+        }
+    }
 }
 /// Breathing sounds while aiming ([`Zoom::breath`]): sound profile names,
 /// heard only by the player aiming.
@@ -593,6 +655,9 @@ impl Zoom {
         }
         if let Some(b) = &self.breath {
             b.validate()?;
+        }
+        if let Some(s) = &self.sights {
+            s.validate()?;
         }
         Ok(())
     }
@@ -1123,6 +1188,12 @@ pub struct Image {
     /// Logical effect to authored effect for the local first-person model.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub first_person_effects: BTreeMap<String, String>,
+    /// Where an effect or shell leaves the local first-person model from its
+    /// node, by the logical attachment name (`muzzlePoint`, `ejectPoint`):
+    /// moved and turned in the node's own frame, as a muzzle flash that is
+    /// attached to a bone with an offset (`_FPMuzzleFlashOffset`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub first_person_offsets: BTreeMap<String, NodeOffset>,
     /// Euler XYZ degrees in the original Z-up frame, explicitly transformed by presentation.
     pub source_rotation_degrees: [f32; 3],
     pub correct_muzzle: bool,
@@ -1211,6 +1282,24 @@ pub struct Image {
     /// image's trigger for one tick; both hands share the holder's ammo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub left_image: Option<String>,
+    /// The archetype laid over the holder's body while this image is in
+    /// their right hand, by the body's archetype id (`push_archetype`'s
+    /// effect, kept by the engine so a switch of tool lifts it): a stance
+    /// for a held grenade. A body with no entry keeps its own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stance: BTreeMap<String, String>,
+    /// The state (an index into `states`) the image goes to when its holder
+    /// asks for another tool: it plays out, and the change comes when it
+    /// reaches a state that allows one, so a weapon is put down before the
+    /// next comes up. The tool asked for again while it plays is raised
+    /// from `redraw`. None changes at once, as v20 does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lower: Option<usize>,
+    /// The state (an index) a draw starts in when the holder has already
+    /// drawn this image since they spawned: the quick raise after the first
+    /// draw's long one. None always starts in state 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redraw: Option<usize>,
     /// Rounds in a magazine and a reserve to reload it from, kept by the
     /// engine for every gun that declares one: tactical packs' magazines
     /// (Tier+Tactical's `ammo` system, the Adventure Pack's), in data.
@@ -4427,6 +4516,21 @@ impl Pack {
                     );
                 }
             }
+            ensure!(
+                image.first_person_offsets.len() <= 16
+                    && image
+                        .first_person_offsets
+                        .iter()
+                        .all(|(name, o)| !name.is_empty() && name.len() <= 64 && o.valid()),
+                "Invalid first-person attachment offsets"
+            );
+            ensure!(
+                [image.lower, image.redraw]
+                    .into_iter()
+                    .flatten()
+                    .all(|index| index < image.states.len()),
+                "Invalid lower or redraw state"
+            );
             for p in image.projectile_refs() {
                 ensure!(
                     self.projectiles.contains_key(p) || self.external_projectiles.contains(p),
