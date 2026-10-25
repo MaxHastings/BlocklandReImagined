@@ -368,8 +368,12 @@ const PCSS_FILTER_TAPS:i32=16;
 // the ordinary 3x3 filter's softest edge.
 const PCSS_MAX_TEXELS:f32=10.0;
 const PCSS_MIN_TEXELS:f32=1.5;
-// Balanced search radius for localizing blocker estimation (prevents uniform blur)
-const PCSS_BASE_SEARCH_TEXELS:f32=4.0;
+// The map layer's blocker search reaches this many texels, and its filter
+// disc grows this much wider per unit of blocker distance and may reach this
+// many times the cascades' own limit: terrain shadows fall on far surfaces.
+const PCSS_MAP_SEARCH_TEXELS:f32=4.0;
+const PCSS_MAP_WIDEN:f32=3.0;
+const PCSS_MAP_MAX_SCALE:f32=1.5;
 
 // A pixel's own noise, so taps rotate differently from pixel to pixel.
 var<private> sun_pixel:vec2<f32>;
@@ -506,13 +510,16 @@ fn map_pcss_lit(c:CascadeCoord)->f32 {
     let last=i32(size)-1;
     let z_minus_bias=z-bias;
 
+    // The slope is per unit of cascade depth; the map layer's depth is
+    // rescaled from it.
+    let slope=c.slope*shadows.map_scale[c.cascade];
     var blocker_sum=0.0;
     var blockers=0.0;
-    let base_search_over_size=PCSS_BASE_SEARCH_TEXELS/size;
+    let base_search_over_size=PCSS_MAP_SEARCH_TEXELS/size;
     for (var i=0;i<PCSS_SEARCH_TAPS;i+=1) {
         let offset=pcss_disc(i,PCSS_SEARCH_TAPS,angle)*base_search_over_size;
         let uv=c.uv+offset;
-        let tap_z=z_minus_bias+dot(c.slope,offset);
+        let tap_z=z_minus_bias+dot(slope,offset);
         let texel_at=clamp(vec2<i32>(floor(uv*size)),vec2<i32>(0),vec2<i32>(last));
         let d=textureLoad(shadow_map,texel_at,layer,0);
         if d<tap_z {
@@ -523,15 +530,14 @@ fn map_pcss_lit(c:CascadeCoord)->f32 {
     if blockers==0.0 {return 1.0;}
     let blocker_distance=(z-blocker_sum/blockers)/scale;
 
-    // Scale up the map penumbra radius so terrain shadows blur just as smoothly as objects/bricks
-    let radius=clamp(blocker_distance*shadows.params.w/texel*3.0,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS*1.5);
+    let radius=clamp(blocker_distance*shadows.params.w/texel*PCSS_MAP_WIDEN,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS*PCSS_MAP_MAX_SCALE);
 
     var lit=0.0;
     let radius_over_size=radius/size;
     let filter_weight_scale=1.0/f32(PCSS_FILTER_TAPS);
     for (var i=0;i<PCSS_FILTER_TAPS;i+=1) {
         let offset=pcss_disc(i,PCSS_FILTER_TAPS,angle)*radius_over_size;
-        let tap_z=z_minus_bias+dot(c.slope,offset);
+        let tap_z=z_minus_bias+dot(slope,offset);
         lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,c.uv+offset,layer,tap_z);
     }
     return lit*filter_weight_scale;
@@ -1505,7 +1511,7 @@ fn plasma_surface(v:VertexOut)->vec4<f32> {
 }
 fn shade_surface(v:VertexOut)->vec4<f32> {
     if v.clip<0.0 {discard;}
-                       sun_pixel=v.position.xy;
+    sun_pixel=v.position.xy;
     // The sky (faces, clouds, fog backdrop) is what lies behind the world:
     // everything else fades out into it toward the visible distance.
     if material[0].x!=4.0 && material[0].x!=5.0

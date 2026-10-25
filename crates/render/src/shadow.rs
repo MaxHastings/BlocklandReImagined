@@ -169,7 +169,7 @@ pub struct ShadowSettings {
 impl ShadowSettings {
     pub const BEST: Self = Self {
         cascades: 4,
-        resolution: 4096, // Upgraded to 4K for ultra-crisp shadows
+        resolution: 2048,
         distance: 320.0,
         lamps: 4,
         lamp_resolution: 1024,
@@ -179,10 +179,10 @@ impl ShadowSettings {
     };
     pub const HIGH: Self = Self {
         cascades: 3,
-        resolution: 2048, // Former BEST setting moved here
+        resolution: 2048,
         distance: 240.0,
         lamps: 2,
-        lamp_resolution: 1024,
+        lamp_resolution: 512,
         light_cubes: false,
         soft_cubes: 12,
         pcss: false,
@@ -1954,29 +1954,26 @@ mod tests {
         // and the map: 12 at Best).
         let best = ShadowSettings::BEST;
         assert_eq!(best.lamp_layers(), 10);
-        assert_eq!(best.lamp_tile(0), (12, [0, 0, 2048]));
-        assert_eq!(best.lamp_tile(5), (13, [2048, 0, 2048]));
-        assert_eq!(best.lamp_tile(16), (16, [0, 0, 2048]));
+        assert_eq!(best.lamp_tile(0), (12, [0, 0, 1024]));
+        assert_eq!(best.lamp_tile(5), (13, [1024, 0, 1024]));
+        assert_eq!(best.lamp_tile(16), (16, [0, 0, 1024]));
         // Moving casters' coarser faces follow in layers of their own.
-        assert_eq!(best.lamp_dynamic_tile(0), (18, [0, 0, 1024]));
-        assert_eq!(best.lamp_dynamic_tile(9), (18, [1024, 2048, 1024]));
+        assert_eq!(best.lamp_dynamic_tile(0), (18, [0, 0, 512]));
+        assert_eq!(best.lamp_dynamic_tile(9), (18, [512, 1024, 512]));
         // Then the map's faces, as coarse.
-        assert_eq!(best.lamp_map_tile(0), (20, [0, 0, 1024]));
-        assert_eq!(best.lamp_map_tile(23), (21, [3072, 1024, 1024]));
+        assert_eq!(best.lamp_map_tile(0), (20, [0, 0, 512]));
+        assert_eq!(best.lamp_map_tile(23), (21, [1536, 512, 512]));
         assert_eq!(ShadowSettings::MEDIUM.lamp_layers(), 4);
         assert_eq!(ShadowSettings::LOW.lamp_layers(), 0);
-        // Dynamic: 24 lights' cubes after the lamps, 16 faces of 1024 a layer.
+        // Dynamic: 24 lights' cubes after the lamps, 16 faces of 512 a layer.
         assert_eq!(best.cube_layers(), 0);
         let dynamic = ShadowSettings {
             light_cubes: true,
             ..best
         };
-        assert_eq!(
-            (dynamic.cube_resolution(), dynamic.cube_layers()),
-            (1024, 9)
-        );
-        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 1024]));
-        assert_eq!(dynamic.cube_tile(143), (30, [3072, 3072, 1024]));
+        assert_eq!((dynamic.cube_resolution(), dynamic.cube_layers()), (512, 9));
+        assert_eq!(dynamic.cube_tile(0), (22, [0, 0, 512]));
+        assert_eq!(dynamic.cube_tile(143), (30, [1536, 1536, 512]));
         let low = ShadowSettings {
             light_cubes: true,
             ..ShadowSettings::LOW

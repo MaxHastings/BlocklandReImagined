@@ -39,9 +39,9 @@ instead of one fixed-width filter.
   checkbox (added to the Shadow Quality section under its radios, labeled
   Soft Sun Shadows), the pref, and `Graphics::shadows.pcss`. Auto Quality does
   not touch it and the Low/Medium/High/Ultra presets do not set it.
-- `crates/render/src/shadow.rs`: the Best shadow preset is now a 4096 map
-  with 2048 lamp faces, and High's lamp faces are 1024 (what Best used to
-  have), so the softer edges have texels to work with.
+- `crates/render/src/shadow.rs`: `ShadowSettings::pcss` and `PCSS_SUN_TAN`.
+  Shadow map sizes are unchanged (the first draft raised Best to 4096; that
+  quadrupled shadow memory for everyone, so it was reverted on merge).
 
 ## Evidence
 
@@ -74,6 +74,5 @@ Commands: see the PR description for the exact `cargo test`, `fmt` and
   the label is not clipped.
 - Cost is roughly 4x the sun-shadow texture reads of the 3x3 filter, and wide
   penumbrae show some grain (no temporal accumulation); the knobs are the
-  `PCSS_*` consts in the shaders and `PCSS_SUN_TAN`. A 4096 Best map uses
-  four times the shadow memory of 2048.
+  `PCSS_*` consts in the shaders and `PCSS_SUN_TAN`.
 - Candidate follow-ups: enable it in the Ultra preset, a softness slider.
