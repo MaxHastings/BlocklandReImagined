@@ -974,6 +974,7 @@ pub(super) fn mode_settings(
         vehicle_return_ms: m.vehicle_return_seconds.map(ms),
         death_view_ms: ms(m.death_view_seconds),
         hold_join_spawn: m.hold_first_spawn,
+        announce_bots: m.announce_bots,
     }
 }
 
@@ -1236,6 +1237,12 @@ impl Session {
         }
     }
 
+    /// Whether `game`'s chat and kill feed name bots
+    /// ([`mg::Settings::announce_bots`]); outside a game, always.
+    fn announces_bots(&self, game: Option<GameId>) -> bool {
+        game.and_then(|g| self.minigames.game(g).ok())
+            .is_none_or(|g| g.settings.announce_bots)
+    }
     /// A death line to a mini-game's members, for their kill feeds or chat;
     /// outside a game, everyone's chat as [`Self::chat_game`] sends it.
     pub(super) fn kill_game(&mut self, game: Option<GameId>, kill: KillLine) {
@@ -1243,6 +1250,14 @@ impl Session {
         let Some(game) = game else {
             return self.system_chat(kill.line);
         };
+        // A game that names only humans leaves out a kill none took part in.
+        let human = |o: OwnerId| !self.bots.is_bot(o);
+        if !self.announces_bots(Some(game))
+            && !human(kill.victim)
+            && !kill.killer.is_some_and(human)
+        {
+            return;
+        }
         let to: Vec<OwnerId> = self
             .minigames
             .game(game)
@@ -2422,9 +2437,12 @@ impl Session {
                     }
                     // A bot the rules add comes and goes unannounced
                     // (Slayer's `addMember` greets only connections).
-                    let quiet = self.bots.rules_package(owner).is_some();
+                    let quiet_in = |session: &Self, game: GameId| {
+                        session.bots.rules_package(owner).is_some()
+                            || session.bots.is_bot(owner) && !session.announces_bots(Some(game))
+                    };
                     if let Some(Some(old)) = previous
-                        && !quiet
+                        && !quiet_in(self, old)
                         && Some(old) != game
                         && self.minigames.game(old).is_ok()
                     {
@@ -2434,7 +2452,7 @@ impl Session {
                             format!("{}{name} left the mini-game.", color_code(1)),
                         );
                     }
-                    if let Some(new) = game.filter(|_| !quiet) {
+                    if let Some(new) = game.filter(|g| !quiet_in(self, *g)) {
                         self.chat_game(
                             Some(new),
                             Some(owner),

@@ -22,6 +22,8 @@ const MAX_PENDING: usize = 512;
 const PENDING_SECONDS: f64 = 0.5;
 /// How far a casing stopped at a wall stands off it, native units.
 const CLIP_MARGIN: f32 = 0.02;
+/// A surface this level (within 60 degrees of up) is a floor a casing can lie on.
+const FLOOR_NORMAL_Y: f32 = 0.5;
 const FIXED_STEP: f64 = 1. / 120.;
 const MAX_FRAME_SECONDS: f64 = 0.25;
 /// Most images with a casing of their own.
@@ -942,6 +944,17 @@ impl WeaponDebris {
                         body.position =
                             from.lerp(to, hit.fraction.clamped(0., 1.)) + normal * CLIP_MARGIN;
                         let vn = body.velocity.dot(normal);
+                        // The speed a fall through the contact separation
+                        // gives: an impact slower than this is noise, and a
+                        // rebound that cannot clear the separation again is
+                        // the casing lying on the surface.
+                        let separation_speed =
+                            (2. * match d.acceleration {
+                                Some(a) => Vec3::from_array(a).length(),
+                                None => 9.81 * d.gravity_multiplier,
+                            } * CLIP_MARGIN)
+                                .sqrt();
+                        let landing = -vn > separation_speed;
                         if vn < 0. {
                             let normal_v = normal * vn;
                             let tangent = body.velocity - normal_v;
@@ -954,7 +967,7 @@ impl WeaponDebris {
                             .as_ref()
                             .and_then(|kind| d.landing_sounds.get(kind))
                             .unwrap_or(&d.sound);
-                        if !sound.is_empty() && self.sounds.len() < 16 {
+                        if landing && !sound.is_empty() && self.sounds.len() < 16 {
                             self.sounds.push((sound.clone(), body.position.to_array()));
                         }
                         if d.respin_on_bounce
@@ -963,12 +976,14 @@ impl WeaponDebris {
                             let mut rng = Deterministic(id ^ u64::from(body.age.to_bits()) << 32);
                             (body.spin_axis, body.spin) = spin_about(&mut rng, turns);
                         }
-                        if d.rest_speed.is_some_and(|r| body.velocity.length() < r) {
+                        let on_floor = normal.y > FLOOR_NORMAL_Y
+                            && body.velocity.dot(normal) <= separation_speed;
+                        if on_floor || d.rest_speed.is_some_and(|r| body.velocity.length() < r) {
                             body.settled = true;
                             body.velocity = Vec3::ZERO;
                             self.diagnostics.settled += 1;
                         }
-                        if body.bounces_left == 0 && d.static_on_max_bounce {
+                        if !body.settled && body.bounces_left == 0 && d.static_on_max_bounce {
                             body.settled = true;
                             body.velocity = Vec3::ZERO;
                             self.diagnostics.settled += 1;
@@ -1428,6 +1443,71 @@ mod tests {
         world.advance(0.5, |_, _, _| None, |_, _| None)?;
         assert_eq!(world.model_instances().next().unwrap().1.w_axis, before);
         assert!(world.take_sounds().is_empty());
+        Ok(())
+    }
+    /// A casing whose image sets a rest speed of zero still lies down once what
+    /// gravity gives it in a step is all its bounce has left, and the
+    /// ground is struck once for each landing, not once a frame.
+    #[test]
+    fn a_casing_whose_rest_speed_is_zero_lies_still_and_sounds_only_landings() -> Result<()> {
+        let json = serde_json::json!({
+            "schema_version": 5, "id": "kit", "items": {},
+            "images": { "kit:image/rifle": { "id": "kit:image/rifle", "name": "rifle",
+                "shell_mesh": { "model": "kit/casing", "exit_direction": [0.0, 1.0, 0.0],
+                    "velocity": 2.0, "velocity_variance": 0.5, "exit_variance": [5.0, 10.0], "acceleration": [0.0, -30.0, 0.0],
+                    "damping": [0.5, 0.0, 0.5], "spin": [1.0, 1.0, 1.0],
+                    "respin_on_bounce": true, "bounce": 0.4, "rest_speed": 0.0,
+                    "lifetime": 10.0, "sound": "kit:casing" },
+                "states": [{ "name": "Ready" }] } }
+        });
+        let pack = bri_weapons::Pack::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        let mut world = WeaponDebris::new(
+            WeaponDebrisAssets::stock_for_test(),
+            WeaponDebrisLimits::default(),
+        )?;
+        assert!(world.set_casings(&pack, |m| m == "kit/casing").is_empty());
+        world.cues(
+            &[shell_cue(1, "kit:image/rifle")],
+            |_, _, _| Some(Mat4::from_translation(Vec3::Y)),
+            |_| (Vec3::X * 12., 0.),
+        )?;
+        let building = crate::building::Building::new(
+            bri_sim::definitions::Definitions::default(),
+            vec![rapier3d::prelude::ColliderBuilder::trimesh(
+                vec![
+                    Vec3::new(-100., 0., -100.),
+                    Vec3::new(100., 0., -100.),
+                    Vec3::new(100., 0., 100.),
+                    Vec3::new(-100., 0., 100.),
+                ],
+                vec![[0, 2, 1], [0, 3, 2]],
+            )?],
+        )?;
+        let mut sounds = 0;
+        for _ in 0..600 {
+            world.advance(
+                1. / 60.,
+                |_, _, _| None,
+                |a, b| {
+                    let length = a.distance(b);
+                    if length < 1e-5 {
+                        return None;
+                    }
+                    let (hit, surface) = building.surface_at(a, b).ok()??;
+                    Some(DebrisHit {
+                        fraction: (hit.distance / length).clamped(0., 1.),
+                        normal: hit.normal.normalize_or(Vec3::Y),
+                        surface: Some(surface.to_owned()),
+                    })
+                },
+            )?;
+            sounds += world.take_sounds().len();
+        }
+        assert_eq!(world.diagnostics.settled, 1, "it lies down");
+        assert!(
+            (1..=8).contains(&sounds),
+            "a landing sounds once, not every frame: {sounds}"
+        );
         Ok(())
     }
 }

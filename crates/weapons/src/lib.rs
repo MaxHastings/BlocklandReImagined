@@ -2805,6 +2805,11 @@ pub struct Item {
     /// did (Slayer CTF's waving flag). Empty: it lies still.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub idle: String,
+    /// A dropped copy stays where it lies until someone takes it or the
+    /// world resets, rather than popping after ten seconds as v20's drops
+    /// do (a rifle a soldier put down in a mission).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lingers: bool,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -2821,6 +2826,7 @@ impl Default for Item {
             label: String::new(),
             rotate: false,
             idle: String::new(),
+            lingers: false,
         }
     }
 }

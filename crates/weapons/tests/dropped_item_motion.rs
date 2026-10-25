@@ -192,3 +192,32 @@ fn moving_drop_keeps_bounce_friction_pickup_and_timeout() {
     }
     assert!(w.drops().next().is_none());
 }
+
+#[test]
+fn a_lingering_item_stays_where_it_was_dropped_and_survives_a_save() {
+    let mut pack = testing::pack();
+    let item = pack
+        .items
+        .values()
+        .find(|i| i.can_drop)
+        .map(|i| i.id.clone())
+        .unwrap();
+    pack.items.get_mut(&item).unwrap().lingers = true;
+    let mut w = WeaponsWorld::new(pack.clone()).unwrap();
+    let actor = ActorId(1);
+    w.add_actor(actor, 5).unwrap();
+    w.give(actor, &item).unwrap();
+    let lingering = w.drop_item(actor, 0).unwrap();
+    let mut ground = Scene {
+        floor: Some(-100.),
+        ..Default::default()
+    };
+    for _ in 0..runtime::MAX_DROP_TICKS + 10 {
+        w.step(&mut ground);
+    }
+    assert!(w.drops().any(|d| d.id == lingering), "it pops like v20's");
+    let bytes = serde_json::to_vec(&w.save()).unwrap();
+    let mut restored = WeaponsWorld::restore(pack, &bytes).unwrap();
+    assert!(restored.drops().any(|d| d.id == lingering));
+    restored.pickup(actor, lingering).unwrap();
+}

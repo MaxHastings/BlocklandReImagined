@@ -369,6 +369,7 @@ impl MinigamesWorld {
             settings.vehicle_return_ms = old.vehicle_return_ms;
             settings.death_view_ms = old.death_view_ms;
             settings.hold_join_spawn = old.hold_join_spawn;
+            settings.announce_bots = old.announce_bots;
         }
     }
     pub(crate) fn configure(
@@ -504,14 +505,23 @@ impl MinigamesWorld {
             return Err(Error::Capacity);
         }
         let mut out = Vec::new();
-        if let Command::Create { actor, .. }
-        | Command::Join { actor, .. }
-        | Command::Leave { actor }
-        | Command::Accept { actor, .. } = command
-            && self.server_game().is_some()
-        {
-            self.player(actor)?;
-            return Err(Error::ServerGame);
+        // The server's game keeps its players in it; only an administrator
+        // may step out of it to build, and back in.
+        if let Some(server) = self.server_game() {
+            let membership = match &command {
+                Command::Create { actor, .. } | Command::Accept { actor, .. } => {
+                    Some((*actor, false))
+                }
+                Command::Join { actor, game } => Some((*actor, *game == server)),
+                Command::Leave { actor } => Some((*actor, true)),
+                _ => None,
+            };
+            if let Some((actor, admin_may)) = membership
+                && !(admin_may && self.player(actor)?.admin)
+            {
+                self.player(actor)?;
+                return Err(Error::ServerGame);
+            }
         }
         match command {
             Command::Create {

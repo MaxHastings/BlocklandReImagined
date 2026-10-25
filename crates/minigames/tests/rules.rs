@@ -864,6 +864,31 @@ fn catalog_accepts_add_on_content_ids() {
 }
 
 #[test]
+fn an_administrator_may_leave_the_servers_game_and_return() {
+    let mut w = world(PolicyMode::Internet);
+    let admin = connect(&mut w, 1);
+    let member = connect(&mut w, 2);
+    let game = w.host_create(3, Settings::default()).unwrap();
+    for p in [admin, member] {
+        w.host_place(p, Some(game)).unwrap();
+    }
+    w.set_admin(admin, true).unwrap();
+    assert_eq!(
+        w.execute(Command::Leave { actor: member }),
+        Err(Error::ServerGame)
+    );
+    w.execute(Command::Leave { actor: admin }).unwrap();
+    assert_eq!(w.player(admin).unwrap().game, None);
+    assert_eq!(w.player(member).unwrap().game, Some(game));
+    // Back in once the join cooldown has run; no other game is theirs to join.
+    for _ in 0..600 {
+        w.step().unwrap();
+    }
+    w.execute(Command::Join { actor: admin, game }).unwrap();
+    assert_eq!(w.player(admin).unwrap().game, Some(game));
+}
+
+#[test]
 fn a_game_modes_minigame_belongs_to_the_server_and_holds_everyone() {
     let mut w = world(PolicyMode::Internet);
     let a = connect(&mut w, 1);
