@@ -59,7 +59,13 @@ pub fn apply_with(
         );
         material.kind = crate::scene::MaterialKind::ActorLit;
         material.parameters = Some([
-            [lit.sun_gain, lit.light_gain, 0.0, 0.0],
+            // z: the vertex colour holds the room's light (a baked mesh); w: the glow.
+            [
+                lit.sun_gain,
+                lit.light_gain,
+                f32::from(u8::from(source.vertex_light)),
+                lit.glow,
+            ],
             [0.0; 4],
             [0.0; 4],
             [0.0; 4],

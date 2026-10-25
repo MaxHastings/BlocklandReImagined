@@ -617,7 +617,7 @@ impl App {
             .upload(renderer, frame.device, frame.queue)?;
         self.fx
             .map_movers
-            .upload(renderer, frame.device, frame.queue)?;
+            .upload(renderer, frame.device, frame.queue, &item_light)?;
         let shells: Vec<_> = self
             .fx
             .weapon_shells
