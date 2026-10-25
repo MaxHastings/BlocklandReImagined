@@ -1649,6 +1649,8 @@ pub enum PanelItemView {
         columns: Vec<u16>,
         /// A picture at the left of each row, by row (missing: none).
         icons: Vec<Option<PanelPicture>>,
+        /// Where it stands in the panel; none: it flows down the panel.
+        place: Option<PanelPlace>,
     },
     /// A line to type in, with a label.
     Field {
@@ -1677,6 +1679,16 @@ pub struct PanelTextView {
     pub align: PanelAlign,
     /// A scrolling box this tall; none: the text's own height.
     pub height: Option<u16>,
+    /// Where it stands in the panel; none: it flows down the panel.
+    pub place: Option<PanelPlace>,
+}
+/// A text or list item's top-left corner in the panel and, if given, its
+/// width (default the panel's inner width).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelPlace {
+    pub x: i32,
+    pub y: i32,
+    pub width: Option<u16>,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PanelAlign {

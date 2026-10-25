@@ -343,17 +343,36 @@ impl PanelItem {
     /// What is wrong with this item, if anything.
     fn problem(&self) -> Option<String> {
         let image = self.kind == PanelKind::Image;
+        let placeable = matches!(self.kind, PanelKind::Text | PanelKind::List);
         let extras = !self.texture.is_empty()
-            || self.x.is_some()
-            || self.y.is_some()
-            || self.w.is_some()
             || self.h.is_some()
-            || self.tint.is_some();
+            || self.tint.is_some()
+            || (!placeable && (self.x.is_some() || self.y.is_some() || self.w.is_some()));
         if !image && extras {
             return Some(format!(
-                "a {:?} item has no texture, place or tint",
-                self.kind
+                "a {:?} item has no texture, size or tint{}",
+                self.kind,
+                if placeable { "" } else { ", and no place" }
             ));
+        }
+        // A text or list item is placed by x and y (both) and may be given
+        // a width; left unplaced it flows down the panel.
+        if placeable
+            && (self.x.is_some() != self.y.is_some()
+                || (self.w.is_some() && self.x.is_none())
+                || self.w.is_some_and(|w| w == 0)
+                || self.x.is_some_and(|x| x < 0)
+                || self.y.is_some_and(|y| y < 0)
+                || i32::from(self.x.unwrap_or(0)) + i32::from(self.w.unwrap_or(0))
+                    > i32::from(*PANEL_WIDTH.end())
+                || self
+                    .y
+                    .is_some_and(|y| i32::from(y) > i32::from(*PANEL_HEIGHT.end())))
+        {
+            return Some(
+                "a text or list place is x with y inside the largest panel, and a width of at least 1 only with a place"
+                    .into(),
+            );
         }
         let styled = self.size.is_some()
             || !self.font.is_empty()
@@ -832,5 +851,32 @@ mod tests {
         ] {
             assert!(!panel.accepts(&bad), "{bad:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod place_tests {
+    use super::*;
+
+    fn item(json: &str) -> Result<PanelItem, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
+    #[test]
+    fn text_and_list_items_may_be_placed_but_not_pictured() {
+        let text = item(r#"{"kind":"text","text":"Hi","x":20,"y":30,"w":300}"#).unwrap();
+        assert_eq!(text.problem(), None);
+        let list =
+            item(r#"{"kind":"list","id":"a","rows":[],"x":0,"y":40,"w":200,"height":80}"#).unwrap();
+        assert_eq!(list.problem(), None);
+        let half = item(r#"{"kind":"text","text":"Hi","x":20}"#).unwrap();
+        assert!(half.problem().is_some());
+        let wide = item(r#"{"kind":"text","text":"Hi","w":50}"#).unwrap();
+        assert!(wide.problem().is_some());
+        let picture =
+            item(r#"{"kind":"text","text":"Hi","x":1,"y":1,"texture":"a:texture/b"}"#).unwrap();
+        assert!(picture.problem().is_some());
+        let field = item(r#"{"kind":"field","id":"f","x":1,"y":1}"#).unwrap();
+        assert!(field.problem().is_some());
     }
 }
