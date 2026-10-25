@@ -121,7 +121,6 @@ jobs:
           cache-on-failure: true
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Provision software graphics for offscreen tests
-        if: env.TEST_TIER != 'pr'
         run: ./tools/setup_ci_gpu.ps1
       - name: Test (${{ env.TEST_TIER }} tier, shard ${{ matrix.shard }} of 4)
         run: python tools/gate.py --ci-test --tier ${{ env.TEST_TIER }} --shard ${{ matrix.shard }}/4 --binary-timeout 30
