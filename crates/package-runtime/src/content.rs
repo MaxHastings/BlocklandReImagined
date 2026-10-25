@@ -1904,6 +1904,25 @@ pub struct ArchetypeSounds {
     /// the clip has run `seconds` (at most 32 clips; 0 to 60 s).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub clips: BTreeMap<String, ClipSoundDef>,
+    /// Footfalls its clips mark, by clip name, in place of the stride timer
+    /// (see the content kinds document: `steps`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub steps: BTreeMap<String, Vec<StepEventDef>>,
+    /// Frames a second of the clips, for steps marked by `frame`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f32>,
+}
+/// [`ArchetypeSounds::steps`]: one footfall of a clip, by `seconds` or `frame`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepEventDef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<u32>,
+    /// The body node that lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foot: Option<String>,
 }
 /// [`ArchetypeSounds::clips`]: a sound at a moment of a clip.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
