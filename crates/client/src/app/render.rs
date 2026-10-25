@@ -1028,6 +1028,18 @@ impl App {
                     || (others_see && elsewhere.sees_sphere(c, radius))
             };
             if !seen(center) && through.is_none_or(|c| !seen(c)) {
+                // A body culled where the game presents it in view is a
+                // body that cannot be seen: its sphere is not where it is.
+                if let Some(shown) = self.motion.presented().get(owner)
+                    && !own_hidden
+                    && in_view.sees_sphere(Vec3::from(shown.feet) + Vec3::Y, 0.1)
+                    && self.avatar.disagreed.insert(*owner)
+                {
+                    bri_console::warn(format!(
+                        "Body of player {owner} is culled though it is presented in view at {:?}: its sphere is at {center} radius {radius}",
+                        shown.feet
+                    ));
+                }
                 continue;
             }
             let full = avatar.needs_full_upload();
@@ -1035,7 +1047,14 @@ impl App {
                 continue;
             }
             let started = full.then(std::time::Instant::now);
-            avatar.build_pending(&self.avatar.avatar_assets)?;
+            // One body that cannot be built or uploaded is reported and not
+            // drawn; it does not stop the bodies after it.
+            if let Err(error) = avatar.build_pending(&self.avatar.avatar_assets) {
+                if self.avatar.disagreed.insert(*owner) {
+                    bri_console::warn(format!("Body of player {owner} is not drawn: {error:#}"));
+                }
+                continue;
+            }
             // Where it stands decides the ambient and suns a lit body takes:
             // its zone's, and the light of the room it stands in (the map's
             // baked volume) as a floor under the ambient, so a body in a lit
@@ -1056,7 +1075,17 @@ impl App {
                 .body_textures
                 .entry(avatar.model.clone())
                 .or_default();
-            avatar.upload_sharing(renderer, frame.device, frame.queue, Some(textures))?;
+            if let Err(error) =
+                avatar.upload_sharing(renderer, frame.device, frame.queue, Some(textures))
+            {
+                if self.avatar.disagreed.insert(*owner) {
+                    bri_console::warn(format!(
+                        "Body of player {owner} is not drawn: {error:#} (light {:?})",
+                        avatar.light
+                    ));
+                }
+                continue;
+            }
             if let Some(started) = started {
                 whole.done(started.elapsed());
             }

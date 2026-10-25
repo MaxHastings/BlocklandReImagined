@@ -912,7 +912,6 @@ impl AvatarAssets {
             instance: None,
             drawn_pose: None,
             posed_feet: None,
-            uploaded_feet: None,
             vertices_dirty: true,
             outfit,
             materials,
@@ -1022,7 +1021,6 @@ pub struct AvatarMesh {
     /// The feet the last pose was made for, and the feet the GPU instance
     /// last drew the body at: where the body should be and where it is.
     posed_feet: Option<Vec3>,
-    uploaded_feet: Option<Vec3>,
     /// `data` holds vertices not yet sent to the GPU.
     vertices_dirty: bool,
     outfit: Outfit,
@@ -1625,12 +1623,30 @@ impl AvatarMesh {
     pub fn disagreement(&self, shown: Vec3) -> Option<String> {
         let scale = self.model_transform.x_axis.truncate().length();
         let tolerance = bri_sim::player::nominal_middle(scale);
-        let posed = self.posed_feet;
-        let drawn = self.uploaded_feet;
         let far = |at: Option<Vec3>, from: Vec3| at.is_some_and(|at| at.distance(from) > tolerance);
         let model = self.model_transform.w_axis.truncate();
-        (far(posed, shown) || (self.instanced && far(drawn, model)) || far(posed, model))
-            .then(|| format!("presented at {shown}, posed for {posed:?}, body transform at {model}, drawn at {drawn:?}"))
+        // Where the GPU instance itself draws the body, not only what was
+        // last asked of it.
+        let instance = self.instance.as_ref().map(|i| {
+            i.transforms()
+                .first()
+                .map(|t| t.transform.w_axis.truncate())
+        });
+        let instanced = self.instanced
+            && match instance {
+                None => true,
+                Some(None) => true,
+                Some(Some(at)) => at.distance(model) > tolerance,
+            };
+        (far(self.posed_feet, shown) || instanced || far(self.posed_feet, model)).then(|| {
+            format!(
+                "presented at {shown}, posed for {:?}, body transform at {model}, drawn at {:?} by its instance ({} vertices, {} batches)",
+                self.posed_feet,
+                instance,
+                self.data.vertices.len(),
+                self.data.batches.len(),
+            )
+        })
     }
     /// A sphere round the drawn body (centre, radius), for culling.
     /// Where openings carry the body: the middle of a standing body of its
@@ -2835,7 +2851,6 @@ impl AvatarMesh {
                 Some(instance) => instance,
                 None => self.instance.insert(GpuInstances::new(device, 2)?),
             };
-            self.uploaded_feet = Some(self.model_transform.w_axis.truncate());
             let body = bri_render::scene::SceneTransform {
                 transform: self.model_transform,
                 tint: [1.0; 4],

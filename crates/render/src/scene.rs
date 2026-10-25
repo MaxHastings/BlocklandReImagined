@@ -1713,6 +1713,10 @@ impl GpuInstances {
         self.revision = next_unique();
         Ok(true)
     }
+    /// The transforms the last update wrote: where the instances draw.
+    pub fn transforms(&self) -> &[SceneTransform] {
+        &self.transforms
+    }
     /// Whether some instance is cut by a clip plane.
     pub fn clipped(&self) -> bool {
         !self.clips.is_empty()
