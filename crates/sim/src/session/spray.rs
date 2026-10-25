@@ -273,6 +273,7 @@ mod tests {
             ]),
             face: "smiley".into(),
             decal: "Alyx".into(),
+            dress: Default::default(),
         };
         let mut look = TempLook {
             color: None,

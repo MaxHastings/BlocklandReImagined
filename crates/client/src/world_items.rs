@@ -1261,6 +1261,7 @@ impl WorldItems {
                         parts: BTreeMap::new(),
                         face: String::new(),
                         decal: String::new(),
+                        dress: Default::default(),
                     }));
                 }
                 if mesh.data.vertices.is_empty() {

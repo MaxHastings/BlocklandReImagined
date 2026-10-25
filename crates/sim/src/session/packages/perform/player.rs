@@ -24,6 +24,14 @@ impl Perform for ops::SetAvatarParts {
         Ok(())
     }
 }
+impl Perform for ops::SetBodyDress {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetBodyDress { player, dress } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        peer.dress = dress;
+        Ok(())
+    }
+}
 impl Perform for ops::Teleport {
     fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
         let peer = session.peers.get(&self.player).context("No such player")?;

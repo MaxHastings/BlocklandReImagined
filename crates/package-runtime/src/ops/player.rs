@@ -789,6 +789,24 @@ impl ScriptOp for SetScale {
     }
 }
 
+/// Dress a player's Add-On body: a texture in place of each named
+/// material's (`skins`) and a drawn size (`scale`, AA's `DrawScale`: what
+/// the body collides with and how fast it moves do not change). One body
+/// then serves many looks. An empty dress gives the body its own again.
+/// Kept across respawns until changed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetBodyDress {
+    pub player: u64,
+    pub dress: bri_content::avatar::Dress,
+}
+impl ScriptOp for SetBodyDress {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_body_dress";
+    fn bounded(&self) -> bool {
+        self.dress.valid()
+    }
+}
+
 /// Bound how far a player's arms and head follow their look
 /// (`setLookLimits(%up, %down)`), as `[down, up]` positions from 0
 /// (all the way up) to 1, or `None` for the whole range. A new body

@@ -181,6 +181,7 @@ fn examples() -> Vec<Command> {
             colors: BTreeMap::from([("hat".into(), [0.5, 0.2, 0.1, 1.0])]),
             face: "smiley".into(),
             decal: "AAA-None".into(),
+            dress: Default::default(),
         }),
         Command::SaveBuild {
             events: true,

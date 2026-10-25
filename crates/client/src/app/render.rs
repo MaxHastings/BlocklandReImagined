@@ -30,7 +30,7 @@ impl App {
             view.vitals.get(&view.owner).is_none_or(|v| v.alive),
         );
         let third_person = stock_third_person || self.view.addon_camera;
-        let mut hidden = self.combat.hidden_bodies(&view.vitals);
+        let mut hidden = CombatPresentation::hidden_bodies(view);
         // Players whose archetype looks like a package model draw as it, in
         // place of the Blockhead; the local player's in first person only
         // in other views (mirrors, portals), as the Blockhead does.
@@ -715,7 +715,7 @@ impl App {
                 let image_meshes = self.world_items.held_image_meshes();
                 // A corpse past its timeout has no body left to pose: a
                 // ragdoll goes with it instead of lingering unseen.
-                let gone = self.combat.hidden_bodies(&view.vitals);
+                let gone = CombatPresentation::hidden_bodies(view);
                 let skeletons = if self.addons.client_code.poses_bodies() {
                     self.avatar
                         .avatars

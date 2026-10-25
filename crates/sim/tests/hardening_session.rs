@@ -776,6 +776,7 @@ fn avatar_and_forged_identity_fields_are_rejected() {
                 colors: [("hat".to_string(), [f32::NAN; 4])].into(),
                 face: "../../face".repeat(1000),
                 decal: String::new(),
+                dress: Default::default(),
             })
         )
         .is_err(),
