@@ -37,8 +37,8 @@ instead of one fixed-width filter.
   filter.
 - `crates/ui/src/screens/options.rs`, `crates/client/src/graphics.rs`: the
   checkbox (added to the Shadow Quality section under its radios, labeled
-  Soft Sun Shadows), the pref, and `Graphics::shadows.pcss`. Auto Quality does
-  not touch it and the Low/Medium/High/Ultra presets do not set it.
+  Soft Sun Shadows), the pref, and `Graphics::shadows.pcss`. Only the Ultra
+  quality preset turns it on; the others turn it off.
 - `crates/render/src/shadow.rs`: `ShadowSettings::pcss` and `PCSS_SUN_TAN`.
   Shadow map sizes are unchanged (the first draft raised Best to 4096; that
   quadrupled shadow memory for everyone, so it was reverted on merge).
@@ -75,4 +75,4 @@ Commands: see the PR description for the exact `cargo test`, `fmt` and
 - Cost is roughly 4x the sun-shadow texture reads of the 3x3 filter, and wide
   penumbrae show some grain (no temporal accumulation); the knobs are the
   `PCSS_*` consts in the shaders and `PCSS_SUN_TAN`.
-- Candidate follow-ups: enable it in the Ultra preset, a softness slider.
+- Candidate follow-up: a softness slider.

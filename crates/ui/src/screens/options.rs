@@ -192,6 +192,7 @@ struct Preset {
     shadows: i64,
     anti_aliasing: bool,
     brick_shadows: bool,
+    soft_sun_shadows: bool,
     anisotropy: f32,
     precipitation: bool,
     reflections: i64,
@@ -206,6 +207,7 @@ const PRESETS: &[Preset] = &[
         shadows: 4,
         anti_aliasing: false,
         brick_shadows: false,
+        soft_sun_shadows: false,
         anisotropy: 0.0,
         precipitation: false,
         reflections: 0,
@@ -216,6 +218,7 @@ const PRESETS: &[Preset] = &[
         shadows: 2,
         anti_aliasing: true,
         brick_shadows: false,
+        soft_sun_shadows: false,
         anisotropy: 3.0 / 15.0,
         precipitation: true,
         reflections: 1,
@@ -226,6 +229,7 @@ const PRESETS: &[Preset] = &[
         shadows: 0,
         anti_aliasing: true,
         brick_shadows: false,
+        soft_sun_shadows: false,
         anisotropy: DEFAULT_ANISOTROPY,
         precipitation: true,
         reflections: 2,
@@ -236,6 +240,7 @@ const PRESETS: &[Preset] = &[
         shadows: 0,
         anti_aliasing: true,
         brick_shadows: true,
+        soft_sun_shadows: true,
         anisotropy: 1.0,
         precipitation: true,
         reflections: 3,
@@ -250,6 +255,7 @@ const PRESET_PREFS: &[&str] = &[
     SHADOW_QUALITY,
     ANTI_ALIASING,
     BRICK_SHADOWS,
+    PCSS_SUN_SHADOWS,
     ANISOTROPY,
     PRECIPITATION,
     REFLECTIONS,
@@ -2060,6 +2066,7 @@ impl Options {
                     && p.lighting == mode
                     && p.anti_aliasing == on(ANTI_ALIASING)
                     && p.brick_shadows == on(BRICK_SHADOWS)
+                    && p.soft_sun_shadows == on(PCSS_SUN_SHADOWS)
                     && p.precipitation == on(PRECIPITATION)
                     && (p.anisotropy - anisotropy).abs() < 0.02
             })
@@ -2085,6 +2092,7 @@ impl Options {
         self.set_shadow_quality(p.shadows);
         self.check(ANTI_ALIASING, p.anti_aliasing);
         self.check(BRICK_SHADOWS, p.brick_shadows);
+        self.check(PCSS_SUN_SHADOWS, p.soft_sun_shadows);
         self.check(PRECIPITATION, p.precipitation);
         self.set_reflections(p.reflections);
         self.set_lighting(p.lighting);
