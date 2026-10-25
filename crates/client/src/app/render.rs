@@ -2219,9 +2219,11 @@ impl App {
         // a map change needs renderers built for the new map.
         // Colour-vision assistance is a pipeline constant, too.
         let vision = bri_ui::screens::options::color_vision(&self.ui.core.prefs);
+        let ramp = bri_ui::screens::options::display_ramp(&self.ui.core.prefs);
         let restart = std::mem::take(&mut self.gpu.gpu_restart);
         if restart
             || bri_render::color::color_vision() != vision
+            || bri_render::color::display_ramp() != ramp
             || self
                 .gpu
                 .renderer

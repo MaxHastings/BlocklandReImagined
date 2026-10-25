@@ -128,6 +128,14 @@ mod tests {
     }
 
     #[test]
+    fn the_ui_and_the_renderer_agree_on_the_identity_ramp() {
+        assert_eq!(
+            bri_ui::screens::options::DISPLAY_RAMP_NEUTRAL,
+            bri_render::color::RAMP_NEUTRAL
+        );
+    }
+
+    #[test]
     fn v20_filtering_prefs_select_sampler_state() {
         assert_eq!(graphics(&[]).filtering, TextureFiltering::default());
         assert_eq!(graphics(&[]).samples, 4);
