@@ -179,6 +179,10 @@ pub struct Mesh {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Primitive {
     pub material: Option<usize>,
+    /// The map zone these triangles sit in, when the map authors zones; a
+    /// zone is drawn only while the viewer can see into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<u16>,
     pub triangles: Vec<[u32; 3]>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

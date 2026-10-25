@@ -80,6 +80,7 @@ pub(crate) fn cuboid(min: Vec3, max: Vec3) -> SceneData {
             .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     data.batches.push(MeshBatch {
+        zone: None,
         indices: 0..data.indices.len() as u32,
         material: 0,
         center: ((min + max) * 0.5).to_array(),
@@ -264,6 +265,7 @@ pub(crate) fn floor(sun: Vec3, sun_color: f32) -> SceneData {
     }
     data.indices.extend([0, 1, 2, 0, 2, 3]);
     data.batches.push(MeshBatch {
+        zone: None,
         indices: 0..6,
         material: 0,
         center: [0.0; 3],
@@ -348,4 +350,47 @@ pub(crate) fn dynamic_floor(
     };
     assert!(DynamicSheet::equip(&[sheet], &mut data));
     data
+}
+
+/// The target read back as tightly packed rows, after `encoder` runs.
+pub(crate) fn read_back(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mut encoder: wgpu::CommandEncoder,
+    target: &wgpu::Texture,
+) -> Result<Vec<u8>> {
+    let (width, height) = (target.width(), target.height());
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        target.size(),
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    })?;
+    let mapped = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    Ok(mapped
+        .chunks_exact(row as usize)
+        .flat_map(|line| line[..width as usize * 4].to_vec())
+        .collect())
 }

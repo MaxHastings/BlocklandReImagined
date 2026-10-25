@@ -528,6 +528,9 @@ pub struct MeshBatch {
     pub material: usize,
     /// World-space center used for back-to-front translucent batch ordering.
     pub center: [f32; 3],
+    /// The map zone this batch lies in, when the map authors zones: it is
+    /// drawn only while the viewer can see into that zone.
+    pub zone: Option<u16>,
 }
 
 #[derive(Clone, Debug)]
@@ -833,6 +836,7 @@ impl SceneData {
             let start = self.indices.len() as u32;
             self.indices.extend(indices);
             self.batches.push(MeshBatch {
+                zone: None,
                 indices: start..self.indices.len() as u32,
                 material,
                 center: placement.transform_point3(Vec3::ZERO).to_array(),
@@ -883,6 +887,7 @@ impl SceneData {
             };
             self.indices.extend(indices);
             self.batches.push(MeshBatch {
+                zone: None,
                 indices: start..self.indices.len() as u32,
                 material,
                 center,
@@ -892,6 +897,7 @@ impl SceneData {
             let start = self.indices.len() as u32;
             self.indices.extend(indices);
             self.batches.push(MeshBatch {
+                zone: None,
                 indices: start..self.indices.len() as u32,
                 material,
                 center,
@@ -2013,6 +2019,7 @@ fn split_batches(data: &SceneData, second: impl Fn(&MeshBatch) -> bool) -> [Spli
                 .map(|&index| remap[p][index as usize]),
         );
         batches.push(MeshBatch {
+            zone: batch.zone,
             indices: start..indices.len() as u32,
             material: batch.material,
             center: batch.center,
@@ -2048,7 +2055,7 @@ fn world_bounds(casters: ShadowCasters<'_>) -> Option<(Vec3, Vec3)> {
     }
     bounds.filter(|(a, b)| a.is_finite() && b.is_finite())
 }
-pub(crate) fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
+pub fn frustum_planes(view_projection: Mat4) -> [glam::Vec4; 6] {
     let (r0, r1, r2, r3) = (
         view_projection.row(0),
         view_projection.row(1),
@@ -2946,6 +2953,8 @@ pub struct RenderStats {
     /// Bounded scenes (chunks) drawn and skipped outside the view.
     pub scenes_drawn: u32,
     pub scenes_culled: u32,
+    /// Batches skipped because their map zone is out of sight.
+    pub zone_batches_culled: u32,
     /// Per-view blended/faded instances rejected before sorting/submission.
     pub blended_draws_culled: u32,
     pub instance_triangles_culled: u64,
@@ -2980,7 +2989,14 @@ pub struct RenderStats {
     /// (the most any pixel adds up).
     pub point_lights: u32,
     pub lights_per_cell: u32,
+    /// Draws of the world pass by material kind, indexed by `MaterialKind as usize`
+    /// (Surface 0, Terrain 1, VertexLit 2, BrickOverlay 3, Sky 4, Cloud 5, Water 6,
+    /// UnlitOverlay 7, Unlit 8, BrickSurfaces 9, Metal 10, Physical 11, ...), so a frame
+    /// that draws the same count but looks different can be told apart.
+    pub kind_draws: [u32; KIND_SLOTS],
 }
+/// Room for every [`MaterialKind`] in [`RenderStats::kind_draws`].
+pub const KIND_SLOTS: usize = 24;
 
 /// The pass state last bound, so repeated binds are skipped.
 #[derive(Default)]
@@ -3042,6 +3058,9 @@ struct View {
     eye: Vec3,
     modern: bool,
     frustum: Option<[glam::Vec4; 6]>,
+    /// The map zones this view can see into; a batch in any other zone is
+    /// skipped. None draws every zone.
+    zones: Option<bri_content::zones::VisibleZones>,
 }
 
 /// Where and how one world pass records (`SceneRenderer::render_world`).
@@ -3685,6 +3704,7 @@ impl SceneRenderer {
                 eye: Vec3::ZERO,
                 modern: false,
                 frustum: None,
+                zones: None,
             });
         }
     }
@@ -4638,6 +4658,13 @@ impl SceneRenderer {
     /// fits the shadows every view reads to the player's view, unless
     /// `fit_view_shadows` gives it its own). Views past `view_count` are
     /// ignored.
+    /// Draw only the map zones `zones` holds in `view` (0 is the player's);
+    /// None draws them all. Shadows and other views are unaffected.
+    pub fn set_view_zones(&mut self, view: usize, zones: Option<bri_content::zones::VisibleZones>) {
+        if let Some(v) = self.views.get_mut(view) {
+            v.zones = zones;
+        }
+    }
     pub fn update_view(&mut self, queue: &wgpu::Queue, view: usize, camera: &Camera) {
         if view >= self.views.len() {
             return;
@@ -6031,6 +6058,12 @@ impl SceneRenderer {
         for (_, whole) in visible {
             for scene in std::iter::once(whole).chain(whole.translucent.as_deref()) {
                 for batch in &scene.batches {
+                    if let (Some(zones), Some(zone)) = (&view.zones, batch.zone)
+                        && !zones.contains(zone)
+                    {
+                        stats.zone_batches_culled += 1;
+                        continue;
+                    }
                     order.push(Draw {
                         scene,
                         batch,
@@ -6332,6 +6365,8 @@ impl SceneRenderer {
             bound.geometry(&mut pass, &scene.vertices, draw.buffer, &scene.indices);
             for d in &order[start..end] {
                 stats.translucent_draws += u32::from(d.blend != 0);
+                let kind = d.scene.material_descriptors[d.batch.material].kind as usize;
+                stats.kind_draws[kind.min(KIND_SLOTS - 1)] += 1;
                 stats.triangles += u64::from(d.batch.indices.end - d.batch.indices.start) / 3
                     * u64::from(d.range.end - d.range.start);
             }
@@ -6397,6 +6432,9 @@ impl SceneRenderer {
             total.triangles += stats.triangles;
             total.translucent_draws += stats.translucent_draws;
             total.batched += stats.batched;
+            for (all, one) in total.kind_draws.iter_mut().zip(stats.kind_draws) {
+                *all += one;
+            }
         } else {
             total.reflection_passes += 1;
             total.reflection_draws += stats.draws;
@@ -6574,6 +6612,7 @@ mod tests {
             let start = data.indices.len() as u32;
             data.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
             data.batches.push(MeshBatch {
+                zone: None,
                 indices: start..data.indices.len() as u32,
                 material: usize::from(brick == 1),
                 center: [0.0; 3],

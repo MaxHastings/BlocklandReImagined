@@ -23,6 +23,7 @@ pub struct PosedVertex {
 pub struct PosedTriangle {
     pub object: usize,
     pub material: Option<usize>,
+    pub zone: Option<u16>,
     pub vertices: [PosedVertex; 3],
 }
 
@@ -449,6 +450,7 @@ pub fn triangles(
                 out.push(PosedTriangle {
                     object: i,
                     material: primitive.material,
+                    zone: primitive.zone,
                     vertices,
                 });
             }

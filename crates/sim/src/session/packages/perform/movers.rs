@@ -11,6 +11,12 @@ impl Perform for ops::MoverGoto {
     }
 }
 
+impl Perform for ops::MoverShow {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        session.mover_show(&self.id, self.shown)
+    }
+}
+
 impl Perform for ops::MoverStop {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         session.mover_stop(&self.id)

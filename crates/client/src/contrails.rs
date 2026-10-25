@@ -265,6 +265,7 @@ fn mesh(image: &SceneImage, additive: bool, vertices: Vec<SceneVertex>) -> Scene
         id: "contrail".into(),
         name: "contrail".into(),
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..indices.len() as u32,
             material: 0,
             center: [0.0; 3],

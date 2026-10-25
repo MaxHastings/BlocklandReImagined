@@ -170,6 +170,7 @@ mod tests {
             data.indices = vec![0, 1, 2];
             data.materials = vec![Material::vertex_lit("wall", 0)];
             data.batches = vec![MeshBatch {
+                zone: None,
                 indices: 0..3,
                 material: 0,
                 center: [0.0; 3],

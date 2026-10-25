@@ -77,6 +77,10 @@ pub struct NodeState {
     /// A host texture drawn at the left of each list row, by row; the
     /// list's `columns` start after it.
     pub row_icons: Vec<Option<u64>>,
+    /// A list's rows' text colour, over its style's.
+    pub text_color: Option<Rgba>,
+    /// A scroll area's field colour, over its style's.
+    pub back: Option<Rgba>,
     /// Optional local disclosure groups; item IDs and selected values stay intact.
     pub popup_groups: HashMap<i64, String>,
     /// Gameplay search words, without changing the displayed or authored identity.
@@ -462,6 +466,8 @@ impl View {
                 popup_aliases: HashMap::new(),
                 flagged: Vec::new(),
                 row_icons: Vec::new(),
+                text_color: None,
+                back: None,
                 scroll_y: 0,
                 cursor: 0,
                 select_all: false,
@@ -1782,7 +1788,9 @@ impl View {
     fn draw_scroll(&self, pack: &Pack, dl: &mut DrawList, id: NodeId) {
         let n = &self.nodes[id];
         let r = n.rect;
-        if let Some(s) = self.style(pack, id)
+        if let Some(back) = n.state.back {
+            dl.fill(r, back);
+        } else if let Some(s) = self.style(pack, id)
             && s.opaque
         {
             dl.fill(r, s.fill_color.unwrap_or(WHITE));
@@ -1963,7 +1971,11 @@ impl View {
                         cell,
                         field,
                         Some(Justify::Left),
-                        n.state.flagged.contains(item).then_some(WARNING),
+                        n.state
+                            .flagged
+                            .contains(item)
+                            .then_some(WARNING)
+                            .or(n.state.text_color),
                         false,
                     );
                     dl.pop_clip();

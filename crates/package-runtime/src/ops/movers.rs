@@ -40,3 +40,18 @@ impl ScriptOp for MoverStop {
         !self.id.is_empty() && self.id.len() <= 64
     }
 }
+
+/// Show or hide the mover called `id`: hidden, it is not drawn and not solid
+/// (a door replaced by its breached twin).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MoverShow {
+    pub id: String,
+    pub shown: bool,
+}
+impl ScriptOp for MoverShow {
+    const CAPABILITY: &str = "movers";
+    const NAME: &str = "mover_show";
+    fn bounded(&self) -> bool {
+        !self.id.is_empty() && self.id.len() <= 64
+    }
+}

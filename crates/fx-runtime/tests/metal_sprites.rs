@@ -89,6 +89,7 @@ fn ball() -> SceneData {
     material.parameters = Some([[0.03, 1.0, 1.0, 0.0], [0.97; 4], [0.0; 4], [0.0; 4]]);
     data.materials.push(material);
     data.batches.push(MeshBatch {
+        zone: None,
         indices: 0..data.indices.len() as u32,
         material: 0,
         center: [0.0; 3],

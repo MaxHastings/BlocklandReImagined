@@ -29,6 +29,7 @@ fn scene() -> SceneData {
     scene.indices = (0..6).collect();
     scene.materials.push(Material::vertex_lit("floor", 0));
     scene.batches.push(MeshBatch {
+        zone: None,
         indices: 0..6,
         material: 0,
         center: [0.0; 3],

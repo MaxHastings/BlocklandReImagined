@@ -187,6 +187,14 @@ pub struct PanelItem {
     pub color: Option<[f32; 4]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<PanelAlign>,
+    /// A list's field colour, RGBA 0..1 (default the stock white field);
+    /// its rows' text colour is `color`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "rgba"
+    )]
+    pub back: Option<[f32; 4]>,
     /// A list's column starts in pixels from its left; a row's cells are
     /// then separated by tabs. At most `MAX_PANEL_COLUMNS`, rising.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -374,15 +382,18 @@ impl PanelItem {
                     .into(),
             );
         }
-        let styled = self.size.is_some()
-            || !self.font.is_empty()
-            || self.color.is_some()
-            || self.align.is_some();
+        let styled = self.size.is_some() || !self.font.is_empty() || self.align.is_some();
         if self.kind != PanelKind::Text && styled {
-            return Some(format!(
-                "a {:?} item has no size, font, color or align",
-                self.kind
-            ));
+            return Some(format!("a {:?} item has no size, font or align", self.kind));
+        }
+        if !matches!(self.kind, PanelKind::Text | PanelKind::List) && self.color.is_some() {
+            return Some(format!("a {:?} item has no color", self.kind));
+        }
+        if self.kind != PanelKind::List && self.back.is_some() {
+            return Some(format!("a {:?} item has no back", self.kind));
+        }
+        if self.back.is_some_and(|c| !colour(&c)) {
+            return Some("a list's back is RGBA 0..1".into());
         }
         if self.kind != PanelKind::List && (!self.columns.is_empty() || !self.icons.is_empty()) {
             return Some(format!("a {:?} item has no columns or icons", self.kind));
@@ -878,5 +889,22 @@ mod place_tests {
         assert!(picture.problem().is_some());
         let field = item(r#"{"kind":"field","id":"f","x":1,"y":1}"#).unwrap();
         assert!(field.problem().is_some());
+    }
+
+    #[test]
+    fn a_list_may_have_a_dark_field_and_text_colour_but_no_other_item_a_back() {
+        let list =
+            item(r#"{"kind":"list","id":"a","rows":[],"back":[0,0,0,0.8],"color":[1,1,1,1]}"#)
+                .unwrap();
+        assert_eq!(list.problem(), None);
+        let out_of_range = item(r#"{"kind":"list","id":"a","back":[0,0,0,2]}"#);
+        assert!(out_of_range.is_err() || out_of_range.unwrap().problem().is_some());
+        let text = item(r#"{"kind":"text","text":"Hi","back":[0,0,0,1]}"#).unwrap();
+        assert!(text.problem().is_some());
+        let image = item(
+            r#"{"kind":"image","texture":"a:texture/b","x":0,"y":0,"w":4,"h":4,"color":[1,1,1,1]}"#,
+        )
+        .unwrap();
+        assert!(image.problem().is_some());
     }
 }

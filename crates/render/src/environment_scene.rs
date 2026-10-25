@@ -46,6 +46,7 @@ fn quad(
     out.indices
         .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     out.batches.push(MeshBatch {
+        zone: None,
         indices: start..start + 6,
         material,
         center: [0.0; 3],

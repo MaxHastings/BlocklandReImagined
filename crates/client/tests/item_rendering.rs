@@ -307,6 +307,7 @@ fn triangle(color: [f32; 4], z: f32, alpha: AlphaMode, kind: MaterialKind) -> Sc
     material.kind = kind;
     scene.materials.push(material);
     scene.batches.push(MeshBatch {
+        zone: None,
         indices: 0..3,
         material: 0,
         center: [0., 0., z],
