@@ -6,7 +6,7 @@ use bri_console::Clamp;
 use bri_content::{
     animation::{Channels, Layer, sample_layers_with_transition, sample_layers_with_transitions},
     avatar::{Appearance, Dress, Outfit, Package, Rig},
-    body::{Animations, CrouchComposition, LocomotionPick, Role, RoleClips, Sockets},
+    body::{Animations, CrouchComposition, Role, RoleClips, Sockets},
     body_pose::{
         BodyFitInput, BodyFits as Fits, BodyFittingInput, BodyHolds, BodySocketInput,
         apply_body_fitting, body_mount_action, body_mount_node, body_offset_socket,
@@ -1127,42 +1127,18 @@ impl BodyKind {
         role: Role,
         velocity: Vec3,
     ) -> f32 {
-        let Some(axis) = role.ground_axis() else {
-            return 1.0;
-        };
         let ground = clip
             .ground_translations
             .last()
-            .map(|&t| Vec3::from(t))
-            .filter(|t| t.is_finite() && clip.duration > 0.0 && t.length() > 1e-4);
-        let named = self.ground_speeds.get(role.name()).or_else(|| {
-            role.speed_alias()
-                .and_then(|alias| self.ground_speeds.get(alias.name()))
-        });
-        let max = if self.max_time_scale > 0.0 {
-            self.max_time_scale
-        } else {
-            bri_sim::archetype::MAX_TIME_SCALE
-        };
-        // `APawn::PlayRunning`: the loop rate is the pawn's whole speed over the class ground speed,
-        // whichever way the clip faces (see `bri_ue2_rules::ground`).
-        if let (LocomotionPick::Ue2FourWay, Some(&speed)) = (self.locomotion_pick, named) {
-            let scale = velocity.length() / speed;
-            return if scale.is_finite() {
-                scale.min(max)
-            } else {
-                1.0
-            };
-        }
-        let (speed, dir) = match named {
-            Some(&speed) => (speed, Vec3::from(axis)),
-            None => match ground {
-                Some(t) => (t.length() / clip.duration, t.normalize()),
-                None => return 1.0,
-            },
-        };
-        let scale = (velocity.dot(dir) / speed).abs().min(max);
-        if scale.is_finite() { scale } else { 1.0 }
+            .map(|&t| (Vec3::from(t), clip.duration));
+        bri_sim::gait::time_scale(
+            &self.ground_speeds,
+            self.locomotion_pick,
+            self.max_time_scale,
+            ground,
+            role,
+            velocity,
+        )
     }
     /// What the body lacks, one line each: sockets for any body, and for a
     /// rigged one the animation roles it has no clip for.
@@ -1537,44 +1513,9 @@ const TRANSITION_TIME: f64 = 0.25;
 const JUMP_TRANSITION_TIME: f64 = 0.15;
 
 /// A picked action sequence and its play direction.
-pub use bri_sim::gait::{LocomotionAction, locomotion, ue2_four_way};
-/// A body lying prone whose clips pose the lying body plays its prone locomotion
-/// roles for the stance names `locomotion` picks from the velocity. A right
-/// strafe takes its own clip when it has one, else the left clip reversed.
-fn own_prone_action(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
-    let stay = |sequence| LocomotionAction {
-        sequence,
-        forward: true,
-    };
-    match (action.sequence, action.forward) {
-        ("run", _) => stay("pronerun"),
-        ("back", _) => stay("proneback"),
-        ("side", true) => stay("proneside"),
-        ("side", false) if roles.has_own(Role::ProneSideRight) => stay("pronesideright"),
-        ("side", false) => LocomotionAction {
-            sequence: "proneside",
-            forward: false,
-        },
-        _ => stay("prone"),
-    }
-}
-
-/// A body with its own right-strafe clip plays it, rather than its left clip
-/// reversed (v20's only way to strafe right, which `locomotion` returns).
-fn own_right_strafe(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
-    let (sequence, role) = match action.sequence {
-        "side" => ("sideright", Role::SideRight),
-        "crouchside" => ("crouchsideright", Role::CrouchSideRight),
-        _ => return action,
-    };
-    if action.forward || !roles.has_own(role) {
-        return action;
-    }
-    LocomotionAction {
-        sequence,
-        forward: true,
-    }
-}
+pub use bri_sim::gait::{
+    LocomotionAction, locomotion, own_prone_action, own_right_strafe, ue2_four_way,
+};
 impl AvatarMesh {
     /// The same sampled node matrices used by this frame's visible character.
     /// Missing nodes remain missing; attachments must not invent a hand offset.
@@ -2229,18 +2170,13 @@ impl AvatarMesh {
                         forward: true,
                     }
                 } else {
-                    let mut action = locomotion(movement, animation_input.water_coverage);
-                    if self.kind.locomotion_pick == LocomotionPick::Ue2FourWay {
-                        action = ue2_four_way(action, movement);
-                    }
-                    if movement.jump.jet_flight && action.sequence == "jump" {
-                        action.sequence = if movement.crouched { "crouch" } else { "root" };
-                    }
-                    if player_prone_authored {
-                        own_prone_action(action, &roles)
-                    } else {
-                        own_right_strafe(action, &roles)
-                    }
+                    bri_sim::gait::ground_action(
+                        movement,
+                        animation_input.water_coverage,
+                        self.kind.locomotion_pick,
+                        &roles,
+                        player_prone_authored,
+                    )
                 }
             },
             |sequence| LocomotionAction {
@@ -4826,7 +4762,7 @@ mod tests {
             .clone();
         archetype.look.ground_speeds = [("side".to_string(), 3.96)].into();
         archetype.look.max_time_scale = 16.0;
-        archetype.look.locomotion_pick = LocomotionPick::Ue2FourWay;
+        archetype.look.locomotion_pick = bri_content::body::LocomotionPick::Ue2FourWay;
         archetype.validate()?;
         let kind = BodyKind::of(&archetype, false);
         let scale = |v: Vec3| kind.time_scale(&side, Role::Side, v);

@@ -2,6 +2,7 @@
 //! clip its motion picks and the stretch of a clip a frame plays, so the
 //! footfalls a clip marks are the same moments wherever they are worked out.
 use crate::player::PlayerState;
+use bri_content::body::{GroundSpeeds, LocomotionPick, Role, RoleClips};
 use glam::Vec3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,5 +143,117 @@ impl ClipSpan {
         let first = (lo / self.duration).floor() as i64;
         let last = (hi / self.duration).floor() as i64;
         (first..=last.min(first + 3)).any(|lap| hit(at + lap as f32 * self.duration))
+    }
+}
+
+/// The ground locomotion action of a body in `player`'s state: v20's pick, or
+/// Army Ops' four-way pick, with a jet in flight holding the root pose and a
+/// body with its own prone or right-strafe clips playing those.
+pub fn ground_action(
+    player: &PlayerState,
+    water_coverage: f32,
+    pick: LocomotionPick,
+    roles: &RoleClips,
+    prone_authored: bool,
+) -> LocomotionAction {
+    let mut action = locomotion(player, water_coverage);
+    if pick == LocomotionPick::Ue2FourWay {
+        action = ue2_four_way(action, player);
+    }
+    if player.jump.jet_flight && action.sequence == "jump" {
+        action.sequence = if player.crouched { "crouch" } else { "root" };
+    }
+    if prone_authored {
+        own_prone_action(action, roles)
+    } else {
+        own_right_strafe(action, roles)
+    }
+}
+
+/// How fast a locomotion clip for `role` plays while the body moves at
+/// `velocity` (its own frame, facing -Z): v20's `Player::updateAnimation`
+/// plays it at the speed the body covers the ground along the clip's way,
+/// `|v . dir| / speed`, up to `max_time_scale`. The speed is the archetype's
+/// for the role, else the clip's own ground motion (`ground`: its last
+/// translation and its duration); a clip with neither, and every other role,
+/// plays at 1x.
+pub fn time_scale(
+    ground_speeds: &GroundSpeeds,
+    pick: LocomotionPick,
+    max_time_scale: f32,
+    ground: Option<(Vec3, f32)>,
+    role: Role,
+    velocity: Vec3,
+) -> f32 {
+    let Some(axis) = role.ground_axis() else {
+        return 1.0;
+    };
+    let ground =
+        ground.filter(|(t, duration)| t.is_finite() && *duration > 0.0 && t.length() > 1e-4);
+    let named = ground_speeds.get(role.name()).or_else(|| {
+        role.speed_alias()
+            .and_then(|alias| ground_speeds.get(alias.name()))
+    });
+    let max = if max_time_scale > 0.0 {
+        max_time_scale
+    } else {
+        crate::archetype::MAX_TIME_SCALE
+    };
+    // `APawn::PlayRunning`: the loop rate is the pawn's whole speed over the class ground speed,
+    // whichever way the clip faces (see `bri_ue2_rules::ground`).
+    if let (LocomotionPick::Ue2FourWay, Some(&speed)) = (pick, named) {
+        let scale = velocity.length() / speed;
+        return if scale.is_finite() {
+            scale.min(max)
+        } else {
+            1.0
+        };
+    }
+    let (speed, dir) = match named {
+        Some(&speed) => (speed, Vec3::from(axis)),
+        None => match ground {
+            Some((t, duration)) => (t.length() / duration, t.normalize()),
+            None => return 1.0,
+        },
+    };
+    let scale = (velocity.dot(dir) / speed).abs().min(max);
+    if scale.is_finite() { scale } else { 1.0 }
+}
+
+/// A body lying prone whose clips pose the lying body plays its prone locomotion
+/// roles for the stance names `locomotion` picks from the velocity. A right
+/// strafe takes its own clip when it has one, else the left clip reversed.
+pub fn own_prone_action(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
+    let stay = |sequence| LocomotionAction {
+        sequence,
+        forward: true,
+    };
+    match (action.sequence, action.forward) {
+        ("run", _) => stay("pronerun"),
+        ("back", _) => stay("proneback"),
+        ("side", true) => stay("proneside"),
+        ("side", false) if roles.has_own(Role::ProneSideRight) => stay("pronesideright"),
+        ("side", false) => LocomotionAction {
+            sequence: "proneside",
+            forward: false,
+        },
+        _ => stay("prone"),
+    }
+}
+
+/// A body with its own right-strafe clip plays it, rather than its left clip
+/// reversed (v20's only way to strafe right, which `locomotion` returns).
+pub fn own_right_strafe(action: LocomotionAction, roles: &RoleClips) -> LocomotionAction {
+    let (sequence, role) = match action.sequence {
+        "side" => ("sideright", Role::SideRight),
+        "crouchside" => ("crouchsideright", Role::CrouchSideRight),
+        _ => return action,
+    };
+    if action.forward || !roles.has_own(role) {
+        return action;
+    }
+    LocomotionAction {
+        sequence,
+        forward: true,
     }
 }
