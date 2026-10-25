@@ -684,11 +684,15 @@ impl AvatarAssets {
             }
             data.materials.push(material);
         }
+        // A see-through draw takes its opacity from the vertex colour, which
+        // an untinted material would ignore (`avatar_mesh::Layout` paints
+        // those white).
         let translucent_materials: Vec<_> = materials
             .iter()
             .map(|index| {
                 let mut material = data.materials[*index].clone();
                 material.alpha = AlphaMode::Blend;
+                material.untinted = false;
                 let index = data.materials.len();
                 data.materials.push(material);
                 index
@@ -844,6 +848,7 @@ impl AvatarAssets {
             fits: None,
             held: ([false; 2], 0.0),
             skipped: Vec::new(),
+            opacity: 1.0,
         }
     }
 }
@@ -963,7 +968,13 @@ pub struct AvatarMesh {
     held: ([bool; 2], f32),
     /// Clips the last pose asked for that the body lacks, left out.
     skipped: Vec<String>,
+    /// How much of the body shows, 1 whole to 0 gone: a dead body fades out
+    /// over its archetype's `corpse_fade`. Drawn in [`FADE_STEPS`] steps.
+    opacity: f32,
 }
+/// Steps a fading body's opacity is drawn in: each one lays the mesh out
+/// afresh, so a fade of seconds costs this many rebuilds, not one a frame.
+const FADE_STEPS: f32 = 16.0;
 
 /// How a player's archetype fits the mesh drawn for it: where its sockets
 /// are, which clips play each animation role, and whether the mesh is the
@@ -2615,6 +2626,7 @@ impl AvatarMesh {
                     .get(name)
                     .copied()
                     .filter(|_| !self.hidden_nodes.contains(name))
+                    .map(|[r, g, b, a]| [r, g, b, a * self.opacity])
             })
             .collect();
         // A material with a masked tint takes its slot's colour from the
@@ -2716,6 +2728,10 @@ impl AvatarMesh {
     /// whether it lies dead. None before a body is known.
     pub fn life(&self) -> Option<(u64, bool)> {
         self.body.map(|body| (body, self.dead))
+    }
+    /// How much of the body to draw, 1 whole to 0 gone.
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = (opacity.clamped(0.0, 1.0) * FADE_STEPS).ceil() / FADE_STEPS;
     }
     /// Whether the drawn body lies dead ([`drawn_life`]).
     pub fn set_dead(&mut self, dead: bool) {

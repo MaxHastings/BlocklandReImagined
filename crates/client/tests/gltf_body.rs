@@ -50,6 +50,27 @@ fn an_imported_gltf_body_draws_untinted_holds_and_animates() -> Result<()> {
         "untinted: {:?}",
         mesh.data.vertices.first().map(|v| v.color)
     );
+    // A dead body fading out (`Look::corpse_fade`) stays untinted but takes
+    // the opacity, and draws with blended materials.
+    mesh.set_opacity(0.5);
+    mesh.pose(&assets, &player, 0.0)?;
+    ensure!(
+        mesh.data
+            .vertices
+            .iter()
+            .all(|v| v.color == [1.0, 1.0, 1.0, 0.5]),
+        "fading: {:?}",
+        mesh.data.vertices.first().map(|v| v.color)
+    );
+    ensure!(
+        mesh.data.batches.iter().all(|b| {
+            let m = &mesh.data.materials[b.material];
+            m.alpha == bri_render::scene::AlphaMode::Blend && !m.untinted
+        }),
+        "fading bodies draw blended"
+    );
+    mesh.set_opacity(1.0);
+    mesh.pose(&assets, &player, 0.0)?;
     // The world lights it as it lights a Blockhead: each texture is drawn
     // times the light, not laid over as a decal, which ignores the light
     // (Max's playtest: Mario stayed bright in a dark map).

@@ -433,6 +433,10 @@ pub struct Deaths {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub prone: Vec<String>,
 }
+/// `$CorpseTimeoutValue`: seconds a v20 corpse lies.
+pub const CORPSE_SECONDS: f32 = 5.0;
+/// Longest a body may lie (an archetype's `corpse_seconds`).
+pub const MAX_CORPSE_SECONDS: f32 = 600.0;
 /// Most clips one side of [`Deaths`] lists.
 pub const MAX_DEATH_CLIPS: usize = 8;
 /// The posture a body died in, for [`Deaths::pick`].
