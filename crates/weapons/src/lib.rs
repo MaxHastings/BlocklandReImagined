@@ -197,6 +197,15 @@ pub struct State {
     pub loaded: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_loaded: Option<usize>,
+    /// Where the state goes while its holder aims the image (the right
+    /// button of a [`Zoom::on_jet`] image) or does not: an aim down sights
+    /// raising its sight picture, and lowering it again. Checked after
+    /// `loaded`, before ammo and the trigger, so a state that sets one
+    /// leaves at once when the holder's aim matches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aimed: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_aimed: Option<usize>,
     /// What the image's `spin` sequence does in this state
     /// (`stateSpinThread`).
     #[serde(skip_serializing_if = "Spin::is_keep")]
@@ -4570,6 +4579,8 @@ impl Pack {
                     state.no_ammo,
                     state.loaded,
                     state.not_loaded,
+                    state.aimed,
+                    state.not_aimed,
                 ]
                 .into_iter()
                 .flatten()

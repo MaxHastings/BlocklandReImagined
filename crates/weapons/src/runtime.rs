@@ -892,6 +892,10 @@ pub struct Actor {
     /// states' `loaded` and `not_loaded` transitions read.
     #[serde(default = "loaded")]
     pub loaded: bool,
+    /// Whether the holder aims the image in hand ([`set_aiming`]), which its
+    /// states' `aimed` and `not_aimed` transitions read.
+    #[serde(default)]
+    pub aiming: bool,
     pub skiing: bool,
     /// Torque's four image slots: 0 the right hand, 1 the left (an akimbo
     /// gun's), 2 and 3 worn on the body (a carried flag on the back). Tool
@@ -1617,6 +1621,7 @@ impl WeaponsWorld {
                 frame: Frame::default(),
                 ammo: true,
                 loaded: true,
+                aiming: false,
                 skiing: false,
                 images: Default::default(),
                 trigger: false,
@@ -1713,6 +1718,13 @@ impl WeaponsWorld {
         ensure!(scale.is_finite() && scale >= 0.0, "Invalid aim scale");
         self.actors.get_mut(&id).context("Unknown actor")?.aim_scale = scale;
         Ok(())
+    }
+    /// Whether the actor aims the image in hand, which its states'
+    /// `aimed` and `not_aimed` transitions read.
+    pub fn set_aiming(&mut self, id: ActorId, aiming: bool) {
+        if let Some(a) = self.actors.get_mut(&id) {
+            a.aiming = aiming;
+        }
     }
     pub fn set_loaded(&mut self, id: ActorId, loaded: bool) -> Result<()> {
         self.actors.get_mut(&id).context("Unknown actor")?.loaded = loaded;
@@ -3823,6 +3835,13 @@ impl WeaponsWorld {
             } else {
                 state.not_loaded
             }
+            .or(if e.hand != 0 {
+                None
+            } else if a.aiming {
+                state.aimed
+            } else {
+                state.not_aimed
+            })
             .or(if !a.ammo { state.no_ammo } else { state.ammo })
             .or(if e.trigger { state.down } else { state.up })
             .or(if e.remaining == 0 {

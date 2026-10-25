@@ -1455,3 +1455,9 @@ than 256 changes are told a tick; the rest follow on the next.
   what lies within that cone from the centre (a launcher's back-blast).
 - A weapon image state may set `"lock": {"movement": true, "look": true}` to
   hold its holder's walk and view still while it runs.
+- A weapon image state may set `"aimed": <state>` and `"not_aimed": <state>`:
+  where it goes while its holder aims the image (the right button of a
+  `zoom` with `on_jet`) or does not, checked after `loaded` and before ammo
+  and the trigger. An aim-down-sights raise is a `Ready` state with `aimed`
+  into an `Aim` state that plays the raise and holds with `not_aimed` back
+  to `Ready`. If the zoom lists `allowed_states`, include the aim state.
