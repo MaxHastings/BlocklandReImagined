@@ -1167,7 +1167,7 @@ fn shot_traced(image: &Image, round: u32) -> bool {
         .as_ref()
         .and_then(|s| s.hitscan.as_ref()?.tracer)
         .map_or(1, |t| t.every);
-    round % every == 0
+    round.is_multiple_of(every)
 }
 /// What one tick of an image's state machine asks of its holder.
 enum Advance {
