@@ -1122,6 +1122,7 @@ fn sample(
                 &a.player,
                 &b.player,
                 ((tick - a.tick as f64) / span) as f32,
+                (span / TICK_RATE) as f32,
                 passages,
             );
         }
@@ -1150,6 +1151,7 @@ fn blend_through(
     a: &PlayerState,
     b: &PlayerState,
     t: f32,
+    seconds: f32,
     passages: &bri_content::passage::Passages,
 ) -> PlayerState {
     let middle = bri_sim::player::nominal_middle(a.scale);
@@ -1163,6 +1165,13 @@ fn blend_through(
         })
         .flatten();
     let Some(carry) = carry else {
+        // A relocation (a rule's teleport, a respawn) is a jump: the body
+        // is there at once, never slid across the map between the two poses.
+        if relocated(a, b, seconds) {
+            let mut state = b.clone();
+            state.feet = state.shown_feet();
+            return state;
+        }
         return blend(a, b, t);
     };
     // Drawn on `a`'s side until its middle reaches the opening, then moving
@@ -1183,6 +1192,16 @@ fn blend_through(
         true => back.carried(&carry, middle),
         false => back,
     }
+}
+/// Whether `b` is farther from `a` than either could have travelled in
+/// `seconds` at the speed they report, plus the distance a correction may
+/// move a body ([`SNAP_DISTANCE`]): the host moved it, it did not walk.
+fn relocated(a: &PlayerState, b: &PlayerState, seconds: f32) -> bool {
+    let speed = Vec3::from(a.velocity)
+        .length()
+        .max(Vec3::from(b.velocity).length());
+    let apart = Vec3::from(a.shown_feet()).distance(Vec3::from(b.shown_feet()));
+    apart > SNAP_DISTANCE + 2.0 * speed * seconds
 }
 /// The angle `t` of the way from `a` to `b` (radians), turning the short way
 /// round and wrapped to [-pi, pi). Every replicated heading or yaw drawn
@@ -1220,6 +1239,20 @@ mod crossing_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_relocated_body_is_drawn_at_once_where_it_arrived_not_slid_across() {
+        let mut a = state(0.0, 0.0);
+        let mut b = a.clone();
+        a.feet = [0.0, 0.0, -7.9];
+        b.feet = [40.0, 0.0, 12.0];
+        let passages = bri_content::passage::Passages::default();
+        let drawn = blend_through(&a, &b, 0.25, 0.1, &passages);
+        assert_eq!(drawn.feet, b.feet);
+        // A run is still drawn between its ticks.
+        b.feet = [0.5, 0.0, -7.9];
+        let drawn = blend_through(&a, &b, 0.5, 0.1, &passages);
+        assert!((drawn.feet[0] - 0.25).abs() < 1e-4);
+    }
     #[test]
     fn the_eye_takes_the_postures_own_time_to_go_down_and_never_jumps() {
         let prone = bri_sim::player::Prone {

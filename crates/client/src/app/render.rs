@@ -1060,6 +1060,14 @@ impl App {
             if let Some(started) = started {
                 whole.done(started.elapsed());
             }
+            if let Some(shown) = self.motion.presented().get(owner)
+                && let Some(what) = avatar.disagreement(Vec3::from(shown.feet))
+                && self.avatar.disagreed.insert(*owner)
+            {
+                bri_console::warn(format!(
+                    "Body of player {owner} is drawn away from where it is presented: {what}"
+                ));
+            }
             bodies_drawn.insert(*owner);
         }
         whole.note();

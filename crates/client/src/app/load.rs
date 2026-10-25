@@ -366,6 +366,7 @@ impl App {
             avatar: Avatars {
                 avatar_assets,
                 avatars: BTreeMap::new(),
+                disagreed: Default::default(),
                 mount_meshes: BTreeMap::new(),
                 avatar_actions: BTreeMap::new(),
                 avatar_threads: BTreeMap::new(),
