@@ -169,6 +169,20 @@ pub struct Sounds {
     /// listed nowhere leaves nothing.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub contacts: std::collections::BTreeMap<String, FootContact>,
+    /// Footfalls of its own while in a posture (`prone`: a crawl's), by
+    /// posture, in place of `footsteps` and `surfaces` there.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub posture_steps: std::collections::BTreeMap<String, PostureSteps>,
+}
+/// [`Sounds::posture_steps`]: the footfalls of one posture, as `footsteps`
+/// and `surfaces` give a body's others.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostureSteps {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footsteps: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub surfaces: std::collections::BTreeMap<String, Vec<String>>,
 }
 /// [`Sounds::land_noise`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -220,8 +234,8 @@ pub struct StepEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foot: Option<String>,
     /// Another sound source in place of the surface's footfall: a ladder's
-    /// climb sound, say. Heard at `volume` times its own out to `radius`
-    /// (0 or none: its own), and it leaves no mark.
+    /// climb sound, say; it leaves no mark. Either way the footfall is heard
+    /// at `volume` times its own out to `radius` (0 or none: its own).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sound: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -277,6 +291,23 @@ impl Sounds {
                     && ids
                         .iter()
                         .all(|s| s.len() <= Self::MAX_NAME && !s.chars().any(char::is_control))
+            })
+            && self.posture_steps.len() <= Self::POSTURES.len()
+            && self.posture_steps.iter().all(|(posture, p)| {
+                let names = |ids: &Vec<String>| {
+                    ids.len() <= Self::MAX_FOOTSTEPS
+                        && ids.iter().all(|s| {
+                            !s.is_empty()
+                                && s.len() <= Self::MAX_NAME
+                                && !s.chars().any(char::is_control)
+                        })
+                };
+                Self::POSTURES.contains(&posture.as_str())
+                    && names(&p.footsteps)
+                    && p.surfaces.len() <= Self::MAX_SURFACES
+                    && p.surfaces.iter().all(|(kind, ids)| {
+                        bri_content::surface::valid_name(kind) && !ids.is_empty() && names(ids)
+                    })
             })
             && self
                 .stride
@@ -351,7 +382,6 @@ impl Sounds {
                             .is_none_or(|v| v.is_finite() && (0.0..=4.0).contains(&v))
                             && e.radius
                                 .is_none_or(|r| r.is_finite() && (0.0..=10_000.0).contains(&r))
-                            && (e.sound.is_some() || (e.volume.is_none() && e.radius.is_none()))
                             && match (e.seconds, e.frame) {
                                 (Some(s), None) => s.is_finite() && (0.0..=60.0).contains(&s),
                                 (None, Some(_)) => self.fps.is_some(),
@@ -372,6 +402,19 @@ impl Sounds {
     /// The footfalls on surface `kind`.
     pub fn footsteps_on(&self, kind: &str) -> &[String] {
         self.surfaces.get(kind).unwrap_or(&self.footsteps)
+    }
+    /// The footfalls of a body in `posture` on surface `kind`: its posture's
+    /// own where it names some for the kind, or for any, else the standing
+    /// ones.
+    pub fn footsteps_for(&self, posture: &str, kind: &str) -> &[String] {
+        self.posture_steps
+            .get(posture)
+            .and_then(|p| {
+                p.surfaces
+                    .get(kind)
+                    .or(Some(&p.footsteps).filter(|f| !f.is_empty()))
+            })
+            .map_or_else(|| self.footsteps_on(kind), Vec::as_slice)
     }
     /// How loud landing at `fall` units/s is for a body whose jump speed is
     /// `jump`, 0 to 1 ([`Sounds::land_noise`]).

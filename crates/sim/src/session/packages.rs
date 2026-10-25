@@ -797,6 +797,21 @@ fn apply_sounds(
     if from.takeoff_on_surface {
         sounds.takeoff_on_surface = true;
     }
+    if !from.posture_steps.is_empty() {
+        sounds.posture_steps = from
+            .posture_steps
+            .iter()
+            .map(|(posture, p)| {
+                (
+                    posture.clone(),
+                    crate::archetype::PostureSteps {
+                        footsteps: p.footsteps.clone(),
+                        surfaces: p.surfaces.clone(),
+                    },
+                )
+            })
+            .collect();
+    }
     if !from.contacts.is_empty() {
         sounds.contacts = from
             .contacts
