@@ -100,6 +100,14 @@ pub struct MoverSounds {
     /// Once, as it comes to rest at key 0.
     #[serde(default)]
     pub closed: Option<String>,
+    /// Once, as it turns back toward key 0 part way through opening
+    /// (Unreal's `PartialClosingSound`); `closing` plays when this is unset.
+    #[serde(default)]
+    pub partial_closing: Option<String>,
+    /// Once, as it turns back toward another key part way through closing
+    /// (`PartialOpeningSound`); `opening` plays when this is unset.
+    #[serde(default)]
+    pub partial_opening: Option<String>,
     /// Once, as it is held between keys (a door stopped part way open).
     #[serde(default)]
     pub stopped: Option<String>,
@@ -127,6 +135,8 @@ impl MoverSounds {
                 &self.closing,
                 &self.closed,
                 &self.stopped,
+                &self.partial_closing,
+                &self.partial_opening,
                 &self.moving
             ]
             .into_iter()
@@ -144,6 +154,16 @@ impl MoverSounds {
             &self.opening
         };
         name.as_deref()
+    }
+    /// The one-shot for a motion that turns back toward `to` before it has
+    /// come to rest.
+    pub fn reverse(&self, to: u8) -> Option<&str> {
+        let partial = if to == 0 {
+            &self.partial_closing
+        } else {
+            &self.partial_opening
+        };
+        partial.as_deref().or_else(|| self.start(to))
     }
     /// The one-shot for a mover that comes to rest at `key`.
     pub fn rest(&self, key: u8) -> Option<&str> {

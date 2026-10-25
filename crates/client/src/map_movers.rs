@@ -96,8 +96,9 @@ impl ClientMovers {
                 continue;
             };
             let name = match (before, now) {
-                // Began, or turned back toward another key mid-swing.
-                ((was, to), (true, new_to)) if !was || to != new_to => set.start(new_to),
+                ((false, _), (true, new_to)) => set.start(new_to),
+                // Turned back toward another key mid-swing.
+                ((true, to), (true, new_to)) if to != new_to => set.reverse(new_to),
                 ((true, _), (false, _)) => set.halt(&state, state.alpha_at_f(tick)),
                 _ => None,
             };
@@ -191,6 +192,8 @@ mod tests {
             closed: Some("door.shut".into()),
             moving: Some("door.creak".into()),
             stopped: Some("door.stopped".into()),
+            partial_closing: Some("door.creak_shut".into()),
+            partial_opening: None,
             volume: 1.0,
         };
         MapMover {
@@ -277,5 +280,26 @@ mod tests {
         held.moving = false;
         assert_eq!(names(movers.update(&[held], 2.0)), ["door.stopped"]);
         assert!(movers.loops().is_empty());
+    }
+
+    #[test]
+    fn a_door_that_turns_back_part_way_sounds_its_partial_sound() {
+        let mut movers = with_door();
+        let mut opening = MoverState::at_rest(0);
+        opening.to = 1;
+        opening.alpha = 0.0;
+        opening.rate = 0.01;
+        opening.moving = true;
+        movers.update(&[opening], 1.0);
+        let mut back = opening;
+        back.from = 1;
+        back.to = 0;
+        back.alpha = 0.5;
+        assert_eq!(names(movers.update(&[back], 2.0)), ["door.creak_shut"]);
+        let mut again = back;
+        again.from = 0;
+        again.to = 1;
+        // No partial opening sound is set: the plain one plays.
+        assert_eq!(names(movers.update(&[again], 3.0)), ["door.open"]);
     }
 }
