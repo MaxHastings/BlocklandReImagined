@@ -1842,6 +1842,8 @@ fn add_launcher(
         paint_tint: false,
         left_image: None,
         stance: Default::default(),
+        lower: None,
+        redraw: None,
         magazine: None,
         volleys: vec![],
         last_shot: None,

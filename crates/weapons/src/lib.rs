@@ -476,6 +476,41 @@ pub struct Zoom {
     /// `inhale` alternate every half `period` (AA's `BreatheCycle`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub breath: Option<Breath>,
+    /// Aiming through the weapon's own sights: the held model, in the eye's
+    /// frame, moves to `sights` over its `seconds` as the aim comes up and
+    /// back as it goes, while the view zooms to `fov` and the weapon and
+    /// its flash stay drawn (a model with real iron sights, no `overlay`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sights: Option<Sights>,
+}
+/// Where the held model sits to look down its sights ([`Zoom::sights`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sights {
+    /// Moved by this much in the view's frame (x right, y up, -z ahead), world units.
+    #[serde(default)]
+    pub offset: [f32; 3],
+    /// Turned by this much about the eye, Euler degrees in x, y, z order.
+    #[serde(default)]
+    pub rotation_degrees: [f32; 3],
+    /// Seconds to bring the weapon up to the sights, and back: 0 to 5.
+    pub seconds: f32,
+}
+impl Sights {
+    fn validate(&self) -> std::result::Result<(), String> {
+        let ok = self.offset.iter().all(|v| v.is_finite() && v.abs() <= 10.)
+            && self
+                .rotation_degrees
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 180.)
+            && self.seconds.is_finite()
+            && (0. ..=5.).contains(&self.seconds);
+        if ok {
+            Ok(())
+        } else {
+            Err("sights: offset within 10, rotation within 180 degrees, seconds 0 to 5".into())
+        }
+    }
 }
 /// Breathing sounds while aiming ([`Zoom::breath`]): sound profile names,
 /// heard only by the player aiming.
@@ -593,6 +628,9 @@ impl Zoom {
         }
         if let Some(b) = &self.breath {
             b.validate()?;
+        }
+        if let Some(s) = &self.sights {
+            s.validate()?;
         }
         Ok(())
     }
@@ -1217,6 +1255,18 @@ pub struct Image {
     /// for a held grenade. A body with no entry keeps its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stance: BTreeMap<String, String>,
+    /// The state (an index into `states`) the image goes to when its holder
+    /// asks for another tool: it plays out, and the change comes when it
+    /// reaches a state that allows one, so a weapon is put down before the
+    /// next comes up. The tool asked for again while it plays is raised
+    /// from `redraw`. None changes at once, as v20 does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lower: Option<usize>,
+    /// The state (an index) a draw starts in when the holder has already
+    /// drawn this image since they spawned: the quick raise after the first
+    /// draw's long one. None always starts in state 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redraw: Option<usize>,
     /// Rounds in a magazine and a reserve to reload it from, kept by the
     /// engine for every gun that declares one: tactical packs' magazines
     /// (Tier+Tactical's `ammo` system, the Adventure Pack's), in data.
@@ -4433,6 +4483,13 @@ impl Pack {
                     );
                 }
             }
+            ensure!(
+                [image.lower, image.redraw]
+                    .into_iter()
+                    .flatten()
+                    .all(|index| index < image.states.len()),
+                "Invalid lower or redraw state"
+            );
             for p in image.projectile_refs() {
                 ensure!(
                     self.projectiles.contains_key(p) || self.external_projectiles.contains(p),
