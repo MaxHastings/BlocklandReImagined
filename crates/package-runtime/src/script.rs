@@ -4861,6 +4861,16 @@ pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i6
     Ok(out)
 }
 
+fn sound(profile: &str, at: SoundAt, volume: f32, pitch: f32, radius: f32) -> ops::Sound {
+    ops::Sound {
+        profile: profile.into(),
+        at,
+        volume,
+        pitch,
+        radius,
+    }
+}
+
 #[cfg(test)]
 mod objective_queries {
     use super::*;
@@ -4932,15 +4942,5 @@ mod objective_queries {
         assert!(runtime.query("unfamiliar", call()).is_err());
         assert!(runtime.last_operations() > 0);
         assert!(runtime.last_operations() <= Budget::Objective.operations() + 1);
-    }
-}
-
-fn sound(profile: &str, at: SoundAt, volume: f32, pitch: f32, radius: f32) -> ops::Sound {
-    ops::Sound {
-        profile: profile.into(),
-        at,
-        volume,
-        pitch,
-        radius,
     }
 }
