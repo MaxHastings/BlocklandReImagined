@@ -1396,11 +1396,24 @@ def run_binaries(units, log, jobs, exclusive=(), env=None):
     return seconds
 
 
-def shard(labels, part):
-    """The labels of shard `part` = (k, n): every nth label from the kth,
-    in sorted order, so the n shards together run each label exactly once."""
+def shard(labels, part, weights=None):
+    """The labels of shard `part` = (k, n), so the n shards together run each
+    label exactly once and take about equally long: heaviest label first onto
+    the lightest shard so far. `weights` is {label: seconds}; a label it does
+    not name weighs the mean of those it does, and with no weights at all
+    this deals the sorted labels out in turn."""
     k, n = part
-    return [label for i, label in enumerate(sorted(labels)) if i % n == k]
+    known = [weights[label] for label in labels if label in weights] if weights else []
+    default = sum(known) / len(known) if known else 1.0
+    cost = {label: (weights or {}).get(label, default) for label in labels}
+    loads = [0.0] * n
+    mine = []
+    for label in sorted(labels, key=lambda label: (-cost[label], label)):
+        lightest = loads.index(min(loads))
+        loads[lightest] += cost[label]
+        if lightest == k:
+            mine.append(label)
+    return sorted(mine)
 
 
 def parse_shard(text):
@@ -1439,7 +1452,8 @@ def ci_test(part=(0, 1), tier="full"):
     for label in sorted(labels):
         if label in skipped and label not in nightly:
             say(f"skipping {label} (needs generated content)")
-    mine = set(shard([label for label in labels if label not in skipped], part))
+    weights = json.loads((top / "tools" / "ci-timings.json").read_text(encoding="utf-8"))
+    mine = set(shard([label for label in labels if label not in skipped], part, weights))
     say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(labels) - len(skipped)} test targets")
     if not mine:
         return True
@@ -1457,14 +1471,19 @@ def ci_test(part=(0, 1), tier="full"):
     skip_args = [arg for entry in data.get("skip", []) + data.get("nightly", [])
                  for arg in ("--skip", entry["test"])]
     failed = []
+    seconds = {}
     for label, executable, cwd, _ in sorted(binaries):
         if label not in mine:
             continue
         say(f"running {label}")
+        started = time.monotonic()
         output, code = run_binary(label, executable, skip_args, cwd)
+        seconds[label] = round(time.monotonic() - started, 1)
         print(output, end="", flush=True)
         if code and not ci_tolerated(label, output, known):
             failed.append((label, output))
+    # tools/ci-timings.json weighs the shards; merge these lines into it.
+    say("ci-timings " + json.dumps(seconds, sort_keys=True))
     if failed:
         failed = retry_ci_failures(failed, binaries)
     if failed:
