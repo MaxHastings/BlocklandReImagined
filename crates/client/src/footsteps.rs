@@ -45,43 +45,7 @@ impl From<&PlayerState> for Walk {
     }
 }
 
-/// The stretch of its base clip a body played this frame: `from` to `to` in
-/// seconds, not wrapped, so a looping clip that came round runs past
-/// `duration`. A clip played backward has `to` below `from`; one that just
-/// started (`restart`) also covers its first instant.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ClipSpan {
-    /// The clip's lower-case name.
-    pub clip: String,
-    pub from: f32,
-    pub to: f32,
-    pub duration: f32,
-    pub looping: bool,
-    pub restart: bool,
-}
-impl ClipSpan {
-    /// Whether a moment `at` seconds into the clip went by in this span.
-    fn passes(&self, at: f32) -> bool {
-        let (lo, hi) = (self.from.min(self.to), self.from.max(self.to));
-        let forward = self.to >= self.from;
-        let hit = |t: f32| {
-            if self.restart {
-                t >= lo && t <= hi
-            } else if forward {
-                t > lo && t <= hi
-            } else {
-                t >= lo && t < hi
-            }
-        };
-        if !(self.looping && self.duration > 0.0) {
-            return hit(at);
-        }
-        // Every lap the span reaches into, a few at most.
-        let first = (lo / self.duration).floor() as i64;
-        let last = (hi / self.duration).floor() as i64;
-        (first..=last.min(first + 3)).any(|lap| hit(at + lap as f32 * self.duration))
-    }
-}
+pub use bri_sim::gait::ClipSpan;
 
 /// One footfall to play: its sound, where, and what it leaves on the
 /// surface it landed on ([`Sounds::contacts`]).
