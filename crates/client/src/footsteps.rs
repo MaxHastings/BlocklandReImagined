@@ -138,22 +138,23 @@ impl Footsteps {
                 continue;
             }
             let kind = surface(position);
-            let steps = if sounds.surfaces.is_empty() {
-                &sounds.footsteps[..]
-            } else {
-                sounds.footsteps_on(&kind)
-            };
+            let walker = self.walkers.entry(owner).or_default();
+            let steps = sounds.footsteps_for(walker.posture.unwrap_or("stand"), &kind);
             if steps.is_empty() {
                 continue;
             }
-            let walker = self.walkers.entry(owner).or_default();
             self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
             let mut pick = (self.turn >> 16) as usize % steps.len();
             if steps.len() > 1 && pick == walker.last {
                 pick = (pick + 1) % steps.len();
             }
             walker.last = pick;
-            out.push(Footfall::on(sounds, &steps[pick], position, &kind));
+            // The mark's own loudness and reach, as a sound source of its own has.
+            out.push(Footfall {
+                volume: event.volume.unwrap_or(1.0),
+                radius: event.radius.unwrap_or(0.0),
+                ..Footfall::on(sounds, &steps[pick], position, &kind)
+            });
         }
         out
     }
@@ -199,11 +200,7 @@ impl Footsteps {
                     } else if sounds.land_on_surface {
                         // AA's PlayLanded: the floor material's foot-contact sound.
                         let kind = surface(player.feet);
-                        let steps = if sounds.surfaces.is_empty() {
-                            &sounds.footsteps[..]
-                        } else {
-                            sounds.footsteps_on(&kind)
-                        };
+                        let steps = sounds.footsteps_for(player.posture, &kind);
                         if !steps.is_empty() {
                             self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
                             let pick = (self.turn >> 16) as usize % steps.len();
@@ -221,11 +218,7 @@ impl Footsteps {
                 walker.airborne = true;
                 if sounds.takeoff_on_surface && velocity.y > 0.0 {
                     let kind = surface(player.feet);
-                    let steps = if sounds.surfaces.is_empty() {
-                        &sounds.footsteps[..]
-                    } else {
-                        sounds.footsteps_on(&kind)
-                    };
+                    let steps = sounds.footsteps_for(player.posture, &kind);
                     if !steps.is_empty() {
                         self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
                         let pick = (self.turn >> 16) as usize % steps.len();
@@ -243,7 +236,9 @@ impl Footsteps {
             // A body whose clips mark their footfalls steps on those instead
             // ([`Self::on_clip`]).
             if !sounds.steps.is_empty()
-                || (sounds.footsteps.is_empty() && sounds.surfaces.is_empty())
+                || (sounds.footsteps.is_empty()
+                    && sounds.surfaces.is_empty()
+                    && sounds.posture_steps.is_empty())
                 || !player.grounded
             {
                 continue;
@@ -257,11 +252,7 @@ impl Footsteps {
             if walker.covered >= stride {
                 walker.covered %= stride;
                 let kind = surface(player.feet);
-                let steps = if sounds.surfaces.is_empty() {
-                    &sounds.footsteps[..]
-                } else {
-                    sounds.footsteps_on(&kind)
-                };
+                let steps = sounds.footsteps_for(player.posture, &kind);
                 let count = steps.len();
                 if count == 0 {
                     continue;
@@ -483,6 +474,45 @@ mod tests {
         stone.update(1.0 / 60.0, [standing], &archetypes, |_| "stone".into());
         let heard = stone.update(1.0 / 60.0, [rising], &archetypes, |_| "stone".into());
         assert!(heard.iter().all(|h| h.contact.is_none()), "{heard:?}");
+    }
+
+    #[test]
+    fn a_mark_sets_the_loudness_of_a_surface_step_and_a_prone_body_crawls() {
+        let (mut archetypes, walker) = walker_body();
+        let mut body = archetypes.resolve(walker).clone();
+        body.id = "test:archetype/crawler".into();
+        body.sounds.fps = Some(30.0);
+        body.sounds.steps.insert(
+            "run".into(),
+            vec![StepEvent {
+                seconds: Some(0.5),
+                volume: Some(0.3),
+                radius: Some(90.0),
+                ..Default::default()
+            }],
+        );
+        body.sounds.posture_steps.insert(
+            "prone".into(),
+            bri_sim::archetype::PostureSteps {
+                footsteps: vec!["test:crawl".into()],
+                surfaces: [("metal".to_string(), vec!["test:crawl_metal".to_string()])].into(),
+            },
+        );
+        let crawler = archetypes.add(body).expect("valid body");
+        let sounds = &archetypes.resolve(crawler).sounds;
+        let mut steps = Footsteps::default();
+        let standing = steps.on_clip(7, sounds, &span(0.4, 0.6), |_| [0.0; 3], |_| "dirt".into());
+        assert_eq!(standing.len(), 1);
+        assert_ne!(standing[0].sound, "test:crawl");
+        assert_eq!((standing[0].volume, standing[0].radius), (0.3, 90.0));
+        // Once the body is seen lying down, its marks play the crawl's sounds.
+        let mut prone = player(crawler, [0.0; 3], true);
+        prone.posture = "prone";
+        steps.update(1.0 / 60.0, [prone], &archetypes, |_| "dirt".into());
+        let on_dirt = steps.on_clip(7, sounds, &span(0.4, 0.6), |_| [0.0; 3], |_| "dirt".into());
+        assert_eq!(on_dirt[0].sound, "test:crawl");
+        let on_metal = steps.on_clip(7, sounds, &span(0.4, 0.6), |_| [0.0; 3], |_| "metal".into());
+        assert_eq!(on_metal[0].sound, "test:crawl_metal");
     }
 
     #[test]

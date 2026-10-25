@@ -428,6 +428,17 @@ same rate from `ground_speeds` as the client), so bots hear a footfall when a
 client would see it land; scripted threads, intent clips, seats and water are
 not followed. Who hears how far is the listener's own (its kind's hearing).
 
+A mark's `volume` and `radius` apply to a surface footfall too, so one clip
+can be as quiet as a crouched walk and another as loud as a sprint while they
+share their sounds (a sound's own volume times `volume`, heard out to `radius`;
+none leaves them as authored). `posture_steps` gives a posture footfalls of
+its own, by posture (`stand`, `crouch`, `prone`), as `footsteps` and
+`surfaces` give the body's others: `"posture_steps": {"prone": {"footsteps":
+["your-id:crawl"], "surfaces": {"metal": ["your-id:crawl_metal"]}}}`. Every
+footfall of a body in that posture (a mark, the stride timer, a landing, a
+take-off) picks from those for the surface underfoot, falling back to the
+standing ones where the posture names none for it.
+
 `takeoff_on_surface: true` makes the take-off of a jump sound once like a
 footfall on the surface underfoot, as `land_on_surface` does the landing.
 `contacts` makes each footfall (a mark, the timer's step, a landing or
