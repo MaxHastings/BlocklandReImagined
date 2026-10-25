@@ -1928,6 +1928,40 @@ pub struct ArchetypeSounds {
     /// Frames a second of the clips, for steps marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// Taking off in a jump sounds like a footfall on the surface underfoot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub takeoff_on_surface: bool,
+    /// What a footfall leaves on a surface kind (`*` for any other): dust
+    /// and a mark (see the content kinds document: `contacts`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub contacts: BTreeMap<String, FootContactDef>,
+}
+/// [`ArchetypeSounds::contacts`]: what a footfall leaves on one surface kind.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootContactDef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decal: Option<FootDecalDef>,
+}
+/// [`FootContactDef::decal`]: a footprint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootDecalDef {
+    pub texture: String,
+    /// Across, in units at scale 1: 0.02 to 4.
+    pub size: f32,
+    /// Seconds it stays: 0.5 to 600.
+    pub seconds: f32,
+    /// Colour and opacity, each 0 to 1; white by default.
+    #[serde(default = "FootDecalDef::white")]
+    pub color: [f32; 4],
+}
+impl FootDecalDef {
+    fn white() -> [f32; 4] {
+        [1.0; 4]
+    }
 }
 /// [`ArchetypeSounds::steps`]: one footfall of a clip, by `seconds` or `frame`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2068,6 +2102,24 @@ impl ArchetypeDef {
                         && ids.iter().all(|s| text(s, 128))
                 }),
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds.contacts.len() <= 17
+                && self.sounds.contacts.iter().all(|(kind, c)| {
+                    (kind == "*" || bri_content::surface::valid_name(kind))
+                        && c.effect.as_ref().is_none_or(|e| text(e, 128))
+                        && c.decal.as_ref().is_none_or(|d| {
+                            text(&d.texture, 128)
+                                && d.size.is_finite()
+                                && (0.02..=4.0).contains(&d.size)
+                                && d.seconds.is_finite()
+                                && (0.5..=600.0).contains(&d.seconds)
+                                && d.color
+                                    .iter()
+                                    .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+                        })
+                }),
+            "sounds.contacts names up to 17 surface kinds (or `*`), each with an effect and a decal of size 0.02 to 4, 0.5 to 600 seconds, colour 0 to 1"
         );
         ensure!(
             self.sounds

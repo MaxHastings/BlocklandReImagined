@@ -145,6 +145,42 @@ pub struct Sounds {
     /// Frames a second of the clips, for `steps` marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// Taking off in a jump sounds like a footfall on the surface underfoot,
+    /// once, as landing does with `land_on_surface`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub takeoff_on_surface: bool,
+    /// What a footfall leaves on the surface it lands on, by surface kind
+    /// (`*` for any other): a mark on the ground and a burst of dust. A kind
+    /// listed nowhere leaves nothing.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub contacts: std::collections::BTreeMap<String, FootContact>,
+}
+/// What one footfall leaves on a surface ([`Sounds::contacts`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootContact {
+    /// An effect (a dust puff) burst where the foot lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    /// A mark left on the ground under it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decal: Option<FootDecal>,
+}
+/// A footprint ([`FootContact::decal`]): the mark's texture, size across in
+/// units at scale 1, seconds it stays and its colour and opacity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootDecal {
+    pub texture: String,
+    pub size: f32,
+    pub seconds: f32,
+    #[serde(default = "FootDecal::white")]
+    pub color: [f32; 4],
+}
+impl FootDecal {
+    fn white() -> [f32; 4] {
+        [1.0; 4]
+    }
 }
 /// One footfall a clip marks ([`Sounds::steps`]): exactly one of `seconds`
 /// or `frame` says when.
@@ -182,6 +218,8 @@ impl Sounds {
     pub const MAX_STEP_EVENTS: usize = 16;
     /// Most surface kinds with their own footfalls.
     pub const MAX_SURFACES: usize = 16;
+    /// Most surface kinds (and `*`) with footfall marks and dust.
+    pub const MAX_CONTACTS: usize = 17;
     /// The falling speed (units/s) a landing must reach to be heard.
     pub const LAND_SPEED: f32 = 4.0;
     pub fn is_standard(&self) -> bool {
@@ -217,6 +255,27 @@ impl Sounds {
                     && c.seconds.is_finite()
                     && (0.0..=60.0).contains(&c.seconds)
             })
+            && self.contacts.len() <= Self::MAX_CONTACTS
+            && self.contacts.iter().all(|(kind, c)| {
+                (kind == "*" || bri_content::surface::valid_name(kind))
+                    && c.effect.as_ref().is_none_or(|e| {
+                        !e.is_empty()
+                            && e.len() <= Self::MAX_NAME
+                            && !e.chars().any(char::is_control)
+                    })
+                    && c.decal.as_ref().is_none_or(|d| {
+                        !d.texture.is_empty()
+                            && d.texture.len() <= Self::MAX_NAME
+                            && !d.texture.chars().any(char::is_control)
+                            && d.size.is_finite()
+                            && (0.02..=4.0).contains(&d.size)
+                            && d.seconds.is_finite()
+                            && (0.5..=600.0).contains(&d.seconds)
+                            && d.color
+                                .iter()
+                                .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+                    })
+            })
             && self.steps.len() <= Self::MAX_CLIPS
             && self
                 .fps
@@ -250,6 +309,10 @@ impl Sounds {
     /// The footfalls on surface `kind`.
     pub fn footsteps_on(&self, kind: &str) -> &[String] {
         self.surfaces.get(kind).unwrap_or(&self.footsteps)
+    }
+    /// What a footfall on surface `kind` leaves, if anything.
+    pub fn contact_on(&self, kind: &str) -> Option<&FootContact> {
+        self.contacts.get(kind).or_else(|| self.contacts.get("*"))
     }
     pub fn stride_for(&self, stand_height: f32, scale: f32) -> f32 {
         self.stride.unwrap_or(stand_height * 1.1) * scale
