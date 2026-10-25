@@ -46,6 +46,9 @@ pub struct MapScene {
     pub backdrop: Option<BackdropScene>,
     /// The map's regions with their own fog, when it has them.
     pub regions: Option<bri_content::regions::RegionMap>,
+    /// How the map's zones open onto each other, when it has them: what the
+    /// viewer cannot see into is not drawn ([`bri_content::zones`]).
+    pub zones: Option<bri_content::zones::ZoneGraph>,
     /// The map's decals and their pictures (in order), when it has them.
     pub decals: Option<crate::decals::LoadedDecals>,
     /// The map's triangles by place, for decals added while the game runs.
@@ -183,6 +186,26 @@ fn load_regions(
         serde_json::from_slice(&read(root, name)?).context("Reading the map's regions")?;
     map.validate()?;
     Ok(Some(map))
+}
+
+/// The zone graph `bundle` lists for `scene`, checked against the map's regions
+/// it shares zone numbers with.
+fn load_zones(
+    root: &Path,
+    bundle: &Value,
+    scene: &Scene,
+) -> Result<Option<bri_content::zones::ZoneGraph>> {
+    let Some(name) = bundle
+        .get("zones")
+        .and_then(|s| s.get(&scene.id))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let graph: bri_content::zones::ZoneGraph =
+        serde_json::from_slice(&read(root, name)?).context("Reading the map's zones")?;
+    graph.validate()?;
+    Ok(Some(graph))
 }
 
 /// One scatter layer: the model about its own origin and where it is placed.
@@ -836,6 +859,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         crate::environment_choices::strip_sky(&mut out);
     }
     let regions = load_regions(&root, &bundle, &scene)?;
+    let zones = load_zones(&root, &bundle, &scene)?;
     let receiver_index = std::sync::Arc::new(crate::decals::ReceiverIndex::build(&out));
     let decals = load_decals(&root, &bundle, &scene, &out, &receiver_index)?;
     Ok(MapScene {
@@ -848,6 +872,7 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         scatter,
         backdrop,
         regions,
+        zones,
         decals,
         receiver_index,
         modern_lights,

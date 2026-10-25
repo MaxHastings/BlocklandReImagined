@@ -146,6 +146,8 @@ struct Prepared {
     backdrop: Option<bri_render::scene_loader::BackdropScene>,
     /// The map's regions with their own fog.
     regions: Option<bri_content::regions::RegionMap>,
+    /// How the map's zones open onto each other.
+    zones: Option<bri_content::zones::ZoneGraph>,
     /// The map's decals with the triangles they draw on.
     decals: Option<bri_render::decals::LoadedDecals>,
     receiver_index: Arc<bri_render::decals::ReceiverIndex>,
@@ -519,6 +521,7 @@ fn prepare_map(
         scatter: visual.scatter,
         backdrop: visual.backdrop,
         regions: visual.regions,
+        zones: visual.zones,
         decals: visual.decals,
         receiver_index: visual.receiver_index,
         light_volume,
