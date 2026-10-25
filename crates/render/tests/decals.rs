@@ -123,3 +123,13 @@ fn the_index_finds_what_a_full_read_finds() {
     d.bounds = Some([[500.0, 0.0, 500.0], [510.0, 5.0, 510.0]]);
     assert!(gather_indexed(&scene, &index, &d).1.is_empty());
 }
+
+#[test]
+fn glass_takes_a_decal_but_an_additive_surface_does_not() {
+    use bri_render::scene::AlphaMode;
+    let mut glass = scene();
+    glass.materials[0].alpha = AlphaMode::Blend;
+    assert_eq!(gather(&glass, &decal(-0.0001)).1.len(), 3);
+    glass.materials[0].alpha = AlphaMode::Additive;
+    assert!(gather(&glass, &decal(-0.0001)).1.is_empty());
+}
