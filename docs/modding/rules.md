@@ -1460,3 +1460,9 @@ than 256 changes are told a tick; the rest follow on the next.
   off again, and `unmount_image(p)` empties the hand (slot 0). A weapon
   slung on a bone is worn in slot 2 or 3 while another is in hand, and
   taken off with `mount_image(p, (), slot)` when it is raised.
+- A weapon image state may set `"aimed": <state>` and `"not_aimed": <state>`:
+  where it goes while its holder aims the image (the right button of a
+  `zoom` with `on_jet`) or does not, checked after `loaded` and before ammo
+  and the trigger. An aim-down-sights raise is a `Ready` state with `aimed`
+  into an `Aim` state that plays the raise and holds with `not_aimed` back
+  to `Ready`. If the zoom lists `allowed_states`, include the aim state.

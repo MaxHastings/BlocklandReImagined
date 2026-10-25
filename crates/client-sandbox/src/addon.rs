@@ -98,7 +98,11 @@ impl AddOnCode {
         if !dir.join(MANIFEST_FILE).exists() {
             return Ok(None);
         }
-        let manifest = read(dir, MANIFEST_FILE, 256 * 1024)?;
+        let manifest = read(
+            dir,
+            MANIFEST_FILE,
+            bri_package::library::MAX_MANIFEST_BYTES as usize,
+        )?;
         let json: PackageJson = serde_json::from_slice(&manifest).map_err(|e| {
             vec![Diagnostic::error("client.manifest", e.to_string()).at(MANIFEST_FILE)]
         })?;

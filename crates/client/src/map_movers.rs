@@ -4,7 +4,9 @@
 use crate::audio::PositionalSource;
 use anyhow::Result;
 use bri_content::mover::MoverState;
-use bri_render::scene::{GpuInstances, GpuScene, SceneData, SceneRenderer, SceneTransform};
+use bri_render::scene::{
+    ActorLight, GpuInstances, GpuScene, SceneData, SceneRenderer, SceneTransform,
+};
 use bri_sim::map::MapMover;
 
 /// How near a mover's looped sound is at full volume, and how far it
@@ -162,6 +164,7 @@ impl ClientMovers {
         renderer: &SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        light_at: &dyn Fn([f32; 3]) -> Option<ActorLight>,
     ) -> Result<()> {
         for model in &mut self.models {
             if model.gpu.is_none() {
@@ -171,7 +174,20 @@ impl ClientMovers {
                 model.instances = Some(GpuInstances::new(device, 1)?);
             }
             if let Some(instances) = &mut model.instances {
-                instances.update(queue, std::slice::from_ref(&model.transform))?;
+                // A lit door (`MaterialKind::ActorLit`) takes the light of where it is, as dropped items do.
+                let light = light_at(model.transform.transform.w_axis.truncate().to_array())
+                    .unwrap_or(ActorLight {
+                        ambient: [0.0; 3],
+                        sun_first: 0,
+                        sun_count: 0,
+                        scene_sun: true,
+                    });
+                instances.update_lit(
+                    queue,
+                    std::slice::from_ref(&model.transform),
+                    &[],
+                    &[light],
+                )?;
             }
         }
         Ok(())

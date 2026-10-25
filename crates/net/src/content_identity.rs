@@ -24,8 +24,12 @@ fn admit_animation_asset(
         bri_sim::session::AnimationAssets::within_resource_budget(count, bytes)
     }) {
         bri_console::warn(format!(
-            "{}: animation metadata unsupported: catalog budget",
-            asset.resource
+            "{}: animation metadata dropped, so its clips will not play on the host: the catalog has {}",
+            asset.resource,
+            bri_sim::session::AnimationAssets::budget_overrun(
+                count,
+                bytes.saturating_add(asset.bytes.len())
+            )
         ));
         return false;
     }
@@ -371,7 +375,7 @@ fn body_pose_candidates(
     include_assets: bool,
 ) -> Vec<(String, Option<String>)> {
     let mut models: Vec<_> = contained(dir, bri_package::library::MANIFEST_FILE)
-        .and_then(|p| bounded_bytes(&p, 256 << 10))
+        .and_then(|p| bounded_bytes(&p, bri_package::library::MAX_MANIFEST_BYTES))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .and_then(|m| m["provides"].as_array().cloned())
@@ -389,7 +393,7 @@ fn body_pose_candidates(
         for file in files.flatten() {
             let name = format!("assets/archetypes/{}", file.file_name().to_string_lossy());
             let parsed = contained(dir, &name)
-                .and_then(|p| bounded_bytes(&p, 256 << 10))
+                .and_then(|p| bounded_bytes(&p, bri_package::library::MAX_MANIFEST_BYTES))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
             if let Some(model) = parsed
@@ -498,7 +502,8 @@ pub fn package_body_grips(
             Vec<(bri_content::body::Sockets, bri_content::body::Animations)>,
         > = BTreeMap::new();
         for file in files.flatten() {
-            let Ok(bytes) = bounded_bytes(&file.path(), 256 * 1024) else {
+            let Ok(bytes) = bounded_bytes(&file.path(), bri_package::library::MAX_MANIFEST_BYTES)
+            else {
                 continue;
             };
             let Ok(a) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
@@ -550,7 +555,7 @@ pub fn package_body_grips(
 /// package-relative shape file.
 fn package_bodies(dir: &Path) -> BTreeMap<String, String> {
     contained(dir, bri_package::library::MANIFEST_FILE)
-        .and_then(|path| bounded_bytes(&path, 256 * 1024))
+        .and_then(|path| bounded_bytes(&path, bri_package::library::MAX_MANIFEST_BYTES))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|manifest| manifest["provides"].as_array().cloned())
@@ -745,7 +750,10 @@ pub fn map_providers(
     let mut out = Vec::new();
     for entry in packages.packages.iter().filter(|p| p.role.is_none()) {
         let dir = bri_package::packages::package_dir(content_root, entry)?;
-        let Ok(bytes) = bounded_bytes(&dir.join("package.json"), 256 * 1024) else {
+        let Ok(bytes) = bounded_bytes(
+            &dir.join("package.json"),
+            bri_package::library::MAX_MANIFEST_BYTES,
+        ) else {
             continue;
         };
         let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
@@ -774,7 +782,10 @@ pub fn map_providers(
 /// The `file` of each `kind` entry in the manifest's `provides` under
 /// `dir`, in order; none when it has no readable manifest.
 fn declared_files(dir: &Path, kind: &str) -> Vec<String> {
-    let Ok(bytes) = bounded_bytes(&dir.join("package.json"), 256 * 1024) else {
+    let Ok(bytes) = bounded_bytes(
+        &dir.join("package.json"),
+        bri_package::library::MAX_MANIFEST_BYTES,
+    ) else {
         return Vec::new();
     };
     let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
@@ -1132,15 +1143,18 @@ fn valid_sha256(value: &str) -> bool {
 }
 fn bounded_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
     ensure!(
-        file.metadata()?.len() <= limit,
-        "Oversized native item metadata"
+        size <= limit,
+        "Oversized native item metadata: {} is {size} bytes, over the limit of {limit}",
+        path.display()
     );
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
     ensure!(
         bytes.len() as u64 <= limit,
-        "Native item metadata grew beyond limit"
+        "{} grew past the limit of {limit} bytes while it was read",
+        path.display()
     );
     Ok(bytes)
 }

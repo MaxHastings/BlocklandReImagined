@@ -253,7 +253,9 @@ pub struct Material {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_lit: Option<ActorLit>,
 }
-/// How a moving body takes the scene's light (`MaterialKind::ActorLit`): the sun and the lights each scaled by an authored gain.
+/// How a moving body takes the scene's light (`MaterialKind::ActorLit`): the sun and the lights each scaled by an authored gain, and an
+/// ambient glow (AmbientGlow / 255 of the engine) added on every channel. On a material that is also `vertex_light` the vertex colour
+/// holds the room's light, and the body takes only the glow and the live lights on top of it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActorLit {
@@ -261,6 +263,9 @@ pub struct ActorLit {
     pub sun_gain: f32,
     #[serde(default = "ActorLit::unit")]
     pub light_gain: f32,
+    /// Light added on every channel, 0 to 1.
+    #[serde(default)]
+    pub glow: f32,
 }
 impl ActorLit {
     /// Largest gain an author may set.
@@ -272,6 +277,8 @@ impl ActorLit {
         [self.sun_gain, self.light_gain]
             .iter()
             .all(|g| g.is_finite() && (0.0..=Self::MAX_GAIN).contains(g))
+            && self.glow.is_finite()
+            && (0.0..=1.0).contains(&self.glow)
     }
 }
 impl Default for ActorLit {
@@ -279,6 +286,7 @@ impl Default for ActorLit {
         Self {
             sun_gain: 1.0,
             light_gain: 1.0,
+            glow: 0.0,
         }
     }
 }

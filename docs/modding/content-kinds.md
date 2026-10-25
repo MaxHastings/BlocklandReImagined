@@ -409,6 +409,37 @@ loop). A body with any `steps` makes no timer footfalls, so a clip that
 marks none is silent; a body without them (v20's Blockhead) keeps the
 timer.
 
+A mark can name `"sound": "your-id:climb"` (with `"volume"`, 0 to 4 times the
+sound's own, and `"radius"`, the distance it is heard out to) to play that
+sound source there in place of the surface's footfall, as a ladder's climb
+does; it leaves no mark. `"postures": {"crouch": "your-id:down", "stand":
+"your-id:up", "prone": "your-id:prone"}` sounds once where the body is
+when it enters that posture.
+
+`step_noise` (0 to 1) makes each footfall a clip marks a noise bots hear, as
+they hear fighting, and a mark can say its own with `"noise"`; the gait shows
+only in how often the clip's marks come, so a clip with none (backing up,
+strafing, crawling) makes none. `land_noise` (`{"factor": 0.5,
+"jump_floor": 150}`) makes touching down after a fall a noise of `factor`
+times the speed fallen over the larger of the body's jump speed and
+`jump_floor`, 0 to 1 (a fall at jump speed is `factor`, faster ones louder).
+The host follows the clip itself (`bri-sim`'s `gait`: the same pick and the
+same rate from `ground_speeds` as the client), so bots hear a footfall when a
+client would see it land; scripted threads, intent clips, seats and water are
+not followed. Who hears how far is the listener's own (its kind's hearing).
+
+`takeoff_on_surface: true` makes the take-off of a jump sound once like a
+footfall on the surface underfoot, as `land_on_surface` does the landing.
+`contacts` makes each footfall (a mark, the timer's step, a landing or
+a take-off that sounds as a footfall) leave something on the surface it
+lands on: `"contacts": {"sand": {"effect": "your-id:dust", "decal":
+{"texture": "your-id:print", "size": 0.4, "seconds": 20, "color": [1, 1, 1,
+0.6]}}, "*": {...}}`. Keys are surface kinds, `*` for any other (up to 17); a
+kind listed nowhere leaves nothing. `effect` is an effect burst at the foot,
+`decal` a mark on the ground (size 0.02 to 4, 0.5 to 600 seconds, colour 0 to
+1; its texture is a texture of the Add-On's weapon pack, and one that did
+not load leaves none).
+
 `clips` ties a sound to a moment of one of the body's clips, by the clip's
 name: `"clips": {"h_kill_back_gut": {"sound": "your-id:body_fall",
 "seconds": 0.57}}` plays the sound where the body is once the clip has run

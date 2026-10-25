@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 pub const MANIFEST_FILE: &str = "package.json";
 pub const MANIFEST_SCHEMA: u32 = 1;
-const MAX_MANIFEST_BYTES: usize = 256 * 1024;
+use bri_package::library::MAX_MANIFEST_BYTES;
 const MAX_COMPANIONS: usize = 8;
 
 /// Unknown fields are errors, so a misspelt field is reported rather than
@@ -88,11 +88,18 @@ impl Manifest {
     }
     fn parse_inner(bytes: &[u8], expected: &str) -> Result<Self, Rejected<Self>> {
         let at = location(expected, MANIFEST_FILE);
-        if bytes.len() > MAX_MANIFEST_BYTES {
+        if bytes.len() as u64 > MAX_MANIFEST_BYTES {
             return Err(Box::new((
                 None,
                 vec![
-                    Diagnostic::error("manifest.too_large", "package.json is over 256 KiB").at(at),
+                    Diagnostic::error(
+                        "manifest.too_large",
+                        format!(
+                            "package.json is {} bytes, over the limit of {MAX_MANIFEST_BYTES}",
+                            bytes.len()
+                        ),
+                    )
+                    .at(at),
                 ],
             )));
         }

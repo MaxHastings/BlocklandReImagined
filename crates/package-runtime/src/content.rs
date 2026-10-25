@@ -987,8 +987,12 @@ impl BrickOutputDef {
 }
 /// Most touch zones one behaviour declares, and brick kinds one zone names.
 pub const MAX_ZONES: usize = 16;
+/// Most bodies one mini-game lists.
+pub const MAX_MINIGAME_BODIES: usize = 4096;
 /// Most commands one package declares.
-pub const MAX_COMMANDS: usize = 256;
+pub const MAX_COMMANDS: usize = 4096;
+/// Most state keys one behaviour declares, player and server-wide together.
+pub const MAX_STATE_KEYS: usize = 4096;
 /// Most extra script files one behaviour loads beside its main `script`.
 pub const MAX_SCRIPT_MODULES: usize = 32;
 pub const MAX_ZONE_KINDS: usize = 16;
@@ -1174,7 +1178,8 @@ impl Behaviour {
         }
         ensure!(
             self.commands.len() <= MAX_COMMANDS,
-            "at most {MAX_COMMANDS} commands"
+            "{} commands is over the limit of {MAX_COMMANDS}",
+            self.commands.len()
         );
         ensure!(self.zones.len() <= MAX_ZONES, "at most {MAX_ZONES} zones");
         for z in &self.zones {
@@ -1377,9 +1382,10 @@ impl Behaviour {
                 "player key `{key}` cannot be per mini-game; make it server-wide"
             );
         }
+        let keys = self.state.player.len() + self.state.global.len();
         ensure!(
-            self.state.player.len() + self.state.global.len() <= 256,
-            "at most 256 state keys"
+            keys <= MAX_STATE_KEYS,
+            "{keys} state keys is over the limit of {MAX_STATE_KEYS}"
         );
         if let Some(over) = self.undo_confirm_over {
             ensure!(
@@ -1533,8 +1539,9 @@ impl ModeMiniGame {
             self.player_type
         );
         ensure!(
-            self.bodies.len() <= 256,
-            "a minigame lists at most 256 bodies"
+            self.bodies.len() <= MAX_MINIGAME_BODIES,
+            "a minigame lists {} bodies, over the limit of {MAX_MINIGAME_BODIES}",
+            self.bodies.len()
         );
         for body in &self.bodies {
             ensure!(
@@ -1928,6 +1935,58 @@ pub struct ArchetypeSounds {
     /// Frames a second of the clips, for steps marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// How loud each marked footfall is to bots, 0 to 1 (see the content
+    /// kinds document: `step_noise`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_noise: Option<f32>,
+    /// The noise of landing from a fall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land_noise: Option<LandNoiseDef>,
+    /// A sound for entering each posture (`stand`, `crouch`, `prone`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub postures: BTreeMap<String, String>,
+    /// Taking off in a jump sounds like a footfall on the surface underfoot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub takeoff_on_surface: bool,
+    /// What a footfall leaves on a surface kind (`*` for any other): dust
+    /// and a mark (see the content kinds document: `contacts`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub contacts: BTreeMap<String, FootContactDef>,
+}
+/// [`ArchetypeSounds::land_noise`]: `factor` times the speed fallen over the
+/// larger of the body's jump speed and `jump_floor`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LandNoiseDef {
+    pub factor: f32,
+    pub jump_floor: f32,
+}
+/// [`ArchetypeSounds::contacts`]: what a footfall leaves on one surface kind.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootContactDef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decal: Option<FootDecalDef>,
+}
+/// [`FootContactDef::decal`]: a footprint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootDecalDef {
+    pub texture: String,
+    /// Across, in units at scale 1: 0.02 to 4.
+    pub size: f32,
+    /// Seconds it stays: 0.5 to 600.
+    pub seconds: f32,
+    /// Colour and opacity, each 0 to 1; white by default.
+    #[serde(default = "FootDecalDef::white")]
+    pub color: [f32; 4],
+}
+impl FootDecalDef {
+    fn white() -> [f32; 4] {
+        [1.0; 4]
+    }
 }
 /// [`ArchetypeSounds::steps`]: one footfall of a clip, by `seconds` or `frame`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1940,6 +1999,17 @@ pub struct StepEventDef {
     /// The body node that lands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foot: Option<String>,
+    /// Another sound source in place of the surface's footfall, with its
+    /// `volume` (0 to 4) and `radius`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
+    /// How loud the mark is to bots, 0 to 1, in place of `step_noise`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise: Option<f32>,
 }
 /// [`ArchetypeSounds::clips`]: a sound at a moment of a clip.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2068,6 +2138,43 @@ impl ArchetypeDef {
                         && ids.iter().all(|s| text(s, 128))
                 }),
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds
+                .step_noise
+                .is_none_or(|n| n.is_finite() && (0.0..=1.0).contains(&n))
+                && self.sounds.land_noise.as_ref().is_none_or(|l| {
+                    l.factor.is_finite()
+                        && (0.0..=10.0).contains(&l.factor)
+                        && l.jump_floor.is_finite()
+                        && l.jump_floor > 0.0
+                }),
+            "sounds.step_noise is 0 to 1; sounds.land_noise has a factor of 0 to 10 and a positive jump_floor"
+        );
+        ensure!(
+            self.sounds.postures.len() <= 3
+                && self.sounds.postures.iter().all(|(posture, sound)| {
+                    ["stand", "crouch", "prone"].contains(&posture.as_str()) && text(sound, 128)
+                }),
+            "sounds.postures names stand, crouch or prone, each with a sound profile"
+        );
+        ensure!(
+            self.sounds.contacts.len() <= 17
+                && self.sounds.contacts.iter().all(|(kind, c)| {
+                    (kind == "*" || bri_content::surface::valid_name(kind))
+                        && c.effect.as_ref().is_none_or(|e| text(e, 128))
+                        && c.decal.as_ref().is_none_or(|d| {
+                            text(&d.texture, 128)
+                                && d.size.is_finite()
+                                && (0.02..=4.0).contains(&d.size)
+                                && d.seconds.is_finite()
+                                && (0.5..=600.0).contains(&d.seconds)
+                                && d.color
+                                    .iter()
+                                    .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+                        })
+                }),
+            "sounds.contacts names up to 17 surface kinds (or `*`), each with an effect and a decal of size 0.02 to 4, 0.5 to 600 seconds, colour 0 to 1"
         );
         ensure!(
             self.sounds
