@@ -463,6 +463,9 @@ pub struct Look {
     /// random; none plays the `death` role's clip.
     #[serde(default, skip_serializing_if = "bri_content::body::Deaths::is_empty")]
     pub deaths: bri_content::body::Deaths,
+    /// A body that goes limp when it dies, in place of its death clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ragdoll: Option<bri_content::body::Ragdoll>,
     /// The body's camera: field of view, first-person offset, bob, weapon
     /// sway and third-person pivot. The default is the stock camera.
     #[serde(default, skip_serializing_if = "CameraProfile::is_default")]
@@ -612,6 +615,9 @@ impl Archetype {
         }
         bri_content::body::validate_animations(&self.look.animations)?;
         self.look.deaths.validate()?;
+        if let Some(ragdoll) = &self.look.ragdoll {
+            ragdoll.validate()?;
+        }
         if !self.look.deaths.is_empty() {
             ensure!(
                 !self.look.deaths.crouched.is_empty(),
@@ -652,6 +658,7 @@ impl Archetype {
                 third_person_only: false,
                 animations: Animations::new(),
                 deaths: Default::default(),
+                ragdoll: None,
                 camera: CameraProfile::default(),
                 intent_clips: BTreeMap::new(),
                 intent_sounds: BTreeMap::new(),

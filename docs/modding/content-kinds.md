@@ -299,7 +299,30 @@ must list `crouched`, and one with `movement.prone` must list `prone` (the
 Add-On does not load without them, so a posture never falls in a standing
 clip). A listed clip the model lacks is named in the Add-On faults log.
 Without `deaths` the body plays its `death`
-role. A dead body lies 5 seconds (v20's `$CorpseTimeoutValue`) and then goes in a
+role. `ragdoll` makes the body go limp instead when it dies, drawn on each
+player's screen only (nothing about it reaches the host or gameplay, and
+every screen simulates its own, so they do not tumble identically):
+`"ragdoll": {"bones": [{"node": "pelvis", "shapes": [{"kind": "capsule",
+"radius": 0.12, "half_length": 0.1, "axis": "y", "offset": [0, 0, 0]}],
+"mass": 0.22}, {"node": "thigh_l", "shapes": [{...}], "mass": 0.1,
+"linear_damping": 1, "angular_damping": 0.5, "joint": {"swing": 0.5,
+"swing_second": 0.2, "twist": 0.2, "stiffness": 120, "damping": 1}},
+{"node": "shin_l", "shapes": [{...}], "mass": 0.1, "joint": {"swing": 0,
+"twist": 0, "hinge": [-1.5, 0]}}], "friction": 0.8, "max_speed": 40,
+"max_spin": 10, "freeze": 10}`. Each bone becomes a rigid body made of up to
+8 `shapes` (a `capsule` lying along the node's `axis`, a `box` or a `ball`,
+each centred `offset` from the node) weighing `mass`, jointed at the bone's
+node to the nearest bone above it in the skeleton that is listed. The first
+bone is the root and has no joint; the others have a ball joint (`swing`,
+optional `swing_second`, `twist`, radians, 0 to pi, round the pose it died in)
+or a hinge (`hinge: [low, high]` about the node's x axis), with `stiffness`
+(how hard it pulls back from its limits) and `damping` (how much it resists
+moving). The body goes limp at once. `max_speed` and `max_spin` cap every
+bone, `bounce` and each bone's `linear_damping` and `angular_damping` shape
+its fall, and `freeze` seconds after it goes limp hold it where it lies (0:
+never). It lies as long as `corpse_seconds` and fades as `corpse_fade` says.
+A body over the physics budget, or whose skeleton lacks a listed node, plays
+its death clip as before and the Add-On faults log says why. A dead body lies 5 seconds (v20's `$CorpseTimeoutValue`) and then goes in a
 puff; `corpse_seconds` (0 to 600) lets it lie longer, and `corpse_fade` (up to
 `corpse_seconds`) makes it fade out over the last of those seconds instead of
 puffing away. The client names what a

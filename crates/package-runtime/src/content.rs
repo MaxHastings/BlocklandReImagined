@@ -1857,6 +1857,10 @@ pub struct ArchetypeDef {
     /// the base's.
     #[serde(default)]
     pub deaths: Option<bri_content::body::Deaths>,
+    /// A body that goes limp when it dies, drawn on each screen only and
+    /// replacing its death clip (see the content kinds document: `ragdoll`).
+    #[serde(default)]
+    pub ragdoll: Option<bri_content::body::Ragdoll>,
     /// The model's clip for each of its movement controller's intents
     /// (`{"11": "triple"}`), replacing the base's.
     #[serde(default)]
@@ -2099,6 +2103,9 @@ impl ArchetypeDef {
         }
         if let Some(deaths) = &self.deaths {
             deaths.validate()?;
+        }
+        if let Some(ragdoll) = &self.ragdoll {
+            ragdoll.validate()?;
         }
         ensure!(
             self.max_time_scale
