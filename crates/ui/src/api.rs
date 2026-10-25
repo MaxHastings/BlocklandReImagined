@@ -1941,6 +1941,9 @@ pub enum UiUpdate {
         color: [f32; 4],
         seconds: f32,
     },
+    /// A full-screen overlay on a curve of seconds: a rule's
+    /// `screen_overlay`.
+    Overlay(bri_content::screen_overlay::Overlay),
     /// Jet energy fraction for `HUD_EnergyBar`; `None` hides it
     /// (`clientCmdShowEnergyBar`, from the datablock's `showEnergyBar`).
     Energy(Option<f32>),

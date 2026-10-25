@@ -512,6 +512,8 @@ pub enum Notice {
         color: [f32; 4],
         seconds: f32,
     },
+    /// A full-screen overlay on a curve (rules' `screen_overlay`).
+    Overlay(bri_content::screen_overlay::Overlay),
     /// The aim kicked by a rule (`view_shake`): out along `direction` to
     /// `max`, back to `min`, radians and radians a second.
     ViewShake {

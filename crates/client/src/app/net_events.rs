@@ -808,6 +808,7 @@ impl App {
                         bri_sim::session::Notice::Flash { color, seconds } => {
                             UiUpdate::Flash { color, seconds }
                         }
+                        bri_sim::session::Notice::Overlay(overlay) => UiUpdate::Overlay(overlay),
                         bri_sim::session::Notice::Line {
                             feed,
                             text,
