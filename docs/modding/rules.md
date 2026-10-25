@@ -1297,6 +1297,16 @@ the pack's choices in v20's order, a slot's list (`hat`, `face`, `decal`)
 and each hat's accents (`accents.helmet`), so a rule reading v20's list
 positions (`$pref::Avatar::Hat` 6) finds the part. Both last across
 respawns until the rule changes them.
+`set_body_dress(p, #{ skins: #{ face: "face_3.png", shirt: "shirt_1.png" },
+scale: 1.12 })` (`player`) dresses a player whose archetype draws an Add-On's
+own body: each `skins` entry lays an image file of the body's package (its
+`assets`, `.png`) over the model's material of that name, so one body serves
+many uniforms, and `scale` (0.2 to 5) draws the body bigger or smaller without
+changing what it collides with or how fast it moves (AA's `DrawScale`).
+A name the body or its package lacks is named in the Add-On faults log and the
+material keeps its texture. `set_body_dress(p, ())` gives the body its own
+again. It lasts across respawns until the rule changes it, and a client's own
+avatar never carries one.
 
 **Filling.** `paint_fill(p, brick, color, limit)` paints `brick` and every
 brick of the same colour joined to it through shared faces (side by side,

@@ -1856,6 +1856,13 @@ pub struct ArchetypeDef {
     /// How the ground locomotion clip is picked: `torque` (v20) or `ue2_four_way` (Army Ops).
     #[serde(default)]
     pub locomotion_pick: Option<bri_content::body::LocomotionPick>,
+    /// Seconds a dead body lies before it is gone (v20's 5), 0 to 600.
+    #[serde(default)]
+    pub corpse_seconds: Option<f32>,
+    /// The last of those seconds the body fades out over, instead of
+    /// vanishing in a puff; 0 to `corpse_seconds`.
+    #[serde(default)]
+    pub corpse_fade: Option<f32>,
     /// Its own movement rules: a `controller` this Add-On or one it
     /// depends on provides (`namespace:controller/name`).
     #[serde(default)]
@@ -1982,6 +1989,17 @@ impl ArchetypeDef {
             self.action_blend
                 .is_none_or(|v| v.is_finite() && (0.0..=2.0).contains(&v)),
             "action_blend must be 0 to 2"
+        );
+        ensure!(
+            self.corpse_seconds.is_none_or(
+                |v| v.is_finite() && (0.0..=bri_content::body::MAX_CORPSE_SECONDS).contains(&v)
+            ),
+            "corpse_seconds must be 0 to {}",
+            bri_content::body::MAX_CORPSE_SECONDS
+        );
+        ensure!(
+            self.corpse_fade.is_none_or(|v| v.is_finite() && v >= 0.0),
+            "corpse_fade must be 0 or more"
         );
         if let Some(camera) = &self.camera {
             camera.validate()?;

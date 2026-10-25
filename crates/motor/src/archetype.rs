@@ -273,9 +273,27 @@ pub struct Look {
         skip_serializing_if = "bri_content::body::LocomotionPick::is_torque"
     )]
     pub locomotion_pick: bri_content::body::LocomotionPick,
+    /// Seconds a dead body lies before it is gone (v20's `$CorpseTimeoutValue`,
+    /// 5): the server clears its collision then and clients stop drawing it.
+    #[serde(
+        default = "default_corpse_seconds",
+        skip_serializing_if = "is_default_corpse_seconds"
+    )]
+    pub corpse_seconds: f32,
+    /// The last of `corpse_seconds` the body fades out over, instead of
+    /// vanishing in v20's puff; 0 vanishes at once.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub corpse_fade: f32,
 }
 fn is_zero(v: &f32) -> bool {
     *v == 0.0
+}
+pub use bri_content::body::{CORPSE_SECONDS, MAX_CORPSE_SECONDS};
+fn default_corpse_seconds() -> f32 {
+    CORPSE_SECONDS
+}
+fn is_default_corpse_seconds(v: &f32) -> bool {
+    *v == CORPSE_SECONDS
 }
 /// v20's `PlayerData::maxTimeScale`.
 pub const MAX_TIME_SCALE: f32 = 1.5;
@@ -292,6 +310,20 @@ pub const HORSE_SHAPE: &str = "v20.shape.horse";
 /// client code can draw the player its own way.
 pub const NO_BODY: &str = "none";
 impl Look {
+    /// How much of a body that has lain dead `lying` seconds still shows:
+    /// `None` once `corpse_seconds` are up, otherwise its opacity, 1 until
+    /// `corpse_fade` before the end and falling to 0 across it.
+    pub fn corpse_opacity(&self, lying: f32) -> Option<f32> {
+        let left = self.corpse_seconds - lying;
+        if left <= 0.0 {
+            return None;
+        }
+        Some(if self.corpse_fade > 0.0 {
+            (left / self.corpse_fade).min(1.0)
+        } else {
+            1.0
+        })
+    }
     pub fn is_horse(&self) -> bool {
         self.model.eq_ignore_ascii_case(HORSE_SHAPE)
     }
@@ -325,6 +357,10 @@ impl Archetype {
                 && (0.1..=16.0).contains(&self.look.max_time_scale)
                 && self.look.action_blend.is_finite()
                 && (0.0..=2.0).contains(&self.look.action_blend)
+                && self.look.corpse_seconds.is_finite()
+                && (0.0..=MAX_CORPSE_SECONDS).contains(&self.look.corpse_seconds)
+                && self.look.corpse_fade.is_finite()
+                && (0.0..=self.look.corpse_seconds).contains(&self.look.corpse_fade)
                 && self.sounds.valid()
                 && self.hit_bones.len() <= bri_content::hit_bones::MAX_HIT_BONES
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
@@ -391,6 +427,8 @@ impl Archetype {
                 max_time_scale: MAX_TIME_SCALE,
                 action_blend: 0.0,
                 locomotion_pick: Default::default(),
+                corpse_seconds: CORPSE_SECONDS,
+                corpse_fade: 0.0,
             },
             uses_items: true,
             sockets: Sockets::default(),
@@ -628,6 +666,26 @@ mod tests {
         let back: Archetypes = serde_json::from_str(&json).unwrap();
         back.validate().unwrap();
         assert_eq!(back, table);
+    }
+
+    #[test]
+    fn a_body_fades_over_the_end_of_its_corpse_seconds() {
+        let mut look = Archetype::v20(PlayerType::Standard).look;
+        // v20: whole for five seconds, then gone.
+        assert_eq!(look.corpse_opacity(4.9), Some(1.0));
+        assert_eq!(look.corpse_opacity(5.0), None);
+        look.corpse_seconds = 20.0;
+        look.corpse_fade = 4.0;
+        assert_eq!(look.corpse_opacity(15.0), Some(1.0));
+        assert_eq!(look.corpse_opacity(18.0), Some(0.5));
+        assert_eq!(look.corpse_opacity(20.0), None);
+        // A fade longer than the time the body lies is refused.
+        let mut table = Archetypes::default();
+        let mut lasting = Archetype::v20(PlayerType::Standard);
+        lasting.id = "moon:archetype/lasting".into();
+        lasting.look = look;
+        lasting.look.corpse_fade = 21.0;
+        assert!(table.add(lasting).is_err());
     }
 
     #[test]
