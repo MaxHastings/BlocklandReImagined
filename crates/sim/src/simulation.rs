@@ -856,6 +856,20 @@ impl Simulation {
             .flatten()
             .map(|contact| contact.dist)
     }
+    /// The point on map collider `collider`'s surface nearest `point` (or
+    /// `point` itself inside it).
+    pub fn map_collider_closest(&self, collider: usize, point: Vec3) -> Option<Vec3> {
+        let c = self
+            .physics
+            .colliders
+            .get(*self.map_handles.get(collider)?)?;
+        let projection = c.shape().project_point(
+            c.position(),
+            rapier3d::prelude::Vector::from_array(point.to_array()),
+            true,
+        );
+        Some(Vec3::from(projection.point.to_array()))
+    }
     /// How far `point` is from map collider `collider`'s surface (zero
     /// on it or inside it).
     pub fn map_collider_gap(&self, collider: usize, point: Vec3) -> Option<f32> {

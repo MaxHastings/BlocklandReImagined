@@ -136,6 +136,7 @@ run are left out. A new mini-game always starts with the default for every such 
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_prone(p, prone)`, `set_lean(p, lean)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `set_aim_scale(p, scale)`, `kick_view(p, pitch, yaw)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_walking(p, walking)` (a body with `movement.momentum` accelerates by its `walking_share` while walking; until changed or respawn), `set_can_jump(p, can)` (`false` bars the body from jumping whatever it presses, as AA's `CanJump` gates do: crouched, reloading, landing; until changed or respawn), `set_crouched(p, crouched)` (holds the body crouched whatever its crouch key does, as AA's toggled C; it stands once released if there is room; until changed or respawn), `set_prone(p, prone)`, `set_lean(p, lean)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`, `scale_velocity(p, horizontal, vertical)` (multiplies the player's level and vertical velocity, each 0 to 2: a jump that keeps only part of its run), `view_shake(p, direction, min, max, rate)` (kicks the player's real aim, in radians: out along `direction` (0 up, 1.57 across) to `max` (0 to pi/2), back at half the speed to `min`, which stays as a small offset; `rate` radians a second. A hit's view shake, AA's `ClientStartViewShake`), `set_drive(p, x, z, accel, max_speed, seconds)` (pushes a body lying prone on the ground along the ground direction `x, z` at `accel` units a second squared until it moves `max_speed` along it, for up to 10 seconds; it ends early when the body leaves the ground or stands. A combat roll. `seconds` 0 ends one; it is part of the player's state, so prediction agrees): `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `set_image_state(p, state)`, `quick_use(p, item)`: `player` |
+| `movers_within(x, y, z, radius)` | | `select_tool(p, slot)` (takes the tool in a slot out, or `()` to put tools away), `place_item(item, x, y, z, nx, ny, nz, mover, seconds)` (see Placed items), `pick_up(p, drop)` (see Placed items): `player`; `mover_show(name, shown)`: `movers` |
 | `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`, `orbit_object(p, object, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`, `set_brick_shown(brick, rendering, colliding, raycasting)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
@@ -1431,3 +1432,26 @@ out of a volume: `event` is `#{ kind, player, id, priority, properties }`, `kind
 being `"enter"` or `"leave"` and the rest the volume as `volumes_at` gives it. A
 player who dies or leaves the game leaves every volume they were in. No more
 than 256 changes are told a tick; the rest follow on the next.
+
+## Placed items, hidden movers and blast shapes
+
+- `place_item(item, x, y, z, nx, ny, nz, mover, seconds)` sets a world item
+  on a surface facing along the normal `n`. It is held still and is not
+  picked up by walking onto it. Give a map mover's name as `mover` and it
+  rides that mover as it swings; `()` leaves it on the ground.
+  `movers_within(x, y, z, radius)` lists the map movers whose collision lies
+  within `radius` as `[#{ id, gap, x, y, z }]`.
+- An item with `"use_only": true` in `weapons.json` is not taken by walking
+  onto it. A rule's `on_use_object` takes the Use key's click on it, and
+  `pick_up(p, drop)` then takes it as touching would (its `on_pickup` may
+  leave it).
+- A map mover declared `"hidden": true` starts with no collision and no
+  drawing; `mover_show(name, true)` shows it and `false` hides it again. A
+  breached door's twin is this.
+- `select_tool(p, slot)` takes the tool in that slot out as its number key
+  would.
+- `explode(x, y, z, radius, damage, brick_radius, explosion, kill_radius)`
+  kills outright within `kill_radius`; add `dx, dy, dz, cos` to hurt only
+  what lies within that cone from the centre (a launcher's back-blast).
+- A weapon image state may set `"lock": {"movement": true, "look": true}` to
+  hold its holder's walk and view still while it runs.

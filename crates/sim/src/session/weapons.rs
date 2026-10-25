@@ -313,6 +313,7 @@ impl Session {
         for owner in owners {
             let actor = ActorId(owner);
             let scale = match self.weapons.image_state(actor, 0) {
+                Some((_, state)) if state.lock.movement => 0.0,
                 Some((image, _)) => image.movement.as_ref().map_or(1.0, |m| {
                     let reloading = self.weapons.ammo(actor).is_some_and(|a| a.reloading);
                     let aiming = self.peers[&owner].input.jet
