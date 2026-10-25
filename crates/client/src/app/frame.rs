@@ -1433,6 +1433,40 @@ impl App {
                         player.feet,
                     );
                 }
+                // Footfalls the clip marks sound as the clip goes by them, on
+                // the surface under the foot they name.
+                if let Some(span) = avatar.take_clip_span() {
+                    let sounds = &view.archetypes.resolve(player.archetype).sounds;
+                    let feet = Vec3::from(player.feet);
+                    let avatar_assets = &self.avatar.avatar_assets;
+                    for (sound, at) in self.fx.footsteps.on_clip(
+                        *owner,
+                        sounds,
+                        &span,
+                        |event| match event
+                            .foot
+                            .as_deref()
+                            .and_then(|name| avatar.world_node(avatar_assets, name))
+                        {
+                            Some(node) => {
+                                let node = node.w_axis.truncate();
+                                [node.x, feet.y, node.z]
+                            }
+                            None => feet.to_array(),
+                        },
+                        |at| {
+                            let at = Vec3::from(at);
+                            building
+                                .surface_at(at + Vec3::Y * 0.5, at - Vec3::Y)
+                                .ok()
+                                .flatten()
+                                .map_or(bri_content::surface::DEFAULT, |(_, kind)| kind)
+                                .to_string()
+                        },
+                    ) {
+                        self.audio.profile(&sound, bri_audio::Placement::World(at));
+                    }
+                }
                 avatar.remember_drawn_offset(gone.contains(owner));
                 self.cosmetic_faults.absorb("avatar pose", posed);
             }
