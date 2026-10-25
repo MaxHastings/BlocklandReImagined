@@ -1687,10 +1687,9 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         alpha=offset+range*min(t,period-t)/(period*0.5);
     }
     if alpha<=material[0].y {discard;}
-    // Diagnostic 8: the material kind as a grey level (code/16); 9: the picture alone; 10: twice the vertex colour alone;
+    // Diagnostic (8 and 12 are in fs_main) 9: the picture alone; 10: twice the vertex colour alone;
     // 11: picture times twice the vertex colour, before fog.
     switch DEBUG_TERM {
-        case 8u: {return vec4<f32>(vec3<f32>(material[0].x/16.0),1.0);}
         case 9u: {return vec4<f32>(clamp(display_color(textureSample(layer0,tiled,v.uv).rgb),vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
         case 10u: {return vec4<f32>(clamp(v.color.rgb*2.0,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
         case 11u: {return vec4<f32>(clamp(display_color(textureSample(layer0,tiled,v.uv).rgb)*v.color.rgb*2.0,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
@@ -1846,6 +1845,12 @@ fn multiplicative_surface(v:VertexOut)->vec4<f32> {
 // 5 multiplicative (unlit frame blends). `WorldPipelines::group_of` picks it from the material.
 override SURFACE_GROUP:u32=0u;
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+    // Diagnostic 8: the material kind code as bits (r 1, g 2, b 4; solid, for every kind); 12: bit 8 in r, bit 16 in g.
+    if DEBUG_TERM==8u || DEBUG_TERM==12u {
+        let code=u32(material[0].x+0.5);
+        if DEBUG_TERM==8u {return vec4<f32>(f32(code&1u),f32((code>>1u)&1u),f32((code>>2u)&1u),1.0);}
+        return vec4<f32>(f32((code>>3u)&1u),f32((code>>4u)&1u),0.0,1.0);
+    }
     if SURFACE_GROUP==5u {return multiplicative_surface(v);}
     return shade_surface(v);
 }
