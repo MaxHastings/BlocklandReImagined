@@ -4718,6 +4718,7 @@ mod tests {
             sitting: false,
             ghost: None,
             base_body: None,
+            held: false,
         }
     }
     #[test]

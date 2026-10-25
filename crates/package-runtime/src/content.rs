@@ -1887,6 +1887,9 @@ pub struct ArchetypeDef {
     /// Seconds a dead body lies before it is gone (v20's 5), 0 to 600.
     #[serde(default)]
     pub corpse_seconds: Option<f32>,
+    /// The body lies until its player spawns again, whatever `corpse_seconds` says.
+    #[serde(default)]
+    pub corpse_stays: Option<bool>,
     /// The last of those seconds the body fades out over, instead of
     /// vanishing in a puff; 0 to `corpse_seconds`.
     #[serde(default)]
