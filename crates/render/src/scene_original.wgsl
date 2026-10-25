@@ -272,7 +272,8 @@ fn room_light(position:vec3<f32>,normal:vec3<f32>)->vec4<f32> {
 }
 // A receiver in one cascade's map: map coordinates, depth along the sun,
 // and whether it lies inside that map (with room for the filter footprint).
-struct CascadeCoord { uv:vec2<f32>, depth:f32, cascade:i32 };
+// slope: how fast the receiver's plane deepens per unit of uv (PCSS only).
+struct CascadeCoord { uv:vec2<f32>, depth:f32, cascade:i32, slope:vec2<f32> };
 fn cascade_coord(position:vec3<f32>,n:vec3<f32>,cascade:i32)->CascadeCoord {
     var out:CascadeCoord;
     // Offset along the normal by the cascade's texel size against acne.
@@ -280,6 +281,23 @@ fn cascade_coord(position:vec3<f32>,n:vec3<f32>,cascade:i32)->CascadeCoord {
     out.uv=clip.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5);
     out.depth=clip.z;
     out.cascade=cascade;
+    out.slope=vec2<f32>(0.0);
+    if shadows.params.z>0.0 {
+        // The receiver's plane in the map: for an orthographic map, the clip
+        // normal is the world normal's clip direction over each axis' squared
+        // scale. Depth change per clip unit, clamped where the plane is edge
+        // on to the sun (no direct light there anyway), then per uv unit.
+        let m=shadows.matrices[cascade];
+        let r0=vec3<f32>(m[0].x,m[1].x,m[2].x);
+        let r1=vec3<f32>(m[0].y,m[1].y,m[2].y);
+        let r2=vec3<f32>(m[0].z,m[1].z,m[2].z);
+        let g=(m[0].xyz*n.x+m[1].xyz*n.y+m[2].xyz*n.z)/vec3<f32>(dot(r0,r0),dot(r1,r1),dot(r2,r2));
+        let edge=select(1.0,-1.0,g.z<0.0)*max(abs(g.z),1e-9);
+        // Ten units across per unit down: steeper is nearly edge on.
+        let limit=10.0*shadows.depth_scale[cascade]*shadows.texels[cascade]*shadows.params.y*0.5;
+        let slope=clamp(-g.xy/edge,vec2<f32>(-limit),vec2<f32>(limit));
+        out.slope=slope*vec2<f32>(2.0,-2.0);
+    }
     return out;
 }
 fn inside_map(c:CascadeCoord)->bool {
@@ -336,9 +354,107 @@ fn shadow_block(uv:vec2<f32>,c:CascadeCoord,occluder_layer:i32,gap:f32)->vec4<f3
     let between=occluders>casters+vec4<f32>(gap) & occluders<vec4<f32>(c.depth-gap);
     return select(vec4<f32>(1.0),vec4<f32>(0.0),casters<vec4<f32>(c.depth) & !between);
 }
+// PCSS sun shadows (the PCSS Sun Shadows option; shadows.params.z is 1).
+// The caster layer is searched around the receiver for blockers; their mean
+// distance back along the sun sets how wide the filter disc is, so a shadow
+// is sharp where its caster touches the surface and soft far from it.
+const PCSS_SEARCH_TAPS:i32=8;
+const PCSS_FILTER_TAPS:i32=16;
+// The disc never grows past this many texels, nor shrinks below the width of
+// the ordinary 3x3 filter's softest edge.
+const PCSS_MAX_TEXELS:f32=10.0;
+const PCSS_MIN_TEXELS:f32=1.5;
+// A pixel's own noise, so taps rotate differently from pixel to pixel.
+var<private> sun_pixel:vec2<f32>;
+fn pcss_noise()->f32 {
+    return fract(52.9829189*fract(dot(floor(sun_pixel),vec2<f32>(0.06711056,0.00583715))));
+}
+// Tap i of n on a unit disc, turned by angle; points spread evenly.
+fn pcss_disc(i:i32,n:i32,angle:f32)->vec2<f32> {
+    let a=f32(i)*2.3999632+angle;
+    return sqrt((f32(i)+0.5)/f32(n))*vec2<f32>(cos(a),sin(a));
+}
+// One bilinear comparison at uv against receiver depth z with the same caster
+// and occluder rules as cascade_lit; 1 is lit.
+fn pcss_tap(uv:vec2<f32>,z:f32,cascade:i32,occluder_layer:i32,gap:f32)->f32 {
+    let size=shadows.params.y;
+    let f=uv*size-vec2<f32>(0.5);
+    // The 2x2 texel block holding the point, kept on the map.
+    let base=clamp(floor(f),vec2<f32>(0.0),vec2<f32>(size-2.0));
+    let t=clamp(f-base,vec2<f32>(0.0),vec2<f32>(1.0));
+    let corner=(base+vec2<f32>(1.0))/size;
+    let casters=textureGather(shadow_map,shadow_point,corner,cascade);
+    let occluders=textureGather(shadow_map,shadow_point,corner,occluder_layer);
+    let between=occluders>casters+vec4<f32>(gap) & occluders<vec4<f32>(z-gap);
+    let lit=select(vec4<f32>(1.0),vec4<f32>(0.0),casters<vec4<f32>(z) & !between);
+    // Gather order is (0,1), (1,1), (1,0), (0,0).
+    return dot(lit,vec4<f32>((1.0-t.x)*t.y,t.x*t.y,t.x*(1.0-t.y),(1.0-t.x)*(1.0-t.y)));
+}
+// The sum of a vector's four components, written out: DXC on Windows rejects
+// dot() against a constant vector of ones here ("DXIL intrinsic overload").
+fn pcss_sum4(v:vec4<f32>)->f32 {return v.x+v.y+v.z+v.w;}
+fn pcss_lit(c:CascadeCoord)->f32 {
+    let size=shadows.params.y;
+    let texel=shadows.texels[c.cascade];
+    let scale=shadows.depth_scale[c.cascade];
+    let occluder_layer=c.cascade+i32(shadows.forward_count.w);
+    let gap=0.1*scale;
+    // Half a texel of depth, so a surface never shadows itself.
+    let bias=0.5*texel*scale;
+    let angle=6.2831853*pcss_noise();
+    let last=i32(size)-1;
+    let depth_minus_bias=c.depth-bias;
+    // The four texels around the receiver always count, so a shadow even one
+    // texel wide is never missed by the sparser ring below. Each is compared
+    // at its own place on the receiver's plane.
+    let core_base=clamp(floor(c.uv*size-vec2<f32>(0.5)),vec2<f32>(0.0),vec2<f32>(size-2.0));
+    let core=textureGather(shadow_map,shadow_point,(core_base+vec2<f32>(1.0))/size,c.cascade);
+    let core_to_texel=(core_base+vec2<f32>(0.5))/size-c.uv;
+    let core_z=vec4<f32>(depth_minus_bias)+vec4<f32>(
+        dot(c.slope,core_to_texel+vec2<f32>(0.0,1.0)/size),
+        dot(c.slope,core_to_texel+vec2<f32>(1.0,1.0)/size),
+        dot(c.slope,core_to_texel+vec2<f32>(1.0,0.0)/size),
+        dot(c.slope,core_to_texel),
+    );
+    let core_blocks=core<core_z;
+    var blocker_sum=pcss_sum4(select(vec4<f32>(0.0),core,core_blocks));
+    var weights=pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),core_blocks));
+    // Then a ring out to the widest the filter can grow, so a pixel just
+    // outside a shadow still finds it and the soft edge spreads to both sides
+    // of the shadow's true edge. Nearer taps count more, which keeps the
+    // distance estimate local to the edge in question.
+    let max_texels_over_size=PCSS_MAX_TEXELS/size;
+    let search_weight_scale=1.0/f32(PCSS_SEARCH_TAPS);
+    for (var i=0;i<PCSS_SEARCH_TAPS;i+=1) {
+        let offset=pcss_disc(i,PCSS_SEARCH_TAPS,angle)*max_texels_over_size;
+        let uv=c.uv+offset;
+        let z=depth_minus_bias+dot(c.slope,offset);
+        let texel_at=clamp(vec2<i32>(floor(uv*size)),vec2<i32>(0),vec2<i32>(last));
+        let d=textureLoad(shadow_map,texel_at,c.cascade,0);
+        if d<z {
+            let w=1.0-(f32(i)+0.5)*search_weight_scale;
+            blocker_sum+=w*d;
+            weights+=w;
+        }
+    }
+    // Nothing in front of the receiver nearby: lit, whatever the occluders.
+    if weights==0.0 {return 1.0;}
+    let blocker_distance=(c.depth-blocker_sum/weights)/scale;
+    let radius=clamp(blocker_distance*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS);
+    var lit=0.0;
+    let radius_over_size=radius/size;
+    let filter_weight_scale=1.0/f32(PCSS_FILTER_TAPS);
+    for (var i=0;i<PCSS_FILTER_TAPS;i+=1) {
+        let offset=pcss_disc(i,PCSS_FILTER_TAPS,angle)*radius_over_size;
+        let z=depth_minus_bias+dot(c.slope,offset);
+        lit+=pcss_tap(c.uv+offset,z,c.cascade,occluder_layer,gap);
+    }
+    return lit*filter_weight_scale;
+}
 // Smooth 3x3 percentage-closer filter from a 4x4 texel footprint, with
 // bilinear edge weights; 1 is fully lit.
 fn cascade_lit(c:CascadeCoord)->f32 {
+    if shadows.params.z>0.0 {return pcss_lit(c);}
     let occluder_layer=c.cascade+i32(shadows.forward_count.w);
     let size=shadows.params.y;
     // Occluders must be a tenth of a unit clear of caster and receiver.
@@ -1307,6 +1423,7 @@ override SURFACE_GROUP:u32=0u;
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
     if SURFACE_GROUP==5u {return multiplicative_surface(v);}
     if v.clip<0.0 {discard;}
+    sun_pixel=v.position.xy;
     // The sky (faces, clouds, fog backdrop) is what lies behind the world:
     // everything else fades out into it toward the visible distance.
     if material[0].x!=4.0 && material[0].x!=5.0
