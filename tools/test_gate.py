@@ -83,6 +83,15 @@ class CiShards(unittest.TestCase):
         self.assertEqual(gate.ci_left_out(data, "pr"), {"a/content", "b/render"})
         self.assertEqual(gate.ci_left_out(data, "full"), {"a/content"})
 
+    def test_the_pr_tier_also_leaves_out_the_slow_packages_except_the_kept_targets(self):
+        data = {"ci_nightly_target": [{"target": "bri-render/gpu"}],
+                "ci_quick": {"slow_packages": ["bri-client", "bri-render"],
+                             "keep": ["bri-client/lib"]}}
+        labels = ["bri-client/lib", "bri-client/flow", "bri-render/gpu", "bri-render/x", "bri-sim/lib"]
+        self.assertEqual(gate.ci_left_out(data, "pr", labels),
+                         {"bri-client/flow", "bri-render/gpu", "bri-render/x"})
+        self.assertEqual(gate.ci_left_out(data, "main", labels), {"bri-render/gpu"})
+
     def test_every_nightly_target_is_named_once_with_a_reason(self):
         import tomllib
         path = Path(__file__).with_name("gate-known-failures.toml")

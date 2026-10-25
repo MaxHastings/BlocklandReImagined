@@ -1446,9 +1446,11 @@ def ci_test(part=(0, 1), tier="full"):
         say(f"ci_skip_target/ci_nightly_target entries match no test target: "
             f"{', '.join(sorted(unknown))}")
         return False
+    if tier != "full":
+        say(f"{tier} tier: {len(nightly)} slow render targets are left to the nightly run")
     if tier == "pr":
-        say(f"pr tier: {len(nightly)} slow render targets are left to the nightly run")
-    skipped = ci_left_out(data, tier)
+        say("pr tier: the slow packages' suites run after merge (ci_quick in gate-known-failures.toml)")
+    skipped = ci_left_out(data, tier, labels)
     for label in sorted(labels):
         if label in skipped and label not in nightly:
             say(f"skipping {label} (needs generated content)")
@@ -1581,12 +1583,21 @@ def target_filters(labels, kinds):
     return args
 
 
-def ci_left_out(data, tier):
+def ci_left_out(data, tier, labels=()):
     """Targets a CI run of `tier` does not run, from the known-failures
-    table `data`: content targets always, nightly targets on the pr tier."""
+    table `data`: content targets always; on "main" and "pr" the nightly
+    targets too; on "pr" also every target of a [ci_quick] slow package
+    (end-to-end, GPU and soak suites) except the named keep targets, which
+    the run after merge covers."""
     left_out = {entry["target"] for entry in data.get("ci_skip_target", [])}
-    if tier == "pr":
+    if tier in ("pr", "main"):
         left_out |= {entry["target"] for entry in data.get("ci_nightly_target", [])}
+    if tier == "pr":
+        quick = data.get("ci_quick", {})
+        slow = set(quick.get("slow_packages", []))
+        keep = set(quick.get("keep", []))
+        left_out |= {label for label in labels
+                     if label.split("/", 1)[0] in slow and label not in keep}
     return left_out
 
 
@@ -1675,8 +1686,9 @@ def main():
                         help="run the tests that need no generated content (used by CI)")
     parser.add_argument("--shard", type=parse_shard, default=(0, 1), metavar="K/N",
                         help="with --ci-test, run only the Kth of N even shares (from 0)")
-    parser.add_argument("--tier", choices=("pr", "full"), default="full",
-                        help="with --ci-test: 'pr' leaves out the [[ci_nightly_target]]s")
+    parser.add_argument("--tier", choices=("pr", "main", "full"), default="full",
+                        help="with --ci-test: 'pr' runs the quick tier, 'main' everything but the "
+                             "[[ci_nightly_target]]s, 'full' everything")
     parser.add_argument("--push", action="store_true",
                         help="rebase onto origin/main, gate and push to main under the lock")
     parser.add_argument("--history-range", nargs=2, metavar=("BASE", "TIP"),
