@@ -24,6 +24,7 @@ fn square(half: f32) -> SceneData {
     }));
     data.indices.extend([0, 1, 2, 0, 2, 3]);
     data.batches.push(MeshBatch {
+        zone: None,
         indices: 0..6,
         material: 0,
         center: [0.0; 3],

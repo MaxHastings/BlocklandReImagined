@@ -119,7 +119,7 @@ impl SceneData {
             "Model vertex limit exceeded"
         );
         let normal = transform.inverse().transpose();
-        let mut groups: BTreeMap<usize, Vec<SceneVertex>> = BTreeMap::new();
+        let mut groups: BTreeMap<(usize, Option<u16>), Vec<SceneVertex>> = BTreeMap::new();
         for triangle in geometry {
             let object_color = colors[triangle.object].expect("filtered visible object");
             let color = triangle
@@ -141,26 +141,31 @@ impl SceneData {
                 crate::scene::MaterialKind::LayerBlend | crate::scene::MaterialKind::VertexLight
             );
             for vertex in triangle.vertices {
-                groups.entry(material).or_default().push(SceneVertex {
-                    position: transform.transform_point3(vertex.position).to_array(),
-                    normal: normal
-                        .transform_vector3(vertex.normal)
-                        .normalize_or_zero()
-                        .to_array(),
-                    uv: vertex.uv,
-                    lightmap_uv: vertex.uv1,
-                    color: match vertex.color {
-                        Some(c) if layered => [
-                            c[0] * color[0],
-                            c[1] * color[1],
-                            c[2] * color[2],
-                            c[3] * color[3],
-                        ],
-                        _ if layered => [color[0] * 0.5, color[1] * 0.5, color[2] * 0.5, color[3]],
-                        _ => color,
-                    },
-                    fx: [0.; 4],
-                });
+                groups
+                    .entry((material, triangle.zone))
+                    .or_default()
+                    .push(SceneVertex {
+                        position: transform.transform_point3(vertex.position).to_array(),
+                        normal: normal
+                            .transform_vector3(vertex.normal)
+                            .normalize_or_zero()
+                            .to_array(),
+                        uv: vertex.uv,
+                        lightmap_uv: vertex.uv1,
+                        color: match vertex.color {
+                            Some(c) if layered => [
+                                c[0] * color[0],
+                                c[1] * color[1],
+                                c[2] * color[2],
+                                c[3] * color[3],
+                            ],
+                            _ if layered => {
+                                [color[0] * 0.5, color[1] * 0.5, color[2] * 0.5, color[3]]
+                            }
+                            _ => color,
+                        },
+                        fx: [0.; 4],
+                    });
             }
         }
         ensure!(
@@ -171,7 +176,7 @@ impl SceneData {
                 .all(|x| x.is_finite())),
             "Posed geometry exceeds finite coordinate range"
         );
-        for (material, vertices) in groups {
+        for ((material, zone), vertices) in groups {
             let start = self.indices.len() as u32;
             let center = vertices
                 .iter()
@@ -196,6 +201,7 @@ impl SceneData {
                 indices: start..self.indices.len() as u32,
                 material,
                 center: center.to_array(),
+                zone,
             });
         }
         Ok(())

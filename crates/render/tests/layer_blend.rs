@@ -74,6 +74,7 @@ fn passes(
         let start = indices.len() as u32;
         indices.extend([0, 1, 2, 0, 2, 3].map(|i| base + i));
         batches.push(MeshBatch {
+            zone: None,
             indices: start..start + 6,
             material: k,
             center: [0., y, 0.],

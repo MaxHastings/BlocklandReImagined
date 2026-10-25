@@ -2528,6 +2528,7 @@ fn placeholder() -> bri_content::shape::Shape {
             normals,
             uv,
             primitives: vec![Primitive {
+                zone: None,
                 material: Some(0),
                 triangles,
             }],

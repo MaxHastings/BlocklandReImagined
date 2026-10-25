@@ -28,6 +28,7 @@ fn triangle(color: [f32; 4], z: f32, alpha: AlphaMode) -> SceneData {
     material.alpha = alpha;
     data.materials.push(material);
     data.batches.push(MeshBatch {
+        zone: None,
         indices: 0..3,
         material: 0,
         center: [0.0, 0.0, z],

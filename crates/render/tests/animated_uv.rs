@@ -46,6 +46,7 @@ fn authored_texture_rotation_uses_the_render_clock_and_declared_center() -> Resu
         .to_vec(),
         indices: vec![0, 1, 2, 0, 2, 3],
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..6,
             material: 0,
             center: [0.; 3],
@@ -134,6 +135,7 @@ fn motion_quadrants(motion: bri_content::shape::UvMotion, times: &[f32]) -> Resu
         .to_vec(),
         indices: vec![0, 1, 2, 0, 2, 3],
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..6,
             material: 0,
             center: [0.; 3],
@@ -274,6 +276,7 @@ fn chain_pixels(chain: Vec<bri_content::shape::UvMotion>, times: &[f32]) -> Resu
         .to_vec(),
         indices: vec![0, 1, 2, 0, 2, 3],
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..6,
             material: 0,
             center: [0.; 3],

@@ -245,6 +245,8 @@ impl App {
                 cpu_scene: None,
                 backdrop: None,
                 regions: None,
+                zones: None,
+                display_ramp: None,
                 sound_carry: None,
                 decals: None,
                 receiver_index: None,

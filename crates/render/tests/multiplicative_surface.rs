@@ -34,6 +34,7 @@ fn plane(y: f32, rgba: [u8; 4], tint: [f32; 4], alpha: AlphaMode) -> SceneData {
         .to_vec(),
         indices: vec![0, 1, 2, 0, 2, 3],
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..6,
             material: 0,
             center: [0., y, 0.],

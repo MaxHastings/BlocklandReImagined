@@ -243,6 +243,7 @@ pub fn simplify(mesh: &Mesh, target: usize) -> Mesh {
             .primitives
             .iter()
             .map(|p| Primitive {
+                zone: p.zone,
                 material: p.material,
                 triangles: Vec::new(),
             })
@@ -355,6 +356,7 @@ mod tests {
             normals: n.iter().map(|v| v.to_array()).collect(),
             uv,
             primitives: vec![Primitive {
+                zone: None,
                 material: Some(0),
                 triangles: i.chunks(3).map(|t| [t[0], t[1], t[2]]).collect(),
             }],
