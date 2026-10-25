@@ -343,6 +343,14 @@ impl App {
             .as_ref()
             .map(|a| a.progress.snapshot().revision)
     }
+    /// A tool switch is still waiting on the host's answer: a trigger sent
+    /// now would go to the tool in hand before it, not the one asked for.
+    pub fn switching_tool(&self) -> bool {
+        self.build
+            .building
+            .as_ref()
+            .is_some_and(|b| b.switching_tool())
+    }
     pub fn network_view(&self) -> Option<&network::View> {
         self.net
             .attempt

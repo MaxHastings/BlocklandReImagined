@@ -584,6 +584,9 @@ fn play(
                 slot: slot as usize,
             });
             pump(app)?;
+            // The next `hold fire` goes to the tool the host has accepted:
+            // sent before it, the click reaches the one put away.
+            until(app, "the tool switch answered", |a| !a.switching_tool())?;
         } else if let Some(name) = step.get("shot").and_then(|v| v.as_str()) {
             let path = out.join(format!("{name}.png"));
             save(&path, &capture(app, gpu, renderer, size)?, size)?;

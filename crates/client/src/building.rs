@@ -860,6 +860,10 @@ impl Building {
     pub fn selected_slot(&self) -> Option<usize> {
         self.selected_slot
     }
+    /// A tool switch has been sent and the host has not answered it yet.
+    pub fn switching_tool(&self) -> bool {
+        !self.pending_equipment.is_empty()
+    }
     pub fn equipment(&self) -> &Equipment {
         &self.equipment
     }
