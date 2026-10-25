@@ -851,10 +851,9 @@ impl WeaponDebris {
         mut pose: impl FnMut(u64, &str, u8) -> Option<Mat4>,
         mut sweep: impl FnMut(Vec3, Vec3) -> Option<DebrisHit>,
     ) -> Result<()> {
-        ensure!(
-            dt.is_finite() && (0. ..=10.).contains(&dt),
-            "invalid debris frame delta"
-        );
+        // A frame that took long (a stall, a slow capture) is not a fault:
+        // the catch-up below is capped, so any length of one is safe.
+        ensure!(dt.is_finite() && dt >= 0., "invalid debris frame delta");
         let applied = f64::from(dt).min(MAX_FRAME_SECONDS);
         if f64::from(dt) > MAX_FRAME_SECONDS {
             self.diagnostics.capped_frame_time += 1;
@@ -1166,6 +1165,25 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn a_frame_that_took_seconds_is_capped_not_refused() -> Result<()> {
+        let fx = Debris::synthetic()?;
+        let mut world = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
+        world.cues(
+            &[cue(1)],
+            |_, _, _| Some(Mat4::IDENTITY),
+            |_| (Vec3::ZERO, 0.),
+        )?;
+        world.advance(24., |_, _, _| Some(Mat4::IDENTITY), |_, _| None)?;
+        assert_eq!(world.diagnostics.capped_frame_time, 1);
+        assert!(
+            world
+                .advance(f32::NAN, |_, _, _| None, |_, _| None)
+                .is_err()
+        );
+        assert!(world.advance(-1., |_, _, _| None, |_, _| None).is_err());
+        Ok(())
+    }
     fn cue_delivery_is_once_deferred_pose_can_resolve_and_disconnect_resets(
         fx: &Debris,
     ) -> Result<()> {

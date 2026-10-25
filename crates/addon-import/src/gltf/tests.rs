@@ -1970,3 +1970,86 @@ fn a_cutout_keeps_its_cutoff_and_sidedness_and_unmapped_extensions_are_refused()
     let odd = get(3).err().unwrap().to_string();
     assert!(odd.contains("MULTIPLY"), "{odd}");
 }
+
+#[test]
+fn map_data_splits_the_world_mesh_by_zone_and_lists_the_zone_graph() {
+    use bri_content::{shape::Shape, zones::ZoneGraph};
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("Test Room.glb");
+    std::fs::write(
+        &input,
+        super::testing::room_named(false, "aa25_pipeline_generated"),
+    )
+    .unwrap();
+    // The floor is one primitive of 12 triangles: the first 4 lie in zone 1, the rest in zone 2.
+    let data = root.path().join("mapdata");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(
+        data.join("test-zone-sections.json"),
+        json!({ "groups": { "world": [
+            { "triangles": 12, "runs": [[0, 4, 1, 0], [4, 8, 2, 0]] }
+        ] } })
+        .to_string(),
+    )
+    .unwrap();
+    let zone = |i: u64, min: f32| json!({ "zone": i, "indoor": true, "bounds": { "min": [min, 0, 0], "max": [min + 1.0, 1, 1] } });
+    std::fs::write(
+        data.join("test-mapdata.json"),
+        json!({
+            "display_ramp": { "brightness": 0.8, "contrast": 0.7, "gamma": 1.0 },
+            "zones": [zone(0, -9.0), zone(1, 0.0), zone(2, 1.0)],
+            "portals": [
+                { "kind": "zone", "front_zone": 1, "back_zone": 2, "plane": [1, 0, 0, 1.0],
+                  "points": [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]] },
+                { "kind": "sky", "front_zone": 1, "back_zone": 0, "plane": [0, 1, 0, 1.0],
+                  "points": [[0, 1, 0], [1, 1, 0], [1, 1, 1]] }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut opts = Options::new(&input, root.path().join("test_room"), Kind::Map);
+    opts.scale = Some(2.0);
+    opts.mapdata = Some(data.clone());
+    let report = import(&opts).unwrap();
+    let dir = root.path().join("test_room");
+    let bundle: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("map/bundle.json")).unwrap()).unwrap();
+    let name = bundle["zones"]["test_room:map/test_room"].as_str().unwrap();
+    let graph: ZoneGraph =
+        serde_json::from_slice(&std::fs::read(dir.join("map").join(name)).unwrap()).unwrap();
+    let ramp: [f32; 3] =
+        serde_json::from_value(bundle["display_ramps"]["test_room:map/test_room"].clone()).unwrap();
+    assert_eq!(ramp, [0.8, 0.7, 1.0]);
+    assert_eq!(graph.zones.len(), 3);
+    assert_eq!(graph.portals.len(), 1, "sky portals are not zone openings");
+    // glTF to native flips x and z; lengths take the scale of 2.
+    assert_eq!(graph.portals[0].plane, [-1.0, 0.0, 0.0, 2.0]);
+    assert_eq!(graph.portals[0].points[1], [-2.0, 2.0, 0.0]);
+    let shape: Shape =
+        serde_json::from_slice(&std::fs::read(dir.join("map/test_room.shape.json")).unwrap())
+            .unwrap();
+    let mut zoned: Vec<(Option<u16>, usize)> = shape
+        .meshes
+        .iter()
+        .flatten()
+        .flat_map(|m| m.primitives.iter().map(|p| (p.zone, p.triangles.len())))
+        .filter(|(zone, _)| zone.is_some())
+        .collect();
+    zoned.sort();
+    zoned.dedup(); // each detail level carries the same split
+    assert_eq!(zoned, vec![(Some(1), 4), (Some(2), 8)]);
+    let check = bri_package_runtime::check::check(&dir);
+    assert!(check.ok, "{check} {:?}", report.warnings);
+
+    // Map data that does not fit the mesh stops the import.
+    std::fs::write(
+        data.join("test-zone-sections.json"),
+        json!({ "groups": { "world": [
+            { "triangles": 11, "runs": [[0, 11, 1, 0]] }
+        ] } })
+        .to_string(),
+    )
+    .unwrap();
+    assert!(import(&opts).is_err());
+}

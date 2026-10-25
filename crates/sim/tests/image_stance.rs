@@ -61,12 +61,13 @@ fn game() -> Result<(tempfile::TempDir, Session)> {
     std::fs::write(
         rules.join("main.rhai"),
         r#"fn cmd_walk(p) { set_archetype(p, "stance:archetype/walking"); }
+fn cmd_swap(p) { select_tool(p, 1); }
 fn cmd_pull(p) { set_image_state(p, "Pulled"); }
 fn cmd_tools(p) { set_tools(p, ["stance:weapon/grenade", "stance:weapon/rifle"]); }"#,
     )?;
     std::fs::write(
         rules.join("behaviour.json"),
-        json!({"schema_version":1,"script":"main.rhai","commands":[{"name":"walk"},{"name":"tools"},{"name":"pull"}]})
+        json!({"schema_version":1,"script":"main.rhai","commands":[{"name":"walk"},{"name":"tools"},{"name":"pull"},{"name":"swap"}]})
             .to_string(),
     )?;
     let packages: PackageSet = serde_json::from_value(json!({"schema_version":1,"packages":[
@@ -88,7 +89,7 @@ fn cmd_tools(p) { set_tools(p, ["stance:weapon/grenade", "stance:weapon/rifle"])
         "items":{"stance:weapon/grenade":{"ui_name":"Invented grenade","image":"stance:image/grenade"},
             "stance:weapon/rifle":{"ui_name":"Invented rifle","image":"stance:image/rifle"}},
         "images":{
-            "stance:image/grenade":{"model":MODEL,"states":[{"name":"Ready"},{"name":"Pulled","stance":{WALKING:WALKING}}],
+            "stance:image/grenade":{"model":MODEL,"states":[{"name":"Ready"},{"name":"Pulled","stance":{WALKING:WALKING},"lock":{"movement":true}}],
                 "stance":{WALKING:CROUCHED}},
             "stance:image/rifle":{"model":MODEL,"states":[{"name":"Ready"}]}
         },"projectiles":{}
@@ -190,5 +191,43 @@ fn a_state_may_lay_a_stance_of_its_own_in_place_of_the_images() -> Result<()> {
     step(&mut session, owner)?;
     step(&mut session, owner)?;
     assert_eq!(body(&session, owner), WALKING, "pulled: the state's own");
+    assert_eq!(
+        session
+            .snapshot()
+            .players
+            .iter()
+            .find(|p| p.owner == owner)
+            .unwrap()
+            .speed_scale,
+        0.0,
+        "the pull holds its holder still"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_rule_may_take_another_tool_out_as_a_swap_key_does() -> Result<()> {
+    let (_root, mut session) = game()?;
+    let owner = session.join("Holder".into(), Vec3::new(0., 0.05, 0.), true)?;
+    let run = |session: &mut Session, name: &str, sequence| {
+        session.command(
+            owner,
+            sequence,
+            Command::Package(PackageCommand {
+                package: "stancerules".into(),
+                command: name.into(),
+                args: vec![],
+            }),
+        )
+    };
+    run(&mut session, "walk", 1)?;
+    run(&mut session, "tools", 2)?;
+    session.equip_tool(owner, Some(0))?;
+    step(&mut session, owner)?;
+    assert_eq!(body(&session, owner), CROUCHED);
+    run(&mut session, "swap", 3)?;
+    step(&mut session, owner)?;
+    step(&mut session, owner)?;
+    assert_eq!(body(&session, owner), WALKING, "the rifle came out");
     Ok(())
 }

@@ -181,6 +181,7 @@ impl BodyShells {
                         id: "body shell".into(),
                         name: "body shell".into(),
                         batches: vec![MeshBatch {
+                            zone: None,
                             indices: 0..data.indices.len() as u32,
                             material: 0,
                             center: center.to_array(),

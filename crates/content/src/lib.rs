@@ -35,6 +35,7 @@ pub mod tutorial;
 pub mod uv_affine;
 pub mod vertex_lighting;
 pub mod water;
+pub mod zones;
 
 pub const TERRAIN_SCHEMA: u32 = 1;
 

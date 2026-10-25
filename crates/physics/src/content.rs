@@ -221,6 +221,7 @@ mod tests {
             normals: vec![[0.0, 0.0, 1.0]; 3],
             uv: vec![[0.0; 2]; 3],
             primitives: vec![Primitive {
+                zone: None,
                 material: None,
                 triangles: vec![[0, 1, 2]],
             }],

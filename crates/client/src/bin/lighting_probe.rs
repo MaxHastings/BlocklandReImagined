@@ -169,6 +169,7 @@ fn cuboid(min: Vec3, max: Vec3) -> SceneData {
         }
     }
     data.batches.push(MeshBatch {
+        zone: None,
         indices: 0..data.indices.len() as u32,
         material: 0,
         center: ((min + max) * 0.5).to_array(),

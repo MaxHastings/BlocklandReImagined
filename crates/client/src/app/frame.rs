@@ -1439,7 +1439,7 @@ impl App {
                     let sounds = &view.archetypes.resolve(player.archetype).sounds;
                     let feet = Vec3::from(player.feet);
                     let avatar_assets = &self.avatar.avatar_assets;
-                    for (sound, at) in self.fx.footsteps.on_clip(
+                    for fall in self.fx.footsteps.on_clip(
                         *owner,
                         sounds,
                         &span,
@@ -1464,7 +1464,9 @@ impl App {
                                 .to_string()
                         },
                     ) {
-                        self.audio.profile(&sound, bri_audio::Placement::World(at));
+                        self.audio
+                            .profile(&fall.sound, bri_audio::Placement::World(fall.at));
+                        leave_foot_contact(&mut self.fx, &self.item_assets, &fall);
                     }
                 }
                 avatar.remember_drawn_offset(gone.contains(owner));
@@ -1730,7 +1732,7 @@ impl App {
                         .is_none_or(|v| v.mounted.is_none() && v.ride.is_none() && !v.sitting)
                 })
                 .map(crate::footsteps::Walk::from);
-            for (sound, at) in self.fx.footsteps.update(
+            for fall in self.fx.footsteps.update(
                 game_elapsed.as_secs_f32(),
                 walking,
                 &view.archetypes,
@@ -1744,7 +1746,9 @@ impl App {
                         .to_string()
                 },
             ) {
-                self.audio.profile(&sound, bri_audio::Placement::World(at));
+                self.audio
+                    .profile(&fall.sound, bri_audio::Placement::World(fall.at));
+                leave_foot_contact(&mut self.fx, &self.item_assets, &fall);
             }
             for (sound, at) in self.fx.clip_sounds.advance(game_elapsed.as_secs_f32()) {
                 self.audio.profile(&sound, bri_audio::Placement::World(at));
@@ -2036,6 +2040,51 @@ impl App {
             self.cosmetic_faults.absorb("weather", weather);
         }
         Ok(())
+    }
+}
+
+/// What a footfall leaves where it landed ([`bri_sim::archetype::Sounds::contacts`]):
+/// a burst of dust and a mark on the ground.
+fn leave_foot_contact(
+    fx: &mut fx::Effects,
+    item_assets: &crate::items::ItemAssets,
+    fall: &crate::footsteps::Footfall,
+) {
+    let Some(contact) = &fall.contact else {
+        return;
+    };
+    let at = Vec3::from(fall.at);
+    if let Some(effect) = &contact.effect
+        && fx.weapon_effects.resolves(effect)
+        && let Err(error) = fx.weapon_effects.burst_at_input(
+            effect,
+            bri_fx_runtime::SourceTransform {
+                position: at,
+                ..Default::default()
+            },
+            1.0,
+        )
+    {
+        bri_console::warn(format!("Footfall effect {effect}: {error:#}"));
+    }
+    if let Some(print) = &contact.decal {
+        let decal = bri_weapons::Decal {
+            blend: bri_weapons::DecalBlend::Alpha,
+            texture: Some(print.texture.clone()),
+            surfaces: Default::default(),
+            profiles: Default::default(),
+            require_profile: false,
+            fade_seconds: None,
+            rotation_degrees: 0.0,
+            size: print.size,
+            color: print.color,
+            seconds: print.seconds,
+        };
+        // A mark whose texture did not load shows nothing.
+        if let Some(image) = item_assets.texture(&print.texture) {
+            fx.decals
+                .add_textured(None, at, Vec3::Y, &decal, 1.0, Some(image));
+        }
     }
 }
 

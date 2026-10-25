@@ -594,6 +594,7 @@ mod tests {
             );
         scene.indices.extend([0, 1, 2]);
         scene.batches.push(MeshBatch {
+            zone: None,
             indices: 0..3,
             material: 0,
             center: [0.0; 3],

@@ -87,6 +87,7 @@ fn quad(texel: [u8; 4], uv: [Vec2; 2], turn: Quat, reference: Option<Vec3>) -> S
     }
     scene.indices = vec![0, 1, 2, 0, 2, 3];
     scene.batches.push(MeshBatch {
+        zone: None,
         material: 0,
         indices: 0..6,
         center: [0.; 3],

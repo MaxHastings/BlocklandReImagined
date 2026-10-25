@@ -98,6 +98,7 @@ impl TerrainScene {
                 .fold(Vec3::ZERO, |sum, p| sum + Vec3::from(*p))
                 / mesh.positions.len().max(1) as f32;
             data.batches.push(MeshBatch {
+                zone: None,
                 indices: start..data.indices.len() as u32,
                 material: 0,
                 center: center.to_array(),

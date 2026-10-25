@@ -247,6 +247,7 @@ impl Layout {
                 sources.push((slot, v));
             }
             data.batches.push(MeshBatch {
+                zone: None,
                 indices: start..data.indices.len() as u32,
                 material,
                 center: [0.0; 3],
