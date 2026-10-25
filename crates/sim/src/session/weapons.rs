@@ -312,12 +312,16 @@ impl Session {
         let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
         for owner in owners {
             let actor = ActorId(owner);
+            let aiming = self.peers[&owner].input.jet
+                && self
+                    .weapons
+                    .image_state(actor, 0)
+                    .is_some_and(|(image, _)| image.zoom.as_ref().is_some_and(|z| z.on_jet));
+            self.weapons.set_aiming(actor, aiming);
             let scale = match self.weapons.image_state(actor, 0) {
                 Some((_, state)) if state.lock.movement => 0.0,
                 Some((image, _)) => image.movement.as_ref().map_or(1.0, |m| {
                     let reloading = self.weapons.ammo(actor).is_some_and(|a| a.reloading);
-                    let aiming = self.peers[&owner].input.jet
-                        && image.zoom.as_ref().is_some_and(|z| z.on_jet);
                     m.scale(reloading, aiming)
                 }),
                 None => 1.0,

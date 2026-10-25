@@ -91,7 +91,8 @@ fn cmd_tools(p) { set_tools(p, ["stance:weapon/grenade", "stance:weapon/rifle"])
         "images":{
             "stance:image/grenade":{"model":MODEL,"states":[{"name":"Ready"},{"name":"Pulled","stance":{WALKING:WALKING},"lock":{"movement":true}}],
                 "stance":{WALKING:CROUCHED}},
-            "stance:image/rifle":{"model":MODEL,"states":[{"name":"Ready"}]}
+            "stance:image/rifle":{"model":MODEL,"zoom":{"fov":40.0,"on_jet":true},
+                "states":[{"name":"Ready","aimed":1},{"name":"Aim","not_aimed":0}]}
         },"projectiles":{}
     }))?)?)?;
     session.set_item_bounds(Default::default())?;
@@ -229,5 +230,51 @@ fn a_rule_may_take_another_tool_out_as_a_swap_key_does() -> Result<()> {
     step(&mut session, owner)?;
     step(&mut session, owner)?;
     assert_eq!(body(&session, owner), WALKING, "the rifle came out");
+    Ok(())
+}
+
+#[test]
+fn a_state_follows_whether_its_holder_aims_the_image() -> Result<()> {
+    let (_root, mut session) = game()?;
+    let owner = session.join("Holder".into(), Vec3::new(0., 0.05, 0.), true)?;
+    session.command(
+        owner,
+        1,
+        Command::Package(PackageCommand {
+            package: "stancerules".into(),
+            command: "tools".into(),
+            args: vec![],
+        }),
+    )?;
+    session.equip_tool(owner, Some(1))?;
+    let state = |session: &Session| {
+        session
+            .weapon_view()
+            .images
+            .get(&owner)
+            .and_then(|hands| hands.iter().find(|m| m.hand == 0))
+            .map(|m| m.state.clone())
+    };
+    let hold = |session: &mut Session, jet: bool| -> Result<()> {
+        let input = MoveInput {
+            jet,
+            ..MoveInput::default()
+        };
+        session.movement(owner, session.simulation().state().tick + 100, input)?;
+        session.step()
+    };
+    hold(&mut session, false)?;
+    hold(&mut session, false)?;
+    assert_eq!(state(&session).as_deref(), Some("Ready"));
+    hold(&mut session, true)?;
+    hold(&mut session, true)?;
+    assert_eq!(state(&session).as_deref(), Some("Aim"), "aim raised it");
+    hold(&mut session, false)?;
+    hold(&mut session, false)?;
+    assert_eq!(
+        state(&session).as_deref(),
+        Some("Ready"),
+        "letting go lowered it"
+    );
     Ok(())
 }
