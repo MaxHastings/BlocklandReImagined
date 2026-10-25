@@ -50,6 +50,14 @@ pub struct Archetype {
     /// damage multiplier ([`crate::bones`]). None: it is hit as one box.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hit_bones: Vec<bri_content::hit_bones::HitBone>,
+    /// The same bones where a crouched body's animation holds them, in the
+    /// feet frame like `hit_bones`; none: the standing ones squeezed down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hit_bones_crouched: Vec<bri_content::hit_bones::HitBone>,
+    /// The same where a body lying prone holds them; none: the standing ones
+    /// squeezed down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hit_bones_prone: Vec<bri_content::hit_bones::HitBone>,
     pub look: Look,
     /// It fires, switches and uses items (`PlayerData::onTrigger` and
     /// `serverCmdUseTool` running as usual). A frozen pre-round body
@@ -515,6 +523,10 @@ pub struct Look {
         skip_serializing_if = "is_default_corpse_seconds"
     )]
     pub corpse_seconds: f32,
+    /// The body lies until the player spawns again (a round's reset), however
+    /// long that is: `corpse_seconds` and `corpse_fade` do not apply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub corpse_stays: bool,
     /// The last of `corpse_seconds` the body fades out over, instead of
     /// vanishing in v20's puff; 0 vanishes at once.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -549,6 +561,9 @@ impl Look {
     /// `None` once `corpse_seconds` are up, otherwise its opacity, 1 until
     /// `corpse_fade` before the end and falling to 0 across it.
     pub fn corpse_opacity(&self, lying: f32) -> Option<f32> {
+        if self.corpse_stays {
+            return Some(1.0);
+        }
         let left = self.corpse_seconds - lying;
         if left <= 0.0 {
             return None;
@@ -598,6 +613,8 @@ impl Archetype {
                 && (0.0..=self.look.corpse_seconds).contains(&self.look.corpse_fade)
                 && self.sounds.valid()
                 && self.hit_bones.len() <= bri_content::hit_bones::MAX_HIT_BONES
+                && self.hit_bones_crouched.len() <= bri_content::hit_bones::MAX_HIT_BONES
+                && self.hit_bones_prone.len() <= bri_content::hit_bones::MAX_HIT_BONES
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
                     !m.node.is_empty()
@@ -610,7 +627,12 @@ impl Archetype {
             self.id
         );
         self.sockets.validate()?;
-        for bone in &self.hit_bones {
+        for bone in self
+            .hit_bones
+            .iter()
+            .chain(&self.hit_bones_crouched)
+            .chain(&self.hit_bones_prone)
+        {
             bone.validate()?;
         }
         bri_content::body::validate_animations(&self.look.animations)?;
@@ -646,6 +668,8 @@ impl Archetype {
             can_ride: kind.can_ride(),
             mount_points: kind.mount_points(),
             hit_bones: Vec::new(),
+            hit_bones_crouched: Vec::new(),
+            hit_bones_prone: Vec::new(),
             look: Look {
                 crouch_composition: Default::default(),
                 model: if kind == PlayerType::Horse {
@@ -667,6 +691,7 @@ impl Archetype {
                 action_blend: 0.0,
                 locomotion_pick: Default::default(),
                 corpse_seconds: CORPSE_SECONDS,
+                corpse_stays: false,
                 corpse_fade: 0.0,
             },
             uses_items: true,

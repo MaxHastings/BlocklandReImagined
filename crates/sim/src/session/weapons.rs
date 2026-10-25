@@ -350,25 +350,41 @@ impl Session {
             .iter()
             .map(|(owner, peer)| {
                 let state = peer.player.state();
-                let bones = &self.archetypes.resolve(state.archetype).hit_bones;
+                let archetype = self.archetypes.resolve(state.archetype);
+                let (bones, squeezes) = bri_motor::bones::for_posture(
+                    &archetype.hit_bones,
+                    &archetype.hit_bones_crouched,
+                    &archetype.hit_bones_prone,
+                    state.crouched,
+                    state.posture.prone,
+                );
                 let stand = peer.player.tuning().stand_height;
                 let bones = (peer.combat.alive && !bones.is_empty()).then(|| {
                     let (min, max) = peer.player.world_bounds();
-                    let squash = if stand > 0.0 {
+                    let squash = if stand > 0.0 && squeezes {
                         (max[1] - min[1]) / stand
                     } else {
                         1.0
                     };
+                    let placed = bri_motor::bones::place(
+                        bones,
+                        Vec3::from(state.feet),
+                        state.yaw,
+                        state.scale,
+                        squash,
+                    );
+                    // A shot crosses the box before it can meet a bone: the
+                    // box reaches as far as bones that animation laid outside it.
+                    let (mut min, mut max) = (Vec3::from(min), Vec3::from(max));
+                    for bone in placed.iter().filter(|_| !squeezes) {
+                        let pad = Vec3::splat(bone.radius);
+                        min = min.min(bone.from.min(bone.to) - pad);
+                        max = max.max(bone.from.max(bone.to) + pad);
+                    }
                     std::sync::Arc::new(bri_motor::bones::Body {
-                        bones: bri_motor::bones::place(
-                            bones,
-                            Vec3::from(state.feet),
-                            state.yaw,
-                            state.scale,
-                            squash,
-                        ),
-                        min: Vec3::from(min),
-                        max: Vec3::from(max),
+                        bones: placed,
+                        min,
+                        max,
                     })
                 });
                 (*owner, bones)

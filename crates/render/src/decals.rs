@@ -49,6 +49,8 @@ pub struct ReceiverIndex {
     big: Vec<u32>,
     /// Per triangle: 0 takes no decal (additive and other effect surfaces), 1 flat surface, 2 ground, 3 alpha-blended surface.
     class: Vec<u8>,
+    /// Per triangle: whether light passes through part of it (an alpha-tested leaf card, glass), so it is no solid occluder.
+    see_through: Vec<bool>,
     /// The longest straight line the scene's triangles span (the diagonal of their box): how far a ray must reach to leave the map.
     extent: f32,
 }
@@ -71,6 +73,7 @@ impl ReceiverIndex {
             cells: HashMap::new(),
             big: Vec::new(),
             class: vec![0; triangles],
+            see_through: vec![false; triangles],
             extent: 0.0,
         };
         let (mut box_lo, mut box_hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
@@ -95,6 +98,7 @@ impl ReceiverIndex {
             for t in (batch.indices.start / 3)..(batch.indices.end / 3) {
                 let t = t as usize;
                 index.class[t] = class;
+                index.see_through[t] = !matches!(material.alpha, AlphaMode::Opaque);
                 let p = [0, 1, 2].map(|k| {
                     Vec3::from(scene.vertices[scene.indices[t * 3 + k] as usize].position)
                 });
@@ -130,6 +134,29 @@ impl ReceiverIndex {
     /// Whether a triangle of `scene` that takes decals (opaque, masked, or alpha-blended; not an effect surface) crosses the
     /// segment from `from` to `to`, a hit nearer `from` than `skin` ignored (the surface a body stands on).
     pub fn segment_blocked(&self, scene: &SceneData, from: Vec3, to: Vec3, skin: f32) -> bool {
+        self.blocked(scene, from, to, skin, false)
+    }
+
+    /// As [`Self::segment_blocked`], but only a triangle that is solid across its whole face blocks: a leaf card (alpha-tested) or
+    /// a pane of glass lets light through the parts of it the picture leaves clear, and a canopy of them is not a roof.
+    pub fn segment_blocked_by_solid(
+        &self,
+        scene: &SceneData,
+        from: Vec3,
+        to: Vec3,
+        skin: f32,
+    ) -> bool {
+        self.blocked(scene, from, to, skin, true)
+    }
+
+    fn blocked(
+        &self,
+        scene: &SceneData,
+        from: Vec3,
+        to: Vec3,
+        skin: f32,
+        solid_only: bool,
+    ) -> bool {
         let line = to - from;
         let length = line.length();
         if length <= skin || !length.is_finite() {
@@ -138,7 +165,7 @@ impl ReceiverIndex {
         let direction = line / length;
         let crosses = |t: u32| {
             let t = t as usize;
-            if self.class[t] == 0 {
+            if self.class[t] == 0 || (solid_only && self.see_through[t]) {
                 return false;
             }
             let p = [0, 1, 2]

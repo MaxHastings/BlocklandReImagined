@@ -130,6 +130,13 @@ impl CombatPresentation {
         Self::corpse_opacities(view)
             .into_iter()
             .filter_map(|(owner, opacity)| opacity.is_none().then_some(owner))
+            // A player a rule holds out of the world has no body to draw.
+            .chain(
+                view.vitals
+                    .iter()
+                    .filter(|(_, vitals)| vitals.held)
+                    .map(|(owner, _)| *owner),
+            )
             .collect()
     }
 }
