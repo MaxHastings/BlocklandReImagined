@@ -3018,6 +3018,10 @@ pub struct Explosion {
     /// the radius, and `edge_damage` up to 1.
     pub core_radius: f32,
     pub edge_damage: f32,
+    /// Within this distance of the blast's centre (scaled with the
+    /// projectile) whatever the blast reaches takes a lethal hit, whatever
+    /// the falloff would give: a rocket's kill radius. 0: none.
+    pub kill_radius: f32,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -4698,6 +4702,7 @@ impl Pack {
                     p.explosion.burn_seconds,
                     p.explosion.core_radius,
                     p.explosion.edge_damage,
+                    p.explosion.kill_radius,
                     p.brick.radius,
                     p.brick.force,
                     p.brick.max_volume,

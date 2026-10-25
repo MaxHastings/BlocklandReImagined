@@ -10,6 +10,8 @@ use std::{
     sync::Arc,
 };
 pub const MAX_ACTORS: usize = 128;
+/// What a blast's kill radius deals: more than any health.
+pub const KILL_RADIUS_DAMAGE: f32 = 10_000.0;
 pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
 /// Ticks a dropped item stays in the world (10 s at 120 Hz).
@@ -5800,7 +5802,13 @@ impl WeaponsWorld {
                 parameters: d.brick.clone(),
             });
         }
-        let radius = d.explosion.radius.max(d.explosion.impulse_radius) * p.scale;
+        let kill_radius = d.explosion.kill_radius * p.scale;
+        let radius = d
+            .explosion
+            .radius
+            .max(d.explosion.impulse_radius)
+            .max(d.explosion.kill_radius)
+            * p.scale;
         if radius <= 0.0 {
             return;
         }
@@ -5843,11 +5851,16 @@ impl WeaponsWorld {
             } else {
                 falloff(distance, d.explosion.radius * p.scale)
             };
-            if damage_factor > 0.0 && d.explosion.damage > 0.0 && spared.is_none() {
+            let killed = distance < kill_radius;
+            if (killed || (damage_factor > 0.0 && d.explosion.damage > 0.0)) && spared.is_none() {
                 self.events.push(Event::Damage {
                     source: p.source,
                     target: target.target,
-                    amount: d.explosion.damage * p.scale * damage_factor,
+                    amount: if killed {
+                        KILL_RADIUS_DAMAGE
+                    } else {
+                        d.explosion.damage * p.scale * damage_factor
+                    },
                     kind: d.radius_damage_type.clone(),
                     position: p.position,
                     direction: (target.center - p.position).normalize_or_zero(),
