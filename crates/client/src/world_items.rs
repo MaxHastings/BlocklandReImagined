@@ -1701,7 +1701,17 @@ impl WorldItems {
         };
         let mut at = self
             .assets
-            .node_transform(&mounted.model, &pose, mounted.transform, node)?;
+            .node_transform(&mounted.model, &pose, mounted.transform, node)
+            .inspect_err(|e| {
+                warn_missing_node(
+                    &mounted.model,
+                    image,
+                    logical,
+                    node,
+                    mounted.first_person,
+                    e,
+                )
+            })?;
         // The point on the node the first-person model gives it, in the
         // node's own frame.
         if mounted.first_person
@@ -1876,6 +1886,37 @@ impl WorldItems {
                 * Quat::from_rotation_arc(Vec3::Y, Vec3::NEG_Z),
             velocity: mounted.velocity,
         })
+    }
+}
+
+/// A node a flash, casing or shot should leave from is not in the model it
+/// was asked of: said once for each, since what leaves from the wrong place
+/// (or from nowhere) is otherwise only a missing flash on screen.
+fn warn_missing_node(
+    model: &str,
+    image: &str,
+    logical: &str,
+    node: &str,
+    first_person: bool,
+    error: &anyhow::Error,
+) {
+    use std::sync::{Mutex, OnceLock};
+    static SAID: OnceLock<Mutex<std::collections::BTreeSet<(String, String)>>> = OnceLock::new();
+    let said = SAID.get_or_init(Default::default);
+    let first = said
+        .lock()
+        .is_ok_and(|mut said| said.insert((model.to_owned(), node.to_owned())));
+    if first {
+        let view = if first_person {
+            "first-person"
+        } else {
+            "world"
+        };
+        eprintln!(
+            "Weapon node `{logical}` of image {image}: no node `{node}` in its {view} model {model} ({error}); \
+             what leaves it falls back to the muzzle or the model origin. A first-person model needs \
+             `first_person_nodes` naming its own muzzle and eject bones."
+        );
     }
 }
 
