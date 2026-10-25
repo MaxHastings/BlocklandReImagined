@@ -778,6 +778,29 @@ fn apply_sounds(
     if from.fps.is_some() {
         sounds.fps = from.fps;
     }
+    if from.takeoff_on_surface {
+        sounds.takeoff_on_surface = true;
+    }
+    if !from.contacts.is_empty() {
+        sounds.contacts = from
+            .contacts
+            .iter()
+            .map(|(kind, c)| {
+                (
+                    kind.clone(),
+                    crate::archetype::FootContact {
+                        effect: c.effect.clone(),
+                        decal: c.decal.as_ref().map(|d| crate::archetype::FootDecal {
+                            texture: d.texture.clone(),
+                            size: d.size,
+                            seconds: d.seconds,
+                            color: d.color,
+                        }),
+                    },
+                )
+            })
+            .collect();
+    }
 }
 
 /// Eye heights from the body: an archetype whose `eye` socket is an offset
@@ -4610,7 +4633,8 @@ mod sound_tests {
     fn an_archetypes_footfall_marks_reach_its_sounds() {
         let from: bri_package_runtime::content::ArchetypeSounds =
             serde_json::from_value(serde_json::json!({
-                "footsteps": ["a:step"], "fps": 30.0,
+                "footsteps": ["a:step"], "fps": 30.0, "takeoff_on_surface": true,
+                "contacts": { "*": { "effect": "a:dust", "decal": { "texture": "a:foot", "size": 0.4, "seconds": 20 } } },
                 "steps": { "Run_F": [ { "frame": 4, "foot": "foot_l" }, { "seconds": 0.5 } ] }
             }))
             .unwrap();
@@ -4621,5 +4645,9 @@ mod sound_tests {
         assert_eq!(marks.len(), 2);
         assert_eq!(sounds.step_time(&marks[0]), Some(4.0 / 30.0));
         assert_eq!(marks[0].foot.as_deref(), Some("foot_l"));
+        assert!(sounds.takeoff_on_surface);
+        let contact = sounds.contact_on("sand").expect("any other surface");
+        assert_eq!(contact.effect.as_deref(), Some("a:dust"));
+        assert_eq!(contact.decal.as_ref().map(|d| d.color), Some([1.0; 4]));
     }
 }

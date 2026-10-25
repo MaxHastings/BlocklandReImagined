@@ -409,6 +409,18 @@ loop). A body with any `steps` makes no timer footfalls, so a clip that
 marks none is silent; a body without them (v20's Blockhead) keeps the
 timer.
 
+`takeoff_on_surface: true` makes the take-off of a jump sound once like a
+footfall on the surface underfoot, as `land_on_surface` does the landing.
+`contacts` makes each footfall (a mark, the timer's step, a landing or
+a take-off that sounds as a footfall) leave something on the surface it
+lands on: `"contacts": {"sand": {"effect": "your-id:dust", "decal":
+{"texture": "your-id:print", "size": 0.4, "seconds": 20, "color": [1, 1, 1,
+0.6]}}, "*": {...}}`. Keys are surface kinds, `*` for any other (up to 17); a
+kind listed nowhere leaves nothing. `effect` is an effect burst at the foot,
+`decal` a mark on the ground (size 0.02 to 4, 0.5 to 600 seconds, colour 0 to
+1; its texture is a texture of the Add-On's weapon pack, and one that did
+not load leaves none).
+
 `clips` ties a sound to a moment of one of the body's clips, by the clip's
 name: `"clips": {"h_kill_back_gut": {"sound": "your-id:body_fall",
 "seconds": 0.57}}` plays the sound where the body is once the clip has run
