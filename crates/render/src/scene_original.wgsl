@@ -152,7 +152,7 @@ fn dynamic_bsp_light(base:vec3<f32>,pigment:vec3<f32>,alpha:f32,brighten:bool,po
 // stage's doubling. No visibility traces are made.
 // `baked` (`material[1].z`): the vertex colour already holds the room's light, so the body takes neither a zone's ambient nor its
 // suns nor the map lamps whose light the baking has: only its glow (`material[1].w`) and the live lights, which add on top.
-fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
+fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>,body:f32)->vec3<f32> {
     let baked=material[1].z>0.5;
     let n=normal/max(length(normal),0.0001);
     var chosen=array<u32,4>(0u,0u,0u,0u);
@@ -162,7 +162,8 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
         let light=listed_light(list,i);
         let delta=light.position_radius.xyz-position;
         let d2=dot(delta,delta);
-        let radius=light.position_radius.w;
+        // The body's own radius adds to the lamp's, to reach and to rank (the original's light ranking).
+        let radius=light.position_radius.w+body;
         if d2>=radius*radius || (baked && light.color.w>2.5) {continue;}
         let s=(1.0-d2/(radius*radius))*max(light.color.r,max(light.color.g,light.color.b));
         if s<=score[3] {continue;}
@@ -1164,7 +1165,7 @@ struct VertexOut {
 };
 @vertex fn vs_main(@location(0) local_position:vec3<f32>,@location(1) local_normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) lightmap_uv:vec2<f32>,@location(4) local_color:vec4<f32>,
     @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>,
-    @location(10) fx_data:vec4<f32>,@location(11) clip:vec4<f32>,@location(12) own_light:vec4<f32>)->VertexOut {
+    @location(10) fx_data:vec4<f32>,@location(11) clip:vec4<f32>,@location(12) own_light:vec4<f32>,@location(13) own_reach:vec4<f32>)->VertexOut {
     let model=mat4x4<f32>(m0,m1,m2,m3);
     let position=(model*vec4<f32>(local_position,1.0)).xyz;
     // Cofactor matrix is det(M)*inverse-transpose(M). Positive affine
@@ -1247,7 +1248,7 @@ struct VertexOut {
     }
     if material[0].x==15.0 {
         // A moving body lit by the scene: its zone's ambient and suns when it has them, else the scene's, and the nearest lights.
-        let lit=actor_light(out.world_position,out.normal,own_light);
+        let lit=actor_light(out.world_position,out.normal,own_light,own_reach.x);
         // Baked: the vertex colour is the room's light (0.5 neutral), the live lights and the glow add to it.
         out.color=vec4<f32>(select(clamp(lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0))*color.rgb,clamp(color.rgb+lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0)),material[1].z>0.5),color.a);
     }

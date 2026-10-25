@@ -32,6 +32,8 @@ pub(super) struct LightVolumeState {
     pub(super) volume: Option<bri_render::light_volume::LightVolume>,
     /// Whether a sun saw a half-unit cell ([`Self::sun_sees`]), behind a mutex like the bake.
     sun_sight: std::sync::Mutex<HashMap<(glam::IVec3, [u32; 3]), bool>>,
+    /// The largest body radius [`Self::actor_light`] has met (an `f32`'s bits, which order as the numbers do while they are not negative).
+    body_reach: std::sync::atomic::AtomicU32,
     pub(super) map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     pub(super) leaks: Vec<bri_render::map_lighting::TexelFix>,
@@ -297,6 +299,10 @@ const SUN_SIGHT_CACHE: usize = 16_384;
 /// Which way the room's light is read for a body: up, as the volume's form shading reads a roof-lit surface.
 const ROOM_NORMAL: [f32; 3] = [0.0, 1.0, 0.0];
 impl LightVolumeState {
+    /// The largest body radius met so far, for the light grid ([`bri_render::scene::SceneRenderer::set_body_reach`]).
+    pub(super) fn body_reach(&self) -> f32 {
+        f32::from_bits(self.body_reach.load(std::sync::atomic::Ordering::Relaxed))
+    }
     /// The light a lit moving thing in `low..high` takes where it is: its
     /// zone's ambient and suns, and the light of the room it stands in (the
     /// map's baked volume) as a floor under the ambient, so a body or a held
@@ -312,6 +318,10 @@ impl LightVolumeState {
         high: [f32; 3],
     ) -> Option<bri_render::scene::ActorLight> {
         let room = self.room_light(low, high);
+        // The body's bounding sphere: about its box's middle, out to a corner.
+        let radius = Vec3::from(high).distance(Vec3::from(low)) * 0.5;
+        self.body_reach
+            .fetch_max(radius.to_bits(), std::sync::atomic::Ordering::Relaxed);
         match regions {
             Some(regions) => {
                 let (ambient, suns) = regions.actor_light(low, high, 0.0);
@@ -331,6 +341,7 @@ impl LightVolumeState {
                 };
                 Some(bri_render::scene::ActorLight {
                     ambient: [0, 1, 2].map(|c| ambient[c].max(room[c])),
+                    radius,
                     sun_first,
                     sun_count,
                     sun_mask,
@@ -342,6 +353,7 @@ impl LightVolumeState {
                 .any(|c| *c > 0.0)
                 .then_some(bri_render::scene::ActorLight {
                     ambient: room,
+                    radius,
                     sun_first: 0,
                     sun_count: 0,
                     sun_mask: 0,
