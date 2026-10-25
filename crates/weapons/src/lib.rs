@@ -520,6 +520,11 @@ pub struct Zoom {
     /// drawn in the world's own and are unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_fov: Vec<f32>,
+    /// The view jumps to the aim's field of view and back with no ease (a
+    /// scope that snaps into place, AA's `bInstantZoom`). The held image's
+    /// own `sights` motion keeps its `seconds`.
+    #[serde(default)]
+    pub instant: bool,
 }
 /// A point in a model node's own frame ([`Image::first_person_offsets`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
