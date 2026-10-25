@@ -76,6 +76,8 @@ pub struct MoverMirror {
     handles: Vec<ColliderHandle>,
     movers: Vec<crate::map::MapMover>,
     placed: Vec<Option<glam::Mat4>>,
+    /// Whether each mover's colliders are hidden (off) here.
+    hidden: Vec<bool>,
 }
 impl MoverMirror {
     /// `handles` are the map colliders in `NativeMap::colliders` order.
@@ -87,6 +89,7 @@ impl MoverMirror {
     }
     fn set(&mut self, movers: &[crate::map::MapMover]) {
         self.movers = movers.to_vec();
+        self.hidden = vec![false; movers.len()];
         self.placed = movers
             .iter()
             .map(|m| Some(m.transform(&bri_content::mover::MoverState::default(), 0)))
@@ -103,6 +106,21 @@ impl MoverMirror {
         let mut moved = false;
         for (index, mover) in self.movers.iter().enumerate() {
             let state = states.get(index).copied().unwrap_or_default();
+            if self.hidden.get(index).copied().unwrap_or(false) != state.hidden {
+                for handle in self
+                    .handles
+                    .get(mover.colliders.clone())
+                    .unwrap_or_default()
+                {
+                    if let Some(collider) = physics.colliders.get_mut(*handle) {
+                        collider.set_enabled(!state.hidden);
+                        moved = true;
+                    }
+                }
+                if let Some(h) = self.hidden.get_mut(index) {
+                    *h = state.hidden;
+                }
+            }
             let target = mover.transform(&state, tick);
             if self.placed.get(index).copied().flatten() == Some(target) {
                 continue;

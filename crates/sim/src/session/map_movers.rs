@@ -98,14 +98,27 @@ impl Session {
                     .is_some_and(|v| v == "1" || bot_door_command(v).is_some()),
             );
         }
+        let initial: Vec<MoverState> = movers
+            .iter()
+            .map(|m| MoverState {
+                hidden: m.def.hidden,
+                ..MoverState::default()
+            })
+            .collect();
+        for (mover, state) in movers.iter().zip(&initial) {
+            if state.hidden {
+                self.simulation
+                    .set_map_colliders(mover.colliders.clone(), false)?;
+            }
+        }
         let count = movers.len();
         self.map_movers = MapMovers {
             asked: BTreeMap::new(),
             refused: BTreeSet::new(),
             movers,
-            states: vec![MoverState::default(); count],
+            states: initial.clone(),
             placed: vec![None; count],
-            accepted: vec![MoverState::default(); count],
+            accepted: initial,
         };
         Ok(())
     }
@@ -297,6 +310,17 @@ impl Session {
         );
         let tick = self.simulation.state().tick;
         Ok(self.map_movers.states[index].go_to(tick, key, seconds))
+    }
+    /// Show or hide mover `id`: hidden, it is not drawn and not solid
+    /// (to bodies, shots and bots alike), though its motion goes on.
+    pub fn mover_show(&mut self, id: &str, shown: bool) -> Result<()> {
+        let index = self
+            .mover_index(id)
+            .with_context(|| format!("No map mover called {id}"))?;
+        self.map_movers.states[index].hidden = !shown;
+        self.map_movers.accepted[index].hidden = !shown;
+        self.simulation
+            .set_map_colliders(self.map_movers.movers[index].colliders.clone(), shown)
     }
     /// Hold mover `id` where it is.
     pub fn mover_stop(&mut self, id: &str) -> Result<()> {

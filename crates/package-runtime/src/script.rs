@@ -3481,6 +3481,12 @@ fn register_presentation(engine: &mut Engine) {
             seconds: float(&seconds)?,
         }))
     });
+    engine.register_fn("mover_show", |name: &str, shown: bool| {
+        push(Op::MoverShow(ops::MoverShow {
+            id: name.to_owned(),
+            shown,
+        }))
+    });
     engine.register_fn("mover_stop", |name: &str| {
         push(Op::MoverStop(ops::MoverStop {
             id: name.to_owned(),
