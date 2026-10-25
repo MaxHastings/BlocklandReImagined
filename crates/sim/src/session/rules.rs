@@ -2974,7 +2974,7 @@ mod tests {
         for _ in 0..400 {
             s.step().unwrap();
         }
-        s.kill(q, None, super::super::combat::DamageKind::Suicide)
+        s.kill(q, None, super::super::combat::DamageKind::Suicide, None)
             .unwrap();
         let tick = s.simulation.state().tick;
         let wait = s.peers[&q].combat.respawn_tick - tick;
@@ -3006,7 +3006,7 @@ mod tests {
         s.fire_input(ids[0], "onActivate", Some(p));
         s.step_events(&BTreeSet::new()).unwrap();
         // Dies some other way, then respawns.
-        s.kill(p, None, super::super::combat::DamageKind::Suicide)
+        s.kill(p, None, super::super::combat::DamageKind::Suicide, None)
             .unwrap();
         for _ in 0..130 {
             s.step().unwrap();
@@ -3266,7 +3266,7 @@ mod tests {
     #[test]
     fn a_goal_pushes_the_ball_while_its_builder_is_dead() {
         let (mut s, p, ids, _, goal) = lone_goal(lift_goal());
-        s.kill(p, None, super::super::combat::DamageKind::Suicide)
+        s.kill(p, None, super::super::combat::DamageKind::Suicide, None)
             .unwrap();
         assert!(goal_lifts(&mut s, &ids, goal, p));
     }

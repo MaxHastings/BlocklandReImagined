@@ -3779,6 +3779,10 @@ pub struct DamageType {
     /// between the names (its death icon).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub special: bool,
+    /// What a kill of this type gives a ragdoll body, in place of the
+    /// archetype's own kick (a grenade throws a body further than a bullet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death_kick: Option<bri_content::body::DeathKick>,
 }
 impl DamageType {
     /// Lower-case ids of the icons both templates show.
@@ -4249,6 +4253,10 @@ impl Pack {
                     }),
                 "Invalid damage type {key}"
             );
+            if let Some(kick) = &t.death_kick {
+                kick.validate()
+                    .map_err(|e| anyhow::anyhow!("Invalid damage type {key}: {e}"))?;
+            }
         }
         for (key, e) in &self.explosions {
             ensure!(

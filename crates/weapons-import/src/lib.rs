@@ -182,6 +182,7 @@ pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
                 vehicle_scale: c[6].trim().parse().unwrap_or(1.0),
                 direct: matches!(c[7].trim(), "1" | "true"),
                 special: false,
+                death_kick: None,
             }
         })
         .collect())
@@ -210,6 +211,7 @@ pub fn special_kills(text: &str) -> Result<Vec<DamageType>> {
                 vehicle_scale: 1.0,
                 direct: false,
                 special: true,
+                death_kick: None,
             }
         })
         .collect())
