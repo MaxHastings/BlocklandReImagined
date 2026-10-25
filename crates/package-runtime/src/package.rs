@@ -45,7 +45,8 @@ pub struct Package {
     pub modes: BTreeMap<String, content::GameMode>,
 }
 
-const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
+/// All of one package's files together; the same size the sync wire allows.
+pub const MAX_PACKAGE_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
 impl Package {
     /// It brings something a host runs for some games and not others
@@ -196,7 +197,7 @@ impl Package {
         }
         if total > MAX_PACKAGE_BYTES {
             out.push(
-                Diagnostic::error("package.too_large", format!("{total} bytes is over 32 MiB"))
+                Diagnostic::error("package.too_large", format!("{total} bytes of files is over the package limit of {MAX_PACKAGE_BYTES} bytes"))
                     .at(location(&id, "")),
             );
         }

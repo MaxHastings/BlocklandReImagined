@@ -21,8 +21,8 @@ pub use animation::{
     ActiveAnimation, AnimationAsset, AnimationAssets, AnimationClip, AnimationImageAsset,
     AnimationOutcome, AnimationPose, AnimationPoseApplicability, AnimationPoseRetention,
     AnimationPoseState, AnimationPoseView, AnimationRecord, AnimationStart, AnimationTarget,
-    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, LibraryClip, PlaybackId,
-    PreparedAnimationStart,
+    AnimationView, EvaluatedActiveAnimation, EvaluatedAnimationView, LibraryClip,
+    MAX_ASSETS as MAX_ANIMATION_ASSETS, PlaybackId, PreparedAnimationStart,
 };
 pub use body_pose::{BodyPoseAssetInfo, BodyPoseBinding, BodyPoseBindings};
 mod bots;

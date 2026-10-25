@@ -284,12 +284,13 @@ fn optional_bind_only_bodies_share_existing_catalog_budget() -> Result<()> {
     std::fs::write(dir.join("tiny.shape.json"), serde_json::to_vec(&shape)?)?;
     let path = dir.join("package.json");
     let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
-    for i in 0..257 {
+    let limit = bri_sim::session::MAX_ANIMATION_ASSETS;
+    for i in 0..=limit {
         manifest["provides"].as_array_mut().unwrap().push(json!({"kind":"body","id":format!("posefixture:body/tiny{i}"),"file":"tiny.shape.json"}));
     }
     std::fs::write(path, manifest.to_string())?;
     let (assets, bindings) = snapshot(root.path())?;
-    assert_eq!(assets.assets.len(), 256);
+    assert_eq!(assets.assets.len(), limit);
     assert!(bindings.bodies.len() <= assets.assets.len());
     assert!(
         assets
