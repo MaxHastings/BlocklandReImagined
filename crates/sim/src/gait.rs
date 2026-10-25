@@ -3,7 +3,8 @@
 //! footfalls a clip marks are the same moments wherever they are worked out.
 use crate::player::PlayerState;
 use bri_content::body::{GroundSpeeds, LocomotionPick, Role, RoleClips};
-use glam::Vec3;
+use glam::{Quat, Vec3};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocomotionAction {
@@ -255,5 +256,153 @@ pub fn own_right_strafe(action: LocomotionAction, roles: &RoleClips) -> Locomoti
     LocomotionAction {
         sequence,
         forward: true,
+    }
+}
+
+/// Where the host has each body in its locomotion clip, so the footfalls the
+/// clip marks fall on the moments a client draws them: the same pick, the
+/// same rate from `ground_speeds`, the same marks. Overrides only a client
+/// sees (a scripted thread, an intent clip, a seat, water) are not followed.
+#[derive(Default)]
+pub struct Gaits {
+    bodies: BTreeMap<u64, Pace>,
+}
+#[derive(Default)]
+struct Pace {
+    /// The action the body is in.
+    mode: String,
+    phase: f32,
+    forward: bool,
+}
+impl Gaits {
+    /// Advance `owner` by `seconds` and return the stretch of its clip it
+    /// played. `clip` gives a clip's duration and whether it loops, by
+    /// lower-case name; none when the body lacks the clip.
+    pub fn advance(
+        &mut self,
+        owner: u64,
+        seconds: f32,
+        player: &PlayerState,
+        look: &crate::archetype::Look,
+        clip: impl Fn(&str) -> Option<(f32, bool)>,
+    ) -> Option<ClipSpan> {
+        let roles = RoleClips::resolve(&look.animations, |name| clip(name).is_some());
+        let prone_authored = player.posture.prone && roles.has_own(Role::Prone);
+        let action = ground_action(player, 0.0, look.locomotion_pick, &roles, prone_authored);
+        let role = Role::from_blockhead_clip(action.sequence).unwrap_or(Role::Idle);
+        let (name, reversed) = roles.clip(role)?;
+        let (duration, looping) = clip(name)?;
+        let pace = self.bodies.entry(owner).or_default();
+        let restart = pace.mode != action.sequence;
+        let before = pace.phase;
+        if restart {
+            pace.mode = action.sequence.to_owned();
+            pace.forward = action.forward != reversed;
+            pace.phase = if pace.forward { 0.0 } else { duration };
+        } else {
+            let local = Quat::from_rotation_y(player.body_yaw()) * Vec3::from(player.velocity)
+                / player.scale.max(0.01);
+            let rate = time_scale(
+                &look.ground_speeds,
+                look.locomotion_pick,
+                look.max_time_scale,
+                None,
+                role,
+                local,
+            );
+            pace.phase += if pace.forward {
+                seconds * rate
+            } else {
+                -seconds * rate
+            };
+        }
+        let span = ClipSpan {
+            clip: name.to_owned(),
+            from: if restart { pace.phase } else { before },
+            to: pace.phase,
+            duration,
+            looping,
+            restart,
+        };
+        pace.phase = if looping && duration > 0.0 {
+            pace.phase.rem_euclid(duration)
+        } else {
+            pace.phase.clamp(0.0, duration)
+        };
+        Some(span)
+    }
+    /// Forget the bodies `keep` does not name.
+    pub fn retain(&mut self, keep: impl Fn(u64) -> bool) {
+        self.bodies.retain(|owner, _| keep(*owner));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::archetype::{Archetype, PlayerType};
+
+    fn running(speed: f32) -> PlayerState {
+        PlayerState {
+            owner: 1,
+            feet: [0.0; 3],
+            velocity: [0.0, 0.0, -speed],
+            yaw: 0.0,
+            pitch: 0.0,
+            head_yaw: 0.0,
+            grounded: true,
+            crouched: false,
+            jetting: false,
+            jump: Default::default(),
+            archetype: Default::default(),
+            scale: 1.0,
+            energy: 100.0,
+            speed_scale: 1.0,
+            walking: false,
+            jump_locked: false,
+            tick: Default::default(),
+            tether: None,
+            controller: None,
+            pass_group: 0,
+            posture: Default::default(),
+        }
+    }
+
+    #[test]
+    fn the_host_walks_the_clip_at_the_rate_a_client_would() {
+        let mut look = Archetype::v20(PlayerType::EVERY[0]).look;
+        look.locomotion_pick = LocomotionPick::Ue2FourWay;
+        look.ground_speeds.insert("run".into(), 6.0);
+        let clips = |name: &str| (name == "run" || name == "root").then_some((0.8, true));
+        let mut gaits = Gaits::default();
+        let me = running(6.0);
+        // The first frame puts the body at the start of its clip.
+        let first = gaits.advance(1, 0.1, &me, &look, clips).unwrap();
+        assert!(first.restart);
+        assert_eq!(first.clip, "run");
+        assert_eq!((first.from, first.to), (0.0, 0.0));
+        // At the class ground speed the clip plays at 1x.
+        let next = gaits.advance(1, 0.1, &me, &look, clips).unwrap();
+        assert!(!next.restart);
+        assert!((next.to - next.from - 0.1).abs() < 1e-5, "{next:?}");
+        // Twice as fast plays at twice the rate, up to the body's limit.
+        let quick = running(12.0);
+        let span = gaits.advance(1, 0.1, &quick, &look, clips).unwrap();
+        assert!((span.to - span.from - 0.2).abs() < 1e-5, "{span:?}");
+        // A mark at 0.25 s is passed exactly once as the clip goes by it.
+        let mut gaits = Gaits::default();
+        gaits.advance(2, 0.0, &me, &look, clips);
+        let mut passes = 0;
+        for _ in 0..40 {
+            let span = gaits.advance(2, 0.02, &me, &look, clips).unwrap();
+            passes += usize::from(span.passes(0.25));
+        }
+        // 0.8 s of clip over 40 frames: one lap.
+        assert_eq!(passes, 1);
+        // A body that stops falls back to its root clip and restarts.
+        let still = running(0.0);
+        let span = gaits.advance(2, 0.02, &still, &look, clips).unwrap();
+        assert_eq!(span.clip, "root");
+        assert!(span.restart);
     }
 }

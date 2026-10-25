@@ -1928,6 +1928,10 @@ pub struct ArchetypeSounds {
     /// Frames a second of the clips, for steps marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// How loud a footfall is to bots, by posture then ground speed (see the
+    /// content kinds document: `noise`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub noise: BTreeMap<String, Vec<NoiseBandDef>>,
     /// A sound for entering each posture (`stand`, `crouch`, `prone`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub postures: BTreeMap<String, String>,
@@ -1938,6 +1942,13 @@ pub struct ArchetypeSounds {
     /// and a mark (see the content kinds document: `contacts`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub contacts: BTreeMap<String, FootContactDef>,
+}
+/// [`ArchetypeSounds::noise`]: from this ground speed, this loud (0 to 1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoiseBandDef {
+    pub min_speed: f32,
+    pub volume: f32,
 }
 /// [`ArchetypeSounds::contacts`]: what a footfall leaves on one surface kind.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2113,6 +2124,20 @@ impl ArchetypeDef {
                         && ids.iter().all(|s| text(s, 128))
                 }),
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
+        );
+        ensure!(
+            self.sounds.noise.len() <= 3
+                && self.sounds.noise.iter().all(|(posture, bands)| {
+                    ["stand", "crouch", "prone"].contains(&posture.as_str())
+                        && (1..=8).contains(&bands.len())
+                        && bands.iter().all(|b| {
+                            b.min_speed.is_finite()
+                                && b.min_speed >= 0.0
+                                && b.volume.is_finite()
+                                && (0.0..=1.0).contains(&b.volume)
+                        })
+                }),
+            "sounds.noise names stand, crouch or prone, each with 1 to 8 bands of min_speed 0 or more and volume 0 to 1"
         );
         ensure!(
             self.sounds.postures.len() <= 3

@@ -781,6 +781,24 @@ fn apply_sounds(
     if from.fps.is_some() {
         sounds.fps = from.fps;
     }
+    if !from.noise.is_empty() {
+        sounds.noise = from
+            .noise
+            .iter()
+            .map(|(posture, bands)| {
+                (
+                    posture.clone(),
+                    bands
+                        .iter()
+                        .map(|b| crate::archetype::NoiseBand {
+                            min_speed: b.min_speed,
+                            volume: b.volume,
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+    }
     if !from.postures.is_empty() {
         sounds.postures.clone_from(&from.postures);
     }
@@ -4640,6 +4658,7 @@ mod sound_tests {
         let from: bri_package_runtime::content::ArchetypeSounds =
             serde_json::from_value(serde_json::json!({
                 "footsteps": ["a:step"], "fps": 30.0, "takeoff_on_surface": true, "postures": { "crouch": "a:down" },
+                "noise": { "stand": [ { "min_speed": 0.0, "volume": 0.2 }, { "min_speed": 6.0, "volume": 0.8 } ] },
                 "contacts": { "*": { "effect": "a:dust", "decal": { "texture": "a:foot", "size": 0.4, "seconds": 20 } } },
                 "steps": { "Run_F": [ { "frame": 4, "foot": "foot_l", "sound": "a:climb", "volume": 0.9, "radius": 150 }, { "seconds": 0.5 } ] }
             }))
@@ -4653,6 +4672,9 @@ mod sound_tests {
         assert_eq!(marks[0].foot.as_deref(), Some("foot_l"));
         assert!(sounds.takeoff_on_surface);
         assert_eq!(sounds.postures["crouch"], "a:down");
+        assert_eq!(sounds.noise_for("stand", 3.0), 0.2);
+        assert_eq!(sounds.noise_for("stand", 9.0), 0.8);
+        assert_eq!(sounds.noise_for("crouch", 9.0), 0.0);
         assert_eq!(marks[0].sound.as_deref(), Some("a:climb"));
         assert_eq!((marks[0].volume, marks[0].radius), (Some(0.9), Some(150.0)));
         let contact = sounds.contact_on("sand").expect("any other surface");

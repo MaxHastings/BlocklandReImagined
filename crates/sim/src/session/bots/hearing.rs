@@ -3,6 +3,68 @@
 use super::*;
 
 impl Session {
+    /// The noise bodies make walking: each body whose clips mark their
+    /// footfalls (`Sounds::steps`) and that has a loudness for its gait
+    /// (`Sounds::noise`) makes it at each marked moment of the clip it plays,
+    /// heard by bots as fighting is and drawing the eye of those who see
+    /// nothing better. The marks are the ones a client sounds the footfall
+    /// from (`gait`).
+    pub(in crate::session) fn footfall_noise(&mut self) {
+        if self.bots.brains.is_empty() {
+            self.gaits.retain(|_| false);
+            return;
+        }
+        let seconds = 1.0 / bri_world::TICKS_PER_SECOND as f32;
+        let mut heard = Vec::new();
+        let mut gaits = std::mem::take(&mut self.gaits);
+        for (&owner, peer) in &self.peers {
+            let state = peer.player.state();
+            let archetype = self.archetypes.resolve(state.archetype);
+            let sounds = &archetype.sounds;
+            if !peer.combat.alive
+                || peer.sitting
+                || !state.grounded
+                || sounds.steps.is_empty()
+                || sounds.noise.is_empty()
+            {
+                continue;
+            }
+            let model = &archetype.look.model;
+            let Some(span) = gaits.advance(owner, seconds, state, &archetype.look, |name| {
+                self.body_clip(model, name)
+            }) else {
+                continue;
+            };
+            let posture = if state.posture.prone {
+                "prone"
+            } else if state.crouched {
+                "crouch"
+            } else {
+                "stand"
+            };
+            let speed = Vec3::new(state.velocity[0], 0.0, state.velocity[2]).length();
+            let volume = sounds.noise_for(posture, speed);
+            if volume <= 0.0 {
+                continue;
+            }
+            let marks = sounds.steps.get(&span.clip).map_or(0, |events| {
+                events
+                    .iter()
+                    .filter(|e| sounds.step_time(e).is_some_and(|at| span.passes(at)))
+                    .count()
+            });
+            if marks > 0 {
+                heard.push((owner, Vec3::from(state.feet), volume));
+            }
+        }
+        gaits.retain(|owner| self.peers.contains_key(&owner));
+        self.gaits = gaits;
+        for (owner, at, volume) in heard {
+            self.bots.noise(owner, at, volume);
+            self.bots
+                .notice(super::perception::Stimulus::sound(at, volume));
+        }
+    }
     /// What it knows of enemies beyond its eyes this tick: what it heard
     /// becomes its memory when it has nothing fresher, a hit this tick names
     /// who hurt it (only roughly where from, out of sight), stale or no

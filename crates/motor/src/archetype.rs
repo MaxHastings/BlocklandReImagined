@@ -145,6 +145,13 @@ pub struct Sounds {
     /// Frames a second of the clips, for `steps` marked by `frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f32>,
+    /// How loud a footfall is to those who listen for it (bots, by gait):
+    /// for each posture (`stand`, `crouch`, `prone`) the bands from the speed
+    /// they begin at, the loudest band whose `min_speed` the body's ground
+    /// speed reaches setting the volume (0 to 1, as a weapon's sound is).
+    /// A posture listed nowhere, or a speed under every band, is silent.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub noise: std::collections::BTreeMap<String, Vec<NoiseBand>>,
     /// A sound for entering each posture (`stand`, `crouch`, `prone`), heard
     /// where the body is when its posture changes.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -158,6 +165,15 @@ pub struct Sounds {
     /// listed nowhere leaves nothing.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub contacts: std::collections::BTreeMap<String, FootContact>,
+}
+/// A step of the footfall loudness ([`Sounds::noise`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoiseBand {
+    /// The ground speed (units/s) the band begins at.
+    pub min_speed: f32,
+    /// How loud, 0 to 1.
+    pub volume: f32,
 }
 /// What one footfall leaves on a surface ([`Sounds::contacts`]).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -231,6 +247,8 @@ impl Sounds {
     pub const MAX_STEP_EVENTS: usize = 16;
     /// Most surface kinds with their own footfalls.
     pub const MAX_SURFACES: usize = 16;
+    /// Most loudness bands one posture lists.
+    pub const MAX_NOISE_BANDS: usize = 8;
     /// The postures a body enters, as `postures` names them.
     pub const POSTURES: [&'static str; 3] = ["stand", "crouch", "prone"];
     /// Most surface kinds (and `*`) with footfall marks and dust.
@@ -269,6 +287,17 @@ impl Sounds {
                     && !c.sound.chars().any(char::is_control)
                     && c.seconds.is_finite()
                     && (0.0..=60.0).contains(&c.seconds)
+            })
+            && self.noise.len() <= Self::POSTURES.len()
+            && self.noise.iter().all(|(posture, bands)| {
+                Self::POSTURES.contains(&posture.as_str())
+                    && (1..=Self::MAX_NOISE_BANDS).contains(&bands.len())
+                    && bands.iter().all(|b| {
+                        b.min_speed.is_finite()
+                            && b.min_speed >= 0.0
+                            && b.volume.is_finite()
+                            && (0.0..=1.0).contains(&b.volume)
+                    })
             })
             && self.postures.len() <= Self::POSTURES.len()
             && self.postures.iter().all(|(posture, sound)| {
@@ -341,6 +370,17 @@ impl Sounds {
     /// The footfalls on surface `kind`.
     pub fn footsteps_on(&self, kind: &str) -> &[String] {
         self.surfaces.get(kind).unwrap_or(&self.footsteps)
+    }
+    /// How loud a footfall is for a body in `posture` moving `speed` along
+    /// the ground ([`Sounds::noise`]); 0 when nothing says.
+    pub fn noise_for(&self, posture: &str, speed: f32) -> f32 {
+        self.noise.get(posture).map_or(0.0, |bands| {
+            bands
+                .iter()
+                .filter(|b| speed >= b.min_speed)
+                .max_by(|a, b| a.min_speed.total_cmp(&b.min_speed))
+                .map_or(0.0, |b| b.volume)
+        })
     }
     /// What a footfall on surface `kind` leaves, if anything.
     pub fn contact_on(&self, kind: &str) -> Option<&FootContact> {
