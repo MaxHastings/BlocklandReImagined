@@ -794,6 +794,9 @@ fn ambient_at(reach:f32)->vec3<f32> {
 // gets brighter, so enclosed rooms stay as dark as before. `normal` is unit
 // length.
 override MODERN_SKY_SHADING:bool=false;
+// Diagnostic: 0 off. 1 sky exposure (r open, g fade); 2 hemisphere multiplier; 3 reflection radiance; 4 diffuse only;
+// 5 (r lighting mode / 3, g shading strength, b probe ready); 6 sun-less ambient_at; 7 enclosed ambient.
+override DEBUG_TERM:u32=0u;
 const HEMISPHERE_DOWN:f32=0.75;
 struct SkyExposure {
     matrices:array<mat4x4<f32>,9>, directions:array<vec4<f32>,9>,
@@ -1772,6 +1775,19 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         // changes with the live environment.
         if relit() {illumination=max(illumination*sky_follow()+(camera.ambient.rgb-baked_ambient())*(1.0-sky_share()),vec3<f32>(0.0));}
     }
+    if DEBUG_TERM!=0u {
+        let normal=v.normal/max(length(v.normal),0.0001);
+        let e=sky_exposure_at(v.world_position,normal);
+        switch DEBUG_TERM {
+            case 1u: {return vec4<f32>(e.x,e.y,0.0,1.0);}
+            case 2u: {return vec4<f32>(hemisphere(v.world_position,normal),1.0);}
+            case 4u: {return vec4<f32>(clamp(illumination,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+            case 5u: {return vec4<f32>(f32(lighting_mode())/3.0,camera.shading.x,select(0.0,1.0,probe.state.x>0.5),1.0);}
+            case 6u: {return vec4<f32>(clamp(ambient_at(1.0),vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+            case 7u: {return vec4<f32>(clamp(camera.enclosed.rgb,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+            default: {}
+        }
+    }
     var display=pigment*illumination;
     // Fixed-function lighting clamps the vertex colour before texturing.
     if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
@@ -2114,6 +2130,19 @@ fn physical_surface(v:VertexOut)->vec4<f32> {
     }
     // Glow, whatever the world's light.
     radiance+=material[2].rgb*textureSample(layer5,tiled,v.uv).rgb;
+    if DEBUG_TERM!=0u {
+        let e=sky_exposure_at(v.world_position,n);
+        switch DEBUG_TERM {
+            case 1u: {return vec4<f32>(e.x,e.y,0.0,1.0);}
+            case 2u: {return vec4<f32>(hemisphere(v.world_position,n),1.0);}
+            case 3u: {return vec4<f32>(clamp(radiance,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+            case 4u: {return vec4<f32>(clamp(display,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+            case 5u: {return vec4<f32>(f32(lighting_mode())/3.0,camera.shading.x,select(0.0,1.0,probe.state.x>0.5),1.0);}
+            case 6u: {return vec4<f32>(clamp(ambient_at(1.0),vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+            case 7u: {return vec4<f32>(clamp(camera.enclosed.rgb,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);}
+            default: {}
+        }
+    }
     display+=display_color(radiance);
     return vec4<f32>(fogged(display,v.world_position),alpha);
 }

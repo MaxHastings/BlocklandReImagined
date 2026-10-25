@@ -3124,6 +3124,13 @@ impl WorldPipelines {
         let mut constants = crate::color::output_constants(color_format).to_vec();
         if modern {
             constants.push(("MODERN_SKY_SHADING", 1.0));
+            // Diagnostic only (never merged): BRI_DEBUG_TERM paints one lighting term.
+            if let Some(term) = std::env::var("BRI_DEBUG_TERM")
+                .ok()
+                .and_then(|t| t.parse::<f64>().ok())
+            {
+                constants.push(("DEBUG_TERM", term));
+            }
         }
         Self {
             device: device.clone(),
