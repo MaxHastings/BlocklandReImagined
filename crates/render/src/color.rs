@@ -33,11 +33,35 @@ pub fn color_vision() -> u32 {
     COLOR_VISION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Pipeline constants telling `output_color` how `format` stores colour
-/// and which colour-vision assistance to apply.
-pub fn output_constants(format: wgpu::TextureFormat) -> [(&'static str, f64); 2] {
+/// The display ramp renderers are built with: Brightness, Contrast and
+/// Gamma as `f32` bits. The defaults are the identity ramp.
+pub const RAMP_NEUTRAL: [f32; 3] = [0.5, 0.5, 1.2];
+static RAMP: [std::sync::atomic::AtomicU32; 3] = [
+    std::sync::atomic::AtomicU32::new(RAMP_NEUTRAL[0].to_bits()),
+    std::sync::atomic::AtomicU32::new(RAMP_NEUTRAL[1].to_bits()),
+    std::sync::atomic::AtomicU32::new(RAMP_NEUTRAL[2].to_bits()),
+];
+/// Choose the display ramp (Brightness, Contrast, Gamma) for pipelines built
+/// from now on. Non-finite values leave the identity in place.
+pub fn set_display_ramp(ramp: [f32; 3]) {
+    for (slot, (value, neutral)) in RAMP.iter().zip(ramp.into_iter().zip(RAMP_NEUTRAL)) {
+        let value = if value.is_finite() { value } else { neutral };
+        slot.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+pub fn display_ramp() -> [f32; 3] {
+    std::array::from_fn(|i| f32::from_bits(RAMP[i].load(std::sync::atomic::Ordering::Relaxed)))
+}
+
+/// Pipeline constants telling `output_color` how `format` stores colour,
+/// which colour-vision assistance to apply and the display ramp.
+pub fn output_constants(format: wgpu::TextureFormat) -> [(&'static str, f64); 5] {
+    let [brightness, contrast, gamma] = display_ramp();
     [
         ("OUTPUT_ENCODED", if format.is_srgb() { 0.0 } else { 1.0 }),
         ("COLOR_VISION", f64::from(color_vision())),
+        ("RAMP_BRIGHTNESS", f64::from(brightness)),
+        ("RAMP_CONTRAST", f64::from(contrast)),
+        ("RAMP_GAMMA", f64::from(gamma)),
     ]
 }

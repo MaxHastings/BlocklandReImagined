@@ -195,7 +195,7 @@ and render modes.
   and asks your name.
 - **Settings v20 didn't have.** Graphics presets, a frame rate cap, field
   of view, anti-aliasing, brick shadows, PCSS sun shadows (soft shadow
-  edges that widen with distance from what casts them), UI size, colour-vision modes,
+  edges that widen with distance from what casts them), UI size, colour-vision modes, a display ramp (`$pref::Video::Brightness`, `Contrast`, `Gamma`: neutral until an Add-On defaults them, the Unreal Engine 2 gamma table),
   sound captions, a music volume, mute in the background, Toggle Crouch,
   and mouse buttons 4 and 5.
 - **Building extras.** Brick search in the selector, a red ghost before a

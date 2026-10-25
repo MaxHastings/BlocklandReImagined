@@ -20,6 +20,9 @@ fn report(name: &str, wgsl: &str, modern: bool) {
         let mut list = vec![
             ("OUTPUT_ENCODED".to_string(), 0.0),
             ("COLOR_VISION".to_string(), 0.0),
+            ("RAMP_BRIGHTNESS".to_string(), 0.5),
+            ("RAMP_CONTRAST".to_string(), 0.5),
+            ("RAMP_GAMMA".to_string(), 1.2),
         ];
         list.push(("SURFACE_GROUP".to_string(), f64::from(group)));
         if modern {
