@@ -3888,6 +3888,14 @@ fn register_presentation(engine: &mut Engine) {
             state: state.into(),
         }))
     });
+    // Pick a world item up as walking onto it would.
+    engine.register_fn("pick_up", |player: Dynamic, drop: Dynamic| {
+        push(Op::PickUp(ops::PickUp {
+            player: id(&player)?,
+            drop: u64::try_from(drop.as_int().map_err(|_| "a drop is a number")?)
+                .map_err(|_| "a drop is not negative")?,
+        }))
+    });
     // Take the tool in a slot out, or () to put tools away.
     engine.register_fn("select_tool", |player: Dynamic, slot: Dynamic| {
         let slot = if slot.is_unit() {

@@ -615,6 +615,13 @@ impl Perform for ops::SetImageState {
             .set_state(bri_weapons::ActorId(player), &state)
     }
 }
+impl Perform for ops::PickUp {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::PickUp { player, drop } = self;
+        session.take_drop(player, drop, true);
+        Ok(())
+    }
+}
 impl Perform for ops::SelectTool {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SelectTool { player, slot } = self;

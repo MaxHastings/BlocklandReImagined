@@ -48,6 +48,7 @@ fn cmd_shoot(p) { fire("kit:projectile/round", 30.0, 5.0, 30.0, 0.0, -60.0, 0.0,
 fn cmd_toss(p, item, x, z) { drop_item(item, x, 0.2, z); }
 fn cmd_bag(p, x, z) { drop_item("kit:weapon/ammo", x, 0.2, z, 0.0, 0.0, 0.0, #{ rounds: 25 }); }
 fn cmd_renew(p, id, seconds) { require(renew_drop(id, seconds)); }
+fn cmd_grab(p, id) { pick_up(p, id); }
 fn cmd_take(p, item) { take_item(p, item); }
 fn cmd_give(p, item) { give_item(p, item, true); }
 fn cmd_facts(p) {
@@ -101,6 +102,7 @@ fn behaviour() -> Value {
             command("toss", &["string", "float", "float"]),
             command("bag", &["float", "float"]),
             command("renew", &["int", "int"]),
+            command("grab", &["int"]),
             command("take", &["string"]),
             command("give", &["string"]),
             command("facts", &[]),
@@ -138,6 +140,7 @@ fn weapons() -> bri_weapons::Pack {
             "kit:weapon/gun": { "ui_name": "Kit Gun", "image": "kit:image/gun" },
             "kit:weapon/ammo": { "ui_name": "Kit Ammo" },
             "kit:weapon/mine": { "ui_name": "Kit Mine" },
+            "kit:weapon/crate": { "ui_name": "Kit Crate", "use_only": true },
             "kit:weapon/f1": { "ui_name": "Filler 1" },
             "kit:weapon/f2": { "ui_name": "Filler 2" },
             "kit:weapon/f3": { "ui_name": "Filler 3" },
@@ -699,4 +702,25 @@ fn a_required_operation_that_cannot_be_done_keeps_the_call_from_taking_effect() 
             .contains("require takes what an operation function returned"),
         "{error:#}"
     );
+}
+
+#[test]
+fn a_use_only_item_is_left_by_walking_and_taken_by_a_rules_pick_up() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(30.0, 0.05, 30.0));
+    g.steps(2);
+    g.run(a, "toss", toss("kit:weapon/crate", 30.0, 30.0))
+        .unwrap();
+    g.steps(60);
+    let crate_id = g.drops("kit:weapon/crate");
+    assert_eq!(crate_id.len(), 1, "walking onto it takes nothing");
+    g.run(
+        a,
+        "grab",
+        vec![PackageArg::Int(g.s.weapon_view().drops[0].id as i64)],
+    )
+    .unwrap();
+    g.steps(2);
+    assert!(g.drops("kit:weapon/crate").is_empty(), "the rule took it");
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }

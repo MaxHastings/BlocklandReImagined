@@ -2917,6 +2917,10 @@ pub struct Item {
     /// do (a rifle a soldier put down in a mission).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub lingers: bool,
+    /// Where it lies it is taken only when a rule picks it up for the Use
+    /// key (`pick_up`), not by walking over it as v20's items are.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub use_only: bool,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -2934,6 +2938,7 @@ impl Default for Item {
             rotate: false,
             idle: String::new(),
             lingers: false,
+            use_only: false,
         }
     }
 }

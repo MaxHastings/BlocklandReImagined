@@ -374,6 +374,22 @@ impl ScriptOp for RenewDrop {
     }
 }
 
+/// Have `player` pick up world item `drop` as walking onto it would: its
+/// rules may leave it, and a full inventory leaves it too. The Use key on a
+/// `use_only` item is this.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PickUp {
+    pub player: u64,
+    pub drop: u64,
+}
+impl ScriptOp for PickUp {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "pick_up";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
 /// Take back an item this package put in the world with `drop_item`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoveDrop {
