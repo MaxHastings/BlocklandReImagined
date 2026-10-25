@@ -863,6 +863,10 @@ struct Equipped {
     /// ([`crate::Image::lower`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     lowering: bool,
+    /// Hitscan rounds fired since it came up, for a tracer that shows only
+    /// every Nth ([`crate::Tracer::every`]).
+    #[serde(default)]
+    rounds: std::cell::Cell<u32>,
 }
 /// Torque's `nextImage`: a right-hand image asked for while the held one's
 /// state forbids image changes. It mounts on the next state that allows one.
@@ -1152,6 +1156,18 @@ struct Ray<'a> {
     direction: Vec3,
     range: f32,
     hitscan: &'a crate::Hitscan,
+    /// Whether this round's streaks are drawn ([`crate::Tracer::every`]).
+    traced: bool,
+}
+/// Whether round number `round` (1 for the first since the image came up)
+/// of `image` draws its tracer.
+fn shot_traced(image: &Image, round: u32) -> bool {
+    let every = image
+        .shot
+        .as_ref()
+        .and_then(|s| s.hitscan.as_ref()?.tracer)
+        .map_or(1, |t| t.every);
+    round % every == 0
 }
 /// What one tick of an image's state machine asks of its holder.
 enum Advance {
@@ -2630,6 +2646,7 @@ impl WeaponsWorld {
             magazine: None,
             fidget: None,
             lowering: false,
+            rounds: Default::default(),
         });
         if let Some(command) = self.pack.images[image].commands.mount.clone() {
             self.events.push(Event::ToolFire {
@@ -2810,6 +2827,7 @@ impl WeaponsWorld {
                 magazine,
                 fidget: None,
                 lowering: false,
+                rounds: Default::default(),
             });
             if self
                 .pack
@@ -4083,6 +4101,11 @@ impl WeaponsWorld {
                     None => (image.shot.clone(), image.volleys.as_slice()),
                 };
                 a.last_shot = Some(self.tick);
+                // The round's place in the image's run decides whether its
+                // tracer is drawn: every Nth, counting from the first.
+                let round = e.rounds.get().wrapping_add(1);
+                e.rounds.set(round);
+                let traced = shot_traced(image, round);
                 let mut origin = if image.melee {
                     a.frame.eye
                 } else {
@@ -4338,6 +4361,7 @@ impl WeaponsWorld {
                                 direction: turn * aim,
                                 range,
                                 hitscan,
+                                traced,
                             },
                             q,
                         );
@@ -5263,12 +5287,14 @@ impl WeaponsWorld {
                 .as_ref()
                 .map_or(from + direction * reach, |h| h.position);
             if landing == 0 {
-                self.events.push(Event::Tracer {
-                    actor: id,
-                    hand: ray.hand,
-                    image: ray.image.into(),
-                    to,
-                });
+                if ray.traced {
+                    self.events.push(Event::Tracer {
+                        actor: id,
+                        hand: ray.hand,
+                        image: ray.image.into(),
+                        to,
+                    });
+                }
                 if let Some(flown) = self.projectile_named(&ray.hitscan.flown)
                     && let Some(speed) = self.pack.projectiles.get(&flown).map(|f| f.speed)
                 {
@@ -5287,7 +5313,7 @@ impl WeaponsWorld {
                         });
                     }
                 }
-            } else if inside.is_none() {
+            } else if inside.is_none() && ray.traced {
                 self.events.push(Event::Ricochet {
                     actor: id,
                     image: ray.image.into(),

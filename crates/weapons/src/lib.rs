@@ -2800,6 +2800,7 @@ impl Hitscan {
                         && t.width <= 1.0
                         && t.seconds > 0.0
                         && t.seconds <= 2.0
+                        && (1..=1000).contains(&t.every)
                 })
                 && self.ricochet.is_none_or(|r| {
                     (1..=8).contains(&r.times)
@@ -2809,7 +2810,7 @@ impl Hitscan {
                 && self.trace.as_ref().is_none_or(|t| t.valid())
                 && (self.trace.is_none() || self.ricochet.is_none()),
             "Invalid hitscan of {what}: range 1 to 8192, eye_within 0.1 to 50, damage -100 \
-             to 100, tracer colour 0 to 1, width to 1, seconds to 2, ricochet 1 to 8 times, \
+             to 100, tracer colour 0 to 1, width to 1, seconds to 2, every 1 to 1000, ricochet 1 to 8 times, \
              damage -100 to 100, shooter 0 to 1, trace 1 to 16 landings with loss, floor, scatter, \
              ricochet and penetration 0 to 1, at most 32 surfaces, not with ricochet"
         );
@@ -2856,6 +2857,17 @@ pub struct Tracer {
     /// Up to 2.
     #[serde(default = "default_tracer_seconds")]
     pub seconds: f32,
+    /// Only every this-many-th round fired since the image came up draws
+    /// its streak (a belt with a tracer every fifth round): 1 to 1000, 1
+    /// all of them.
+    #[serde(default = "default_tracer_every", skip_serializing_if = "is_every_round")]
+    pub every: u32,
+}
+fn default_tracer_every() -> u32 {
+    1
+}
+fn is_every_round(n: &u32) -> bool {
+    *n == 1
 }
 fn default_tracer_width() -> f32 {
     0.04

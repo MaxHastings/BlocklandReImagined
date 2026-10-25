@@ -317,7 +317,7 @@ so a shot that was on target on their screen hits; a flying projectile
 meets them where they are; `explosion` names another projectile exploded there in
 place of its own, `player_sound` and `other_sound` play there by what it
 hit, `flown` names a projectile flown from the muzzle to that point, and
-`tracer` (`color`, `width`, `seconds`) draws a streak to it. A ray from
+`tracer` (`color`, `width`, `seconds`, and `every`, 1 to 1000, to draw only each Nth round fired since the image came up, as a belt with a tracer every fifth round does) draws a streak to it. A ray from
 the muzzle (`from_eye` false) starts at the eye instead when something
 stands within `eye_within` units in front of it, so a muzzle poking
 through a wall does not shoot past it; with `converge` it heads for the
