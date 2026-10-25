@@ -44,6 +44,15 @@ pub fn locomotion(player: &PlayerState, coverage: f32) -> LocomotionAction {
     if player.jetting {
         return forward("root");
     }
+    // Holding a ladder: the climb clip of the way it moves, which a body
+    // holding still keeps (its clip plays at the rate it gains height).
+    if player.posture.climbing {
+        return forward(if player.velocity[1] < 0.0 {
+            "ladderdown"
+        } else {
+            "ladderup"
+        });
+    }
     let crouched = player.crouched && !player.posture.prone;
     let root = if crouched { "crouch" } else { "root" };
     if coverage > 0.6 || (coverage > 0.01 && (!player.grounded || player.velocity[1] < -0.1)) {
@@ -384,6 +393,33 @@ mod tests {
             pass_group: 0,
             posture: Default::default(),
         }
+    }
+
+    #[test]
+    fn a_body_on_a_ladder_plays_the_climb_clip_of_the_way_it_moves() {
+        let mut on_ladder = running(0.0);
+        on_ladder.grounded = false;
+        on_ladder.posture.climbing = true;
+        let pick = |vy: f32, p: &mut PlayerState| {
+            p.velocity = [0.0, vy, 0.0];
+            locomotion(p, 0.0).sequence
+        };
+        assert_eq!(pick(4.0, &mut on_ladder), "ladderup");
+        assert_eq!(pick(-4.0, &mut on_ladder), "ladderdown");
+        // Holding still keeps the pose, and the clip stands still with it.
+        assert_eq!(pick(0.0, &mut on_ladder), "ladderup");
+        let speeds = GroundSpeeds::from([("ladder_up".to_string(), 3.0)]);
+        let rate = |vy: f32| {
+            time_scale(
+                &speeds,
+                LocomotionPick::Ue2FourWay,
+                1.5,
+                None,
+                Role::LadderUp,
+                Vec3::new(0.0, vy, 0.0),
+            )
+        };
+        assert_eq!((rate(0.0), rate(1.5)), (0.0, 0.5));
     }
 
     #[test]

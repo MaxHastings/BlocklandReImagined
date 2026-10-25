@@ -178,9 +178,13 @@ pub enum Role {
     HeadSide,
     HeadUp,
     SeatAim,
+    /// Climbing a ladder, up and down: the climb clip plays at the rate the
+    /// body gains height (a body holding still on the ladder holds its pose).
+    LadderUp,
+    LadderDown,
 }
 impl Role {
-    pub const ALL: [Role; 29] = [
+    pub const ALL: [Role; 31] = [
         Role::Idle,
         Role::Run,
         Role::Back,
@@ -210,6 +214,8 @@ impl Role {
         Role::HeadSide,
         Role::HeadUp,
         Role::SeatAim,
+        Role::LadderUp,
+        Role::LadderDown,
     ];
     /// The role's name in an archetype's `animations`.
     pub fn name(self) -> &'static str {
@@ -243,6 +249,8 @@ impl Role {
             Role::HeadSide => "head_side",
             Role::HeadUp => "head_up",
             Role::SeatAim => "seat_aim",
+            Role::LadderUp => "ladder_up",
+            Role::LadderDown => "ladder_down",
         }
     }
     /// The Blockhead's clip for the role (m.dts sequence names, lower case):
@@ -278,6 +286,8 @@ impl Role {
             Role::HeadSide => "headside",
             Role::HeadUp => "headup",
             Role::SeatAim => "seataim",
+            Role::LadderUp => "ladderup",
+            Role::LadderDown => "ladderdown",
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {
@@ -326,6 +336,8 @@ impl Role {
             Role::HeadSide => &[],
             Role::HeadUp => &[],
             Role::SeatAim => &[],
+            Role::LadderUp => &[(Role::Idle, false)],
+            Role::LadderDown => &[(Role::LadderUp, true), (Role::Idle, false)],
         }
     }
     /// The way a locomotion role's clip carries the body, facing -Z (v20's
@@ -342,6 +354,8 @@ impl Role {
             Role::ProneBack => Some([0.0, 0.0, 1.0]),
             Role::ProneSide => Some([-1.0, 0.0, 0.0]),
             Role::ProneSideRight => Some([1.0, 0.0, 0.0]),
+            Role::LadderUp => Some([0.0, 1.0, 0.0]),
+            Role::LadderDown => Some([0.0, -1.0, 0.0]),
             _ => None,
         }
     }
@@ -359,6 +373,8 @@ impl Role {
                 | Role::ProneBack
                 | Role::ProneSide
                 | Role::ProneSideRight
+                | Role::LadderUp
+                | Role::LadderDown
         )
     }
     /// The role whose ground speed stands in for this one's when the

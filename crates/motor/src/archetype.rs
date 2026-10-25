@@ -268,7 +268,7 @@ impl Sounds {
     /// Most surface kinds with their own footfalls.
     pub const MAX_SURFACES: usize = 16;
     /// The postures a body enters, as `postures` names them.
-    pub const POSTURES: [&'static str; 3] = ["stand", "crouch", "prone"];
+    pub const POSTURES: [&'static str; 4] = ["stand", "crouch", "prone", "climb"];
     /// Most surface kinds (and `*`) with footfall marks and dust.
     pub const MAX_CONTACTS: usize = 17;
     /// The falling speed (units/s) a landing must reach to be heard.

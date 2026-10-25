@@ -120,6 +120,7 @@ action. Name them by role (the names are not case-sensitive):
 | `aim_right`, `aim_left`, `aim_both` | holding an item in that hand, or both | a held pose: the body holds the last frame. Key only the arm bones |
 | `sit` | seated in a vehicle or on a rideable | a held pose; one frame is enough. If missing it sits in `idle` |
 | `death` | on death | once; it holds the last frame |
+| `ladder_up`, `ladder_down` | holding a ladder, rising or sinking | loops. They play at the rate the body gains height (`ground_speeds`); a body holding still holds the pose. If `ladder_down` is missing it plays `ladder_up` reversed, and if both are it stays in `idle` |
 | `swim` | in water | a loop |
 | `look` | looking up and down | first frame looking straight up, middle frame level, last frame straight down. Key only head, neck, spine and arms |
 | `look_crouch` | looking up and down while crouched | the same frames as `look`. If missing a crouched body uses `look` |

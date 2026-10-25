@@ -280,7 +280,7 @@ travel divided by the cycle's length.
 `back`, `side`, `side_right`, `crouch`, `crouch_run`, `crouch_back`, `crouch_side`,
 `crouch_side_right`, `prone`, `prone_run`, `prone_back`, `prone_side`, `prone_side_right`,
 `jump`, `fall`, `sit`, `aim_right`, `aim_left`, `aim_both`,
-`look`, `look_crouch`, `look_prone`, `head_up`, `head_side`, `seat_aim`, `swim` and `death`. `seat_aim`
+`look`, `look_crouch`, `look_prone`, `head_up`, `head_side`, `seat_aim`, `ladder_up`, `ladder_down`, `swim` and `death`. `seat_aim`
 is a seated gunner's pose from aiming the gun at its highest (the clip's
 start) to its lowest (its end): it holds at the gun's pitch across the
 vehicle's `look_pitch` range in place of `look`, so the whole seated body,
@@ -432,12 +432,20 @@ A mark's `volume` and `radius` apply to a surface footfall too, so one clip
 can be as quiet as a crouched walk and another as loud as a sprint while they
 share their sounds (a sound's own volume times `volume`, heard out to `radius`;
 none leaves them as authored). `posture_steps` gives a posture footfalls of
-its own, by posture (`stand`, `crouch`, `prone`), as `footsteps` and
+its own, by posture (`stand`, `crouch`, `prone`, `climb`), as `footsteps` and
 `surfaces` give the body's others: `"posture_steps": {"prone": {"footsteps":
 ["your-id:crawl"], "surfaces": {"metal": ["your-id:crawl_metal"]}}}`. Every
 footfall of a body in that posture (a mark, the stride timer, a landing, a
 take-off) picks from those for the surface underfoot, falling back to the
-standing ones where the posture names none for it.
+standing ones where the posture names none for it. `climb` is a body holding
+a ladder: its `ladder_up` and `ladder_down` clips (played at the rate the
+body gains height, `ground_speeds` `ladder_up` and `ladder_down` in units a
+second, so one holding still holds its pose) mark their steps like any
+clip, and they sound on the surface kind the map's climb volume names
+(`surface`), say `"posture_steps": {"climb": {"surfaces": {"wood":
+["your-id:ladder_wood1", "your-id:ladder_wood2"], "metal": [...]}}}`; a ladder
+that names none sounds like the floor under the foot. Grabbing a ladder
+sounds the `postures` entry for `climb`.
 
 `takeoff_on_surface: true` makes the take-off of a jump sound once like a
 footfall on the surface underfoot, as `land_on_surface` does the landing.
