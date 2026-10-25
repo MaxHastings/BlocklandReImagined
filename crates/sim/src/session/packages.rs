@@ -708,32 +708,41 @@ pub(super) fn archetype(
             module: module.to_vec(),
         });
     }
-    let sounds = &mut archetype.sounds;
+    apply_sounds(&mut archetype.sounds, &def.sounds);
+    archetype.validate()?;
+    Ok(archetype)
+}
+
+/// Lay an archetype definition's sounds over the base's: what it names
+/// replaces, what it leaves out stays.
+fn apply_sounds(
+    sounds: &mut crate::archetype::Sounds,
+    from: &bri_package_runtime::content::ArchetypeSounds,
+) {
     for (to, from) in [
-        (&mut sounds.jump, &def.sounds.jump),
-        (&mut sounds.pain, &def.sounds.pain),
-        (&mut sounds.death, &def.sounds.death),
-        (&mut sounds.land, &def.sounds.land),
+        (&mut sounds.jump, &from.jump),
+        (&mut sounds.pain, &from.pain),
+        (&mut sounds.death, &from.death),
+        (&mut sounds.land, &from.land),
     ] {
         if from.is_some() {
             to.clone_from(from);
         }
     }
-    if def.sounds.land_on_surface {
+    if from.land_on_surface {
         sounds.land_on_surface = true;
     }
-    if !def.sounds.footsteps.is_empty() {
-        sounds.footsteps.clone_from(&def.sounds.footsteps);
+    if !from.footsteps.is_empty() {
+        sounds.footsteps.clone_from(&from.footsteps);
     }
-    if !def.sounds.surfaces.is_empty() {
-        sounds.surfaces.clone_from(&def.sounds.surfaces);
+    if !from.surfaces.is_empty() {
+        sounds.surfaces.clone_from(&from.surfaces);
     }
-    if def.sounds.stride.is_some() {
-        sounds.stride = def.sounds.stride;
+    if from.stride.is_some() {
+        sounds.stride = from.stride;
     }
-    if !def.sounds.clips.is_empty() {
-        sounds.clips = def
-            .sounds
+    if !from.clips.is_empty() {
+        sounds.clips = from
             .clips
             .iter()
             .map(|(clip, c)| {
@@ -747,8 +756,28 @@ pub(super) fn archetype(
             })
             .collect();
     }
-    archetype.validate()?;
-    Ok(archetype)
+    if !from.steps.is_empty() {
+        sounds.steps = from
+            .steps
+            .iter()
+            .map(|(clip, events)| {
+                (
+                    clip.to_ascii_lowercase(),
+                    events
+                        .iter()
+                        .map(|e| crate::archetype::StepEvent {
+                            seconds: e.seconds,
+                            frame: e.frame,
+                            foot: e.foot.clone(),
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+    }
+    if from.fps.is_some() {
+        sounds.fps = from.fps;
+    }
 }
 
 /// Eye heights from the body: an archetype whose `eye` socket is an offset
@@ -4570,5 +4599,27 @@ mod archetype_tests {
             }))?;
         assert!(bad.validate().is_err());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::*;
+
+    #[test]
+    fn an_archetypes_footfall_marks_reach_its_sounds() {
+        let from: bri_package_runtime::content::ArchetypeSounds =
+            serde_json::from_value(serde_json::json!({
+                "footsteps": ["a:step"], "fps": 30.0,
+                "steps": { "Run_F": [ { "frame": 4, "foot": "foot_l" }, { "seconds": 0.5 } ] }
+            }))
+            .unwrap();
+        let mut sounds = crate::archetype::Sounds::default();
+        apply_sounds(&mut sounds, &from);
+        assert_eq!(sounds.fps, Some(30.0));
+        let marks = &sounds.steps["run_f"];
+        assert_eq!(marks.len(), 2);
+        assert_eq!(sounds.step_time(&marks[0]), Some(4.0 / 30.0));
+        assert_eq!(marks[0].foot.as_deref(), Some("foot_l"));
     }
 }

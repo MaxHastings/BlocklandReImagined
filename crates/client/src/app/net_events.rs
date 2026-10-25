@@ -1474,6 +1474,14 @@ fn panel_view(
         slice: b.slice,
         tint: b.tint.unwrap_or([1.0; 4]),
     });
+    // A text or list item's own place, when the rules gave one.
+    let place = |x: Option<i16>, y: Option<i16>, width: Option<u16>| {
+        Some(bri_ui::api::PanelPlace {
+            x: i32::from(x?),
+            y: i32::from(y?),
+            width,
+        })
+    };
     let items = panel
         .items
         .into_iter()
@@ -1492,6 +1500,7 @@ fn panel_view(
                             PanelAlign::Right => bri_ui::api::PanelAlign::Right,
                         },
                         height: item.height,
+                        place: place(item.x, item.y, item.w),
                     },
                 },
                 PanelKind::List => PanelItemView::List {
@@ -1502,6 +1511,7 @@ fn panel_view(
                     drag: item.drag,
                     columns: item.columns,
                     icons: item.icons.iter().map(|i| picture(i)).collect(),
+                    place: place(item.x, item.y, item.w),
                 },
                 PanelKind::Field => PanelItemView::Field {
                     id: item.id,

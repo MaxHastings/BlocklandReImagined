@@ -135,6 +135,32 @@ pub struct Sounds {
     /// clip's body-fall is one.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub clips: std::collections::BTreeMap<String, ClipSound>,
+    /// Footfalls the clips themselves mark (lower-case clip name to the
+    /// moments its feet land), in place of the stride timer: the body steps
+    /// when a marked moment of the clip it is playing goes by, on the surface
+    /// under that foot, so the sound follows the animation. A body with none
+    /// keeps the timer (v20's Blockhead).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub steps: std::collections::BTreeMap<String, Vec<StepEvent>>,
+    /// Frames a second of the clips, for `steps` marked by `frame`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f32>,
+}
+/// One footfall a clip marks ([`Sounds::steps`]): exactly one of `seconds`
+/// or `frame` says when.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepEvent {
+    /// Seconds into the clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f32>,
+    /// A frame of the clip, counted at [`Sounds::fps`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<u32>,
+    /// The body's node for the foot that lands; the step sounds where it is
+    /// and on the surface under it. None: at the body's feet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foot: Option<String>,
 }
 /// A sound tied to the moment of a clip ([`Sounds::clips`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,6 +178,8 @@ impl Sounds {
     pub const MAX_NAME: usize = 128;
     /// Most footstep variants.
     pub const MAX_FOOTSTEPS: usize = 8;
+    /// Most footfalls one clip marks.
+    pub const MAX_STEP_EVENTS: usize = 16;
     /// Most surface kinds with their own footfalls.
     pub const MAX_SURFACES: usize = 16;
     /// The falling speed (units/s) a landing must reach to be heard.
@@ -189,6 +217,34 @@ impl Sounds {
                     && c.seconds.is_finite()
                     && (0.0..=60.0).contains(&c.seconds)
             })
+            && self.steps.len() <= Self::MAX_CLIPS
+            && self
+                .fps
+                .is_none_or(|f| f.is_finite() && (1.0..=240.0).contains(&f))
+            && self.steps.iter().all(|(clip, events)| {
+                !clip.is_empty()
+                    && clip.len() <= 64
+                    && *clip == clip.to_ascii_lowercase()
+                    && !clip.chars().any(char::is_control)
+                    && (1..=Self::MAX_STEP_EVENTS).contains(&events.len())
+                    && events.iter().all(|e| {
+                        e.foot.as_ref().is_none_or(|f| {
+                            !f.is_empty() && f.len() <= 64 && !f.chars().any(char::is_control)
+                        }) && match (e.seconds, e.frame) {
+                            (Some(s), None) => s.is_finite() && (0.0..=60.0).contains(&s),
+                            (None, Some(_)) => self.fps.is_some(),
+                            _ => false,
+                        }
+                    })
+            })
+    }
+    /// When in its clip `event` lands, in seconds.
+    pub fn step_time(&self, event: &StepEvent) -> Option<f32> {
+        match (event.seconds, event.frame, self.fps) {
+            (Some(s), None, _) => Some(s),
+            (None, Some(frame), Some(fps)) => Some(frame as f32 / fps),
+            _ => None,
+        }
     }
     /// Ground between footfalls for a body `stand_height` tall at `scale`.
     /// The footfalls on surface `kind`.
