@@ -1146,7 +1146,7 @@ fn bounded_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let size = file.metadata()?.len();
     ensure!(
         size <= limit,
-        "{} is {size} bytes, over the limit of {limit}",
+        "Oversized native item metadata: {} is {size} bytes, over the limit of {limit}",
         path.display()
     );
     let mut bytes = Vec::new();
