@@ -43,6 +43,12 @@ impl ViewShake {
     }
 }
 
+/// See [`Controls::view_model_fov`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ModelZoom {
+    fov: f32,
+    world: f32,
+}
 /// A rule's camera shake (`camera_shake`): the view alone jittered, up to
 /// `translation` units and `rotation` radians, fading over `seconds`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,6 +111,10 @@ pub struct Controls {
     /// The FOV shown (`$cameraFov`), ramping toward the normal or zoom FOV.
     /// `None` until the first frame, which starts at its target.
     fov_shown: Option<f32>,
+    /// The held image's field of view at the aim step showing, and the world
+    /// field the aim is heading for, kept while the view comes back out so
+    /// the image's field returns with it ([`Self::view_model_fov`]).
+    model_zoom: Option<ModelZoom>,
     /// `GameConnection::mCameraPos`: 0 in first person, 1 fully out in
     /// third person; slides between them when the view is toggled.
     camera_pos: f32,
@@ -1281,6 +1291,48 @@ impl Controls {
         let shown = self.fov_shown.get_or_insert(target);
         let step = ZOOM_DEGREES_PER_SECOND * seconds.clamped(0.0, 0.25);
         *shown += (target - *shown).clamped(-step, step);
+        let shown = *shown;
+        let model = self
+            .aim_while_aiming()
+            .and_then(|a| a.model_fov_at(self.aim_level));
+        match model {
+            Some(fov) => {
+                self.model_zoom = Some(ModelZoom { fov, world: target });
+            }
+            // Zoomed with no field of its own, or the view is back out.
+            None if self.aim_while_aiming().is_some()
+                || (shown - self.unzoomed_fov()).abs() < 1e-3 =>
+            {
+                self.model_zoom = None;
+            }
+            // The view is still coming back out: the image's goes with it.
+            None => {}
+        }
+    }
+    /// The horizontal field of view the player has when not zoomed.
+    fn unzoomed_fov(&self) -> f32 {
+        self.server_fov.unwrap_or_else(|| {
+            self.body_camera
+                .profile
+                .fov_for(self.normal_fov.unwrap_or(90.0))
+        })
+    }
+    /// The field of view to draw a held image with, given the `base` its
+    /// `first_person_view` sets: `base` unzoomed, the aim's `model_fov` for
+    /// the step showing once the view has zoomed all the way in, and between
+    /// in step with the world's field.
+    pub fn view_model_fov(&self, base: f32) -> f32 {
+        let Some(zoom) = self.model_zoom else {
+            return base;
+        };
+        let unzoomed = self.unzoomed_fov();
+        let span = unzoomed - zoom.world;
+        let t = if span.abs() < 1e-3 {
+            1.0
+        } else {
+            ((unzoomed - self.fov()) / span).clamped(0.0, 1.0)
+        };
+        base + (zoom.fov - base) * t
     }
     /// The held weapon's aim, or `None` when it has none: holding Zoom (or
     /// Jet, when the aim is `on_jet`) then aims at its FOV in place of the
@@ -1592,11 +1644,7 @@ impl Controls {
     }
     fn target_fov(&self) -> f32 {
         if let Some(aim) = self.aim_while_aiming() {
-            let unzoomed = self.server_fov.unwrap_or_else(|| {
-                self.body_camera
-                    .profile
-                    .fov_for(self.normal_fov.unwrap_or(90.0))
-            });
+            let unzoomed = self.unzoomed_fov();
             aim.level_fov_from(self.aim_level, unzoomed)
                 .clamped(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
         } else if self.held(HeldControl::Zoom) && (self.aim.is_none() || self.aim_state_allowed) {
@@ -2562,6 +2610,33 @@ mod tests {
         assert_eq!(c.zoom_level(), 2, "the wheel's step");
         settle(&mut c);
         assert!((c.fov() - 10.0).abs() < 0.01);
+    }
+    #[test]
+    fn the_held_image_keeps_its_own_field_through_a_zoom_and_back() {
+        let mut zoom = scope();
+        zoom.model_fov = vec![60.0, 50.0];
+        let mut c = Controls::default();
+        held(&mut c, HeldControl::Jet, true);
+        c.set_aim_in_state(Some(zoom), Some("Ready"));
+        assert_eq!(c.view_model_fov(70.0), 70.0, "not zoomed yet");
+        c.advance_zoom(1.0 / 60.0);
+        let early = c.view_model_fov(70.0);
+        assert!((60.0..70.0).contains(&early), "part way: {early}");
+        settle(&mut c);
+        assert!((c.view_model_fov(70.0) - 60.0).abs() < 1e-3);
+        assert!(c.aim_wheel(1));
+        settle(&mut c);
+        assert!(
+            (c.view_model_fov(70.0) - 50.0).abs() < 1e-3,
+            "the level's own"
+        );
+        // Letting go brings it back out with the world's field.
+        held(&mut c, HeldControl::Jet, false);
+        c.advance_zoom(1.0 / 60.0);
+        let back = c.view_model_fov(70.0);
+        assert!(back < 70.0, "still drawn zoomed while it comes out: {back}");
+        settle(&mut c);
+        assert_eq!(c.view_model_fov(70.0), 70.0);
     }
     fn restricted_scope() -> bri_weapons::Zoom {
         let mut profile = scope();
