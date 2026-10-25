@@ -135,11 +135,16 @@ impl SceneData {
                 .material
                 .map_or(unassigned_material, |i| bindings[i]);
             // A layer-blended surface (a terrain) is lit by its vertex colour alone, doubled: the mesh's own colours are that baked
-            // light; without them 0.5 is the neutral light.
-            let layered = matches!(
-                self.materials[material].kind,
-                crate::scene::MaterialKind::LayerBlend | crate::scene::MaterialKind::VertexLight
-            );
+            // light; without them 0.5 is the neutral light. So is a lit moving body whose vertex colour holds the room's light
+            // (`parameters[0].z`, a map's mover).
+            let layered = match self.materials[material].kind {
+                crate::scene::MaterialKind::LayerBlend
+                | crate::scene::MaterialKind::VertexLight => true,
+                crate::scene::MaterialKind::ActorLit => self.materials[material]
+                    .parameters
+                    .is_some_and(|p| p[0][2] > 0.5),
+                _ => false,
+            };
             for vertex in triangle.vertices {
                 groups
                     .entry((material, triangle.zone))
