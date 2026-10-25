@@ -29,6 +29,7 @@ pub mod cosmetic;
 pub mod culling;
 pub mod decals;
 pub mod footsteps;
+pub mod ragdoll;
 pub mod rule_regions;
 pub mod sun_flare;
 pub mod wheel_contacts;

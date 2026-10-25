@@ -43,6 +43,8 @@ pub(super) struct Effects {
     pub(super) flash_showing: Option<(f32, bri_ui::api::ScreenFlashDraw)>,
     /// Killed-brick debris (v20 brick explosions) and its GPU models.
     pub(super) brick_debris: crate::brick_debris::BrickDebris,
+    /// Bodies gone limp when they died (`Look::ragdoll`).
+    pub(super) ragdolls: crate::ragdoll::Ragdolls,
     pub(super) debris_models: crate::brick_debris::DebrisModels,
     /// Bricks easing to a new paint colour, drawn apart from their chunks.
     pub(super) brick_fades: crate::brick_fade::BrickFades,

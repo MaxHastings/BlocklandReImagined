@@ -1255,6 +1255,13 @@ impl App {
                     });
                 self.avatar.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = life.is_some_and(|life| life.dead);
+                // A body whose archetype has a ragdoll goes limp where it
+                // died, in the pose it was drawn in the frame before.
+                let ragdoll = archetype.look.ragdoll.as_ref();
+                if !dead {
+                    self.fx.ragdolls.stop(*owner);
+                }
+                let limp = dead && ragdoll.is_some() && !self.fx.ragdolls.is_refused(*owner);
                 self.avatar.avatars.get_mut(owner).unwrap().set_dead(dead);
                 // A dead body fades out over its last `corpse_fade` seconds.
                 let opacity = corpses.get(owner).copied().flatten().unwrap_or(1.0);
@@ -1353,12 +1360,12 @@ impl App {
                         .filter(|_| !dead),
                     gesture: threads[3].clone(),
                     body: [threads[0].clone(), threads[1].clone()],
-                    dead,
+                    dead: dead && !limp,
                     death: view
                         .vitals
                         .get(owner)
                         .and_then(|v| v.death)
-                        .filter(|_| dead),
+                        .filter(|_| dead && !limp),
                     sitting: !dead && sit_posed(view, &self.vehicle_assets, presented, *owner),
                     seat_pose: mounted_seat.and_then(|s| s.rider_pose.clone()),
                     // Riders hold `root` (`Armor::onMount` sets the action
@@ -1419,6 +1426,24 @@ impl App {
                     self.avatar.animation_time,
                     &input,
                 );
+                if limp && posed.is_ok() {
+                    if !self.fx.ragdolls.is_live(*owner) {
+                        let started = Self::start_ragdoll(
+                            &mut self.fx.ragdolls,
+                            avatar,
+                            &self.avatar.avatar_assets,
+                            ragdoll.expect("limp bodies have a ragdoll"),
+                            *owner,
+                            player,
+                            view,
+                        );
+                        self.cosmetic_faults.absorb("ragdoll", started);
+                    }
+                    let nodes = self.fx.ragdolls.nodes(*owner);
+                    if !nodes.is_empty() {
+                        avatar.override_nodes(&self.avatar.avatar_assets, &nodes);
+                    }
+                }
                 // Add-On code (`avatar.pose`) may draw the body its own way:
                 // a ragdoll, a dance. Only the drawing changes.
                 if posed.is_ok()
@@ -1995,6 +2020,17 @@ impl App {
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
             drop(debris_span);
+            if !self.fx.ragdolls.is_empty() {
+                let _span = crate::frame_trace::span("ragdolls");
+                self.fx
+                    .ragdolls
+                    .retain(|owner| view.poses.contains_key(&owner));
+                let moved = self
+                    .fx
+                    .ragdolls
+                    .advance(game_elapsed.as_secs_f32().min(0.25), building);
+                self.cosmetic_faults.absorb("ragdolls", moved);
+            }
             if bodies {
                 let _span = crate::frame_trace::span("Add-On bodies");
                 // A corpse does not shove bodies: it may be the one lying in
@@ -2130,6 +2166,51 @@ fn seat_ready_matches(
         .map(|m| (m.hand, m.image.as_str()))
         .collect();
     seat.ready_matches(&images)
+}
+
+impl App {
+    /// Make `owner`'s dead body limp where it stands, from the pose it is
+    /// drawn in, set moving by the death it died.
+    fn start_ragdoll(
+        ragdolls: &mut crate::ragdoll::Ragdolls,
+        avatar: &mut crate::avatar::AvatarMesh,
+        assets: &crate::avatar::AvatarAssets,
+        ragdoll: &bri_content::body::Ragdoll,
+        owner: u64,
+        player: &bri_sim::player::PlayerState,
+        view: &crate::network::View,
+    ) -> Result<()> {
+        let names: Vec<&str> = ragdoll.bones.iter().map(|b| b.node.as_str()).collect();
+        let frames = avatar.bone_frames(assets, &names).map_err(|missing| {
+            anyhow::anyhow!(
+                "its rig has no node {}, which its ragdoll names",
+                missing.join(", ")
+            )
+        })?;
+        let pose =
+            view.vitals
+                .get(&owner)
+                .and_then(|v| v.death)
+                .unwrap_or(bri_sim::session::DeathPose {
+                    from: None,
+                    roll: 0,
+                    hit: None,
+                });
+        let height = bri_sim::water::body_height(
+            player,
+            &view.archetypes.tuning(player.archetype, player.scale),
+        );
+        ragdolls.start(
+            owner,
+            &frames,
+            &crate::ragdoll::Death {
+                ragdoll,
+                pose,
+                velocity: Vec3::from(player.velocity),
+                centre: Vec3::from(player.feet) + Vec3::Y * (height * 0.5),
+            },
+        )
+    }
 }
 
 impl App {

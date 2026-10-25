@@ -40,6 +40,44 @@ struct Body {
     kicks: Vec<Kick>,
     /// Holds for this frame's steps.
     holds: Vec<Hold>,
+    /// The fastest it may move and spin after each step (units/s,
+    /// radians/s): a ragdoll's own limits.
+    limits: Option<(f32, f32)>,
+}
+
+/// One shape of a [`BoneSpec`], placed in the bone's frame.
+pub struct BoneShape {
+    pub shape: Shape,
+    pub offset: Vec3,
+    pub rotation: Quat,
+}
+impl BoneShape {
+    fn volume(&self) -> f32 {
+        use std::f32::consts::PI;
+        match self.shape {
+            Shape::Box([x, y, z]) => 8.0 * x * y * z,
+            Shape::Ball(r) => 4.0 / 3.0 * PI * r.powi(3),
+            Shape::Capsule(r, h) => PI * r * r * 2.0 * h + 4.0 / 3.0 * PI * r.powi(3),
+        }
+    }
+}
+/// A ragdoll's bone (see [`AddOnPhysics::create_bone`]): shapes sharing one
+/// mass, in the bone's world pose.
+pub struct BoneSpec {
+    pub shapes: Vec<BoneShape>,
+    pub mass: f32,
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub velocity: Vec3,
+    pub spin: Vec3,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub friction: f32,
+    pub bounce: f32,
+    /// Bones of one group never touch each other.
+    pub group: u32,
+    pub max_speed: f32,
+    pub max_spin: f32,
 }
 
 /// A hold for this frame's steps ([`PhysicsCommand::Hold`]).
@@ -398,6 +436,61 @@ impl AddOnPhysics {
                 group: spec.group,
                 kicks: Vec::new(),
                 holds: Vec::new(),
+                limits: None,
+            },
+        );
+    }
+
+    /// Make body `id` out of `bone`'s shapes, replacing one it had. Several
+    /// shapes share the bone's mass by volume.
+    pub fn create_bone(&mut self, id: u32, bone: &BoneSpec) {
+        let volume: f32 = bone.shapes.iter().map(|s| s.volume()).sum();
+        let density = bone.mass / volume.max(f32::MIN_POSITIVE);
+        let body = RigidBodyBuilder::dynamic()
+            .pose(Pose::from_parts(
+                vector(bone.position),
+                rotation(bone.rotation),
+            ))
+            .linvel(vector(bone.velocity))
+            .angvel(vector(bone.spin))
+            .linear_damping(bone.linear_damping)
+            .angular_damping(bone.angular_damping)
+            .soft_ccd_prediction(SOFT_CCD);
+        self.remove(id);
+        let handle = self.world.insert_body(body);
+        let mut extent = 0.0_f32;
+        for part in &bone.shapes {
+            let (builder, reach) = match part.shape {
+                Shape::Box([x, y, z]) => (
+                    ColliderBuilder::cuboid(x, y, z),
+                    Vec3::new(x, y, z).length(),
+                ),
+                Shape::Ball(r) => (ColliderBuilder::ball(r), r),
+                Shape::Capsule(r, h) => (ColliderBuilder::capsule_y(h, r), r + h),
+            };
+            extent = extent.max(reach + part.offset.length());
+            let collider = builder
+                .position(Pose::from_parts(
+                    vector(part.offset),
+                    rotation(part.rotation),
+                ))
+                .density(density)
+                .friction(bone.friction)
+                .restitution(bone.bounce)
+                .user_data(u128::from(bone.group) | BODY)
+                .active_hooks(ActiveHooks::FILTER_CONTACT_PAIRS);
+            self.world.insert_collider(collider, Some(handle));
+        }
+        self.bodies.insert(
+            id,
+            Body {
+                handle,
+                extent,
+                shared: false,
+                group: bone.group,
+                kicks: Vec::new(),
+                holds: Vec::new(),
+                limits: Some((bone.max_speed, bone.max_spin)),
             },
         );
     }
@@ -405,13 +498,17 @@ impl AddOnPhysics {
     /// A ball joint pinned at the spec's world anchor, its twist axis along
     /// the spec's axis, limited round where the bodies are now.
     fn join(&mut self, a: u32, b: u32, spec: &JointSpec) {
+        let frame = Quat::from_rotation_arc(Vec3::X, Vec3::from(spec.axis));
+        self.join_framed(a, b, Vec3::from(spec.anchor), frame, spec);
+    }
+
+    /// [`Self::join`] with the joint's whole frame given (its x axis the
+    /// twist axis, `spec.axis` unused): a ragdoll joins in the bone's own.
+    pub fn join_framed(&mut self, a: u32, b: u32, anchor: Vec3, frame: Quat, spec: &JointSpec) {
         let (Some(first), Some(second)) = (self.bodies.get(&a), self.bodies.get(&b)) else {
             return;
         };
-        let frame = Pose::from_parts(
-            vector(Vec3::from(spec.anchor)),
-            rotation(Quat::from_rotation_arc(Vec3::X, Vec3::from(spec.axis))),
-        );
+        let frame = Pose::from_parts(vector(anchor), rotation(frame));
         let local = |h: RigidBodyHandle| self.world.bodies[h].position().inv_mul(&frame);
         let (frame1, frame2) = (local(first.handle), local(second.handle));
         // A hinge turns about the axis alone, between its low and high
@@ -539,6 +636,19 @@ impl AddOnPhysics {
                     .drive(&mut self.world, step as f32 / steps as f32);
                 let touched = self.forces(STEP);
                 self.world.step_with_events(&Groups, &());
+                for body in self.bodies.values() {
+                    let Some((speed, spin)) = body.limits else {
+                        continue;
+                    };
+                    let rb = &mut self.world.bodies[body.handle];
+                    let (v, w) = (vec3(rb.linvel()), vec3(rb.angvel()));
+                    if v.length() > speed {
+                        rb.set_linvel(vector(v.clamp_length_max(speed)), false);
+                    }
+                    if w.length() > spin {
+                        rb.set_angvel(vector(w.clamp_length_max(spin)), false);
+                    }
+                }
                 for handle in touched {
                     if let Some(rb) = self.world.bodies.get_mut(handle) {
                         rb.reset_forces(false);
