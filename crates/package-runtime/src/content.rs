@@ -1811,6 +1811,14 @@ pub struct ArchetypeDef {
     /// damage multiplier, replacing the base's. Left out, the base's.
     #[serde(default)]
     pub hit_bones: Option<Vec<bri_content::hit_bones::HitBone>>,
+    /// The bones where a crouched body's animation holds them, replacing the
+    /// base's. Left out, the base's.
+    #[serde(default)]
+    pub hit_bones_crouched: Option<Vec<bri_content::hit_bones::HitBone>>,
+    /// The bones where a body lying prone holds them, replacing the base's.
+    /// Left out, the base's.
+    #[serde(default)]
+    pub hit_bones_prone: Option<Vec<bri_content::hit_bones::HitBone>>,
     /// Model id the clients draw: a package model (`namespace:model/name`)
     /// or one of v20's shapes (`v20.shape.m` is the Blockhead).
     #[serde(default)]
@@ -2070,14 +2078,20 @@ impl ArchetypeDef {
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
         );
-        if let Some(bones) = &self.hit_bones {
-            ensure!(
-                bones.len() <= bri_content::hit_bones::MAX_HIT_BONES,
-                "hit_bones names up to {} bones",
-                bri_content::hit_bones::MAX_HIT_BONES
-            );
-            for bone in bones {
-                bone.validate()?;
+        for (name, bones) in [
+            ("hit_bones", &self.hit_bones),
+            ("hit_bones_crouched", &self.hit_bones_crouched),
+            ("hit_bones_prone", &self.hit_bones_prone),
+        ] {
+            if let Some(bones) = bones {
+                ensure!(
+                    bones.len() <= bri_content::hit_bones::MAX_HIT_BONES,
+                    "{name} names up to {} bones",
+                    bri_content::hit_bones::MAX_HIT_BONES
+                );
+                for bone in bones {
+                    bone.validate()?;
+                }
             }
         }
         if let Some(sockets) = &self.sockets {

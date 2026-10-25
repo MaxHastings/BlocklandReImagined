@@ -654,6 +654,12 @@ pub(super) fn archetype(
     if let Some(bones) = &def.hit_bones {
         archetype.hit_bones = bones.clone();
     }
+    if let Some(bones) = &def.hit_bones_crouched {
+        archetype.hit_bones_crouched = bones.clone();
+    }
+    if let Some(bones) = &def.hit_bones_prone {
+        archetype.hit_bones_prone = bones.clone();
+    }
     if let Some(v) = &def.model {
         archetype.look.model = v.clone();
     }
