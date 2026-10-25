@@ -688,6 +688,14 @@ impl App {
             image.and_then(|i| i.zoom.clone()),
             held_image.map(|(_, state)| state),
         );
+        let locked = held_image.is_some_and(|(image, state)| {
+            image
+                .states
+                .iter()
+                .find(|s| s.name == state)
+                .is_some_and(|s| s.lock.look)
+        });
+        self.controls.set_look_locked(locked);
         let hidden = image.is_some_and(|i| !i.crosshair) || self.controls.aim_hides_crosshair();
         if hidden != self.view.crosshair_hidden {
             self.view.crosshair_hidden = hidden;

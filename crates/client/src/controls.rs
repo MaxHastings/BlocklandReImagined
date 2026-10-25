@@ -71,6 +71,7 @@ pub struct CameraJolt {
 
 #[derive(Clone, Default)]
 pub struct Controls {
+    look_locked: bool,
     /// Rules' camera shakes running, and the jitter they give this frame.
     camera_shakes: Vec<CameraShake>,
     camera_jolt: CameraJolt,
@@ -449,7 +450,14 @@ impl Controls {
         }
         true
     }
+    /// The held image's state keeps the view still ([`bri_weapons::Lock::look`]).
+    pub fn set_look_locked(&mut self, locked: bool) {
+        self.look_locked = locked;
+    }
     fn look(&mut self, yaw: f32, pitch: f32) {
+        if self.look_locked && self.observer.is_none() {
+            return;
+        }
         if let Some(observer) = &mut self.observer {
             if self.death_view && observer.from == ControlObject::Corpse {
                 return;

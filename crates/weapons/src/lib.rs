@@ -151,6 +151,20 @@ pub struct Definition {
     pub source: Evidence,
     pub fields: BTreeMap<String, String>,
 }
+/// What a state holds still in its holder ([`State::lock`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Lock {
+    /// The holder does not walk.
+    pub movement: bool,
+    /// The holder's view does not turn.
+    pub look: bool,
+}
+impl Lock {
+    pub fn is_none(&self) -> bool {
+        !self.movement && !self.look
+    }
+}
 /// One state of an image's state machine (`stateName[i]` and its fields).
 /// Every field may be left out of `weapons.json`: an Add-On writes only
 /// what it uses.
@@ -171,6 +185,10 @@ pub struct State {
     /// movement set of a grenade in hand, then of one with its pin pulled.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stance: BTreeMap<String, String>,
+    /// What the holder cannot do while the image is in this state: the
+    /// walk and the look both held still for a charge's pull.
+    #[serde(default, skip_serializing_if = "Lock::is_none")]
+    pub lock: Lock,
     /// Where the state goes while the image in hand is loaded or not
     /// (`stateTransitionOnLoaded`, `stateTransitionOnNotLoaded`), which a
     /// rule sets with `set_image_loaded` (v20's `setImageLoaded`). Checked
