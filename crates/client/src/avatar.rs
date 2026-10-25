@@ -821,6 +821,7 @@ impl AvatarAssets {
             last_time: None,
             death_announced: false,
             started_clips: Vec::new(),
+            clip_span: None,
             channels: None,
             transition: None,
             action_channels: None,
@@ -928,6 +929,9 @@ pub struct AvatarMesh {
     death_announced: bool,
     /// Clips (lower case) the body started since the last take.
     started_clips: Vec<String>,
+    /// The stretch of the base clip the last pose played, for footfalls the
+    /// clip marks ([`crate::footsteps::ClipSpan`]).
+    clip_span: Option<crate::footsteps::ClipSpan>,
     /// Locomotion channels of the last pose, frozen when a transition starts.
     channels: Option<Channels>,
     /// Frozen source pose and start time of the current action transition.
@@ -2277,6 +2281,7 @@ impl AvatarMesh {
             None => (None, false),
         };
         let duration = clip.map_or(0.0, |c| c.duration);
+        let phase_before = self.phase;
         if let Some(action) = next {
             if action.sequence == SIT {
                 self.stood_at = None;
@@ -2306,6 +2311,29 @@ impl AvatarMesh {
             }
         }
         let mode = self.mode;
+        let span = clip.map(|c| crate::footsteps::ClipSpan {
+            clip: c.name.to_ascii_lowercase(),
+            from: if next.is_some() {
+                self.phase
+            } else {
+                phase_before
+            },
+            to: self.phase,
+            duration,
+            looping: c.looping,
+            restart: next.is_some() || first,
+        });
+        // Posed again before the footfalls were taken: one stretch.
+        self.clip_span = match (self.clip_span.take(), span) {
+            (Some(held), Some(new)) if held.clip == new.clip && !new.restart => {
+                Some(crate::footsteps::ClipSpan {
+                    from: held.from,
+                    restart: held.restart,
+                    ..new
+                })
+            }
+            (_, new) => new,
+        };
         if clip.is_some_and(|c| c.looping) && duration > 0.0 {
             self.phase = self.phase.rem_euclid(duration);
         } else {
@@ -2672,6 +2700,10 @@ impl AvatarMesh {
             });
         }
         Ok(())
+    }
+    /// The stretch of its base clip the last pose played.
+    pub fn take_clip_span(&mut self) -> Option<crate::footsteps::ClipSpan> {
+        self.clip_span.take()
     }
     /// The clips the body started since the last call, lower case.
     pub fn take_started_clips(&mut self) -> Vec<String> {

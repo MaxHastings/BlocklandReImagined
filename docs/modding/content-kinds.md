@@ -393,6 +393,19 @@ under the feet (a map material's `bri_surface`, see Making maps; bricks are
 that kind: `"surfaces": {"metal": ["your-id:clang_1"]}` (up to 16 kinds,
 1 to 8 sounds each). Test: `crates/client/src/footsteps.rs`.
 
+`steps` has the clips mark the footfalls instead of the stride timer, as an
+animation's footstep notifies do: `"fps": 30, "steps": {"run_f": [{"frame": 4,
+"foot": "foot_l"}, {"seconds": 0.52, "foot": "foot_r"}]}`. Keys are lower-case
+clip names (up to 32 clips, 16 marks each); a mark says when by `seconds` or
+by `frame` (counted at `fps`, 1 to 240, required for `frame`), and `foot`
+names the body's node that lands, so the sound plays there and on the
+surface under it (left out: at the body's feet). The sound is picked from
+`footsteps` or `surfaces` as above, by every client, for players and bots
+alike, as the clip plays through the mark (forward, backward or round a
+loop). A body with any `steps` makes no timer footfalls, so a clip that
+marks none is silent; a body without them (v20's Blockhead) keeps the
+timer.
+
 `clips` ties a sound to a moment of one of the body's clips, by the clip's
 name: `"clips": {"h_kill_back_gut": {"sound": "your-id:body_fall",
 "seconds": 0.57}}` plays the sound where the body is once the clip has run
