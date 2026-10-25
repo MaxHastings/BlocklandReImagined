@@ -1431,3 +1431,8 @@ out of a volume: `event` is `#{ kind, player, id, priority, properties }`, `kind
 being `"enter"` or `"leave"` and the rest the volume as `volumes_at` gives it. A
 player who dies or leaves the game leaves every volume they were in. No more
 than 256 changes are told a tick; the rest follow on the next.
+- `mount_image(p, image, slot)` puts an image in worn slot 2 or 3 (a sling,
+  a flag on the back); `mount_image(p, (), slot)` takes that slot's image
+  off again, and `unmount_image(p)` empties the hand (slot 0). A weapon
+  slung on a bone is worn in slot 2 or 3 while another is in hand, and
+  taken off with `mount_image(p, (), slot)` when it is raised.
