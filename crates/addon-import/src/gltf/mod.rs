@@ -19,6 +19,7 @@ mod map_environment;
 mod map_regions;
 mod map_scatter;
 mod map_terrain;
+mod map_zones;
 mod read;
 mod static_lighting;
 mod vertex_lights;
@@ -122,6 +123,8 @@ pub struct Options {
     pub backdrop: Option<PathBuf>,
     /// A map's regions: a JSON file in the glTF's frame (`map_regions.rs`).
     pub regions: Option<PathBuf>,
+    /// A map's zones: a folder with its zone table and portals and which zone each world triangle lies in (`map_zones.rs`).
+    pub mapdata: Option<PathBuf>,
     /// A map's projector pictures: a JSON `DecalSet` with no decals, only `pictures`, beside their PNGs (`map_decals.rs`).
     pub projector_pictures: Option<PathBuf>,
     /// The asset lane's static-mesh lighting inputs (`static_lighting.rs`).
@@ -155,6 +158,7 @@ impl Options {
             scatter: Vec::new(),
             backdrop: None,
             regions: None,
+            mapdata: None,
             projector_pictures: None,
             lighting: None,
             original_lighting: false,
@@ -609,6 +613,7 @@ pub fn convert(
     };
     let json = &doc.json;
     // The lane's static-mesh lighting inputs, with the regions whose ambient the meshes take.
+    let zone_sections = map_zones::sections(opts)?;
     let static_lighting = match &opts.lighting {
         Some(dir) => {
             let regions = match &opts.regions {
@@ -1016,7 +1021,7 @@ pub fn convert(
                 "`{}` primitive {pi} has an index past its vertices",
                 names[k]
             );
-            let mut triangles: Vec<[u32; 3]> = match mode {
+            let triangles: Vec<[u32; 3]> = match mode {
                 4 => indices
                     .chunks_exact(3)
                     .map(|t| [t[0], t[1], t[2]])
@@ -1034,7 +1039,29 @@ pub fn convert(
                     .map(|i| [indices[0], indices[i - 1], indices[i]])
                     .collect(),
             };
-            triangles.retain(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2]);
+            // A world primitive spans zones: the map data says which one each triangle lies in, by position in the primitive.
+            let mut zone_of: Vec<Option<u16>> = vec![None; triangles.len()];
+            if names[k] == static_lighting::WORLD_NODE
+                && let Some(sections) = &zone_sections
+            {
+                ensure!(
+                    mode == 4,
+                    "The map data zones triangle lists; world primitive {pi} is not one"
+                );
+                let mut at = 0;
+                for &(count, zone) in sections.runs(pi, triangles.len())? {
+                    zone_of[at..at + count as usize].fill(Some(zone));
+                    at += count as usize;
+                }
+            }
+            let (mut kept, mut zone_of_kept) = (Vec::new(), Vec::new());
+            for (t, zone) in triangles.into_iter().zip(zone_of) {
+                if t[0] != t[1] && t[1] != t[2] && t[0] != t[2] {
+                    kept.push(t);
+                    zone_of_kept.push(zone);
+                }
+            }
+            let (triangles, zone_of) = (kept, zone_of_kept);
             let base = mesh.positions.len() as u32;
             let skinned = skin.is_some() && attr.get("JOINTS_0").is_some();
             let mirrored = !skinned && own_scale.x * own_scale.y * own_scale.z < 0.0;
@@ -1233,17 +1260,31 @@ pub fn convert(
             if mapped && let Some(m) = material {
                 lit_materials.insert(m);
             }
-            mesh.primitives.push(Primitive {
-                zone: None,
-                material,
-                triangles: triangles
-                    .into_iter()
-                    .map(|t| {
-                        let t = t.map(|i| i + base);
-                        if mirrored { [t[0], t[2], t[1]] } else { t }
-                    })
-                    .collect(),
-            });
+            // One primitive per zone, in the order the zones first appear.
+            let mut zones: Vec<Option<u16>> = Vec::new();
+            for z in &zone_of {
+                if !zones.contains(z) {
+                    zones.push(*z);
+                }
+            }
+            if zones.is_empty() {
+                zones.push(None);
+            }
+            for zone in zones {
+                mesh.primitives.push(Primitive {
+                    zone,
+                    material,
+                    triangles: triangles
+                        .iter()
+                        .zip(&zone_of)
+                        .filter(|(_, z)| **z == zone)
+                        .map(|(t, _)| {
+                            let t = t.map(|i| i + base);
+                            if mirrored { [t[0], t[2], t[1]] } else { t }
+                        })
+                        .collect(),
+                });
+            }
         }
         if mesh.positions.is_empty() {
             continue;

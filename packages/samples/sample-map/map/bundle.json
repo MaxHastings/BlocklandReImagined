@@ -83,5 +83,8 @@
   },
   "waters": {
     "sample-map:map/sample-map": []
+  },
+  "zones": {
+    "sample-map:map/sample-map": null
   }
 }
