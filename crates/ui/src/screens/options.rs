@@ -77,6 +77,10 @@ pub const AMBIENT_OCCLUSION: &str = "$pref::Video::AmbientOcclusion";
 /// (lamps, muzzle flashes), on unless turned off.
 pub const BLOOM: &str = "$pref::Video::Bloom";
 const SHADOW_RADIO: &str = "OPT_ShadowQuality";
+/// Effect toggles under Display Settings: the gap above them and the margin
+/// at either side of their two columns.
+const TOGGLE_GAP: i32 = 4;
+const TOGGLE_MARGIN: i32 = 10;
 /// v20's Physics Quality radios (0 Best .. 4 Off; the stock default is 1,
 /// High): how many knocked-out bricks tumble as debris at once.
 pub const PHYSICS_QUALITY: &str = "$pref::PhysicsQuality";
@@ -1043,50 +1047,6 @@ fn graphics_pane(v: &mut View) {
     }
     let f = &mut v.nodes[full].ctrl;
     f.extent[1] = PANE_BOTTOM - f.position[1];
-
-    // Add PCSS Sun Shadows checkbox inside the Shadow Quality section below the radio buttons
-    if let Some(shadow_node) = find_section(v, "Shadow Quality") {
-        let last_radio_bottom = v
-            .node(shadow_node)
-            .children
-            .iter()
-            .map(|&k| v.node(k))
-            .filter(|n| {
-                n.ctrl.class == "GuiRadioCtrl"
-                    || n.ctrl
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| name.starts_with(SHADOW_RADIO))
-            })
-            .map(|n| n.ctrl.position[1] + n.ctrl.extent[1])
-            .max()
-            .unwrap_or(120);
-
-        let template_ctrl = {
-            v.walk().find_map(|n| {
-                let ctrl = &v.node(n).ctrl;
-                if ctrl
-                    .variable
-                    .as_deref()
-                    .is_some_and(|var| var.eq_ignore_ascii_case(NO_VSYNC))
-                {
-                    Some(ctrl.clone())
-                } else {
-                    None
-                }
-            })
-        };
-
-        if let Some(mut c) = template_ctrl {
-            c.name = Some("OptGraphicsPcssSunShadowsToggle".into());
-            c.variable = Some(PCSS_SUN_SHADOWS.into());
-            c.text = Some("Soft Sun Shadows".into());
-            c.position = [10, last_radio_bottom + 6];
-            c.extent = [130, 20];
-            c.command = None;
-            v.add(shadow_node, c);
-        }
-    }
 }
 
 /// Audio: the driver panel under Volume is gone; Volume and Audio Options
@@ -1827,45 +1787,63 @@ impl Options {
         let parent = vsync.and_then(|k| v.walk().find(|&n| v.node(n).children.contains(&k)));
         if let (Some(vsync), Some(parent)) = (vsync, parent) {
             let mut c = v.node(vsync).ctrl.clone();
-            c.name = Some("OptGraphicsAntiAliasingToggle".into());
-            c.variable = Some(ANTI_ALIASING.into());
-            c.text = Some("Anti-Aliasing".into());
-            // Under the resolution menu, left of Apply.
             let menu = v
                 .id("OptGraphicsResolutionMenu")
                 .map(|m| v.node(m).ctrl.clone());
-            let (x, y) = menu.as_ref().map_or((60, 85), |m| {
-                (m.position[0] - 40, m.position[1] + m.extent[1] + 4)
-            });
-            c.position = [x, y];
-            c.extent = [110, 23];
+            // Two columns of effect toggles under the Resolution row and
+            // the Apply button: shadows on the left, shading on the right.
+            let apply_bottom = v
+                .node(parent)
+                .children
+                .iter()
+                .map(|&k| &v.node(k).ctrl)
+                .find(|k| k.class == "GuiBitmapButtonCtrl" && k.text.as_deref() == Some("Apply"))
+                .map(|k| k.position[1] + k.extent[1]);
+            let top = apply_bottom.unwrap_or_else(|| {
+                menu.as_ref()
+                    .map_or(85, |m| m.position[1] + m.extent[1] + TOGGLE_GAP)
+            }) + TOGGLE_GAP;
+            let width = find_section(v, "Display Settings")
+                .map_or(v.node(parent).ctrl.extent[0], |n| v.node(n).ctrl.extent[0]);
+            let column = (width - 2 * TOGGLE_MARGIN) / 2;
+            c.extent = [column, 23];
             c.command = None;
-            v.add(parent, c.clone());
-            // Brick Shadows follows it: the authored Shadow Quality section
-            // is too narrow and clipped for another row.
-            c.name = Some("OptGraphicsBrickShadowsToggle".into());
-            c.variable = Some(BRICK_SHADOWS.into());
-            c.text = Some("Brick Shadows".into());
-            c.position[1] += c.extent[1] - 3;
-            v.add(parent, c.clone());
-            // Soft Shading (sky-tinted shade) and Ambient Occlusion follow.
-            c.name = Some("OptGraphicsSoftShadingToggle".into());
-            c.variable = Some(SOFT_SHADING.into());
-            c.text = Some("Soft Shading".into());
-            c.position[1] += c.extent[1] - 3;
-            v.add(parent, c.clone());
-            c.name = Some("OptGraphicsAmbientOcclusionToggle".into());
-            c.variable = Some(AMBIENT_OCCLUSION.into());
-            c.text = Some("Ambient Occlusion".into());
-            c.extent[0] = 160;
-            c.position[1] += c.extent[1] - 3;
-            v.add(parent, c.clone());
-            c.name = Some("OptGraphicsBloomToggle".into());
-            c.variable = Some(BLOOM.into());
-            c.text = Some("Bloom".into());
-            c.position[1] += c.extent[1] - 3;
-            let below = c.position[1] + c.extent[1] + 8;
-            v.add(parent, c);
+            let mut below = top;
+            for (i, (name, var, text)) in [
+                (
+                    "OptGraphicsAntiAliasingToggle",
+                    ANTI_ALIASING,
+                    "Anti-Aliasing",
+                ),
+                ("OptGraphicsSoftShadingToggle", SOFT_SHADING, "Soft Shading"),
+                (
+                    "OptGraphicsBrickShadowsToggle",
+                    BRICK_SHADOWS,
+                    "Brick Shadows",
+                ),
+                (
+                    "OptGraphicsAmbientOcclusionToggle",
+                    AMBIENT_OCCLUSION,
+                    "Ambient Occlusion",
+                ),
+                (
+                    "OptGraphicsPcssSunShadowsToggle",
+                    PCSS_SUN_SHADOWS,
+                    "Soft Sun Shadows",
+                ),
+                ("OptGraphicsBloomToggle", BLOOM, "Bloom"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (col, row) = (i as i32 % 2, i as i32 / 2);
+                c.name = Some(name.into());
+                c.variable = Some(var.into());
+                c.text = Some(text.into());
+                c.position = [TOGGLE_MARGIN + col * column, top + row * (c.extent[1] - 3)];
+                below = c.position[1] + c.extent[1] + 8;
+                v.add(parent, c.clone());
+            }
             // Quality presets and the frame-rate cap follow as menu rows
             // shaped like Resolution.
             if let Some(menu) = menu {
@@ -1878,12 +1856,12 @@ impl Options {
                 let mut y = below;
                 for (name, text) in [
                     (QUALITY_MENU, "Quality:"),
+                    (LIGHTING_MENU, "Lighting:"),
+                    (REFLECTIONS_MENU, "Reflections:"),
+                    (RENDER_SCALE_MENU, "Render Scale:"),
                     (MAX_FPS_MENU, "Max FPS:"),
                     (UI_SCALE_MENU, "UI Size:"),
                     (COLOR_VISION_MENU, "Colors:"),
-                    (REFLECTIONS_MENU, "Mirrors:"),
-                    (LIGHTING_MENU, "Lighting:"),
-                    (RENDER_SCALE_MENU, "Render Scale:"),
                 ] {
                     let mut m = menu.clone();
                     m.name = Some(name.into());
@@ -1903,7 +1881,7 @@ impl Options {
                     l.position[1] = y + (menu.extent[1] - l.extent[1]) / 2;
                     // The longest label starts further left so it ends
                     // where the others do, short of its menu.
-                    if name == RENDER_SCALE_MENU {
+                    if name == RENDER_SCALE_MENU || name == REFLECTIONS_MENU {
                         l.extent[0] = l.extent[0].max(74);
                         l.position[0] = l.position[0].min(menu.position[0] - l.extent[0] - 2);
                     }
@@ -3486,6 +3464,56 @@ mod tests {
         assert_eq!(saved.get(RESOLUTION), Some("1280 720 32"));
     }
 
+    /// Every graphics toggle and menu sits inside Display Settings, and no
+    /// two of them cover each other.
+    #[test]
+    fn display_settings_controls_stay_inside_and_apart() {
+        let ui = fixture();
+        let s = Options::new(&ui.core);
+        let menu = s.view.id(LIGHTING_MENU).unwrap();
+        let parent = s
+            .view
+            .walk()
+            .find(|&n| s.view.node(n).children.contains(&menu))
+            .unwrap();
+        let section = s.view.node(parent).ctrl.extent;
+        let ours = [
+            ANTI_ALIASING,
+            SOFT_SHADING,
+            BRICK_SHADOWS,
+            AMBIENT_OCCLUSION,
+            PCSS_SUN_SHADOWS,
+            BLOOM,
+        ];
+        let rects: Vec<(i32, i32, i32, i32)> = s
+            .view
+            .node(parent)
+            .children
+            .iter()
+            .map(|&k| &s.view.node(k).ctrl)
+            .filter(|c| {
+                c.class == "GuiPopUpMenuCtrl"
+                    || c.variable.as_deref().is_some_and(|v| ours.contains(&v))
+            })
+            .map(|c| (c.position[0], c.position[1], c.extent[0], c.extent[1]))
+            .collect();
+        assert!(rects.len() >= ours.len() + 7, "{rects:?}");
+        for (i, a) in rects.iter().enumerate() {
+            assert!(
+                a.0 >= 0 && a.1 >= 0 && a.0 + a.2 <= section[0] && a.1 + a.3 <= section[1],
+                "{a:?} in {section:?}"
+            );
+            for b in &rects[i + 1..] {
+                // Checkbox rows sit 20 apart though 23 tall: the art has margin.
+                let apart = a.0 + a.2 <= b.0
+                    || b.0 + b.2 <= a.0
+                    || a.1 + a.3 - 3 <= b.1
+                    || b.1 + b.3 - 3 <= a.1;
+                assert!(apart, "{a:?} overlaps {b:?} in {rects:?}");
+            }
+        }
+    }
+
     #[test]
     fn lighting_defaults_to_unified_and_saves_a_choice() {
         let mut ui = fixture();
@@ -3501,7 +3529,7 @@ mod tests {
             .map(|(t, _)| t.as_str())
             .collect();
         assert_eq!(items, ["Classic", "Unified", "Dynamic"]);
-        // The row fits inside its section, below Mirrors.
+        // The row fits inside its section.
         let parent = s
             .view
             .walk()
@@ -3512,8 +3540,6 @@ mod tests {
             row.position[1] + row.extent[1] <= section.extent[1],
             "{row:?} in {section:?}"
         );
-        let mirrors = &s.view.node(s.view.id(REFLECTIONS_MENU).unwrap()).ctrl;
-        assert!(row.position[1] >= mirrors.position[1] + mirrors.extent[1]);
         s.view.select(menu, Some(0));
         change(&mut s, &mut ui, menu);
         click(&mut s, "done", &mut ui);
