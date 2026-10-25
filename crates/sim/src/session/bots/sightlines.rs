@@ -132,8 +132,13 @@ impl Sightlines {
     }
     /// Whether nothing can be seen by `viewer` along `from` to `to` now.
     fn blinded(&self, viewer: OwnerId, from: Vec3, to: Vec3) -> bool {
-        self.dazed.get(&viewer).is_some_and(|until| self.tick < *until)
-            || self.clouds.iter().any(|c| self.tick < c.until && c.blocks(from, to))
+        self.dazed
+            .get(&viewer)
+            .is_some_and(|until| self.tick < *until)
+            || self
+                .clouds
+                .iter()
+                .any(|c| self.tick < c.until && c.blocks(from, to))
     }
     /// Whether `viewer` was refused rays within `ticks` before `tick`.
     pub(super) fn starved(&self, viewer: OwnerId, tick: u64, ticks: u64) -> bool {

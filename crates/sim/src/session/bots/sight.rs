@@ -38,7 +38,8 @@ impl Session {
     }
     /// Hang smoke at `at` for `seconds` (`obscure`): bots see through none of it.
     pub(in crate::session) fn bot_cloud(&self, at: Vec3, radius: f32, seconds: f32) {
-        let until = self.simulation.state().tick + (seconds * bri_world::TICKS_PER_SECOND as f32) as u64;
+        let until =
+            self.simulation.state().tick + (seconds * bri_world::TICKS_PER_SECOND as f32) as u64;
         self.bots
             .sightlines
             .lock()
@@ -47,7 +48,8 @@ impl Session {
     }
     /// Dazzle `bot` for `seconds` (`daze_bot`): it sees nothing until then.
     pub(in crate::session) fn bot_daze(&self, bot: OwnerId, seconds: f32) {
-        let until = self.simulation.state().tick + (seconds * bri_world::TICKS_PER_SECOND as f32) as u64;
+        let until =
+            self.simulation.state().tick + (seconds * bri_world::TICKS_PER_SECOND as f32) as u64;
         self.bots
             .sightlines
             .lock()

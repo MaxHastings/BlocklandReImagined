@@ -39,7 +39,11 @@ impl Perform for ops::RestBot {
 }
 impl Perform for ops::Obscure {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
-        let ops::Obscure { at, radius, seconds } = self;
+        let ops::Obscure {
+            at,
+            radius,
+            seconds,
+        } = self;
         session.bot_cloud(Vec3::from(at), radius, seconds);
         Ok(())
     }
