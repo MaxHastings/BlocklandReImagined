@@ -63,6 +63,9 @@ pub enum Encroach {
     Stop,
     /// It moves through whatever is there.
     Ignore,
+    /// It turns back toward the key it left, at the pace it was going
+    /// (Unreal's `ME_ReturnWhenEncroach`).
+    Return,
 }
 
 /// A continuous turn that needs no state: a fan.
