@@ -14,6 +14,11 @@ pub struct Explode {
     /// when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explosion: Option<String>,
+    /// Within this distance of the centre a player or entity takes a
+    /// lethal hit, whatever the falloff would give (0: none), a breaching
+    /// charge's kill radius.
+    #[serde(default)]
+    pub kill_radius: f32,
 }
 impl ScriptOp for Explode {
     const CAPABILITY: &str = "damage";
@@ -25,6 +30,7 @@ impl ScriptOp for Explode {
             damage,
             brick_radius,
             explosion,
+            kill_radius,
         } = self;
         explosion.as_deref().is_none_or(|e| {
             (1..=64).contains(&e.len()) && e.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -32,6 +38,7 @@ impl ScriptOp for Explode {
             && (0.0..=32.0).contains(radius)
             && (0.0..=1000.0).contains(damage)
             && (0.0..=16.0).contains(brick_radius)
+            && (0.0..=32.0).contains(kill_radius)
     }
 }
 

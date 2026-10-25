@@ -341,11 +341,11 @@ fn add_on_blasts_obey_the_minigame_like_weapon_blasts() {
         Vec3::from(state.feet) + Vec3::Y
     };
     // Alpha's minigame keeps Bravo, outside it, out of Alpha's blasts.
-    s.explode(at(&s, b), 4.0, 50.0, 0.0, None, "test", Some(a))
+    s.explode(at(&s, b), 4.0, 50.0, 0.0, None, 0.0, "test", Some(a))
         .unwrap();
     assert_eq!(s.vitals()[&b].health, 100.0);
     // A blast nobody set off still hurts.
-    s.explode(at(&s, b), 4.0, 50.0, 0.0, None, "test", None)
+    s.explode(at(&s, b), 4.0, 50.0, 0.0, None, 0.0, "test", None)
         .unwrap();
     assert!(s.vitals()[&b].health < 100.0);
 }
@@ -474,7 +474,8 @@ fn spawn_protection_follows_the_game_and_can_be_off() {
             .find(|(p, _)| p.owner == a)
             .unwrap();
         let at = Vec3::from(state.feet) + Vec3::Y;
-        s.explode(at, 4.0, 50.0, 0.0, None, "test", None).unwrap();
+        s.explode(at, 4.0, 50.0, 0.0, None, 0.0, "test", None)
+            .unwrap();
         assert_eq!(s.vitals()[&a].health == 100.0, spared, "{protection_ms} ms");
     }
 }
@@ -506,7 +507,8 @@ fn a_game_death_is_a_kill_notice_with_its_side() {
         .find(|(p, _)| p.owner == a)
         .unwrap();
     let at = Vec3::from(state.feet) + Vec3::Y;
-    s.explode(at, 4.0, 500.0, 0.0, None, "test", None).unwrap();
+    s.explode(at, 4.0, 500.0, 0.0, None, 0.0, "test", None)
+        .unwrap();
     steps(&mut s, 1);
     assert!(!s.vitals()[&a].alive);
     let kills: Vec<_> = s

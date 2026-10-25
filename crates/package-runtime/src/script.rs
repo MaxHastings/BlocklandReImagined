@@ -1771,6 +1771,7 @@ fn register_api(engine: &mut Engine) {
                 damage: float(&damage)?,
                 brick_radius: float(&brick_radius)?,
                 explosion: None,
+                kill_radius: 0.0,
             }))
         },
     );
@@ -1789,6 +1790,28 @@ fn register_api(engine: &mut Engine) {
                 damage: float(&damage)?,
                 brick_radius: float(&brick_radius)?,
                 explosion: Some(explosion.into()),
+                kill_radius: 0.0,
+            }))
+        },
+    );
+    // With the distance within which it kills outright.
+    engine.register_fn(
+        "explode",
+        |x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         radius: Dynamic,
+         damage: Dynamic,
+         brick_radius: Dynamic,
+         explosion: &str,
+         kill_radius: Dynamic| {
+            push(Op::Explode(ops::Explode {
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                radius: float(&radius)?,
+                damage: float(&damage)?,
+                brick_radius: float(&brick_radius)?,
+                explosion: Some(explosion.into()),
+                kill_radius: float(&kill_radius)?,
             }))
         },
     );

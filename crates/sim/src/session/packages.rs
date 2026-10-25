@@ -2348,6 +2348,7 @@ impl Session {
         damage: f32,
         brick_radius: f32,
         look: Option<&str>,
+        kill_radius: f32,
         source: &str,
         caller: Option<OwnerId>,
     ) -> Result<()> {
@@ -2355,7 +2356,8 @@ impl Session {
             center.is_finite()
                 && radius.is_finite()
                 && damage.is_finite()
-                && brick_radius.is_finite(),
+                && brick_radius.is_finite()
+                && kill_radius.is_finite(),
             "Invalid explosion"
         );
         let look = match look {
@@ -2376,7 +2378,8 @@ impl Session {
             .iter()
             .filter_map(|(owner, p)| {
                 let d = (Vec3::from(p.player.state().feet) + Vec3::Y).distance(center);
-                (d < radius).then(|| (*owner, damage * (1.0 - d / radius)))
+                (d < radius.max(kill_radius))
+                    .then(|| (*owner, blast_damage(d, radius, damage, kill_radius)))
             })
             // A player's blast obeys the minigame's radius damage rule, as
             // their weapons' blasts do.
@@ -2404,7 +2407,8 @@ impl Session {
                     .iter()
                     .filter_map(|(id, e)| {
                         let d = Vec3::from(e.body.state().feet).distance(center);
-                        (d < radius).then(|| (*id, damage * (1.0 - d / radius)))
+                        (d < radius.max(kill_radius))
+                            .then(|| (*id, blast_damage(d, radius, damage, kill_radius)))
                     })
                     .collect()
             })
@@ -4495,6 +4499,20 @@ fn required_failed(
     .hint("check player(p).tools or the brick before charging, or tell the player why not")
 }
 
+/// The most a blast's kill radius deals: more than any health.
+const LETHAL: f32 = 10_000.0;
+/// What a blast `d` from its centre deals: `damage` falling off to nothing
+/// at `radius`, and a lethal hit within `kill_radius`.
+fn blast_damage(d: f32, radius: f32, damage: f32, kill_radius: f32) -> f32 {
+    if d < kill_radius {
+        LETHAL
+    } else if radius > 0.0 {
+        (damage * (1.0 - d / radius)).max(0.0)
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod allowance_tests {
     use super::Allowance;
@@ -4570,5 +4588,13 @@ mod archetype_tests {
             }))?;
         assert!(bad.validate().is_err());
         Ok(())
+    }
+
+    #[test]
+    fn a_blast_kills_within_its_kill_radius_and_falls_off_beyond_it() {
+        assert_eq!(super::blast_damage(1.0, 10.0, 150.0, 2.0), super::LETHAL);
+        assert_eq!(super::blast_damage(5.0, 10.0, 150.0, 2.0), 75.0);
+        assert_eq!(super::blast_damage(12.0, 10.0, 150.0, 2.0), 0.0);
+        assert_eq!(super::blast_damage(1.0, 0.0, 150.0, 2.0), super::LETHAL);
     }
 }

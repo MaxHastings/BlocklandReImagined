@@ -13,6 +13,7 @@ impl Perform for ops::Explode {
             damage,
             brick_radius,
             explosion,
+            kill_radius,
         } = self;
         session.explode(
             Vec3::from(position),
@@ -20,6 +21,7 @@ impl Perform for ops::Explode {
             damage,
             brick_radius,
             explosion.as_deref(),
+            kill_radius,
             package,
             caller,
         )
