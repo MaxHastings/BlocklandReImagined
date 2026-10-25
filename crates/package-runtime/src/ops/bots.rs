@@ -79,6 +79,45 @@ impl ScriptOp for BotTool {
     }
 }
 
+/// Hang a cloud at `at` that bots cannot see through for `seconds`
+/// (smoke): a bot whose line of sight to anything passes inside it sees
+/// nothing along that line and fights from what it last knew.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Obscure {
+    pub at: [f32; 3],
+    pub radius: f32,
+    pub seconds: f32,
+}
+impl ScriptOp for Obscure {
+    const CAPABILITY: &str = "bots";
+    const NAME: &str = "obscure";
+    fn bounded(&self) -> bool {
+        let Obscure { at, radius, seconds } = self;
+        finite(at)
+            && (0.1..=64.0).contains(radius)
+            && seconds.is_finite()
+            && (0.0..=MAX_OBSCURE_SECONDS).contains(seconds)
+    }
+}
+
+/// Longest a cloud hangs, in seconds.
+pub const MAX_OBSCURE_SECONDS: f32 = 120.0;
+
+/// Dazzle a bot (a flash): it sees nothing for `seconds`, the way a
+/// person in a white-out does, while its other senses go on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DazeBot {
+    pub bot: u64,
+    pub seconds: f32,
+}
+impl ScriptOp for DazeBot {
+    const CAPABILITY: &str = "bots";
+    const NAME: &str = "daze_bot";
+    fn bounded(&self) -> bool {
+        self.seconds.is_finite() && (0.0..=MAX_OBSCURE_SECONDS).contains(&self.seconds)
+    }
+}
+
 /// Most points a patrol visits.
 pub const MAX_PATROL_POINTS: usize = 16;
 

@@ -717,10 +717,6 @@ fn collide_cylinder(
     let pose = Pose::translation(feet.x, feet.y + height * 0.5, feet.z);
     let options = ShapeCastOptions {
         max_time_of_impact: 1.0,
-        // Two-sided mesh faces may already overlap the body after a mover
-        // advances. A separating cast must be allowed to leave that contact;
-        // otherwise the reverse-wound face reports a zero-time hit forever.
-        stop_at_penetration: false,
         ..Default::default()
     };
     let round = Vec3::new(radius, 0.0, radius);
@@ -747,6 +743,14 @@ fn collide_cylinder(
             ) else {
                 continue;
             };
+            // Two-sided mesh faces may already overlap the body after a mover
+            // advances. A body that starts in contact and moves directly away
+            // from it leaves it; the reverse-wound face must not report a
+            // zero-time hit forever. Every other cast, inward motion included,
+            // still stops at the contact.
+            if hit.time_of_impact <= 0.0 && -v3(hit.normal1).dot(heading) > 0.0 {
+                continue;
+            }
             if best.is_none_or(|(t, ..)| hit.time_of_impact < t) {
                 best = Some((hit.time_of_impact, -v3(hit.normal1), v3(hit.witness2)));
             }

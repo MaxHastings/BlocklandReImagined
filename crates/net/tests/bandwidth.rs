@@ -145,6 +145,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         collide_players: true,
         pass_source: false,
         settle_speed: 0.0,
+        collision_radius: 0.0,
         explosion: bri_weapons::Explosion {
             effect: String::new(),
             damage: 0.,

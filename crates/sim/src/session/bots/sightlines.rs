@@ -10,6 +10,11 @@
 //! while both ends stay put; once the ordinary share is spent, a stale
 //! answer (or "unseen") stands in until the next tick.
 //!
+//! Two things the rules can put in the way of that eye (`obscure`,
+//! `daze_bot`): a cloud nothing is seen through while the line to it passes
+//! inside, and a dazed viewer who sees nothing until the daze ends. Both are
+//! answered here, before any ray is spent, so every lane that asks sees them.
+//!
 //! A player is seen at the eye or, failing that, at the chest (a head
 //! behind a pole still shows a body). Vehicles with seats occlude too,
 //! except the ones the viewer or the subject sit in and the body the viewer
@@ -39,6 +44,30 @@ const CACHE_SLACK: f32 = 0.5;
 const CHEST: f32 = 0.55;
 /// How far below the eye a shot aims at a body of scale 1: the upper chest.
 const AIM_DROP: f32 = 0.5;
+
+/// Most clouds that hang at once; a new one beyond them replaces the oldest.
+pub(super) const MOST_CLOUDS: usize = 64;
+
+/// A volume nothing is seen through (smoke) until `until`.
+#[derive(Clone, Copy, Debug)]
+struct Cloud {
+    at: Vec3,
+    radius: f32,
+    until: u64,
+}
+impl Cloud {
+    /// Whether the straight line from `from` to `to` passes inside it.
+    fn blocks(&self, from: Vec3, to: Vec3) -> bool {
+        let line = to - from;
+        let length_squared = line.length_squared();
+        let along = if length_squared > 0.0 {
+            ((self.at - from).dot(line) / length_squared).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (from + line * along).distance(self.at) < self.radius
+    }
+}
 
 /// What is looked at, for the cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -84,8 +113,28 @@ pub(in crate::session) struct Sightlines {
     /// The last tick each viewer was refused rays because the share was
     /// spent: a bot that sees nothing may be seeing nothing for that.
     refused: BTreeMap<OwnerId, u64>,
+    clouds: Vec<Cloud>,
+    /// Each dazed viewer's last tick of seeing nothing.
+    dazed: BTreeMap<OwnerId, u64>,
 }
 impl Sightlines {
+    /// Hang a cloud at `at` until tick `until`.
+    pub(super) fn add_cloud(&mut self, at: Vec3, radius: f32, until: u64) {
+        if self.clouds.len() >= MOST_CLOUDS {
+            self.clouds.remove(0);
+        }
+        self.clouds.push(Cloud { at, radius, until });
+    }
+    /// Daze `viewer` until tick `until`, never shortening a longer daze.
+    pub(super) fn daze(&mut self, viewer: OwnerId, until: u64) {
+        let ends = self.dazed.entry(viewer).or_default();
+        *ends = (*ends).max(until);
+    }
+    /// Whether nothing can be seen by `viewer` along `from` to `to` now.
+    fn blinded(&self, viewer: OwnerId, from: Vec3, to: Vec3) -> bool {
+        self.dazed.get(&viewer).is_some_and(|until| self.tick < *until)
+            || self.clouds.iter().any(|c| self.tick < c.until && c.blocks(from, to))
+    }
     /// Whether `viewer` was refused rays within `ticks` before `tick`.
     pub(super) fn starved(&self, viewer: OwnerId, tick: u64, ticks: u64) -> bool {
         self.refused
@@ -99,6 +148,8 @@ impl Sightlines {
             self.targeted.clear();
             self.cache
                 .retain(|_, c| tick < c.tick.saturating_add(4 * CACHE_TICKS));
+            self.clouds.retain(|c| tick < c.until);
+            self.dazed.retain(|_, until| tick < *until);
         }
     }
     /// A cached answer for these ends: fresh only, or any age.
@@ -209,6 +260,9 @@ impl Session {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         lines.begin(tick);
+        if lines.blinded(viewer, from, to) {
+            return None;
+        }
         let key = subject.map(|s| (viewer, s));
         if urgency == Urgency::Ordinary
             && let Some(answer) = key.and_then(|k| lines.cached(k, from, to, true))
