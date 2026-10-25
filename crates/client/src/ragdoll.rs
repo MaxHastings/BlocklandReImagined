@@ -16,7 +16,7 @@ use crate::avatar::BoneFrames;
 use crate::building::Building;
 use anyhow::{Result, bail, ensure};
 use bri_client_sandbox::bodies::{JointSpec, PhysicsCommand, PosedNode, Shape};
-use bri_content::body::{Ragdoll, RagdollShape};
+use bri_content::body::{RAGDOLL_SIZE, Ragdoll, RagdollShape};
 use bri_sim::session::{DeathHit, DeathPose};
 use glam::{Mat4, Quat, Vec3};
 use std::collections::{BTreeMap, BTreeSet};
@@ -188,6 +188,19 @@ impl Ragdolls {
         }
 
         let scale = frames.scale;
+        // Every shape is found before anything is made, so a bad one leaves
+        // nothing half built.
+        let mut built = Vec::with_capacity(ragdoll.bones.len());
+        for (i, bone) in ragdoll.bones.iter().enumerate() {
+            let limb = limb_frame(i, frames, &above);
+            let shapes = bone
+                .shapes
+                .iter()
+                .map(|s| shape(s, scale, limb.as_ref()))
+                .collect::<Result<Vec<_>>>()
+                .map_err(|e| anyhow::anyhow!("ragdoll bone {}: {e}", bone.node))?;
+            built.push(shapes);
+        }
         let (velocity, spin, push) = motion(ragdoll, death);
         let first = self.next;
         let ids: Vec<u32> = (0..ragdoll.bones.len() as u32)
@@ -196,14 +209,9 @@ impl Ragdolls {
         self.next = first.wrapping_add(ragdoll.bones.len() as u32);
         // Bones of one body never touch each other: the group is its first.
         let group = first.max(1);
-        for (i, bone) in ragdoll.bones.iter().enumerate() {
+        for (i, (bone, shapes)) in ragdoll.bones.iter().zip(built).enumerate() {
             let world = frames.world[frames.index[i]];
             let (_, rotation, position) = world.to_scale_rotation_translation();
-            let shapes = bone
-                .shapes
-                .iter()
-                .map(|s| shape(s, scale))
-                .collect::<Vec<_>>();
             self.physics.create_bone(
                 ids[i],
                 &BoneSpec {
@@ -228,7 +236,14 @@ impl Ragdolls {
                 continue;
             };
             let world: Mat4 = frames.world[frames.index[i]];
-            let (_, frame, anchor) = world.to_scale_rotation_translation();
+            let (_, node, anchor) = world.to_scale_rotation_translation();
+            // The joint's x axis is the one it twists or hinges about.
+            let frame = node
+                * match joint.axis {
+                    Some('y') => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+                    Some('z') => Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
+                    _ => Quat::IDENTITY,
+                };
             self.physics.join_framed(
                 ids[up],
                 ids[i],
@@ -243,6 +258,11 @@ impl Ragdolls {
                     hinge: joint.hinge.is_some(),
                     hinge_low: joint.hinge.map_or(0.0, |[low, _]| low),
                     friction: joint.damping,
+                },
+                if joint.hinge.is_some() {
+                    joint.damping
+                } else {
+                    joint.twist_damping.unwrap_or(joint.damping)
                 },
             );
         }
@@ -286,10 +306,71 @@ impl Ragdolls {
     }
 }
 
+/// Where a [`RagdollShape::Limb`] lies in its bone's frame.
+struct LimbFrame {
+    /// The middle of the span, or of a bone with none from its node on.
+    centre: Vec3,
+    /// Turns a capsule built along y onto the bone.
+    rotation: Quat,
+    /// The bone's length to the bone below it, if it has one.
+    span: Option<f32>,
+}
+
+/// The way bone `i` runs: from its node toward the nearest listed bone that
+/// hangs from it, else its first child in the rig, else on the way its
+/// parent ran. None where it has no way (a bone alone in its rig).
+fn limb_frame(i: usize, frames: &BoneFrames, above: &[Option<usize>]) -> Option<LimbFrame> {
+    let node = frames.index[i];
+    let (_, turn, start) = frames.world[node].to_scale_rotation_translation();
+    let end = above
+        .iter()
+        .position(|up| *up == Some(i))
+        .map(|j| frames.index[j])
+        .or_else(|| frames.parents.iter().position(|p| *p == Some(node)))
+        .map(|n| frames.world[n].w_axis.truncate());
+    let (way, span) = match end {
+        Some(end) => ((end - start).try_normalize()?, Some(end.distance(start))),
+        None => {
+            let parent = frames.parents.get(node).copied().flatten()?;
+            (
+                (start - frames.world[parent].w_axis.truncate()).try_normalize()?,
+                None,
+            )
+        }
+    };
+    let local = turn.inverse() * way;
+    Some(LimbFrame {
+        centre: turn.inverse() * (way * span.unwrap_or(0.0) * 0.5),
+        rotation: Quat::from_rotation_arc(Vec3::Y, local),
+        span,
+    })
+}
+
 /// A bone's shape at the body's scale.
-fn shape(shape: &RagdollShape, scale: f32) -> BoneShape {
+fn shape(shape: &RagdollShape, scale: f32, limb: Option<&LimbFrame>) -> Result<BoneShape> {
     let at = |offset: &[f32; 3]| Vec3::from(*offset) * scale;
-    match shape {
+    Ok(match shape {
+        RagdollShape::Limb { radius, length } => {
+            let Some(limb) = limb else {
+                bail!("a limb needs a bone below it, or a parent to run on from");
+            };
+            let radius = radius * scale;
+            let half = match (length, limb.span) {
+                (Some(length), _) => length * scale * 0.5,
+                (None, Some(span)) => (span * 0.5 - radius).max(*RAGDOLL_SIZE.start()),
+                (None, None) => bail!("a limb on a bone with nothing below it needs a `length`"),
+            };
+            // With nothing below, it runs on from the node by its own length.
+            let centre = match limb.span {
+                Some(_) => limb.centre,
+                None => limb.rotation * Vec3::Y * (half + radius),
+            };
+            BoneShape {
+                shape: Shape::Capsule(radius, half),
+                offset: centre,
+                rotation: limb.rotation,
+            }
+        }
         RagdollShape::Capsule {
             radius,
             half_length,
@@ -305,17 +386,21 @@ fn shape(shape: &RagdollShape, scale: f32) -> BoneShape {
                 _ => Quat::IDENTITY,
             },
         },
-        RagdollShape::Box { half, offset } => BoneShape {
+        RagdollShape::Box {
+            half,
+            offset,
+            rotation,
+        } => BoneShape {
             shape: Shape::Box([half[0] * scale, half[1] * scale, half[2] * scale]),
             offset: at(offset),
-            rotation: Quat::IDENTITY,
+            rotation: Quat::from_euler(glam::EulerRot::XYZ, rotation[0], rotation[1], rotation[2]),
         },
         RagdollShape::Ball { radius, offset } => BoneShape {
             shape: Shape::Ball(radius * scale),
             offset: at(offset),
             rotation: Quat::IDENTITY,
         },
-    }
+    })
 }
 
 /// How a death sets the body moving: its speed and spin, and the push at
@@ -525,5 +610,50 @@ mod tests {
         assert_eq!(a, spin(0).1, "every screen picks the same way");
         assert_ne!(a, spin(64).1);
         assert!((a.length() - ragdoll.random_spin).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_limb_runs_from_its_bone_to_the_one_below_and_the_model_gives_only_sizes() {
+        let frames = frames(2.0);
+        let above = [None, Some(0), Some(1)];
+        let limb = limb_frame(0, &frames, &above).unwrap();
+        assert!((limb.span.unwrap() - 0.4).abs() < 1e-5);
+        let thigh = RagdollShape::Limb {
+            radius: 0.1,
+            length: None,
+        };
+        let made = shape(&thigh, 1.0, Some(&limb)).unwrap();
+        let Shape::Capsule(radius, half) = made.shape else {
+            panic!("a capsule");
+        };
+        assert!(
+            (radius - 0.1).abs() < 1e-5 && (half - 0.1).abs() < 1e-5,
+            "0.4 between, 0.1 caps"
+        );
+        assert!(
+            (made.offset - Vec3::new(0.0, -0.2, 0.0)).length() < 1e-5,
+            "mid-bone"
+        );
+        assert!(
+            (made.rotation * Vec3::Y - Vec3::NEG_Y).length() < 1e-5,
+            "along the bone, toward the one below"
+        );
+        // The last bone has nothing below: it runs on the way the one above ran.
+        let leaf = limb_frame(2, &frames, &above).unwrap();
+        assert!(leaf.span.is_none());
+        let foot = RagdollShape::Limb {
+            radius: 0.1,
+            length: Some(0.2),
+        };
+        let made = shape(&foot, 1.0, Some(&leaf)).unwrap();
+        assert!((made.offset - Vec3::new(0.0, -0.2, 0.0)).length() < 1e-5);
+        let bare = RagdollShape::Limb {
+            radius: 0.1,
+            length: None,
+        };
+        assert!(
+            shape(&bare, 1.0, Some(&leaf)).is_err(),
+            "no length to go by"
+        );
     }
 }

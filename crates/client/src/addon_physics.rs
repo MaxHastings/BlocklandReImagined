@@ -499,12 +499,22 @@ impl AddOnPhysics {
     /// the spec's axis, limited round where the bodies are now.
     fn join(&mut self, a: u32, b: u32, spec: &JointSpec) {
         let frame = Quat::from_rotation_arc(Vec3::X, Vec3::from(spec.axis));
-        self.join_framed(a, b, Vec3::from(spec.anchor), frame, spec);
+        self.join_framed(a, b, Vec3::from(spec.anchor), frame, spec, spec.friction);
     }
 
     /// [`Self::join`] with the joint's whole frame given (its x axis the
-    /// twist axis, `spec.axis` unused): a ragdoll joins in the bone's own.
-    pub fn join_framed(&mut self, a: u32, b: u32, anchor: Vec3, frame: Quat, spec: &JointSpec) {
+    /// twist axis, `spec.axis` unused) and the resistance to twisting
+    /// apart from `spec.friction`, which resists swinging: a ragdoll joins
+    /// in the bone's own.
+    pub fn join_framed(
+        &mut self,
+        a: u32,
+        b: u32,
+        anchor: Vec3,
+        frame: Quat,
+        spec: &JointSpec,
+        twist_friction: f32,
+    ) {
         let (Some(first), Some(second)) = (self.bodies.get(&a), self.bodies.get(&b)) else {
             return;
         };
@@ -526,7 +536,7 @@ impl AddOnPhysics {
             .limits(JointAxis::AngX, twist)
             .limits(JointAxis::AngY, [-swing, swing])
             .limits(JointAxis::AngZ, [-swing_second, swing_second])
-            .motor_velocity(JointAxis::AngX, 0.0, spec.friction)
+            .motor_velocity(JointAxis::AngX, 0.0, twist_friction)
             .motor_velocity(JointAxis::AngY, 0.0, spec.friction)
             .motor_velocity(JointAxis::AngZ, 0.0, spec.friction);
         self.world

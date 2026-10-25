@@ -565,10 +565,24 @@ pub enum RagdollShape {
         #[serde(default)]
         offset: [f32; 3],
     },
+    /// A capsule spanning the bone itself: from its node toward the bone
+    /// below it (the nearest listed bone that hangs from it, else its first
+    /// child in the rig; a bone with neither goes on the way its parent
+    /// ran), centred between them, so the model supplies only the sizes.
+    /// `length` is the straight middle's (the capsule is that and a
+    /// `radius` cap beyond each end); left out, the bone's own span.
+    Limb {
+        radius: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        length: Option<f32>,
+    },
+    /// `rotation` turns it about the node's x, y then z axes (radians).
     Box {
         half: [f32; 3],
         #[serde(default)]
         offset: [f32; 3],
+        #[serde(default)]
+        rotation: [f32; 3],
     },
     Ball {
         radius: f32,
@@ -590,9 +604,16 @@ pub struct RagdollJoint {
     pub twist: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hinge: Option<[f32; 2]>,
-    /// How much it resists moving; 0 swings freely.
+    /// The node's axis (`x`, `y` or `z`) a ball twists and a hinge turns
+    /// about; `x` when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<char>,
+    /// How much it resists swinging (a hinge: turning); 0 swings freely.
     #[serde(default, skip_serializing_if = "zero_f32")]
     pub damping: f32,
+    /// How much it resists twisting; `damping` when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twist_damping: Option<f32>,
 }
 impl RagdollShape {
     fn valid(&self) -> bool {
@@ -610,7 +631,18 @@ impl RagdollShape {
                     && matches!(axis, 'x' | 'y' | 'z')
                     && near(offset)
             }
-            Self::Box { half, offset } => half.iter().all(|h| size(*h)) && near(offset),
+            Self::Limb { radius, length } => size(*radius) && length.is_none_or(size),
+            Self::Box {
+                half,
+                offset,
+                rotation,
+            } => {
+                half.iter().all(|h| size(*h))
+                    && near(offset)
+                    && rotation
+                        .iter()
+                        .all(|a| a.is_finite() && a.abs() <= std::f32::consts::TAU)
+            }
             Self::Ball { radius, offset } => size(*radius) && near(offset),
         }
     }
@@ -664,7 +696,7 @@ impl Ragdoll {
             ensure!(
                 (1..=MAX_RAGDOLL_SHAPES).contains(&bone.shapes.len())
                     && bone.shapes.iter().all(RagdollShape::valid),
-                "ragdoll bone {}: 1 to {MAX_RAGDOLL_SHAPES} shapes of {} to {} units, a capsule's axis x, y or z, offsets within 32 units",
+                "ragdoll bone {}: 1 to {MAX_RAGDOLL_SHAPES} shapes of {} to {} units, a capsule's axis x, y or z, offsets within 32 units, a box turned within a full turn",
                 bone.node,
                 RAGDOLL_SIZE.start(),
                 RAGDOLL_SIZE.end()
@@ -678,8 +710,10 @@ impl Ragdoll {
                         && joint
                             .hinge
                             .is_none_or(|[low, high]| finite(low, -pi, pi) && finite(high, low, pi))
-                        && finite(joint.damping, 0.0, 1000.0),
-                    "ragdoll bone {}: joint angles are 0 to pi radians (a hinge from -pi, rising) and damping 0 to 1000",
+                        && finite(joint.damping, 0.0, 1000.0)
+                        && joint.twist_damping.is_none_or(|v| finite(v, 0.0, 1000.0))
+                        && joint.axis.is_none_or(|a| matches!(a, 'x' | 'y' | 'z')),
+                    "ragdoll bone {}: joint angles are 0 to pi radians (a hinge from -pi, rising), damping 0 to 1000 and axis x, y or z",
                     bone.node
                 );
             }
@@ -967,6 +1001,33 @@ mod tests {
         let mut bad = ragdoll();
         bad.bones = Vec::new();
         assert!(bad.validate().is_err(), "no bones");
+        let mut ok = ragdoll();
+        ok.bones[0].shapes = vec![
+            RagdollShape::Limb {
+                radius: 0.1,
+                length: None,
+            },
+            RagdollShape::Box {
+                half: [0.1; 3],
+                offset: [0.0; 3],
+                rotation: [0.5, 0.0, 0.0],
+            },
+        ];
+        ok.bones[1].joint.as_mut().unwrap().axis = Some('y');
+        ok.bones[1].joint.as_mut().unwrap().twist_damping = Some(3.0);
+        assert!(
+            ok.validate().is_ok(),
+            "a limb, a turned box, a hinge about y"
+        );
+        let mut bad = ok.clone();
+        bad.bones[1].joint.as_mut().unwrap().axis = Some('w');
+        assert!(bad.validate().is_err(), "no such axis");
+        let mut bad = ok.clone();
+        bad.bones[0].shapes = vec![RagdollShape::Limb {
+            radius: 0.0,
+            length: None,
+        }];
+        assert!(bad.validate().is_err(), "a limb too thin");
         let typo = serde_json::json!({"bones": [], "friction": 1.0, "max_speed": 1.0, "max_spin": 1.0, "typo": 1});
         assert!(serde_json::from_value::<Ragdoll>(typo).is_err());
     }
