@@ -80,6 +80,7 @@ pub(crate) fn cuboid(min: Vec3, max: Vec3) -> SceneData {
             .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     data.batches.push(MeshBatch {
+        zone: None,
         indices: 0..data.indices.len() as u32,
         material: 0,
         center: ((min + max) * 0.5).to_array(),
@@ -264,6 +265,7 @@ pub(crate) fn floor(sun: Vec3, sun_color: f32) -> SceneData {
     }
     data.indices.extend([0, 1, 2, 0, 2, 3]);
     data.batches.push(MeshBatch {
+        zone: None,
         indices: 0..6,
         material: 0,
         center: [0.0; 3],

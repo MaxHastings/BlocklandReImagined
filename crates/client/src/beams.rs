@@ -199,6 +199,7 @@ fn unit_beam() -> SceneData {
         id: "beam".into(),
         name: "beam".into(),
         batches: vec![MeshBatch {
+            zone: None,
             indices: 0..indices.len() as u32,
             material: 0,
             center: centre.to_array(),

@@ -1347,6 +1347,7 @@ fn load_static_shape(
     for i in first_batch..out.batches.len() {
         if let Some(&edges) = soft_edges.get(&out.batches[i].material) {
             out.batches.push(MeshBatch {
+                zone: None,
                 material: edges,
                 ..out.batches[i].clone()
             });
@@ -1559,6 +1560,7 @@ fn load_interior(
         let start = out.indices.len() as u32;
         out.indices.extend(indices);
         out.batches.push(MeshBatch {
+            zone: None,
             indices: start..out.indices.len() as u32,
             material,
             center,

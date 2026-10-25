@@ -2054,6 +2054,7 @@ mod tests {
         let start = scene.indices.len() as u32;
         scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
         scene.batches.push(MeshBatch {
+            zone: None,
             indices: start..start + 6,
             material: scene.materials.len(),
             center: [0.0; 3],
@@ -2164,6 +2165,7 @@ mod tests {
         let start = scene.indices.len() as u32;
         scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
         scene.batches.push(crate::scene::MeshBatch {
+            zone: None,
             indices: start..start + 6,
             material: scene.materials.len(),
             center: [0.0; 3],
@@ -2274,6 +2276,7 @@ mod tests {
         let start = scene.indices.len() as u32;
         scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
         scene.batches.push(crate::scene::MeshBatch {
+            zone: None,
             indices: start..start + 6,
             material: scene.materials.len(),
             center: [0.0; 3],
@@ -2501,6 +2504,7 @@ mod tests {
         let start = scene.indices.len() as u32;
         scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
         scene.batches.push(crate::scene::MeshBatch {
+            zone: None,
             indices: start..start + 6,
             material: scene.materials.len(),
             center: [0.0; 3],
@@ -2606,6 +2610,7 @@ mod tests {
         let start = scene.indices.len() as u32;
         scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
         scene.batches.push(crate::scene::MeshBatch {
+            zone: None,
             indices: start..start + 6,
             material: scene.materials.len(),
             center: [0.0; 3],

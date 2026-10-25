@@ -160,6 +160,7 @@ fn append_copy(
             out.indices.extend([a, b, d, a, d, c]);
         }
         out.batches.push(MeshBatch {
+            zone: None,
             indices: start..out.indices.len() as u32,
             material: material_index,
             center: [

@@ -1234,6 +1234,7 @@ pub fn convert(
                 lit_materials.insert(m);
             }
             mesh.primitives.push(Primitive {
+                zone: None,
                 material,
                 triangles: triangles
                     .into_iter()

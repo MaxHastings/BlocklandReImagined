@@ -25,6 +25,7 @@ fn vertex(position: Vec3, normal: Vec3, uv: [f32; 2], color: [f32; 4]) -> SceneV
 fn batch(data: &mut SceneData, start: u32, material: Material) {
     data.materials.push(material);
     data.batches.push(MeshBatch {
+        zone: None,
         indices: start..data.indices.len() as u32,
         material: data.materials.len() - 1,
         center: [0.0; 3],
