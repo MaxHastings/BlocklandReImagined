@@ -1651,6 +1651,10 @@ pub enum PanelItemView {
         icons: Vec<Option<PanelPicture>>,
         /// Where it stands in the panel; none: it flows down the panel.
         place: Option<PanelPlace>,
+        /// The rows' text colour; none: the stock one.
+        color: Option<[f32; 4]>,
+        /// The field behind the rows; none: the stock white one.
+        back: Option<[f32; 4]>,
     },
     /// A line to type in, with a label.
     Field {
