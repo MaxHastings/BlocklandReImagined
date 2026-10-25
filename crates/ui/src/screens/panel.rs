@@ -105,6 +105,15 @@ pub struct AddOnPanel {
     shown: PanelView,
 }
 
+/// Where a text or list item stands: its own place if the rules gave one,
+/// else the left margin at the flow's `y`; and the width it has.
+fn stand(place: Option<crate::api::PanelPlace>, y: i32, inner: i32) -> (i32, i32, i32) {
+    match place {
+        Some(p) => (p.x, p.y, p.width.map_or(inner, i32::from)),
+        None => (MARGIN, y, inner),
+    }
+}
+
 impl AddOnPanel {
     pub fn new(core: &Core) -> Self {
         let shown = core.panel.clone().unwrap_or_default();
@@ -142,6 +151,7 @@ impl AddOnPanel {
         for (n, item) in shown.items.iter().enumerate() {
             match item {
                 PanelItemView::Text { text: t, style } => {
+                    let (x0, mut ly, inner) = stand(style.place, y, inner);
                     let face = profile_face(core, "GuiMLTextProfile");
                     let markup = text_style_markup(style, &face) + &plain_lines(t);
                     match style.height {
@@ -151,7 +161,7 @@ impl AddOnPanel {
                             let mut scroll = ctrl(
                                 "GuiScrollCtrl",
                                 "BlockScrollProfile",
-                                Rect::new(MARGIN, y, inner, box_height),
+                                Rect::new(x0, ly, inner, box_height),
                             );
                             scroll
                                 .fields
@@ -167,19 +177,22 @@ impl AddOnPanel {
                             c.text = Some(markup);
                             scroll.children.push(c);
                             win.children.push(scroll);
-                            y += box_height + GAP;
+                            ly += box_height + GAP;
                         }
                         None => {
                             let height =
                                 View::ml_height(&core.pack, "GuiMLTextProfile", &markup, inner)
                                     .max(16);
                             let mut c =
-                                text("GuiMLTextProfile", Rect::new(MARGIN, y, inner, height), "");
+                                text("GuiMLTextProfile", Rect::new(x0, ly, inner, height), "");
                             c.class = "GuiMLTextCtrl".into();
                             c.text = Some(markup);
                             win.children.push(c);
-                            y += height + GAP;
+                            ly += height + GAP;
                         }
+                    }
+                    if style.place.is_none() {
+                        y = ly;
                     }
                 }
                 PanelItemView::List {
@@ -188,13 +201,15 @@ impl AddOnPanel {
                     drag,
                     columns,
                     icons,
+                    place,
                     ..
                 } => {
+                    let (x0, ly, inner) = stand(*place, y, inner);
                     let height = i32::from(*height);
                     let mut scroll = ctrl(
                         "GuiScrollCtrl",
                         "BlockScrollProfile",
-                        Rect::new(MARGIN, y, inner, height),
+                        Rect::new(x0, ly, inner, height),
                     );
                     scroll
                         .fields
@@ -226,7 +241,9 @@ impl AddOnPanel {
                     }
                     scroll.children.push(named(list, format!("{LIST}{id}")));
                     win.children.push(scroll);
-                    y += height + GAP;
+                    if place.is_none() {
+                        y += height + GAP;
+                    }
                 }
                 PanelItemView::Field {
                     id,
