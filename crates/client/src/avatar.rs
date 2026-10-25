@@ -4787,6 +4787,7 @@ mod tests {
             talking: false,
             sitting: false,
             ghost: None,
+            base_body: None,
         }
     }
     #[test]

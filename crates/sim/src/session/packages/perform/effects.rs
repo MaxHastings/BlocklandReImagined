@@ -160,17 +160,24 @@ impl Perform for ops::Sound {
             profile,
             at,
             volume,
+            pitch,
+            radius,
         } = self;
         session.take_cue(package)?;
-        // Full volume keeps the plain messages every client already knows.
-        let scaled = volume != 1.0;
+        // As authored keeps the plain messages every client already knows.
+        let scaled = volume != 1.0 || pitch != 1.0 || radius != 0.0;
         match at {
             bri_package_runtime::ops::SoundAt::Player(player) => {
                 ensure!(session.peers.contains_key(&player), "No such player");
                 session.notify(
                     player,
                     if scaled {
-                        Notice::SoundScaled { profile, volume }
+                        Notice::SoundShaped {
+                            profile,
+                            volume,
+                            pitch,
+                            radius,
+                        }
                     } else {
                         Notice::Sound(profile)
                     },
@@ -179,7 +186,12 @@ impl Perform for ops::Sound {
             bri_package_runtime::ops::SoundAt::Position(position) => session.cues.emit(
                 tick,
                 if scaled {
-                    crate::presentation::CueKind::SoundScaled { profile, volume }
+                    crate::presentation::CueKind::SoundShaped {
+                        profile,
+                        volume,
+                        pitch,
+                        radius,
+                    }
                 } else {
                     crate::presentation::CueKind::WeaponSound { profile }
                 },

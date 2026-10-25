@@ -138,6 +138,7 @@ fn tool_pack() -> bri_weapons::Pack {
             bri_weapons::Image {
                 first_person_nodes: Default::default(),
                 first_person_effects: Default::default(),
+                first_person_offsets: Default::default(),
                 id: image.clone(),
                 name: format!("{stem}Image"),
                 model: String::new(),
@@ -173,6 +174,9 @@ fn tool_pack() -> bri_weapons::Pack {
                 both_arms: false,
                 paint_tint: false,
                 left_image: None,
+                stance: Default::default(),
+                lower: None,
+                redraw: None,
                 magazine: None,
                 volleys: vec![],
                 last_shot: None,

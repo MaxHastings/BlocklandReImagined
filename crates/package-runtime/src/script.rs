@@ -2815,40 +2815,81 @@ fn register_api(engine: &mut Engine) {
         }))
     });
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
-        push(Op::Sound(ops::Sound {
-            profile: profile.into(),
-            at: SoundAt::Player(id(&player)?),
-            volume: 1.0,
-        }))
+        push(Op::Sound(sound(
+            profile,
+            SoundAt::Player(id(&player)?),
+            1.0,
+            1.0,
+            0.0,
+        )))
     });
     engine.register_fn(
         "play_sound",
         |player: Dynamic, profile: &str, volume: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Player(id(&player)?),
-                volume: float(&volume)?,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Player(id(&player)?),
+                float(&volume)?,
+                1.0,
+                0.0,
+            )))
+        },
+    );
+    // `PlaySound(sound, slot, volume, bNoOverride, radius, pitch)`: the
+    // volume, then the pitch (times the profile's own).
+    engine.register_fn(
+        "play_sound",
+        |player: Dynamic, profile: &str, volume: Dynamic, pitch: Dynamic| {
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Player(id(&player)?),
+                float(&volume)?,
+                float(&pitch)?,
+                0.0,
+            )))
         },
     );
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
-                volume: 1.0,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                1.0,
+                1.0,
+                0.0,
+            )))
         },
     );
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic, volume: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
-                volume: float(&volume)?,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                float(&volume)?,
+                1.0,
+                0.0,
+            )))
+        },
+    );
+    // With the volume, the pitch and the radius it is heard out to.
+    engine.register_fn(
+        "sound_at",
+        |profile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         volume: Dynamic,
+         pitch: Dynamic,
+         radius: Dynamic| {
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                float(&volume)?,
+                float(&pitch)?,
+                float(&radius)?,
+            )))
         },
     );
     physics::register(engine);
@@ -4343,27 +4384,57 @@ impl Runtime {
             let Some(behaviour) = &package.behaviour else {
                 continue;
             };
-            let Some(source) = package.script_source() else {
+            let sources = package.script_sources();
+            if sources.is_empty() {
+                continue;
+            }
+            // Each file compiles on its own, so a problem names its file and
+            // line; the files then load as one script.
+            let mut combined: Option<AST> = None;
+            let mut defined: BTreeMap<(String, usize), &str> = BTreeMap::new();
+            for (file, source) in sources {
+                let part = match runtime.engine.compile(source) {
+                    Ok(ast) => ast,
+                    Err(e) => {
+                        let at = match e.1.line() {
+                            Some(line) => format!("{}:{line}", location(id, file)),
+                            None => location(id, file),
+                        };
+                        problems.push(Diagnostic::error("script.syntax", e.0.to_string()).at(at));
+                        continue;
+                    }
+                };
+                if !part.statements().is_empty() {
+                    problems.push(
+                        Diagnostic::error("script.top_level", "scripts may only define functions")
+                            .at(location(id, file))
+                            .hint("move top-level statements into a function; keep constants in behaviour state"),
+                    );
+                }
+                for f in part.iter_functions() {
+                    if let Some(first) = defined.insert((f.name.to_string(), f.params.len()), file)
+                    {
+                        problems.push(
+                            Diagnostic::error(
+                                "script.duplicate_function",
+                                format!(
+                                    "`fn {}` with {} parameter(s) is defined in both {first} and {file}",
+                                    f.name,
+                                    f.params.len()
+                                ),
+                            )
+                            .at(location(id, file)),
+                        );
+                    }
+                }
+                combined = Some(match combined {
+                    Some(whole) => whole.merge(&part),
+                    None => part,
+                });
+            }
+            let Some(ast) = combined else {
                 continue;
             };
-            let ast = match runtime.engine.compile(source) {
-                Ok(ast) => ast,
-                Err(e) => {
-                    let at = match e.1.line() {
-                        Some(line) => format!("{}:{line}", location(id, &behaviour.script)),
-                        None => location(id, &behaviour.script),
-                    };
-                    problems.push(Diagnostic::error("script.syntax", e.0.to_string()).at(at));
-                    continue;
-                }
-            };
-            if !ast.statements().is_empty() {
-                problems.push(
-                    Diagnostic::error("script.top_level", "scripts may only define functions")
-                        .at(location(id, &behaviour.script))
-                        .hint("move top-level statements into a function; keep constants in behaviour state"),
-                );
-            }
             let has = |name: &str, arity: usize| {
                 ast.iter_functions()
                     .any(|f| f.name == name && f.params.len() == arity)
@@ -4859,6 +4930,16 @@ pub fn voxels(value: &Dynamic, materials: usize, limit: usize) -> Result<Vec<[i6
         out.push(item);
     }
     Ok(out)
+}
+
+fn sound(profile: &str, at: SoundAt, volume: f32, pitch: f32, radius: f32) -> ops::Sound {
+    ops::Sound {
+        profile: profile.into(),
+        at,
+        volume,
+        pitch,
+        radius,
+    }
 }
 
 #[cfg(test)]

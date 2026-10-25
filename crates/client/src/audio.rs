@@ -22,6 +22,23 @@ pub(crate) struct PreparedSounds {
     warnings: BTreeSet<String>,
 }
 
+/// How an Add-On asked for one sound to be played.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Voice {
+    /// Times the profile's own volume.
+    pub volume: f32,
+    /// Times its own pitch.
+    pub pitch: f32,
+    /// The distance it is heard out to; 0 keeps its own.
+    pub radius: f32,
+}
+impl Voice {
+    pub const AS_AUTHORED: Self = Self {
+        volume: 1.0,
+        pitch: 1.0,
+        radius: 0.0,
+    };
+}
 struct SoundChoice {
     asset: Arc<SoundAsset>,
     volume: f32,
@@ -344,7 +361,7 @@ impl MusicBricks {
 
 pub struct ClientAudio {
     runtime: AudioRuntime,
-    pending: VecDeque<(String, Placement, f32)>,
+    pending: VecDeque<(String, Placement, Voice)>,
     contact_pending: VecDeque<(String, [f32; 3], u64)>,
     pub warnings: BTreeSet<String>,
     pub dropped: u64,
@@ -599,7 +616,7 @@ impl ClientAudio {
             return;
         }
         if let Some(id) = self.runtime.bank().trigger(key).map(str::to_string) {
-            self.enqueue(id, placement, key, 1.0);
+            self.enqueue(id, placement, key, Voice::AS_AUTHORED);
         } else if self.warnings.len() < 64 {
             self.warnings
                 .insert(format!("Unbound audio trigger: {key}"));
@@ -617,11 +634,19 @@ impl ClientAudio {
         }
     }
     pub fn profile(&mut self, profile: &str, placement: Placement) {
-        self.enqueue(profile.into(), placement, profile, 1.0);
+        self.enqueue(profile.into(), placement, profile, Voice::AS_AUTHORED);
     }
     /// `profile` at `volume` times its own, an Add-On's choice.
     pub fn profile_scaled(&mut self, profile: &str, placement: Placement, volume: f32) {
-        self.enqueue(profile.into(), placement, profile, volume);
+        let voice = Voice {
+            volume,
+            ..Voice::AS_AUTHORED
+        };
+        self.enqueue(profile.into(), placement, profile, voice);
+    }
+    /// `profile` as an Add-On asked for it.
+    pub fn profile_shaped(&mut self, profile: &str, placement: Placement, voice: Voice) {
+        self.enqueue(profile.into(), placement, profile, voice);
     }
     /// Bounded local cosmetic starts. No backlog survives a tick or session reset.
     /// Unknown profiles are silent; this path never guesses a bank fallback.
@@ -637,7 +662,7 @@ impl ClientAudio {
         self.contact_pending
             .push_back((profile.to_owned(), point, seed));
     }
-    fn enqueue(&mut self, id: String, placement: Placement, label: &str, volume: f32) {
+    fn enqueue(&mut self, id: String, placement: Placement, label: &str, voice: Voice) {
         if self.pending.len() == bri_sim::presentation::MAX_CUES {
             self.dropped = self.dropped.saturating_add(1);
             return;
@@ -646,7 +671,7 @@ impl ClientAudio {
         if self.requested.len() < 512 || self.requested.contains_key(label) {
             *self.requested.entry(label.into()).or_default() += 1;
         }
-        self.pending.push_back((id, placement, volume));
+        self.pending.push_back((id, placement, voice));
     }
     pub fn cue(&mut self, cue: &Cue) {
         let key = match &cue.kind {
@@ -660,8 +685,18 @@ impl ClientAudio {
             | CueKind::MoverDecal { .. }
             | CueKind::BodyFlash { .. }
             | CueKind::BodyShell { .. } => return,
-            CueKind::SoundScaled { profile, volume } => {
-                self.profile_scaled(profile, Placement::World(cue.position), *volume);
+            CueKind::SoundShaped {
+                profile,
+                volume,
+                pitch,
+                radius,
+            } => {
+                let voice = Voice {
+                    volume: *volume,
+                    pitch: *pitch,
+                    radius: *radius,
+                };
+                self.profile_shaped(profile, Placement::World(cue.position), voice);
                 return;
             }
             CueKind::WeaponSound { profile } => {
@@ -996,11 +1031,25 @@ impl ClientAudio {
         &mut self,
         profile: &str,
         placement: Placement,
-        scale: f32,
+        voice: Voice,
     ) -> Result<SoundHandle, AudioError> {
+        let shaped = |asset: Arc<SoundAsset>| {
+            if voice.pitch == 1.0 && voice.radius == 0.0 {
+                asset
+            } else {
+                Arc::new(asset.shaped(voice.pitch, voice.radius))
+            }
+        };
         let handle = match self.pack_asset(profile) {
-            Some((asset, volume)) => self.runtime.play_asset(asset, placement, volume * scale),
-            None => self.runtime.play_scaled(profile, placement, scale),
+            Some((asset, volume)) => {
+                self.runtime
+                    .play_asset(shaped(asset), placement, volume * voice.volume)
+            }
+            None => {
+                let asset = self.runtime.bank().resolve(profile)?.clone();
+                self.runtime
+                    .play_asset(shaped(asset), placement, voice.volume)
+            }
         }?;
         if let Placement::World(at) = placement
             && self.fresh_world.len() < FRESH_WORLD_LIMIT
@@ -1074,7 +1123,7 @@ impl ClientAudio {
                 let result = self.runtime.set_source_position(*handle, *position);
                 self.record(result);
             } else if self.image_loops.len() < 64 {
-                match self.start(sound, Placement::World(*position), 1.0) {
+                match self.start(sound, Placement::World(*position), Voice::AS_AUTHORED) {
                     Ok(handle) => {
                         self.image_loops.insert(*key, (sound.clone(), handle));
                     }
@@ -1113,7 +1162,11 @@ impl ClientAudio {
                     handle
                 }
                 None if self.engines.len() < 64 => {
-                    match self.start(&engine.sound, Placement::World(engine.position), 1.0) {
+                    match self.start(
+                        &engine.sound,
+                        Placement::World(engine.position),
+                        Voice::AS_AUTHORED,
+                    ) {
                         Ok(handle) => {
                             self.engines.insert(*id, (engine.sound.clone(), handle));
                             handle
@@ -1173,7 +1226,7 @@ impl ClientAudio {
                 entity: projectile_entity(p.id),
                 position,
             };
-            let result = self.start(sound, placement, 1.0).map(|_| ());
+            let result = self.start(sound, placement, Voice::AS_AUTHORED).map(|_| ());
             self.record(result);
         }
     }
@@ -1210,8 +1263,8 @@ impl ClientAudio {
         let result = self.runtime.set_listener(listener);
         self.record(result);
         // Listener precedes starts so distance culling cannot use last session's pose.
-        while let Some((id, placement, scale)) = self.pending.pop_front() {
-            let result = self.start(&id, placement, scale).map(|_| ());
+        while let Some((id, placement, voice)) = self.pending.pop_front() {
+            let result = self.start(&id, placement, voice).map(|_| ());
             self.record(result);
         }
         while let Some((id, point, seed)) = self.contact_pending.pop_front() {

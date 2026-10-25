@@ -200,6 +200,13 @@ pub struct Behaviour {
     pub schema_version: u32,
     /// Package-relative script file (also listed as a `script` provide).
     pub script: String,
+    /// More script files, each also listed as a `script` provide and held to
+    /// the same size limit as `script`. They load together with it as one
+    /// script: a function in any of them calls any other, and the engine
+    /// calls hooks in whichever file defines them. A function name defined
+    /// twice (same parameter count) is refused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<String>,
     #[serde(default)]
     pub commands: Vec<CommandDef>,
     #[serde(default)]
@@ -982,6 +989,8 @@ impl BrickOutputDef {
 pub const MAX_ZONES: usize = 16;
 /// Most commands one package declares.
 pub const MAX_COMMANDS: usize = 256;
+/// Most extra script files one behaviour loads beside its main `script`.
+pub const MAX_SCRIPT_MODULES: usize = 32;
 pub const MAX_ZONE_KINDS: usize = 16;
 /// A touch zone: the box over every brick of some kinds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1155,6 +1164,14 @@ impl Behaviour {
             self.schema_version == 1,
             "behaviour schema_version must be 1"
         );
+        ensure!(
+            self.modules.len() <= MAX_SCRIPT_MODULES,
+            "at most {MAX_SCRIPT_MODULES} modules"
+        );
+        let mut files = std::collections::BTreeSet::from([&self.script]);
+        for m in &self.modules {
+            ensure!(files.insert(m), "script file `{m}` is listed twice");
+        }
         ensure!(
             self.commands.len() <= MAX_COMMANDS,
             "at most {MAX_COMMANDS} commands"

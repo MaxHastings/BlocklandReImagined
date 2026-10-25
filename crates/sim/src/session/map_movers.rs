@@ -323,7 +323,7 @@ impl Session {
             let target = mover.transform(&state, tick);
             if self.map_movers.placed[index] != Some(target) && !mover.colliders.is_empty() {
                 let blocked = state.moving
-                    && mover.def.encroach == Encroach::Stop
+                    && mover.def.encroach != Encroach::Ignore
                     && self.map_movers.placed[index].is_some()
                     && mover
                         .colliders
@@ -333,10 +333,15 @@ impl Session {
                     // The attempted pose intersects a player. Publishing it as the
                     // stopped state would apply it without the moving check next
                     // tick, and clients would immediately predict that bad pose.
-                    self.map_movers.states[index] = MoverState {
+                    let held = MoverState {
                         blocked: true,
                         ..self.map_movers.accepted[index]
                     };
+                    self.map_movers.states[index] = held;
+                    if mover.def.encroach == Encroach::Return && held.rate > 0.0 {
+                        let seconds = 1.0 / (held.rate * bri_world::TICKS_PER_SECOND as f32);
+                        self.map_movers.states[index].go_to(tick, held.from, seconds);
+                    }
                     continue;
                 }
                 self.simulation

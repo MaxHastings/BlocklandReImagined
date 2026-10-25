@@ -1560,6 +1560,7 @@ mod tests {
                 bri_weapons::Image {
                     first_person_nodes: Default::default(),
                     first_person_effects: Default::default(),
+                    first_person_offsets: Default::default(),
                     id: image.clone(),
                     name: format!("{stem}Image"),
                     model: "source.dts".into(),
@@ -1595,6 +1596,9 @@ mod tests {
                     both_arms: false,
                     paint_tint: false,
                     left_image: None,
+                    stance: Default::default(),
+                    lower: None,
+                    redraw: None,
                     magazine: None,
                     volleys: vec![],
                     last_shot: None,

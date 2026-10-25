@@ -165,6 +165,8 @@ pub struct Controls {
     aim_level: usize,
     /// The aim's sway (`Zoom::sway`), eased in while aiming and out after.
     sway: SwayState,
+    /// The weapon coming up to its sights (`Zoom::sights`) and back.
+    sights: SightsState,
     /// The roll an opening in a floor or ceiling turned the view by, and
     /// how it turned the body's eye and camera pivot about its middle
     /// (upside down, for a floor onto a floor) past the turn of its
@@ -222,6 +224,14 @@ struct SwayState {
 }
 /// Seconds a sway takes to ease fully in or out.
 const SWAY_EASE_SECONDS: f32 = 0.6;
+/// How far the held model has come up to its sights.
+#[derive(Clone, Copy, Debug, Default)]
+struct SightsState {
+    /// The sights last aimed with, kept to lower the weapon after the aim ends.
+    def: Option<bri_weapons::Sights>,
+    /// 0 at rest, 1 on the sights.
+    blend: f32,
+}
 /// A mouse driver's `mHead.x` returning after Free Look as v20 runs it:
 /// in first person each 32 ms tick halves it (blocklandv20.exe 0x5aeb0b),
 /// and the view shows it between the last two ticks
@@ -1378,6 +1388,7 @@ impl Controls {
             return;
         }
         let seconds = seconds.clamped(0.0, 0.25);
+        self.advance_sights(seconds);
         let on_foot = self.observer.is_none()
             && !self.mounted
             && self.vehicle_view.is_none()
@@ -1426,6 +1437,43 @@ impl Controls {
         if self.sway.gain == 0.0 {
             self.sway = SwayState::default();
         }
+    }
+    /// Bring the held model up to its sights while aiming, and back after.
+    fn advance_sights(&mut self, seconds: f32) {
+        let aimed = self
+            .aim_while_aiming()
+            .and_then(|a| a.sights)
+            .filter(|_| self.at_eye());
+        if let Some(def) = aimed {
+            self.sights.def = Some(def);
+        }
+        let Some(def) = self.sights.def else {
+            return;
+        };
+        let target = if aimed.is_some() { 1.0 } else { 0.0 };
+        let step = if def.seconds > 0.0 {
+            seconds / def.seconds
+        } else {
+            1.0
+        };
+        self.sights.blend += (target - self.sights.blend).clamped(-step, step);
+        if self.sights.blend == 0.0 && aimed.is_none() {
+            self.sights = SightsState::default();
+        }
+    }
+    /// How far the weapon has moved from its rest to its sights, in the
+    /// view's frame (x right, y up, looking down -z), for the view frame
+    /// the weapon is drawn in. `None` when it is at rest.
+    pub fn view_model_sights(&self) -> Option<glam::Mat4> {
+        let def = self.sights.def?;
+        let t = self.sights.blend.clamped(0.0, 1.0);
+        let eased = t * t * (3.0 - 2.0 * t);
+        let [x, y, z] = def.rotation_degrees.map(|d| d.to_radians() * eased);
+        let m = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_euler(glam::EulerRot::XYZ, x, y, z),
+            glam::Vec3::from(def.offset) * eased,
+        );
+        m.is_finite().then_some(m)
     }
     /// The active body's camera (`Look::camera`) at its `scale`. A
     /// different profile starts from rest, so switching bodies hands the
@@ -2703,6 +2751,37 @@ mod tests {
         assert_eq!(c.scope_overlay(), None);
         settle(&mut c);
         assert_eq!(c.scope_overlay(), Some("scope/scope"));
+    }
+    /// A weapon with real sights comes up to them over its time while aimed
+    /// and goes back as the aim ends, and stays put with no sights.
+    #[test]
+    fn the_weapon_comes_up_to_its_sights_and_back() {
+        let mut zoom = scope();
+        zoom.overlay = None;
+        zoom.sway = None;
+        zoom.sights = Some(bri_weapons::Sights {
+            offset: [0.1, 0.2, 0.0],
+            rotation_degrees: [0.0; 3],
+            seconds: 0.5,
+        });
+        let mut c = Controls::default();
+        c.set_aim(Some(zoom));
+        assert!(c.view_model_sights().is_none());
+        held(&mut c, HeldControl::Jet, true);
+        for _ in 0..15 {
+            c.advance_sway(1.0 / 60.0);
+        }
+        let half = c.view_model_sights().unwrap().w_axis.y;
+        assert!(half > 0.0 && half < 0.2, "on its way: {half}");
+        for _ in 0..30 {
+            c.advance_sway(1.0 / 60.0);
+        }
+        assert!((c.view_model_sights().unwrap().w_axis.y - 0.2).abs() < 1e-5);
+        held(&mut c, HeldControl::Jet, false);
+        for _ in 0..60 {
+            c.advance_sway(1.0 / 60.0);
+        }
+        assert!(c.view_model_sights().is_none(), "back at rest");
     }
     fn swayed(c: &mut Controls, frames: usize) -> Vec<(f32, f32)> {
         (0..frames)

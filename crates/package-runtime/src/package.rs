@@ -21,7 +21,7 @@ pub struct Asset {
 #[derive(Debug, Clone)]
 pub struct Package {
     /// The folder it was read from, for reading its rules again
-    /// ([`Package::reread_script`]).
+    /// ([`Package::reread_scripts`]).
     pub dir: std::path::PathBuf,
     pub side: Side,
     pub manifest: Manifest,
@@ -278,21 +278,20 @@ impl Package {
                     }
                     if let Some(b) = parse::<content::Behaviour>(asset, &id, |b| b.validate(), out)
                     {
-                        if !self
-                            .assets
-                            .iter()
-                            .any(|a| a.kind == Kind::Script && a.file == b.script)
-                        {
-                            out.push(
-                                Diagnostic::error(
-                                    "content.behaviour.script",
-                                    format!(
-                                        "script `{}` is not provided as kind `script`",
-                                        b.script
-                                    ),
-                                )
-                                .at(at),
-                            );
+                        for file in std::iter::once(&b.script).chain(&b.modules) {
+                            if !self
+                                .assets
+                                .iter()
+                                .any(|a| a.kind == Kind::Script && &a.file == file)
+                            {
+                                out.push(
+                                    Diagnostic::error(
+                                        "content.behaviour.script",
+                                        format!("script `{file}` is not provided as kind `script`"),
+                                    )
+                                    .at(at.clone()),
+                                );
+                            }
                         }
                         self.behaviour = Some(b);
                     }
@@ -477,29 +476,48 @@ impl Package {
                 .collect(),
         )
     }
+    /// Its rules script files with their text, the main `script` first and
+    /// then the behaviour's `modules` in order.
+    pub fn script_sources(&self) -> Vec<(&str, &str)> {
+        let Some(b) = &self.behaviour else {
+            return Vec::new();
+        };
+        std::iter::once(&b.script)
+            .chain(&b.modules)
+            .filter_map(|file| {
+                let bytes = &self.asset(file)?.bytes;
+                Some((file.as_str(), std::str::from_utf8(bytes).ok()?))
+            })
+            .collect()
+    }
     pub fn script_source(&self) -> Option<&str> {
         let b = self.behaviour.as_ref()?;
         std::str::from_utf8(&self.asset(&b.script)?.bytes).ok()
     }
-    /// Its rules script as the file is now, when it differs from the one
-    /// loaded: `Ok(None)` when it is unchanged or the package has no rules.
-    pub fn reread_script(&self) -> Result<Option<String>, String> {
-        let Some(b) = &self.behaviour else {
-            return Ok(None);
-        };
-        let path = bri_package::path::inside(&self.dir, &b.script)?;
-        let bytes = std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", b.script))?;
-        if bytes.len() > MAX_PACKAGE_BYTES {
-            return Err(format!("{} is over 32 MiB", b.script));
+    /// Each rules script file as it is now, when it differs from the one
+    /// loaded: empty when nothing changed or the package has no rules.
+    pub fn reread_scripts(&self) -> Result<Vec<(String, String)>, String> {
+        let mut changed = Vec::new();
+        for (file, loaded) in self.script_sources() {
+            let path = bri_package::path::inside(&self.dir, file)?;
+            let bytes = std::fs::read(&path).map_err(|e| format!("cannot read {file}: {e}"))?;
+            if bytes.len() > Kind::Script.max_bytes() {
+                return Err(format!(
+                    "{file} is {} bytes; the limit is {}",
+                    bytes.len(),
+                    Kind::Script.max_bytes()
+                ));
+            }
+            let source = String::from_utf8(bytes).map_err(|_| format!("{file} is not UTF-8"))?;
+            if source != loaded {
+                changed.push((file.to_string(), source));
+            }
         }
-        let source = String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", b.script))?;
-        Ok((self.script_source() != Some(source.as_str())).then_some(source))
+        Ok(changed)
     }
-    /// Swap in a new rules script (from [`Package::reread_script`]).
-    pub fn set_script(&mut self, source: String) {
-        let Some(file) = self.behaviour.as_ref().map(|b| b.script.clone()) else {
-            return;
-        };
+    /// Swap in a new text for one rules script file (from
+    /// [`Package::reread_scripts`]).
+    pub fn set_script(&mut self, file: &str, source: String) {
         if let Some(asset) = self.assets.iter_mut().find(|a| a.file == file) {
             asset.bytes = source.into_bytes();
         }
