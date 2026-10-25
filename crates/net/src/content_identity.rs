@@ -375,7 +375,7 @@ fn body_pose_candidates(
     include_assets: bool,
 ) -> Vec<(String, Option<String>)> {
     let mut models: Vec<_> = contained(dir, bri_package::library::MANIFEST_FILE)
-        .and_then(|p| bounded_bytes(&p, 256 << 10))
+        .and_then(|p| bounded_bytes(&p, bri_package::library::MAX_MANIFEST_BYTES))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .and_then(|m| m["provides"].as_array().cloned())
@@ -393,7 +393,7 @@ fn body_pose_candidates(
         for file in files.flatten() {
             let name = format!("assets/archetypes/{}", file.file_name().to_string_lossy());
             let parsed = contained(dir, &name)
-                .and_then(|p| bounded_bytes(&p, 256 << 10))
+                .and_then(|p| bounded_bytes(&p, bri_package::library::MAX_MANIFEST_BYTES))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
             if let Some(model) = parsed
