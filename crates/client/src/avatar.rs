@@ -23,6 +23,19 @@ use glam::{Mat4, Quat, Vec3};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
+/// A drawn body's nodes as a ragdoll is built from them
+/// ([`AvatarMesh::bone_frames`]).
+pub struct BoneFrames {
+    /// Each node's parent in the rig.
+    pub parents: Vec<Option<usize>>,
+    /// The node of each bone asked for, in the order asked.
+    pub index: Vec<usize>,
+    /// Every node's world transform.
+    pub world: Vec<Mat4>,
+    /// How much the body is scaled.
+    pub scale: f32,
+}
+
 pub struct AvatarAssets {
     pub package: Package,
     pub rig: Rig,
@@ -1672,6 +1685,34 @@ impl AvatarMesh {
                 .collect(),
             bounds,
         }
+    }
+    /// The drawn body's node tree and world poses, with the index of each
+    /// of `names` (a ragdoll's bones), for a body that goes limp where it
+    /// stands. Names the rig lacks are returned, all together.
+    pub fn bone_frames(
+        &mut self,
+        assets: &AvatarAssets,
+        names: &[&str],
+    ) -> Result<BoneFrames, Vec<String>> {
+        let assets = assets.for_mesh(self);
+        let missing: Vec<String> = names
+            .iter()
+            .filter(|n| assets.node(n).is_none())
+            .map(|n| n.to_string())
+            .collect();
+        if !missing.is_empty() {
+            return Err(missing);
+        }
+        Ok(BoneFrames {
+            parents: assets.rig.shape.nodes.iter().map(|n| n.parent).collect(),
+            index: names.iter().filter_map(|n| assets.node(n)).collect(),
+            world: self
+                .posed_nodes
+                .iter()
+                .map(|node| self.model_transform * *node)
+                .collect(),
+            scale: self.model_transform.x_axis.truncate().length(),
+        })
     }
     /// Place `nodes` (index, world position, world rotation) for Add-On
     /// code, after this frame's animation. Nodes it leaves out keep their

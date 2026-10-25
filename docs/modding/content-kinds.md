@@ -311,13 +311,21 @@ every screen simulates its own, so they do not tumble identically):
 "twist": 0, "hinge": [-1.5, 0]}}], "friction": 0.8, "max_speed": 40,
 "max_spin": 10, "freeze": 10, "kick": {...}, "carry": [0.6, 1],
 "falling": 0.2, "inertia": 4, "spin_scale": 13, "prone_scale": 0.35, "random_spin": 9}`. Each bone becomes a rigid body made of up to
-8 `shapes` (a `capsule` lying along the node's `axis`, a `box` or a `ball`,
-each centred `offset` from the node) weighing `mass`, jointed at the bone's
+8 `shapes` (a `capsule` lying along the node's `axis`, a `box` (optionally
+turned by `rotation`, radians about x, y then z), a `ball`, each centred
+`offset` from the node, or a `limb`: `{"kind": "limb", "radius": 0.05,
+"length": 0.25}`, a capsule that spans the bone itself, from its node toward
+the nearest listed bone that hangs from it, else its first child in the rig,
+else on the way its parent ran, so the model supplies only sizes; `length` is
+the straight middle's, and left out it is the bone's span, a bone with
+nothing below it needing one) weighing `mass`, jointed at the bone's
 node to the nearest bone above it in the skeleton that is listed. The first
 bone is the root and has no joint; the others have a ball joint (`swing`,
 optional `swing_second`, `twist`, radians, 0 to pi, round the pose it died in)
-or a hinge (`hinge: [low, high]` about the node's x axis), with `damping`
-(how much it resists moving). The body goes limp at once. `max_speed` and
+or a hinge (`hinge: [low, high]`), both about the node's x axis unless
+`axis` (`"y"` or `"z"`) says otherwise, with `damping` (how much it resists
+swinging or turning) and `twist_damping` (twisting; `damping` when left out).
+Limits are hard: there is no spring pulling back from them. The body goes limp at once. `max_speed` and
 `max_spin` cap every bone, `bounce` and each bone's `linear_damping` and
 `angular_damping` shape its fall, and `freeze` seconds after it goes limp
 hold it where it lies (0: never). The killing hit sets it moving:
