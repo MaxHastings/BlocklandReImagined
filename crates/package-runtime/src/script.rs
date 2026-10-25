@@ -2815,40 +2815,81 @@ fn register_api(engine: &mut Engine) {
         }))
     });
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
-        push(Op::Sound(ops::Sound {
-            profile: profile.into(),
-            at: SoundAt::Player(id(&player)?),
-            volume: 1.0,
-        }))
+        push(Op::Sound(sound(
+            profile,
+            SoundAt::Player(id(&player)?),
+            1.0,
+            1.0,
+            0.0,
+        )))
     });
     engine.register_fn(
         "play_sound",
         |player: Dynamic, profile: &str, volume: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Player(id(&player)?),
-                volume: float(&volume)?,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Player(id(&player)?),
+                float(&volume)?,
+                1.0,
+                0.0,
+            )))
+        },
+    );
+    // `PlaySound(sound, slot, volume, bNoOverride, radius, pitch)`: the
+    // volume, then the pitch (times the profile's own).
+    engine.register_fn(
+        "play_sound",
+        |player: Dynamic, profile: &str, volume: Dynamic, pitch: Dynamic| {
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Player(id(&player)?),
+                float(&volume)?,
+                float(&pitch)?,
+                0.0,
+            )))
         },
     );
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
-                volume: 1.0,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                1.0,
+                1.0,
+                0.0,
+            )))
         },
     );
     engine.register_fn(
         "sound_at",
         |profile: &str, x: Dynamic, y: Dynamic, z: Dynamic, volume: Dynamic| {
-            push(Op::Sound(ops::Sound {
-                profile: profile.into(),
-                at: SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
-                volume: float(&volume)?,
-            }))
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                float(&volume)?,
+                1.0,
+                0.0,
+            )))
+        },
+    );
+    // With the volume, the pitch and the radius it is heard out to.
+    engine.register_fn(
+        "sound_at",
+        |profile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         volume: Dynamic,
+         pitch: Dynamic,
+         radius: Dynamic| {
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Position([float(&x)?, float(&y)?, float(&z)?]),
+                float(&volume)?,
+                float(&pitch)?,
+                float(&radius)?,
+            )))
         },
     );
     physics::register(engine);
@@ -4891,5 +4932,15 @@ mod objective_queries {
         assert!(runtime.query("unfamiliar", call()).is_err());
         assert!(runtime.last_operations() > 0);
         assert!(runtime.last_operations() <= Budget::Objective.operations() + 1);
+    }
+}
+
+fn sound(profile: &str, at: SoundAt, volume: f32, pitch: f32, radius: f32) -> ops::Sound {
+    ops::Sound {
+        profile: profile.into(),
+        at,
+        volume,
+        pitch,
+        radius,
     }
 }

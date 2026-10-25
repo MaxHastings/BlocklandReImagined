@@ -635,10 +635,13 @@ pub enum Notice {
         pitch: f32,
         yaw: f32,
     },
-    /// `Sound` at `volume` times its own: an Add-On's radio line, a whisper.
-    SoundScaled {
+    /// `Sound` at `volume` times its own and `pitch` times its own pitch,
+    /// heard out to `radius` (0: its own): an Add-On's radio line, a whisper.
+    SoundShaped {
         profile: String,
         volume: f32,
+        pitch: f32,
+        radius: f32,
     },
     /// A line for a HUD `message_feed` (rules' `hud_line`): shown for
     /// `seconds`, in `color` when given, with one of the feed's `icons`.

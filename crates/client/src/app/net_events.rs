@@ -67,12 +67,19 @@ impl App {
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Sound(profile)) => {
                     self.audio.profile(&profile, bri_audio::Placement::Listener);
                 }
-                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::SoundScaled {
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::SoundShaped {
                     profile,
                     volume,
+                    pitch,
+                    radius,
                 }) => {
+                    let voice = crate::audio::Voice {
+                        volume,
+                        pitch,
+                        radius,
+                    };
                     self.audio
-                        .profile_scaled(&profile, bri_audio::Placement::Listener, volume);
+                        .profile_shaped(&profile, bri_audio::Placement::Listener, voice);
                 }
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Music(play)) => {
                     self.audio.play_music(&play);
@@ -780,11 +787,21 @@ impl App {
                             self.audio.profile(&profile, bri_audio::Placement::Listener);
                             continue;
                         }
-                        bri_sim::session::Notice::SoundScaled { profile, volume } => {
-                            self.audio.profile_scaled(
+                        bri_sim::session::Notice::SoundShaped {
+                            profile,
+                            volume,
+                            pitch,
+                            radius,
+                        } => {
+                            let voice = crate::audio::Voice {
+                                volume,
+                                pitch,
+                                radius,
+                            };
+                            self.audio.profile_shaped(
                                 &profile,
                                 bri_audio::Placement::Listener,
-                                volume,
+                                voice,
                             );
                             continue;
                         }
