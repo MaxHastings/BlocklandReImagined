@@ -343,7 +343,7 @@ A body over the physics budget, or whose skeleton lacks a listed node, plays
 its death clip as before and the Add-On faults log says why. A dead body lies 5 seconds (v20's `$CorpseTimeoutValue`) and then goes in a
 puff; `corpse_seconds` (0 to 600) lets it lie longer, and `corpse_fade` (up to
 `corpse_seconds`) makes it fade out over the last of those seconds instead of
-puffing away. The client names what a
+puffing away. `corpse_stays: true` has it lie until its player spawns again (a round's reset), whatever `corpse_seconds` says. A player a rule holds out of the world (before a round's first spawn, out of lives) has no body at all: none is simulated, drawn or left as a corpse. The client names what a
 body lacks once, in the Add-On faults log ("no `sit` animation; it plays
 its `idle` instead"). The Playground's
 [Runner](../../packages/playground/playground-runner/runner.json) and the

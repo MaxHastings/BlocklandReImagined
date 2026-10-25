@@ -515,6 +515,10 @@ pub struct Look {
         skip_serializing_if = "is_default_corpse_seconds"
     )]
     pub corpse_seconds: f32,
+    /// The body lies until the player spawns again (a round's reset), however
+    /// long that is: `corpse_seconds` and `corpse_fade` do not apply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub corpse_stays: bool,
     /// The last of `corpse_seconds` the body fades out over, instead of
     /// vanishing in v20's puff; 0 vanishes at once.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -549,6 +553,9 @@ impl Look {
     /// `None` once `corpse_seconds` are up, otherwise its opacity, 1 until
     /// `corpse_fade` before the end and falling to 0 across it.
     pub fn corpse_opacity(&self, lying: f32) -> Option<f32> {
+        if self.corpse_stays {
+            return Some(1.0);
+        }
         let left = self.corpse_seconds - lying;
         if left <= 0.0 {
             return None;
@@ -667,6 +674,7 @@ impl Archetype {
                 action_blend: 0.0,
                 locomotion_pick: Default::default(),
                 corpse_seconds: CORPSE_SECONDS,
+                corpse_stays: false,
                 corpse_fade: 0.0,
             },
             uses_items: true,
