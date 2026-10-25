@@ -154,7 +154,10 @@ fn dynamic_bsp_light(base:vec3<f32>,pigment:vec3<f32>,alpha:f32,brighten:bool,po
 // ranked by `(1 - d^2/R^2) * brightness`, each light `Colour * reach(d/R) * N.L` with the smooth radial reach used for effect lights.
 // `material[1].x` scales the sun and `material[1].y` the lights (the body's authored gains). Returns the multiplier before the
 // stage's doubling. No visibility traces are made.
+// `baked` (`material[1].z`): the vertex colour already holds the room's light, so the body takes neither a zone's ambient nor its
+// suns nor the map lamps whose light the baking has: only its glow (`material[1].w`) and the live lights, which add on top.
 fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
+    let baked=material[1].z>0.5;
     let n=normal/max(length(normal),0.0001);
     var chosen=array<u32,4>(0u,0u,0u,0u);
     var score=array<f32,4>(0.0,0.0,0.0,0.0);
@@ -164,7 +167,7 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
         let delta=light.position_radius.xyz-position;
         let d2=dot(delta,delta);
         let radius=light.position_radius.w;
-        if d2>=radius*radius {continue;}
+        if d2>=radius*radius || (baked && light.color.w>2.5) {continue;}
         let s=(1.0-d2/(radius*radius))*max(light.color.r,max(light.color.g,light.color.b));
         if s<=score[3] {continue;}
         var k=3u;
@@ -177,6 +180,8 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
     }
     // A zone's own ambient, or the scene's with the room's light as a floor under it.
     var sum=select(max(camera.ambient.rgb,own.rgb),own.rgb,own.w>=0.0);
+    if baked {sum=vec3<f32>(0.0);}
+    sum+=vec3<f32>(material[1].w);
     for(var k=0u;k<4u;k+=1u) {
         if score[k]<=0.0 {continue;}
         let light=listed_light(list,chosen[k]);
@@ -185,6 +190,9 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>)->vec3<f32> {
         let t=min(d/max(light.position_radius.w,0.0001),1.0);
         let reach=2.0*(1.0-3.0*t*t+2.0*t*t*t);
         sum+=material[1].y*light.color.rgb*reach*max(dot(n,delta/max(d,0.0001)),0.0)*point_cone(light,-delta/max(d,0.0001));
+    }
+    if baked {
+        return sum;
     }
     if own.w<0.0 {
         let toward_sun=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
@@ -1367,7 +1375,8 @@ struct VertexOut {
     if material[0].x==15.0 {
         // A moving body lit by the scene: its zone's ambient and suns when it has them, else the scene's, and the nearest lights.
         let lit=actor_light(out.world_position,out.normal,own_light);
-        out.color=vec4<f32>(clamp(lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0))*color.rgb,color.a);
+        // Baked: the vertex colour is the room's light (0.5 neutral), the live lights and the glow add to it.
+        out.color=vec4<f32>(select(clamp(lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0))*color.rgb,clamp(color.rgb+lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0)),material[1].z>0.5),color.a);
     }
     out.point_light=vec3<f32>(0.0);
     if material[0].x==2.0 || material[0].x==3.0 || material[0].x==9.0 || material[0].x==11.0 {

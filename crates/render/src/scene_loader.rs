@@ -1250,7 +1250,7 @@ fn load_static_shape(
                 [0.0; 4],
             ]);
         }
-        if authored.vertex_light && authored.layers.is_none() {
+        if authored.vertex_light && authored.layers.is_none() && authored.actor_lit.is_none() {
             material.kind = MaterialKind::VertexLight;
             // A metal detail set above took the kind's uniforms with it.
             material.parameters = None;
