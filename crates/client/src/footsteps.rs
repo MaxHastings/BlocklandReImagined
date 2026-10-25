@@ -81,24 +81,6 @@ impl Footfall {
     }
 }
 
-/// One footfall to play: its sound, where, and what it leaves on the
-/// surface it landed on ([`Sounds::contacts`]).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Footfall {
-    pub sound: String,
-    pub at: [f32; 3],
-    pub contact: Option<FootContact>,
-}
-impl Footfall {
-    fn on(sounds: &Sounds, sound: &str, at: [f32; 3], surface: &str) -> Self {
-        Self {
-            sound: sound.to_owned(),
-            at,
-            contact: sounds.contact_on(surface).cloned(),
-        }
-    }
-}
-
 #[derive(Default)]
 struct Walker {
     /// Ground covered since the last footfall.
