@@ -206,7 +206,10 @@ back to the stock HUD when nothing claims a region.
   times `strength`; 0 draws nothing). The edge is the nearest of ahead (top),
   behind (bottom), left and right by the viewer's facing, so the arrow follows
   the camera. Claim `top_center`, `bottom_center`, `left` and `right` with one
-  arrow each. Flashing a meter needs nothing more than `show` on a value the
+  arrow each. `edge` may instead be `top_left`, `top_right`, `bottom_left`
+  or `bottom_right`, the four diagonal sectors of the viewer's view (one
+  picture split four ways, as a radar's hit ring); use the four edges or the
+  four diagonals in one layout. Flashing a meter needs nothing more than `show` on a value the
   rule flips.
 - `strip`: a picture strip scrolled by the way the viewer faces, as a
   compass. `textures` (one to eight, equal width) are laid end to end to make
