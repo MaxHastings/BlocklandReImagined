@@ -80,6 +80,16 @@ fn floor(baked: Option<f32>) -> SceneData {
 
 /// The darker and brighter side pixels' green, in Dynamic lighting.
 fn sides(data: &SceneData, ambient: f32, soft: bool) -> Result<(i32, i32)> {
+    sides_lit(data, ambient, soft, &[])
+}
+
+/// [`sides`] with `lights` in the point light pool.
+fn sides_lit(
+    data: &SceneData,
+    ambient: f32,
+    soft: bool,
+    lights: &[PointLight],
+) -> Result<(i32, i32)> {
     let (device, queue) = gpu()?;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let target = color_target(&device, format, 64, 64);
@@ -99,6 +109,7 @@ fn sides(data: &SceneData, ambient: f32, soft: bool) -> Result<(i32, i32)> {
     // Soft Shading on draws through the modern shader, off through the original.
     camera.shading = if soft { [1.0, 1.0, 1.0, 1.0] } else { [0.0; 4] };
     renderer.update_camera(&queue, &camera);
+    renderer.update_lights(&queue, lights)?;
     let pixels = render(&device, &queue, &mut renderer, &target, &[&scene], &[], &[])?;
     let at = |x: usize| i32::from(pixels[(32 * 64 + x) * 4 + 1]);
     // (the darker side, the brighter side): which is left depends on the view
@@ -127,5 +138,35 @@ fn check(soft: bool) -> Result<()> {
     // Without the flag the live light is even across the floor.
     let (a, b) = sides(&floor(None), 0.4, soft)?;
     assert!((a - b).abs() < 6 && a > 100, "live {a} {b}");
+    Ok(())
+}
+
+/// A point light over the floor, `w` the kind of light it is.
+fn lamp(w: f32) -> PointLight {
+    PointLight {
+        position_radius: [0.0, 3.0, 0.0, 30.0],
+        color: [1.0, 1.0, 1.0, w],
+        cone: [0.0; 4],
+    }
+}
+
+#[test]
+fn the_maps_own_lights_add_nothing_to_a_baked_surface() -> Result<()> {
+    for soft in [false, true] {
+        let baked = sides(&floor(Some(1.0)), 0.4, soft)?;
+        // An overflow map light (colour w 1) is in the lightmap already.
+        let overflow = sides_lit(&floor(Some(1.0)), 0.4, soft, &[lamp(1.0)])?;
+        // (its highlight on the glossy floor aside, a level or two)
+        assert!(
+            (baked.0 - overflow.0).abs() < 4 && (baked.1 - overflow.1).abs() < 4,
+            "overflow light {overflow:?}, baked {baked:?}, soft {soft}"
+        );
+        // An effect light (w 0) is not, and lights it.
+        let effect = sides_lit(&floor(Some(1.0)), 0.4, soft, &[lamp(0.0)])?;
+        assert!(
+            effect.0 > baked.0 + 20,
+            "effect {effect:?}, baked {baked:?}"
+        );
+    }
     Ok(())
 }
