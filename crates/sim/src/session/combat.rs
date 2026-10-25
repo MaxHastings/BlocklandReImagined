@@ -112,8 +112,12 @@ impl DamagePolicy<'_> {
 
 /// `PlayerStandardArmor.maxDamage`.
 pub const MAX_HEALTH: f32 = 100.0;
-/// `$CorpseTimeoutValue` (5 s): `Player::RemoveBody` then deletes the corpse.
-const CORPSE_TICKS: u64 = 600;
+/// Ticks a dead body lies (`Look::corpse_seconds`: v20's
+/// `$CorpseTimeoutValue`, 5 s, unless its archetype sets it); then
+/// `Player::RemoveBody` deletes the corpse.
+fn corpse_ticks(look: &bri_motor::archetype::Look) -> u64 {
+    (look.corpse_seconds * bri_weapons::TICK_HZ as f32).round() as u64
+}
 /// `Armor::damage` sums hits less than 300 ms apart into one pain level.
 const PAIN_TICKS: u64 = 36;
 /// `Player::emote`: emotes under 1000 ms apart count, 10000 ms forgive,
@@ -1761,11 +1765,12 @@ impl Session {
         self.release_riders(owner);
         {
             let peer = self.peers.get_mut(&owner).unwrap();
+            let look = &self.archetypes.resolve(peer.player.state().archetype).look;
             peer.combat.alive = false;
             peer.player.set_corpse(&mut self.simulation.physics, true);
             peer.combat.health = 0.0;
             // Past the corpse timeout: the next step clears the body.
-            peer.combat.died_tick = tick.saturating_sub(CORPSE_TICKS);
+            peer.combat.died_tick = tick.saturating_sub(corpse_ticks(look));
             peer.combat.corpse_cleared = false;
             peer.discard_inputs();
             peer.control = super::ControlObject::Corpse;
@@ -2944,13 +2949,17 @@ impl Session {
         let tick = self.simulation.state().tick;
         let mut bodies = Vec::new();
         for (&owner, peer) in self.peers.iter_mut() {
+            let look = &self.archetypes.resolve(peer.player.state().archetype).look;
             if !peer.combat.alive
                 && !peer.combat.corpse_cleared
-                && tick.saturating_sub(peer.combat.died_tick) >= CORPSE_TICKS
+                && tick.saturating_sub(peer.combat.died_tick) >= corpse_ticks(look)
             {
                 peer.player.set_solid(&mut self.simulation.physics, false);
                 peer.combat.corpse_cleared = true;
-                bodies.push((ActorId(owner), Vec3::from(peer.player.state().feet)));
+                // A body that fades away leaves no puff.
+                if look.corpse_fade == 0.0 {
+                    bodies.push((ActorId(owner), Vec3::from(peer.player.state().feet)));
+                }
             }
         }
         // `Player::RemoveBody`: a deathProjectile where the corpse lay.
@@ -3310,6 +3319,35 @@ mod tests {
             health(&s, loading) < full,
             "its first move makes it vulnerable"
         );
+        Ok(())
+    }
+
+    /// A body lies for its archetype's `corpse_seconds` (v20's 5 s unless it
+    /// sets them), and one that fades leaves no puff of smoke behind.
+    #[test]
+    fn a_body_lies_as_long_as_its_archetype_says() -> Result<()> {
+        let mut s = session()?;
+        let mut long = s.archetypes.resolve(Default::default()).clone();
+        long.id = "test:archetype/lingerer".into();
+        long.look.corpse_seconds = 20.0;
+        long.look.corpse_fade = 4.0;
+        let long = s.archetypes.add(long)?;
+        let stock = s.join("Stock".into(), Vec3::new(0.0, 0.1, 0.0), false)?;
+        let slow = s.join("Slow".into(), Vec3::new(6.0, 0.1, 0.0), false)?;
+        s.set_player_archetype(slow, long)?;
+        s.damage_player(stock, 1000.0, DamageKind::Event, None)?;
+        s.damage_player(slow, 1000.0, DamageKind::Event, None)?;
+        let hz = bri_weapons::TICK_HZ as usize;
+        let cleared = |s: &Session, who| s.peers[&who].combat.corpse_cleared;
+        for _ in 0..hz * 6 {
+            s.step()?;
+        }
+        assert!(cleared(&s, stock), "v20's 5 s are up");
+        assert!(!cleared(&s, slow), "its 20 s are not");
+        for _ in 0..hz * 15 {
+            s.step()?;
+        }
+        assert!(cleared(&s, slow), "20 s are up");
         Ok(())
     }
 

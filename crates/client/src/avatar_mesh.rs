@@ -194,10 +194,20 @@ impl Layout {
                     .material
                     .map_or(binding.unassigned_material, |i| bindings[i]);
                 let group = groups.entry(material).or_default();
+                // An untinted material shows its texture as it is; drawn see-through
+                // its colour is white, which carries only the opacity.
+                let untinted = color[3] < 1.0
+                    && primitive
+                        .material
+                        .is_some_and(|i| data.materials[binding.materials[i]].untinted);
                 let corner_color = primitive
                     .material
                     .and_then(|i| material_colors.get(i).copied().flatten())
-                    .unwrap_or(color);
+                    .unwrap_or(if untinted {
+                        [1.0, 1.0, 1.0, color[3]]
+                    } else {
+                        color
+                    });
                 for triangle in &primitive.triangles {
                     for &v in triangle {
                         ensure!((v as usize) < mesh.frame_vertices, "Vertex out of range");

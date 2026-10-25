@@ -3513,6 +3513,47 @@ fn register_presentation(engine: &mut Engine) {
             decal,
         }))
     });
+    // A body's dress: #{ skins: #{ face: "face_3.png", shirt: "shirt_1.png" },
+    // scale: 1.12 }, or () for the body's own again.
+    engine.register_fn("set_body_dress", |player: Dynamic, look: Dynamic| {
+        let mut dress = bri_content::avatar::Dress::default();
+        if !look.is_unit() {
+            let Some(look) = look.try_cast::<Map>() else {
+                return fail(
+                    "set_body_dress takes #{ skins: #{ material: file }, scale: n } or ()",
+                );
+            };
+            for (key, value) in look {
+                match key.as_str() {
+                    "skins" => {
+                        let Some(skins) = value.try_cast::<Map>() else {
+                            return fail("skins is #{ material: image file }");
+                        };
+                        for (material, file) in skins {
+                            let file = file
+                                .into_string()
+                                .map_err(|_| "a skin is the name of an image file")?;
+                            dress.skins.insert(material.to_string(), file);
+                        }
+                    }
+                    "scale" => {
+                        dress.scale = value
+                            .as_float()
+                            .or_else(|_| value.as_int().map(|i| i as f64))
+                            .map_err(|_| "scale is a number")?
+                            as f32;
+                    }
+                    k => {
+                        return fail(format!("`{k}` is not skins or scale"));
+                    }
+                }
+            }
+        }
+        push(Op::SetBodyDress(ops::SetBodyDress {
+            player: id(&player)?,
+            dress,
+        }))
+    });
     // temp_look(player, look, seconds): for a while every colour slot
     // #{ color: [r, g, b, a] } or palette colour #{ paint: n } (and no
     // decal), a face #{ face: "name" },

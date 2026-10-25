@@ -286,6 +286,49 @@ fn save(path: &Path, data: &[u8], size: (u32, u32)) -> Result<()> {
     Ok(())
 }
 
+/// The player or bot a step names: the first other player whose name contains `name` (case-insensitive); an empty name picks the
+/// nearest living one. Its owner, and the point `height` of its body's height above its feet.
+fn target(app: &App, name: &str, height: f32) -> Option<(bri_world::OwnerId, glam::Vec3)> {
+    let view = app.network_view()?;
+    let me = glam::Vec3::from(view.poses.get(&view.owner)?.player.feet);
+    let wanted = name.to_lowercase();
+    let mut found: Vec<_> = view
+        .poses
+        .iter()
+        .filter(|(owner, _)| **owner != view.owner)
+        .filter(|(owner, _)| {
+            let named = view
+                .names
+                .get(owner)
+                .is_some_and(|n| n.to_lowercase().contains(&wanted));
+            let living = view.vitals.get(owner).is_some_and(|v| v.alive);
+            named && (!wanted.is_empty() || living)
+        })
+        .map(|(owner, pose)| {
+            let feet = glam::Vec3::from(pose.player.feet);
+            let tall = view
+                .archetypes
+                .resolve(pose.player.archetype)
+                .movement
+                .stand_height
+                * pose.player.scale;
+            (*owner, feet + glam::Vec3::Y * tall * height)
+        })
+        .collect();
+    found.sort_by(|a, b| a.1.distance(me).total_cmp(&b.1.distance(me)));
+    found.into_iter().next()
+}
+/// `angle` turned into (-PI, PI].
+fn wrapped(mut angle: f32) -> f32 {
+    while angle > std::f32::consts::PI {
+        angle -= std::f32::consts::TAU;
+    }
+    while angle <= -std::f32::consts::PI {
+        angle += std::f32::consts::TAU;
+    }
+    angle
+}
+
 fn control(name: &str) -> Result<HeldControl> {
     Ok(match name {
         "forward" => HeldControl::Forward,
@@ -307,6 +350,9 @@ fn control(name: &str) -> Result<HeldControl> {
 
 /// The steps of a spec, one JSON object each: {"command": name, "args": [..]}, {"wait": seconds}, {"until": "landed"},
 /// {"hold": control, "down": bool}, {"look": {"yaw": radians, "pitch": radians}}, {"third_person": true}, {"use_tool": slot},
+/// {"key": name, "seconds": 0.1} and {"mouse": "left", "seconds": 0.1} (a press through the interface's own input path, so the profile's binds
+/// decide: the Use key opens a door), {"aim": [x, z]} (turn to face a point), {"goto": [x, z]} (walk there), {"aim_at": {"name": part of a
+/// player's or bot's name, "height": 0.7}} (turn the crosshair onto it; fire with `hold`) and {"until": "dead", "name": ..} (wait for it to die),
 /// {"measure": 120} records bounded synchronized frame timings without image readback.
 /// {"panel": {"control": id, "lists": {id: row}}} (a press or pick in the open Add-On panel), {"report": true} (prints every body's place and health), {"shot": name}, {"burst": {"name": n, "count": c, "every_ms": ms}} (steps the game `every_ms` and captures `count` times).
 fn play(
@@ -357,6 +403,168 @@ fn play(
                 down,
             }));
             pump(app)?;
+        } else if let Some(name) = step.get("key").and_then(|v| v.as_str()) {
+            // A key press through the interface's own input path (the profile's binds, the panels, the chat box), held `seconds` (default 0.1).
+            let key = bri_ui::input::Key::from_torque(name).with_context(|| {
+                format!("unknown key {name:?} (Torque ActionMap names: r, f, 2, lshift, f3 ...)")
+            })?;
+            let hold = step.get("seconds").and_then(|v| v.as_f64()).unwrap_or(0.1) as f32;
+            let mods = bri_ui::input::Modifiers::default();
+            app.ui.handle_input(bri_ui::input::InputEvent::KeyDown {
+                key,
+                mods,
+                repeat: false,
+            });
+            pump(app)?;
+            run_for(app, hold)?;
+            app.ui
+                .handle_input(bri_ui::input::InputEvent::KeyUp { key, mods });
+            pump(app)?;
+        } else if let Some(name) = step.get("mouse").and_then(|v| v.as_str()) {
+            // A mouse button press through the interface's own input path (the profile's mouse binds), held `seconds` (default 0.1).
+            let button = match name {
+                "left" => bri_ui::input::MouseButton::Left,
+                "middle" => bri_ui::input::MouseButton::Middle,
+                "right" => bri_ui::input::MouseButton::Right,
+                other => anyhow::bail!("unknown mouse button {other:?} (left, middle, right)"),
+            };
+            let hold = step.get("seconds").and_then(|v| v.as_f64()).unwrap_or(0.1) as f32;
+            let (x, y) = (0.0, 0.0);
+            app.ui
+                .handle_input(bri_ui::input::InputEvent::MouseDown { button, x, y });
+            pump(app)?;
+            run_for(app, hold)?;
+            app.ui
+                .handle_input(bri_ui::input::InputEvent::MouseUp { button, x, y });
+            pump(app)?;
+        } else if let Some(aim) = step.get("aim").and_then(|v| v.as_array()) {
+            // Turn to face a point (the look action, repeated until within a hair of it); nothing is held. Prints the yaw it ended at.
+            let (tx, tz) = (
+                aim.first().and_then(|v| v.as_f64()).context("aim x")? as f32,
+                aim.get(1).and_then(|v| v.as_f64()).context("aim z")? as f32,
+            );
+            for _ in 0..20 {
+                let Some((p, _)) = app.local_motion() else {
+                    break;
+                };
+                let want = (tx - p.feet[0]).atan2(-(tz - p.feet[2]));
+                let mut delta = want - p.yaw;
+                while delta > std::f32::consts::PI {
+                    delta -= std::f32::consts::TAU;
+                }
+                while delta < -std::f32::consts::PI {
+                    delta += std::f32::consts::TAU;
+                }
+                if delta.abs() < 0.005 {
+                    break;
+                }
+                app.ui.core.request(UiAction::Game(GameAction::Look {
+                    yaw: delta,
+                    pitch: 0.0,
+                }));
+                pump(app)?;
+                run_for(app, 0.05)?;
+            }
+            let at = app.local_motion().map(|(p, _)| (p.feet, p.yaw));
+            println!("CAPTURE aim {tx} {tz}: at {at:.3?}");
+        } else if let Some(goto) = step.get("goto").and_then(|v| v.as_array()) {
+            // Walk to a point by the controls alone: turn toward it (the look action) and hold forward until within `within`
+            // (default 0.8), or `timeout` seconds (default 30) pass. Reports where it ended.
+            let (tx, tz) = (
+                goto.first().and_then(|v| v.as_f64()).context("goto x")? as f32,
+                goto.get(1).and_then(|v| v.as_f64()).context("goto z")? as f32,
+            );
+            let within = step.get("within").and_then(|v| v.as_f64()).unwrap_or(0.8) as f32;
+            let timeout = step.get("timeout").and_then(|v| v.as_f64()).unwrap_or(30.0) as f32;
+            app.ui.core.request(UiAction::Game(GameAction::Held {
+                control: HeldControl::Forward,
+                down: true,
+            }));
+            let mut spent = 0.0f32;
+            let mut arrived = false;
+            while spent < timeout {
+                let Some((p, _)) = app.local_motion() else {
+                    break;
+                };
+                let (dx, dz) = (tx - p.feet[0], tz - p.feet[2]);
+                if (dx * dx + dz * dz).sqrt() <= within {
+                    arrived = true;
+                    break;
+                }
+                let want = dx.atan2(-dz);
+                let mut delta = want - p.yaw;
+                while delta > std::f32::consts::PI {
+                    delta -= std::f32::consts::TAU;
+                }
+                while delta < -std::f32::consts::PI {
+                    delta += std::f32::consts::TAU;
+                }
+                app.ui.core.request(UiAction::Game(GameAction::Look {
+                    yaw: delta,
+                    pitch: 0.0,
+                }));
+                pump(app)?;
+                run_for(app, 0.05)?;
+                spent += 0.05;
+            }
+            app.ui.core.request(UiAction::Game(GameAction::Held {
+                control: HeldControl::Forward,
+                down: false,
+            }));
+            pump(app)?;
+            let at = app.local_motion().map(|(p, _)| p.feet);
+            println!(
+                "CAPTURE goto {tx} {tz}: {} after {spent:.2}s at {at:.2?}",
+                if arrived { "arrived" } else { "did not arrive" }
+            );
+        } else if let Some(aim) = step.get("aim_at") {
+            // Turn the view onto a player or bot, the look action repeated until the crosshair is on it; nothing is held and nothing is
+            // damaged: fire with `hold`. {"aim_at": {"name": "Gd", "height": 0.7}}: `name` part of its name (empty: the nearest living one),
+            // `height` how far up its body, as a share of its height (default 0.7, the chest).
+            let name = aim.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let height = aim.get("height").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32;
+            let mut aimed = None;
+            for _ in 0..40 {
+                let (Some((owner, point)), Some((p, Some(eye)))) =
+                    (target(app, name, height), app.local_motion())
+                else {
+                    break;
+                };
+                let to = point - eye;
+                let yaw = wrapped(to.x.atan2(-to.z) - p.yaw);
+                let pitch = to.y.atan2(to.x.hypot(to.z)) - p.pitch;
+                aimed = Some((owner, to.length(), yaw.abs().max(pitch.abs())));
+                if yaw.abs() < 0.005 && pitch.abs() < 0.005 {
+                    break;
+                }
+                app.ui
+                    .core
+                    .request(UiAction::Game(GameAction::Look { yaw, pitch: -pitch }));
+                pump(app)?;
+                run_for(app, 0.05)?;
+            }
+            let (owner, distance, off) = aimed.with_context(|| {
+                format!(
+                    "no player to aim at matches {name:?}; the others are {:?}",
+                    app.network_view().map(|v| v
+                        .names
+                        .iter()
+                        .filter(|(o, _)| **o != v.owner)
+                        .map(|(_, n)| n.clone())
+                        .collect::<Vec<_>>())
+                )
+            })?;
+            println!("CAPTURE aim_at {owner} {distance:.2} away, {off:.3} rad off");
+        } else if step.get("until").and_then(|v| v.as_str()) == Some("dead") {
+            // Wait until the named player or bot lies dead (shot, by `hold fire` after `aim_at`): {"until": "dead", "name": "Gd"}.
+            let name = step.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let (owner, _) = target(app, name, 0.0)
+                .with_context(|| format!("no player to wait on matches {name:?}"))?;
+            until(app, "the target dead", |a| {
+                a.network_view()
+                    .is_some_and(|v| v.vitals.get(&owner).is_some_and(|life| !life.alive))
+            })?;
+            println!("CAPTURE dead {owner}");
         } else if let Some(look) = step.get("look") {
             let f = |k: &str| look.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
             app.ui.core.request(UiAction::Game(GameAction::Look {
