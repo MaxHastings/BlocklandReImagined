@@ -26,6 +26,15 @@ A rule is a `behaviour` file and a Rhai `script`, both listed in
 }
 ```
 
+**Several script files.** A script file holds at most 256 KiB. A rule that
+needs more splits into files and lists the extra ones in `"modules"`
+(`["spawns.rhai", "waves.rhai"]`, at most 32), each also in `provides` as a
+`script`. They load together with `script` as one script: a function in any
+file calls any other, and a hook may live in whichever file defines it.
+Each file keeps the size limit, a name defined in two files (same parameter
+count) is refused naming both, and `/reloadrules` re-reads all of them.
+Several Add-Ons can also split work between them by exports and events.
+
 **Hooks.** A script may only define functions; top-level statements are
 refused. The engine calls:
 
