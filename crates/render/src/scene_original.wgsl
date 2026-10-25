@@ -71,6 +71,11 @@ fn point_sums(position:vec3<f32>,normal:vec3<f32>)->PointSums {
     }
     return sums;
 }
+// What a baked surface (one with a lightmap) takes from the point lights: effect and vehicle lights only. The map's own lights,
+// shaded or overflow, are in its lightmap already, in every lighting mode, and light only what has no lightmap.
+fn baked_point_light(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    return point_sums(position,normal).others;
+}
 fn point_illumination(position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let sums=point_sums(position,normal);
     return sums.others+sums.overflow;
@@ -1526,7 +1531,7 @@ override SURFACE_GROUP:u32=0u;
         var terrain_lit:vec3<f32>;
         if lighting_mode()==3 {terrain_lit=dynamic_illumination(v.world_position,v.normal).diffuse;}
         else {terrain_lit=terrain_light(textureSampleLevel(lightmap,tiled_exact,light_uv,0.0).rgb,v.world_position,v.normal);}
-        var point_lit=point_illumination(v.world_position,v.normal);
+        var point_lit=baked_point_light(v.world_position,v.normal);
         if lighting_mode()==3 {point_lit=map_surface_point_light(v.world_position,v.normal,terrain_lit);}
         return vec4<f32>(terrain_passes(diffuse*v.color.rgb*(terrain_lit+point_lit),v.world_position),v.color.a);
     }
@@ -1667,10 +1672,10 @@ override SURFACE_GROUP:u32=0u;
         specular=live.specular;
     } else if material[1].x==1.0 {
         illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.lightmap_uv,v.world_position,v.normal)
-            +point_illumination(v.world_position,v.normal);
+            +baked_point_light(v.world_position,v.normal);
     } else {
         illumination=shadowed_lightmap(illumination,v.world_position,v.normal)
-            +point_illumination(v.world_position,v.normal);
+            +baked_point_light(v.world_position,v.normal);
         // A lightmap without its decomposition: only the ambient light
         // changes with the live environment.
         if relit() {illumination=max(illumination*sky_follow()+(camera.ambient.rgb-baked_ambient())*(1.0-sky_share()),vec3<f32>(0.0));}
@@ -1870,13 +1875,7 @@ fn physical_light(v:VertexOut,n:vec3<f32>)->vec3<f32> {
     let p=v.world_position;
     let baked=textureSample(lightmap,clamped,v.lightmap_uv).rgb*material[7].w;
     var light=shadowed_lightmap(baked*sky_follow(),p,n);
-    if lighting_mode()==3 {
-        let live=dynamic_light_sum(p,n,SPECULAR_POWER).diffuse;
-        light+=live+map_surface_point_light(p,n,light+live);
-    } else {
-        light+=v.point_light;
-    }
-    return light;
+    return light+baked_point_light(p,n);
 }
 fn physical_surface(v:VertexOut)->vec4<f32> {
     let albedo=textureSample(layer0,tiled,v.uv);
