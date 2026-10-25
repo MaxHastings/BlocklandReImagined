@@ -911,6 +911,8 @@ impl AvatarAssets {
             light: None,
             instance: None,
             drawn_pose: None,
+            posed_feet: None,
+            uploaded_feet: None,
             vertices_dirty: true,
             outfit,
             materials,
@@ -1017,6 +1019,10 @@ pub struct AvatarMesh {
     pub straddle: Option<crate::portal_view::Straddle>,
     /// The pose last written into `data`, to skip rewriting an equal one.
     drawn_pose: Option<bri_content::animation::Pose>,
+    /// The feet the last pose was made for, and the feet the GPU instance
+    /// last drew the body at: where the body should be and where it is.
+    posed_feet: Option<Vec3>,
+    uploaded_feet: Option<Vec3>,
     /// `data` holds vertices not yet sent to the GPU.
     vertices_dirty: bool,
     outfit: Outfit,
@@ -1611,6 +1617,20 @@ impl AvatarMesh {
             sum / nodes.len().max(1) as f32
         };
         Some(middle(&self.posed_nodes) - middle(&self.animated_nodes))
+    }
+    /// How the drawn body disagrees with where the game presents it
+    /// (`shown`, its feet): the body was posed for other feet than it is
+    /// shown at, or the GPU draws it away from where it was posed. `None`
+    /// while they agree to within the body's own size.
+    pub fn disagreement(&self, shown: Vec3) -> Option<String> {
+        let scale = self.model_transform.x_axis.truncate().length();
+        let tolerance = bri_sim::player::nominal_middle(scale);
+        let posed = self.posed_feet;
+        let drawn = self.uploaded_feet;
+        let far = |at: Option<Vec3>, from: Vec3| at.is_some_and(|at| at.distance(from) > tolerance);
+        let model = self.model_transform.w_axis.truncate();
+        (far(posed, shown) || (self.instanced && far(drawn, model)) || far(posed, model))
+            .then(|| format!("presented at {shown}, posed for {posed:?}, body transform at {model}, drawn at {drawn:?}"))
     }
     /// A sphere round the drawn body (centre, radius), for culling.
     /// Where openings carry the body: the middle of a standing body of its
@@ -2556,6 +2576,7 @@ impl AvatarMesh {
             _ => model_transform,
         };
         self.model_transform = model_transform;
+        self.posed_feet = Some(Vec3::from(player.feet));
         self.held = (holds.raised, holds.pitch);
         // Stock and authored-hand poses without seat holds need no IK inputs.
         if self
@@ -2814,6 +2835,7 @@ impl AvatarMesh {
                 Some(instance) => instance,
                 None => self.instance.insert(GpuInstances::new(device, 2)?),
             };
+            self.uploaded_feet = Some(self.model_transform.w_axis.truncate());
             let body = bri_render::scene::SceneTransform {
                 transform: self.model_transform,
                 tint: [1.0; 4],

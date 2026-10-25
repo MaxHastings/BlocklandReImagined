@@ -1500,7 +1500,10 @@ impl App {
                     }
                 }
                 avatar.remember_drawn_offset(gone.contains(owner));
-                self.cosmetic_faults.absorb("avatar pose", posed);
+                self.cosmetic_faults.absorb(
+                    "avatar pose",
+                    posed.with_context(|| format!("player {owner}")),
+                );
             }
             drop(avatars_span);
             self.mounts.posed_eye = Self::posed_eye(
