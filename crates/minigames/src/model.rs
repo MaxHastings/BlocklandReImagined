@@ -197,6 +197,11 @@ pub struct Settings {
     /// (`respawn`): they wait as the dead do, with the respawn held.
     #[serde(default)]
     pub hold_join_spawn: bool,
+    /// Whether the game's chat and kill feed name bots: that they join or
+    /// leave, and kills no human took part in. On, as v20 shows them; a
+    /// game of many bots turns it off so the feed is the players'.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub announce_bots: bool,
 }
 /// v20's `$Game::PlayerInvulnerabilityTime`.
 pub const DEFAULT_SPAWN_PROTECTION_MS: u32 = 2500;
@@ -251,6 +256,7 @@ impl Default for Settings {
             vehicle_return_ms: None,
             death_view_ms: 0,
             hold_join_spawn: false,
+            announce_bots: true,
         }
     }
 }

@@ -14,6 +14,8 @@ pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
 /// Ticks a dropped item stays in the world (10 s at 120 Hz).
 pub const DROP_LIFETIME_TICKS: u64 = 1200;
+/// The deadline of a drop that stays until taken ([`Item::lingers`]).
+pub const DROP_LINGERS: u64 = u64::MAX;
 /// Ticks before the dropper may pick an item back up: v20's 15 engine ticks
 /// of 32 ms, rounded up at 120 Hz.
 pub const DROP_PICKUP_DELAY_TICKS: u64 = 58;
@@ -2940,9 +2942,34 @@ impl WeaponsWorld {
         }
         Ok(())
     }
+    /// When a drop of `item` made now pops.
+    fn drop_deadline(&self, item: &str) -> u64 {
+        if self.pack.items.get(item).is_some_and(|i| i.lingers) {
+            DROP_LINGERS
+        } else {
+            self.tick + DROP_LIFETIME_TICKS
+        }
+    }
+    /// Room for one more drop: the budget is full of items that stay until
+    /// taken, so the one that has lain longest goes.
+    fn make_room_for_drop(&mut self) -> Result<()> {
+        if self.drops.len() < MAX_DROPS {
+            return Ok(());
+        }
+        let oldest = self
+            .drops
+            .values()
+            .filter(|d| d.expires == DROP_LINGERS)
+            .map(|d| d.id)
+            .min()
+            .context("Drop budget")?;
+        self.drops.remove(&oldest);
+        self.events.push(Event::DropRemoved { drop: oldest });
+        Ok(())
+    }
     pub fn drop_item(&mut self, id: ActorId, slot: usize) -> Result<u64> {
         ensure!(self.events.len() < 8192, "Command event budget");
-        ensure!(self.drops.len() < MAX_DROPS, "Drop budget");
+        self.make_room_for_drop()?;
         let a = self.actors.get(&id).context("Unknown actor")?;
         let item = a
             .inventory
@@ -2993,7 +3020,7 @@ impl WeaponsWorld {
                 velocity: vel,
                 source: id,
                 pickup_after: self.tick + DROP_PICKUP_DELAY_TICKS,
-                expires: self.tick + DROP_LIFETIME_TICKS,
+                expires: self.drop_deadline(&item),
                 rounds,
                 paint,
                 name: None,
@@ -3010,7 +3037,14 @@ impl WeaponsWorld {
     /// A world drop not thrown by an actor (the `spawnItem` brick event).
     /// Anyone may pick it up at once; it pops after ten seconds.
     pub fn spawn_drop(&mut self, item: &str, position: Vec3, velocity: Vec3) -> Result<u64> {
-        self.spawn_drop_with(item, position, velocity, DropLook::default())
+        let drop = self.spawn_drop_with(item, position, velocity, DropLook::default())?;
+        if self.drop_deadline(item) == DROP_LINGERS {
+            self.drops
+                .get_mut(&drop)
+                .context("Dropped item vanished")?
+                .expires = DROP_LINGERS;
+        }
+        Ok(drop)
     }
     /// [`Self::spawn_drop`] tinted and lasting as `look` says (a dropped
     /// flag waiting to go home).
@@ -3026,7 +3060,7 @@ impl WeaponsWorld {
             "Drop lifetime out of range"
         );
         ensure!(self.events.len() < 8192, "Command event budget");
-        ensure!(self.drops.len() < MAX_DROPS, "Drop budget");
+        self.make_room_for_drop()?;
         ensure!(self.contains_item(item), "Unknown item");
         ensure!(
             position.is_finite()
@@ -4755,7 +4789,7 @@ impl WeaponsWorld {
                     position: p.position,
                 });
                 // `onRest`: a popping item facing the ball's travel.
-                if self.drops.len() < MAX_DROPS {
+                if self.make_room_for_drop().is_ok() {
                     let drop = self.next_id;
                     self.next_id += 1;
                     let travel = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
@@ -4775,7 +4809,7 @@ impl WeaponsWorld {
                             velocity: Vec3::ZERO,
                             source: p.source,
                             pickup_after: self.tick,
-                            expires: self.tick + DROP_LIFETIME_TICKS,
+                            expires: self.drop_deadline(&item),
                             rounds: None,
                             paint: None,
                             name: None,

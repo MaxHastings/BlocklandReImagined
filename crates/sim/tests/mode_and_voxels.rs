@@ -445,9 +445,14 @@ fn a_modes_minigame_holds_everyone_and_rules_dress_them() {
     for p in [a, b] {
         assert_eq!(vitals[&p].minigame, Some(games[0].id));
     }
-    // It is the only one: nobody leaves it or starts another.
+    // It is the only one: nobody but an administrator leaves it, and
+    // nobody starts another.
+    let guest =
+        g.s.join("Carol".into(), Vec3::new(9.0, 12.0, 9.0), false)
+            .unwrap();
+    g.steps(2);
     let leave = g
-        .cmd(a, Command::MiniGame(MiniGameRequest::Leave))
+        .cmd(guest, Command::MiniGame(MiniGameRequest::Leave))
         .unwrap_err();
     assert!(format!("{leave:#}").contains("game mode"), "{leave:#}");
     assert!(

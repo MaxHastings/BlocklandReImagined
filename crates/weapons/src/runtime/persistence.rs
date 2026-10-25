@@ -172,8 +172,9 @@ impl WeaponsWorld {
                     && d.velocity.is_finite()
                     && d.position.abs().max_element() < 1e7
                     && d.velocity.length() <= 10000.0
-                    && d.expires >= w.tick
-                    && d.expires - w.tick <= MAX_DROP_TICKS
+                    && (d.expires == DROP_LINGERS
+                        && w.pack.items.get(&d.item).is_some_and(|i| i.lingers)
+                        || d.expires >= w.tick && d.expires - w.tick <= MAX_DROP_TICKS)
                     && d.pickup_after <= w.tick.saturating_add(DROP_PICKUP_DELAY_TICKS),
                 "Save drop input"
             );

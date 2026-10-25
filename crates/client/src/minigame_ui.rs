@@ -71,6 +71,7 @@ pub fn settings(rules: &MiniGameRules) -> Result<Settings> {
         vehicle_return_ms: None,
         death_view_ms: 0,
         hold_join_spawn: false,
+        announce_bots: true,
     })
 }
 
@@ -138,7 +139,8 @@ pub fn state(
         ready: true,
         revision,
         // A game mode's mini-game is the only one: nobody starts, joins or
-        // leaves another while it runs.
+        // leaves another while it runs ([`with_addon_settings`] lets an
+        // administrator step out of it to build, and back in).
         capabilities: MiniGameCapabilities {
             list: true,
             create: !server_game,
@@ -319,6 +321,11 @@ pub fn with_addon_settings(
     palette: &[[f32; 4]],
 ) -> MiniGameUiState {
     let admin = rank.admin || rank.super_admin || rank.host;
+    // An administrator may step out of the server's game to build, and back.
+    if rank.admin && games.iter().any(|g| g.owner == 0) {
+        state.capabilities.join = true;
+        state.capabilities.leave = true;
+    }
     state.addon_settings = settings
         .iter()
         .map(|s| MiniGameAddOnSetting {

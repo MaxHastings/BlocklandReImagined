@@ -1458,6 +1458,9 @@ pub struct ModeMiniGame {
     /// A player who joins gets no body until the mode's rules release their
     /// spawn (`respawn(p)`); they wait as the dead do.
     pub hold_first_spawn: bool,
+    /// Whether the game's chat and kill feed name bots (v20 does). Off, only
+    /// humans are announced: bots joining, and kills with no human in them.
+    pub announce_bots: bool,
 }
 impl Default for ModeMiniGame {
     fn default() -> Self {
@@ -1487,6 +1490,7 @@ impl Default for ModeMiniGame {
             vehicle_return_seconds: None,
             death_view_seconds: 0.0,
             hold_first_spawn: false,
+            announce_bots: true,
         }
     }
 }
