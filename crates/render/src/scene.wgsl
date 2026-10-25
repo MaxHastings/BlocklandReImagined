@@ -1867,6 +1867,15 @@ fn probe_uv(d:vec3<f32>)->vec2<f32> {
     }
     return p*0.5+vec2<f32>(0.5);
 }
+// What a mirror sees along `r` with no probe to ask: the sky where it is
+// open overhead, the room's own ambient where something covers it.
+fn covered_sky_along(position:vec3<f32>,r:vec3<f32>)->vec3<f32> {
+    let sky=covered_sky_along(position,r);
+    if !MODERN_SKY_SHADING {return sky;}
+    let e=sky_exposure_at(position,r);
+    let room=linear_color(clamp(select(camera.ambient.rgb,camera.enclosed.rgb,camera.enclosed.w>=0.5),vec3<f32>(0.0),vec3<f32>(1.0)));
+    return mix(sky,room,e.y*(1.0-e.x));
+}
 // What a mirror at `position` sees along `r`, blurred for `roughness`.
 fn environment_along(position:vec3<f32>,r:vec3<f32>,roughness:f32)->vec3<f32> {
     let sky=sky_along(r);
