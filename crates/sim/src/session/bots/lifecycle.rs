@@ -677,6 +677,8 @@ impl Session {
             }
             None => {
                 brain.plan.clear();
+                brain.route_source = RouteSource::Pending;
+                brain.repair_join = None;
                 brain.search = None;
                 brain.settled = false;
             }

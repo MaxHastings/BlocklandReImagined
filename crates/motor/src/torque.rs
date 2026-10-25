@@ -717,6 +717,10 @@ fn collide_cylinder(
     let pose = Pose::translation(feet.x, feet.y + height * 0.5, feet.z);
     let options = ShapeCastOptions {
         max_time_of_impact: 1.0,
+        // Two-sided mesh faces may already overlap the body after a mover
+        // advances. A separating cast must be allowed to leave that contact;
+        // otherwise the reverse-wound face reports a zero-time hit forever.
+        stop_at_penetration: false,
         ..Default::default()
     };
     let round = Vec3::new(radius, 0.0, radius);

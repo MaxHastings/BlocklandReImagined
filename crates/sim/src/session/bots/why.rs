@@ -113,6 +113,12 @@ impl Session {
             .iter()
             .map(|(bot, b)| BotThought {
                 bot: *bot,
+                route_provider: match b.route_source {
+                    RouteSource::Pending => "pending",
+                    RouteSource::Local => "local",
+                    RouteSource::Prepared => "prepared",
+                },
+                repairing: b.repair_join.is_some(),
                 sight_starved: self
                     .bots
                     .sightlines
@@ -274,6 +280,8 @@ mod tests {
             next: None,
             path_steps: 0,
             searching: false,
+            route_provider: "pending",
+            repairing: false,
             search_phase: "",
             objective: None,
             objective_diagnostic: None,

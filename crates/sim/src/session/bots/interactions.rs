@@ -1631,6 +1631,8 @@ impl Session {
                 + glam::Quat::from_array(v.transform.rotation)
                     * Vec3::new(centre.x, support, centre.z),
             Body {
+                round: false,
+                wall_step: None,
                 width: Vec3::new(size.x, 0.0, size.z).length(),
                 height: Vec3::from(d.bounds_max).y * v.scale - support,
                 crouch_height: Vec3::from(d.bounds_max).y * v.scale - support,
@@ -1694,6 +1696,8 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.next_interaction = tick + GIVE_UP_TICKS;
             brain.plan.clear();
+            brain.route_source = RouteSource::Pending;
+            brain.repair_join = None;
             brain.search = None;
             self.bot_leave_seat(bot, why);
             return Ok(MoveInput {
@@ -1719,6 +1723,8 @@ impl Session {
         if last_hit > 0.0 && d.max_damage - v.damage <= last_hit {
             brain.next_interaction = tick + GIVE_UP_TICKS;
             brain.plan.clear();
+            brain.route_source = RouteSource::Pending;
+            brain.repair_join = None;
             brain.search = None;
             self.bot_leave_seat(bot, Leave::BailOut);
             return Ok(MoveInput {
@@ -2087,6 +2093,8 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             if stuck >= VEHICLE_STALLED && stuck.is_multiple_of(120) {
                 brain.plan.clear();
+                brain.route_source = RouteSource::Pending;
+                brain.repair_join = None;
                 brain.search = None;
                 brain.settled = false;
                 // A place it cannot drive to is looked for elsewhere.
@@ -2105,6 +2113,8 @@ impl Session {
                 let brain = self.bots.brains.get_mut(&bot).unwrap();
                 brain.next_interaction = tick + GIVE_UP_TICKS;
                 brain.plan.clear();
+                brain.route_source = RouteSource::Pending;
+                brain.repair_join = None;
                 brain.search = None;
                 self.bot_leave_seat(bot, Leave::WalkTheRest);
                 return Ok(MoveInput {

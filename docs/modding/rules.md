@@ -897,6 +897,8 @@ them). `mover_goto` does not redirect a mover that is already on its way to
 another key; stop it or let it finish. Needs the `movers` capability.
 A mover whose `params` hold `bots_open` is a door bots can request passage through. Route searches may cross its closed or interrupted pose; once it rests open, searches avoid the actual open leaf. Set `bots_open` to `"your-id:command"` and a nearby bot sends that rules command (no arguments) when the door is closed or stopped between keys, retrying every two seconds. Moving doors and doors resting open receive no request. The package decides whether to open or recover the door, using `movers_near(caller(), reach)` and the mover state. Make the passage request idempotent: another approaching bot must not stop or close a door already opening. Human Use may retain its separate toggle semantics. Set `bots_open` to `"1"` instead and the host sends nothing: your rules must notice the bot and operate the door themselves.
 
+For a targeted passage action, also set `bots_open_target` to `"1"` and declare one string argument on the command. The host passes the mover's ID and keeps that door as the bot's current passage action while it opens. The bot waits clear of the leaf, backing away through ordinary movement if it obstructs the swing, then resumes its route when the door rests open. The command must continue opening an interrupted door rather than toggle it closed. Combat aim and firing remain active during the wait. Existing commands without this opt-in keep their no-argument behavior.
+
 #### Ambient sound
 
 **Ambient beds** (`effects`) loop a sound under the game on the effects

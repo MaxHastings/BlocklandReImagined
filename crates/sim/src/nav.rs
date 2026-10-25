@@ -86,6 +86,8 @@ const HINT_BAND: f32 = 0.25;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Body {
     pub width: f32,
+    pub round: bool,
+    pub wall_step: Option<bri_motor::player::WallStep>,
     pub height: f32,
     /// Height crouched: what fits through a crawlspace.
     pub crouch_height: f32,
@@ -124,6 +126,8 @@ impl Body {
         };
         Self {
             width: tuning.width * scale,
+            round: tuning.body == bri_motor::player::Body::Cylinder,
+            wall_step: tuning.wall_step,
             height: tuning.stand_height * scale,
             crouch_height: tuning.crouch_height * scale,
             step: tuning.step_height,

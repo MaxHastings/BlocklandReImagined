@@ -22,7 +22,7 @@ fn passage_session() -> (Session, tempfile::TempDir) {
         (
             "behaviour.json",
             json!({"schema_version":1,"script":"main.rhai",
-            "commands":[{"name":"enter","cooldown_ticks":0}],
+            "commands":[{"name":"enter","args":["string"],"cooldown_ticks":0}],
             "state":{"global":{"requests":{"default":0,"visible":"everyone"}}}}),
         ),
     ] {
@@ -31,10 +31,10 @@ fn passage_session() -> (Session, tempfile::TempDir) {
     std::fs::write(
         addon.join("main.rhai"),
         r#"
-        fn cmd_enter(p) {
+        fn cmd_enter(p, id) {
             set("requests", get("requests") + 1);
-            let m = mover("door");
-            if !m.moving && (m.key == 0 || (m.blocked && m.to == 0)) {
+            let m = mover(id);
+            if !m.moving && (m.key == 0 || m.blocked) {
                 mover_goto(m.id, 1, 1.0);
             }
         }
@@ -88,11 +88,61 @@ fn passage_session() -> (Session, tempfile::TempDir) {
             spin: None,
             collide: true,
             sounds: None,
-            params: BTreeMap::from([("bots_open".into(), "passage:enter".into())]),
+            params: BTreeMap::from([
+                ("bots_open".into(), "passage:enter".into()),
+                ("bots_open_target".into(), "1".into()),
+            ]),
         },
     }])
     .unwrap();
     (s, root)
+}
+
+#[test]
+fn an_opening_blocked_on_its_first_step_keeps_its_target_and_can_resume() {
+    let (mut s, _root) = passage_session();
+    s.step().unwrap();
+    let at = Vec3::new(2.5, 0.05, 0.7251);
+    s.set_spawn_points(vec![at]).unwrap();
+    let actor = s
+        .join("Initial swing obstruction".into(), at, false)
+        .unwrap();
+    let closed = s.map_movers.placed[0].unwrap();
+    assert!(s.mover_goto("door", 1, 1.).unwrap());
+    // Bots request after map movers have stepped. Advance the world clock
+    // before the next mover step, without an extra zero-motion acceptance.
+    s.simulation.step().unwrap();
+    for _ in 0..2 {
+        s.step().unwrap();
+    }
+    let state = s.map_mover_states()[0];
+    assert!(
+        state.blocked && !state.moving,
+        "first opening step should be blocked: {state:?}"
+    );
+    assert_eq!(
+        s.map_movers.placed[0],
+        Some(closed),
+        "no unsafe leaf pose accepted"
+    );
+    assert_eq!(
+        state.to, 1,
+        "rollback must retain the requested opening target"
+    );
+    assert_eq!(
+        state.alpha, 0.,
+        "last accepted pose is the start of this path"
+    );
+    s.disconnect(actor).unwrap();
+    assert!(s.mover_goto("door", 1, 1.).unwrap());
+    for _ in 0..150 {
+        s.step().unwrap();
+    }
+    assert_eq!(
+        s.mover_views()[0].key,
+        Some(1),
+        "cleared obstruction can resume opening"
+    );
 }
 
 #[test]
@@ -144,6 +194,65 @@ fn blocked_closing_door_receives_a_passage_request_without_crowd_toggling() {
         "passage reopened after physical closing obstruction"
     );
     assert!(s.take_package_problems().is_empty());
+}
+
+#[test]
+fn a_passage_action_waits_for_the_leaf_and_then_crosses() {
+    let attempt = |wait| {
+        let (mut s, _root) = passage_session();
+        // This side is in the authored swing: waiting alone is insufficient;
+        // contact must cause an ordinary retreat before the opening can finish.
+        let at = Vec3::new(1.5, 0.05, 1.0);
+        s.set_spawn_points(vec![at]).unwrap();
+        let actor = s.join("Passage requester".into(), at, false).unwrap();
+        for sequence in 1..=720 {
+            let tick = s.simulation.state().tick;
+            s.bot_opens_door(actor, tick);
+            let input = MoveInput {
+                forward: 1.,
+                ..Default::default()
+            };
+            let input = if wait {
+                s.bot_door_control(actor, input, tick).0
+            } else {
+                input
+            };
+            s.movement(actor, sequence, input).unwrap();
+            s.step().unwrap();
+            if sequence % 120 == 0 {
+                let player = &s.peers[&actor].player;
+                let body = &s.simulation.physics.colliders[player.collider()];
+                eprintln!(
+                    "DOOR wait={wait} tick={sequence} feet={:?} input={input:?} holding={:?} contact={:?} state={:?}",
+                    player.state().feet,
+                    s.map_movers.waiting.get(&actor),
+                    s.simulation
+                        .map_collider_contact(1, body.position(), body.shape(), 0.2)
+                        .map(|c| (c.dist, c.normal1)),
+                    s.mover_views()[0]
+                );
+            }
+        }
+        (
+            s.peers[&actor].player.state().feet,
+            s.mover_views()[0].clone(),
+        )
+    };
+    let (unchecked, blocked) = attempt(false);
+    assert!(
+        blocked.blocked && unchecked[2] > -0.5,
+        "negative control should crowd the swing: {unchecked:?}, {blocked:?}"
+    );
+    let (crossed, open) = attempt(true);
+    assert_eq!(
+        open.key,
+        Some(1),
+        "passage must finish opening: {crossed:?} {open:?}"
+    );
+    assert!(
+        crossed[2] < -2.,
+        "ordinary movement crosses after opening: {crossed:?}"
+    );
 }
 
 #[test]

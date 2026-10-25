@@ -112,6 +112,8 @@ pub struct BotThought {
     pub next: Option<[f32; 3]>,
     pub path_steps: usize,
     pub searching: bool,
+    pub route_provider: &'static str,
+    pub repairing: bool,
     /// Evidence-based search progress; never an unseen actor position.
     pub search_phase: &'static str,
     pub objective: Option<BrickId>,
@@ -415,6 +417,15 @@ struct Knowledge {
     observed: u64,
     expires: u64,
 }
+/// Exactly one provider owns the current plan. Prepared walking corridors
+/// are executed by the ordinary motor; they are not reconstructed by the grid.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum RouteSource {
+    #[default]
+    Pending,
+    Local,
+    Prepared,
+}
 struct Brain {
     /// The vehicle spawn brick that made it; `None` for a bot the rules
     /// added (`Bots::by_rules`).
@@ -447,6 +458,9 @@ struct Brain {
     /// on (the next search spot, a chase's runner) never stops it dead.
     bridge: Option<Waypoint>,
     search: Option<Search>,
+    route_source: RouteSource,
+    /// A bounded repair rejoins the retained prepared corridor at this index.
+    repair_join: Option<usize>,
     /// The goal's plan is walked (or none exists): no new search until the
     /// goal changes or the bot gets stuck.
     settled: bool,
@@ -715,6 +729,8 @@ impl Brain {
             plan: Vec::new(),
             bridge: None,
             search: None,
+            route_source: RouteSource::Pending,
+            repair_join: None,
             settled: false,
             partial_route: false,
             home_given_up: None,
@@ -832,6 +848,8 @@ impl Brain {
                 });
             self.plan.clear();
             self.search = None;
+            self.route_source = RouteSource::Pending;
+            self.repair_join = None;
             self.replans = 0;
             self.progress.reset();
             self.settled = false;
@@ -1814,6 +1832,10 @@ impl Session {
             input.pitch.sin(),
             -input.yaw.cos() * input.pitch.cos(),
         );
+        let (input, waiting_for_door) = self.bot_door_control(bot, input, tick);
+        if waiting_for_door {
+            self.bots.brains.get_mut(&bot).unwrap().progress.reset();
+        }
         self.bots.brains.get_mut(&bot).unwrap().pressed = input;
         let input = self.bot_seated_input(bot, input, wanted, behaviour, tick)?;
         self.movement(bot, sequence, input)?;
@@ -1948,6 +1970,8 @@ impl Session {
         if let Some(height) = swim {
             // In water it swims straight there, keeping to the water.
             brain.plan.clear();
+            brain.route_source = RouteSource::Pending;
+            brain.repair_join = None;
             brain.search = None;
             if let Some(goal) = brain.goal
                 && let Some((water, _)) = self.simulation.liquid_at(state.feet, height)
@@ -1964,7 +1988,53 @@ impl Session {
             }
         } else if let Some(goal) = brain.goal {
             let point = goal.point();
-            if brain.plan.is_empty() && brain.search.is_none() && !brain.settled {
+            if brain.plan.is_empty()
+                && brain.search.is_none()
+                && !brain.settled
+                && brain.route_source == RouteSource::Pending
+            {
+                brain.route_source = RouteSource::Local;
+                if let Some(route) = self
+                    .simulation
+                    .map_navigation()
+                    .and_then(|navigation| navigation.route(body, feet, point))
+                    && !route.is_empty()
+                {
+                    brain.plan = route.into_iter().map(Waypoint::walk).collect();
+                    brain.partial_route = false;
+                    brain.route_source = RouteSource::Prepared;
+                }
+            }
+            // The global corridor excludes operable doors, not their accepted
+            // open poses. Keep the corridor; search only around an actual leaf
+            // obstruction, rejoining beyond it instead of rebuilding every leg.
+            let repair = brain.route_source == RouteSource::Prepared
+                && brain.search.is_none()
+                && brain
+                    .plan
+                    .first()
+                    .is_some_and(|w| matches!(w.mode, Mode::Walk) && w.through.is_none());
+            if repair {
+                let next = brain.plan[0].feet;
+                if self.bot_open_leaf_blocks(bot, next) {
+                    let brain = self.bots.brains.get_mut(&bot).unwrap();
+                    let join =
+                        crate::navigation::repair_join(&mut brain.plan, feet, body.width * 4.);
+                    brain.search = Some(Search::with(
+                        feet,
+                        brain.plan[join].feet,
+                        body.width * 6.,
+                        costs.clone(),
+                    ));
+                    brain.repair_join = Some(join);
+                }
+            }
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            if brain.plan.is_empty()
+                && brain.search.is_none()
+                && !brain.settled
+                && brain.route_source == RouteSource::Local
+            {
                 // On a long way to an objective each bot (each life of it)
                 // leans its own way (`Costs::veer`), so a side spreads over
                 // the ways there instead of filing down one. A near one (a
@@ -2037,6 +2107,36 @@ impl Session {
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
                     let explored = brain.search.as_ref().map_or(0, Search::explored);
                     brain.search = None;
+                    if let Some(join) = brain.repair_join.take() {
+                        if let Found::Path(path) = found {
+                            let tail = brain.plan.split_off(join + 1);
+                            brain.plan = crate::nav::pull(&ground, nav, body, feet, path);
+                            brain.plan.extend(tail);
+                        } else {
+                            if self
+                                .bots
+                                .dead_end_told
+                                .get(&bot)
+                                .is_none_or(|at| tick >= at + STALL_TELL_TICKS)
+                            {
+                                self.bots.dead_end_told.insert(bot, tick);
+                                let (kind, end) = match &found {
+                                    Found::Partial(path) => {
+                                        ("partial", path.last().map(|w| w.feet))
+                                    }
+                                    _ => ("nowhere", None),
+                                };
+                                bri_console::warn(format!(
+                                    "bot {bot} door repair {kind}: from {feet:?} toward {:?}, end {end:?}, {explored} grid nodes",
+                                    brain.plan[join].feet
+                                ));
+                            }
+                            // The local repair failed; retain the evidence and
+                            // let the ordinary progress judge invalidate it.
+                            brain.route_source = RouteSource::Local;
+                        }
+                        return brain.plan.first().copied();
+                    }
                     if let Found::Partial(path) = &found
                         && let Some(goal) = brain.goal
                         && self
@@ -2103,9 +2203,16 @@ impl Session {
                         other => {
                             brain.partial_route = matches!(other, Found::Partial(_));
                             brain.plan.clear();
+                            brain.route_source = RouteSource::Pending;
+                            brain.repair_join = None;
                         }
                     }
                 }
+            }
+            if self.bots.brains[&bot].repair_join.is_some() {
+                // Keep the retained corridor stable while its bounded repair
+                // is pending. Advancing it would change the stored join index.
+                return None;
             }
             // A door it may open stands across the way on from where the
             // route ends: the enemy is in reach once it is clicked open.
@@ -3771,6 +3878,8 @@ impl Session {
                 if leg.failed(feet, state.grounded, body.step, seconds, tick) {
                     brain.jet_leg = None;
                     brain.plan.clear();
+                    brain.route_source = RouteSource::Pending;
+                    brain.repair_join = None;
                     brain.search = None;
                     brain.settled = false;
                     brain.replans += 1;
@@ -3805,6 +3914,8 @@ impl Session {
                     missed = Some((from, to));
                     brain.leap_leg = None;
                     brain.plan.clear();
+                    brain.route_source = RouteSource::Pending;
+                    brain.repair_join = None;
                     brain.search = None;
                     brain.settled = false;
                     brain.replans += 1;
@@ -3841,6 +3952,8 @@ impl Session {
                     missed = Some((from, to));
                     brain.climb_since = None;
                     brain.plan.clear();
+                    brain.route_source = RouteSource::Pending;
+                    brain.repair_join = None;
                     brain.search = None;
                     brain.settled = false;
                     brain.replans += 1;
@@ -4037,6 +4150,8 @@ impl Session {
                     .outcome(cfg, surprise::Domain::Route, route, false, tick);
             }
             brain.plan.clear();
+            brain.route_source = RouteSource::Pending;
+            brain.repair_join = None;
             brain.search = None;
             brain.settled = false;
             // What blocked it may be newer than the grid: look again. Not
