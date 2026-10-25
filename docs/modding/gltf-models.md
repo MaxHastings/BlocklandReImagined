@@ -174,7 +174,11 @@ default) or `flat` (a torso, a foot), and `region` is `head`, `torso` or
 multiplied by the bone's `modifier`; with 0 a shot passes through the bone, and
 a shot that meets no bone goes on past the body. Bones follow the body's
 facing and scale, and a crouched or lying body's lower box squeezes them down
-with it; they do not follow the body's animation. A splash is not multiplied.
+with it; they do not follow the body's animation. `hit_bones_crouched` and
+`hit_bones_prone` give the same bones where the body's crouch or prone clip
+holds them (the original tests bones where the animation holds them): a body in
+that posture is hit through them, unsqueezed, and its hit box reaches as far as
+they do, so a body lying along the ground is hit along its length. A splash is not multiplied.
 An archetype with none is hit as one box and its region read from the height
 of the hit, as before.
 

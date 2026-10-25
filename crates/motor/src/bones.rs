@@ -86,6 +86,26 @@ pub fn place(bones: &[HitBone], feet: Vec3, yaw: f32, scale: f32, squash: f32) -
         .collect()
 }
 
+/// The bones a body in this posture is hit through, and whether they are the
+/// standing ones that the body's squeezed box must squeeze down. A posture
+/// with bones of its own holds them where its animation does, in the feet
+/// frame; without, the standing ones follow the box.
+pub fn for_posture<'a>(
+    standing: &'a [HitBone],
+    crouched_set: &'a [HitBone],
+    prone_set: &'a [HitBone],
+    crouched: bool,
+    prone: bool,
+) -> (&'a [HitBone], bool) {
+    if prone && !prone_set.is_empty() {
+        (prone_set, false)
+    } else if crouched && !prone && !crouched_set.is_empty() {
+        (crouched_set, false)
+    } else {
+        (standing, true)
+    }
+}
+
 /// A body's bones where it stands, with the box shots meet them through.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Body {
@@ -144,5 +164,36 @@ impl Body {
         self.bones
             .iter()
             .min_by(|a, b| a.gap(point).total_cmp(&b.gap(point)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn bone(name: &str) -> HitBone {
+        HitBone {
+            bone: name.into(),
+            from: [0.0, 0.0, 0.0],
+            to: [0.0, 1.0, 0.0],
+            radius: 0.1,
+            ends: Ends::Round,
+            modifier: 1.0,
+            region: Region::Torso,
+        }
+    }
+    #[test]
+    fn a_posture_with_bones_of_its_own_is_hit_through_them_unsqueezed() {
+        let (stand, crouch, prone) = ([bone("s")], [bone("c")], [bone("p")]);
+        let pick = |c, p| {
+            let (set, squeeze) = for_posture(&stand, &crouch, &prone, c, p);
+            (set[0].bone.clone(), squeeze)
+        };
+        assert_eq!(pick(false, false), ("s".into(), true));
+        assert_eq!(pick(true, false), ("c".into(), false));
+        // A lying body also has its crouch flag set.
+        assert_eq!(pick(true, true), ("p".into(), false));
+        // Without a set of its own, the standing bones follow the box.
+        let (set, squeeze) = for_posture(&stand, &[], &[], true, true);
+        assert_eq!((set[0].bone.as_str(), squeeze), ("s", true));
     }
 }
