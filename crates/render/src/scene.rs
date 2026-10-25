@@ -1086,6 +1086,8 @@ pub struct ActorSun {
 pub struct ActorLight {
     pub ambient: [f32; 3],
     pub radius: f32,
+    /// The sphere's middle: lamps are ranked and fitted at it, and the vertices lit by distance from the lamp.
+    pub centre: [f32; 3],
     pub sun_first: u8,
     pub sun_count: u8,
     pub sun_mask: u8,
@@ -1098,6 +1100,7 @@ impl ActorLight {
             .all(|v| v.is_finite() && (0.0..=MAX_TINT).contains(v))
             && self.radius.is_finite()
             && self.radius >= 0.0
+            && self.centre.iter().all(|v| v.is_finite())
             && self.sun_count <= MAX_BODY_SUNS
             && usize::from(self.sun_first) + usize::from(self.sun_count) <= MAX_ACTOR_SUNS
     }
@@ -1576,7 +1579,9 @@ impl SceneTransform {
                     },
                 ]
             }),
-            reach: [light.map_or(0.0, |l| l.radius), 0.0, 0.0, 0.0],
+            reach: light.map_or([0.0; 4], |l| {
+                [l.radius, l.centre[0], l.centre[1], l.centre[2]]
+            }),
         }
     }
 }
@@ -1594,7 +1599,7 @@ struct InstanceRecord {
     clip: ClipPlane,
     /// A lit moving body's own light: ambient rgb and its suns (first + 256 * count), or w -1 for the scene's sun (ambient then a floor).
     light: [f32; 4],
-    /// x: the lit body's bounding-sphere radius (added to a lamp's radius).
+    /// The lit body's bounding sphere: radius (added to a lamp's radius), then its centre.
     reach: [f32; 4],
 }
 
@@ -6501,13 +6506,14 @@ mod tests {
         let room = ActorLight {
             ambient: [0.3, 0.2, 0.1],
             radius: 40.0,
+            centre: [1.0, 2.0, 3.0],
             sun_first: 0,
             sun_count: 0,
             sun_mask: 0,
             scene_sun: true,
         };
         assert_eq!(at.record(KEEP_ALL, Some(room)).light, [0.3, 0.2, 0.1, -1.0]);
-        assert_eq!(at.record(KEEP_ALL, Some(room)).reach[0], 40.0);
+        assert_eq!(at.record(KEEP_ALL, Some(room)).reach, [40.0, 1.0, 2.0, 3.0]);
         let zone = ActorLight {
             scene_sun: false,
             sun_first: 2,

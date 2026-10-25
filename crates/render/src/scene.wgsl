@@ -151,25 +151,47 @@ fn dynamic_bsp_light(base:vec3<f32>,pigment:vec3<f32>,alpha:f32,brighten:bool,po
     return result;
 }
 // A moving body lit at draw time (`MaterialKind::ActorLit`): its ambient plus the sun and the best four lights that reach each vertex,
-// ranked by `(1 - d^2/R^2) * brightness`, each light `Colour * reach(d/R) * N.L` with the smooth radial reach used for effect lights.
+// ranked by `(1 - d^2/(R + body)^2) * brightness` at the body's sphere, each light `Colour * N.L / (A0 + A1 d)` as Direct3D lights it.
 // `material[1].x` scales the sun and `material[1].y` the lights (the body's authored gains). Returns the multiplier before the
 // stage's doubling. No visibility traces are made.
 // `baked` (`material[1].z`): the vertex colour already holds the room's light, so the body takes neither a zone's ambient nor its
 // suns nor the map lamps whose light the baking has: only its glow (`material[1].w`) and the live lights, which add on top.
-fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>,body:f32)->vec3<f32> {
+const ACTOR_SUN_GAIN:f32=1.75;
+// The original's falloff of a lamp (D3DDrv 0x149d0): 2 at the lamp, 1 at half its radius, 0 at its radius.
+fn lamp_falloff(x:f32,radius:f32)->f32 {
+    if x>radius {return 0.0;}
+    let t=x/radius;
+    return 2.0*(1.0-3.0*t*t+2.0*t*t*t);
+}
+// A spot lamp's cone on a body, as Direct3D has it (D3DDrv SetLight): x = 1 - LightCone/256 (the cone words hold it as cos(outer)),
+// Phi = acos(x^2) * 1.15 across, Theta = 0.05 Phi, falling off linearly between. `away` runs from the lamp to the vertex.
+fn actor_cone(light:PointLight,away:vec3<f32>)->f32 {
+    let k=length(light.cone.xyz);
+    if k==0.0 {return 1.0;}
+    let x=clamp(light.cone.w/k,-1.0,1.0);
+    let phi=acos(x*x)*1.15;
+    let outer=cos(phi*0.5);
+    let inner=cos(phi*0.025);
+    return clamp((dot(away,light.cone.xyz/k)-outer)/max(inner-outer,0.0001),0.0,1.0);
+}
+// A lit body's lights as the original gives them to Direct3D (D3DDrv SetLight): lamps are ranked at the body's sphere
+// (`body`: radius, then centre; a zero radius makes the vertex its own sphere), the best four lit by 1/(A0 + A1 d), the straight
+// line through the reciprocal of the lamp's falloff at the sphere's near and far points, and the zone's suns at 1.75 times their colour.
+fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>,body:vec4<f32>)->vec3<f32> {
     let baked=material[1].z>0.5;
     let n=normal/max(length(normal),0.0001);
+    let centre=select(position,body.yzw,body.x>0.0);
     var chosen=array<u32,4>(0u,0u,0u,0u);
     var score=array<f32,4>(0.0,0.0,0.0,0.0);
-    let list=light_cell(position);
+    let list=light_cell(centre);
     for(var i=0u;i<list.y;i+=1u) {
         let light=listed_light(list,i);
-        let delta=light.position_radius.xyz-position;
+        let delta=light.position_radius.xyz-centre;
         let d2=dot(delta,delta);
         // The body's own radius adds to the lamp's, to reach and to rank (the original's light ranking).
-        let radius=light.position_radius.w+body;
-        if d2>=radius*radius || (baked && light.color.w>2.5) {continue;}
-        let s=(1.0-d2/(radius*radius))*max(light.color.r,max(light.color.g,light.color.b));
+        let reach=light.position_radius.w+body.x;
+        if d2>=reach*reach || (baked && light.color.w>2.5) {continue;}
+        let s=(1.0-d2/(reach*reach))*max(light.color.r,max(light.color.g,light.color.b));
         if s<=score[3] {continue;}
         var k=3u;
         loop {
@@ -186,11 +208,25 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>,body:f32)->vec3
     for(var k=0u;k<4u;k+=1u) {
         if score[k]<=0.0 {continue;}
         let light=listed_light(list,chosen[k]);
-        let delta=light.position_radius.xyz-position;
-        let d=length(delta);
-        let t=min(d/max(light.position_radius.w,0.0001),1.0);
-        let reach=2.0*(1.0-3.0*t*t+2.0*t*t*t);
-        sum+=material[1].y*light.color.rgb*reach*max(dot(n,delta/max(d,0.0001)),0.0)*point_cone(light,-delta/max(d,0.0001));
+        let radius=max(light.position_radius.w,0.0001);
+        let near=distance(centre,light.position_radius.xyz);
+        let d=max(near,0.1);
+        // The line through 1/falloff at the sphere's far side (a) and near side (b).
+        let a=clamp(d+body.x,0.05*radius,0.9*radius);
+        let b=clamp(d-body.x,0.1*radius,0.95*radius);
+        let pa=1.0/lamp_falloff(a,radius);
+        let pb=1.0/lamp_falloff(b,radius);
+        var a0=pb;
+        var a1=0.0;
+        if abs(pb-pa)>=1e-8 {
+            let slope=(pa-pb)/(a-b);
+            a0=max(0.01,pb-slope*b);
+            a1=max(0.0,(pb-a0)/b);
+        }
+        let toward=light.position_radius.xyz-position;
+        let dist=length(toward);
+        if dist>(256.0-a0)/max(a1,0.01) {continue;}
+        sum+=material[1].y*light.color.rgb*(1.0/(a0+a1*dist))*max(dot(n,toward/max(dist,0.0001)),0.0)*actor_cone(light,-toward/max(dist,0.0001));
     }
     if baked {
         return sum;
@@ -210,7 +246,7 @@ fn actor_light(position:vec3<f32>,normal:vec3<f32>,own:vec4<f32>,body:f32)->vec3
             let s=first+i;
             if s>=u32(camera.actor_sun_count.x+0.5) {break;}
             let toward=-camera.actor_suns[2u*s].xyz/max(length(camera.actor_suns[2u*s].xyz),0.0001);
-            sum+=material[1].x*camera.actor_suns[2u*s+1u].rgb*max(dot(n,toward),0.0);
+            sum+=ACTOR_SUN_GAIN*material[1].x*camera.actor_suns[2u*s+1u].rgb*max(dot(n,toward),0.0);
         }
     }
     return sum;
@@ -1378,7 +1414,7 @@ struct VertexOut {
     }
     if material[0].x==15.0 {
         // A moving body lit by the scene: its zone's ambient and suns when it has them, else the scene's, and the nearest lights.
-        let lit=actor_light(out.world_position,out.normal,own_light,own_reach.x);
+        let lit=actor_light(out.world_position,out.normal,own_light,own_reach);
         // Baked: the vertex colour is the room's light (0.5 neutral), the live lights and the glow add to it.
         out.color=vec4<f32>(select(clamp(lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0))*color.rgb,clamp(color.rgb+lit*0.5,vec3<f32>(0.0),vec3<f32>(1.0)),material[1].z>0.5),color.a);
     }
