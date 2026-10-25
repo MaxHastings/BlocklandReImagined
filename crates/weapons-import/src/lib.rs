@@ -446,6 +446,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 up: target("stateTransitionOnTriggerUp"),
                 ammo: target("stateTransitionOnAmmo"),
                 no_ammo: target("stateTransitionOnNoAmmo"),
+                stance: Default::default(),
                 loaded: target("stateTransitionOnLoaded"),
                 not_loaded: target("stateTransitionOnNotLoaded"),
                 spin: match f("stateSpinThread").to_ascii_lowercase().as_str() {

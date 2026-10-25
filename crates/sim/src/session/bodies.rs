@@ -110,11 +110,11 @@ impl Session {
             .overlays
             .as_ref()
             .map_or(peer.player.state().archetype, |o| o.base);
+        let body = self.archetypes.resolve(base).id.clone();
         let want = self
             .weapons
-            .image_id(ActorId(owner), 0)
-            .and_then(|image| self.weapons.pack.images.get(image))
-            .and_then(|image| image.stance.get(&self.archetypes.resolve(base).id))
+            .image_state(ActorId(owner), 0)
+            .and_then(|(image, state)| state.stance.get(&body).or_else(|| image.stance.get(&body)))
             .and_then(|id| self.archetypes.find(id));
         let laid = peer.stance;
         if want == laid {

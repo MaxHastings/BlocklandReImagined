@@ -166,6 +166,11 @@ pub struct State {
     pub up: Option<usize>,
     pub ammo: Option<usize>,
     pub no_ammo: Option<usize>,
+    /// The archetype laid over the holder's body while the image is in this
+    /// state, in place of the image's own `stance` for that body: the
+    /// movement set of a grenade in hand, then of one with its pin pulled.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stance: BTreeMap<String, String>,
     /// Where the state goes while the image in hand is loaded or not
     /// (`stateTransitionOnLoaded`, `stateTransitionOnNotLoaded`), which a
     /// rule sets with `set_image_loaded` (v20's `setImageLoaded`). Checked
