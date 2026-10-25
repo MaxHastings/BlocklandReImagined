@@ -22,6 +22,8 @@ pub(super) struct Avatars {
     pub(super) preview_time: f64,
     /// Bodies and horses whose mesh the last frame built, where they can
     /// show (`render_frame`).
+    /// Bodies already reported as drawn away from where they are presented.
+    pub(super) disagreed: std::collections::BTreeSet<bri_world::OwnerId>,
     pub(super) meshes_built: (usize, usize),
     /// The face, decal and surface textures bodies have uploaded, by body
     /// model (None the Blockhead): a new outfit binds them instead of
