@@ -179,6 +179,7 @@ impl ClientMovers {
                     .unwrap_or(ActorLight {
                         ambient: [0.0; 3],
                         radius: 0.0,
+                        centre: [0.0; 3],
                         sun_first: 0,
                         sun_count: 0,
                         sun_mask: 0,

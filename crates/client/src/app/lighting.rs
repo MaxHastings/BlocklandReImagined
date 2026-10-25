@@ -320,6 +320,7 @@ impl LightVolumeState {
         let room = self.room_light(low, high);
         // The body's bounding sphere: about its box's middle, out to a corner.
         let radius = Vec3::from(high).distance(Vec3::from(low)) * 0.5;
+        let centre = Vec3::from(low).midpoint(Vec3::from(high)).to_array();
         self.body_reach
             .fetch_max(radius.to_bits(), std::sync::atomic::Ordering::Relaxed);
         match regions {
@@ -342,6 +343,7 @@ impl LightVolumeState {
                 Some(bri_render::scene::ActorLight {
                     ambient: [0, 1, 2].map(|c| ambient[c].max(room[c])),
                     radius,
+                    centre,
                     sun_first,
                     sun_count,
                     sun_mask,
@@ -354,6 +356,7 @@ impl LightVolumeState {
                 .then_some(bri_render::scene::ActorLight {
                     ambient: room,
                     radius,
+                    centre,
                     sun_first: 0,
                     sun_count: 0,
                     sun_mask: 0,
