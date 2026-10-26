@@ -128,3 +128,32 @@ jobs:
           WGPU_BACKEND: dx12
           WGPU_DX12_COMPILER: dxc
           RUST_TEST_THREADS: 1
+
+  # An experiment beside the Windows shards: the pull-request tier on Linux
+  # (software Vulkan), where linking 70 test binaries is far quicker. It never
+  # blocks a pull request; its wall time against `test` decides whether the
+  # quick tier moves here.
+  test-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install native build dependencies and software Vulkan
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers libvulkan1
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-test
+          cache-on-failure: true
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Test (pr tier on Linux, shard ${{ matrix.shard }} of 4)
+        run: python3 tools/gate.py --ci-test --tier pr --shard ${{ matrix.shard }}/4 --binary-timeout 30
+        env:
+          WGPU_BACKEND: vulkan
+          RUST_TEST_THREADS: 1
