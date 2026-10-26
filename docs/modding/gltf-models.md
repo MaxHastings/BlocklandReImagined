@@ -182,6 +182,12 @@ they do, so a body lying along the ground is hit along its length. A splash is n
 An archetype with none is hit as one box and its region read from the height
 of the hit, as before.
 
+**Crouch damage (optional).** `crouch_damage` is `{ "direct": 2.1, "indirect": 0.75 }`:
+the multipliers a crouched body's damage takes, `direct` for direct hits and
+`indirect` for the rest (blast, fall, fire). Left out, the base archetype's,
+and v20's players take those values. `{ "direct": 1, "indirect": 1 }` makes
+crouching change nothing, as in Army Operations.
+
 **Prone and lean (optional).** `movement.prone` lets the body lie down
 (`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "seconds": 0.7, "forward": 1,
 "backward": 0.5, "sideways": 0.5 }`, its box height (at most the crouch's),
