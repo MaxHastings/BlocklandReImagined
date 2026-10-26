@@ -87,6 +87,11 @@ impl App {
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Ambient(play)) => {
                     self.audio.play_ambient(&play);
                 }
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::WorldVolume(
+                    set,
+                )) => {
+                    self.audio.set_world_volume(set);
+                }
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Kill(kill)) => {
                     self.ui.apply_session(
                         id,
@@ -844,6 +849,10 @@ impl App {
                         }
                         bri_sim::session::Notice::Ambient(play) => {
                             self.audio.play_ambient(&play);
+                            continue;
+                        }
+                        bri_sim::session::Notice::WorldVolume(set) => {
+                            self.audio.set_world_volume(set);
                             continue;
                         }
                         bri_sim::session::Notice::InventoryAmmo(slots) => {

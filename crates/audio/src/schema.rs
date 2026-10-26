@@ -105,6 +105,9 @@ pub enum Bus {
     Message,
     /// Music-brick loops and title music.
     Music,
+    /// An Add-On rule's own looping bed: mixed like the effects bus, but
+    /// not part of the world a rule can turn down (`SetWorld`).
+    Bed,
     /// Other numbered channels (0, 4..8) only used by the stock options test tone.
     Other,
 }

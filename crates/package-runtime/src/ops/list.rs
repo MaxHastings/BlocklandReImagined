@@ -143,6 +143,7 @@ macro_rules! for_each_op {
             SetTeleportSound = effects,
             Music = effects,
             Ambient = effects,
+            WorldVolume = effects,
             PlayThread = effects,
             SetMapLights = lighting,
             MoverGoto = movers,

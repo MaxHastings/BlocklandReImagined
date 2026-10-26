@@ -469,6 +469,18 @@ pub struct KillLine {
     pub weapon: String,
 }
 
+/// The world's sounds turned down for a player ([`Notice::WorldVolume`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorldVolumeSet {
+    /// 0 to 1, times the world's volume.
+    pub scale: f32,
+    /// Seconds it lasts, easing included.
+    pub seconds: f32,
+    /// Seconds it eases in, and again out.
+    pub fade: f32,
+}
+
 /// An ambient bed a rule plays for a player ([`Notice::Ambient`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -553,6 +565,9 @@ pub enum Notice {
     /// Add-On rule ambience (`play_ambient`, `stop_ambient`): a looping
     /// bed this player hears on the effects bus, by key.
     Ambient(AmbientPlay),
+    /// Add-On rule `world_volume`: the world's sounds this player hears
+    /// turned down for a while.
+    WorldVolume(WorldVolumeSet),
     /// A death line: a client with a kill feed shows it there, else in chat.
     Kill(KillLine),
     /// `MessageBoxOK` from the server.

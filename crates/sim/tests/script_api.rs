@@ -175,6 +175,8 @@ fn cmd_music(p, track) { play_music_all(track, #{ looping: false, fade: 2.0 }); 
 fn cmd_music_stop(p) { stop_music_all(1.5); }
 fn cmd_my_music(p) { play_music(p, "probe:sound/theme"); }
 fn cmd_bed(p, key) { play_ambient_all(key, "probe:sound/theme", #{ volume: 0.5, fade: 1.0, at: [1.0, 2.0, 3.0], range: 40.0 }); }
+fn cmd_ring(p, scale) { world_volume(p, scale, 12, 2); }
+fn cmd_ring_all(p) { world_volume_all(0.15, 3); }
 fn cmd_bed_stop(p, key) { stop_ambient_all(key, 2.0); }
 fn cmd_keep_game(p, v) { let s = get("per_game"); s[`${player(p).minigame}`] = v; set("per_game", s); }
 fn cmd_keep_large_game(p) {
@@ -266,6 +268,8 @@ fn behaviour() -> Value {
             command("my_music", &[]),
             command("bed", &["string"]),
             command("bed_stop", &["string"]),
+            command("ring", &["float"]),
+            command("ring_all", &[]),
             command("keep_game", &["string"]),
             command("keep_large_game", &[]),
         ],
@@ -2376,6 +2380,40 @@ fn rules_play_ambient_beds_for_everyone_until_stopped() {
     }
     let d = g.join(Vec3::new(6.0, 0.05, 0.0));
     assert_eq!(beds(&mut g, d).len(), bri_package_runtime::ops::MAX_AMBIENT);
+}
+
+/// A rule turns the world down for one player or everyone, whole numbers
+/// and floats alike.
+#[test]
+fn rules_turn_the_world_volume_down_for_a_while() {
+    use bri_sim::session::WorldVolumeSet;
+    let sets = |g: &mut Game| -> Vec<(OwnerId, WorldVolumeSet)> {
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(o, n)| match n {
+                Notice::WorldVolume(set) => Some((o, set)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(2.0, 0.05, 0.0));
+    g.s.take_private_notices();
+    g.run(a, "ring", vec![PackageArg::Float(0.5)]);
+    g.steps(1);
+    let one = WorldVolumeSet {
+        scale: 0.5,
+        seconds: 12.0,
+        fade: 2.0,
+    };
+    assert_eq!(sets(&mut g), vec![(a, one)]);
+    g.run(a, "ring_all", vec![]);
+    g.steps(1);
+    let all = sets(&mut g);
+    assert_eq!(all.len(), 2);
+    assert!(all.iter().all(|(_, s)| s.scale == 0.15 && s.seconds == 3.0));
+    assert!(all.iter().any(|(o, _)| *o == b));
 }
 
 /// A key of an Add-On's own (here a command) uses an item once without

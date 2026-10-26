@@ -233,6 +233,31 @@ fn master_channel_and_music_gains() {
     assert_eq!(rms(&seconds(&mut rt, 0.2)[4800..]), 0.0);
 }
 
+/// A rule turns the world (the effects bus) down; music and a rule's own
+/// bed stay as they were.
+#[test]
+fn the_world_gain_turns_effects_down_but_not_music_or_beds() {
+    let mut rt = offline(|_| {});
+    rt.play("Loop2dSound", Placement::Listener).unwrap();
+    let base = rms(&seconds(&mut rt, 0.2));
+    rt.set_volume(VolumeControl::World, 0.5).unwrap();
+    let half = rms(&seconds(&mut rt, 0.2)[4800..]);
+    assert!(half > 0.0 && half < base, "{half} vs {base}");
+    rt.set_volume(VolumeControl::World, 0.0).unwrap();
+    assert_eq!(rms(&seconds(&mut rt, 0.2)[4800..]), 0.0);
+
+    let mut rt = offline(|_| {});
+    rt.play("musicData_Test", Placement::Listener).unwrap();
+    rt.set_volume(VolumeControl::World, 0.0).unwrap();
+    assert!(rms(&seconds(&mut rt, 0.2)[4800..]) > 0.0);
+
+    let mut rt = offline(|_| {});
+    let bed = std::sync::Arc::new(rt.bank().resolve("Loop2dSound").unwrap().as_ambient(None));
+    rt.play_asset(bed, Placement::Listener, 1.0).unwrap();
+    rt.set_volume(VolumeControl::World, 0.0).unwrap();
+    assert!(rms(&seconds(&mut rt, 0.2)[4800..]) > 0.0);
+}
+
 #[test]
 fn voice_pressure_is_bounded_observable_and_leak_free() {
     let mut rt = offline(|c| c.command_capacity = 20_000);
