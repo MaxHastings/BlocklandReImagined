@@ -223,9 +223,9 @@ impl Stimulus {
 impl Bots {
     /// A player's weapon made a sound, heard as fighting
     /// (`Session::hear_fighting`).
-    pub(in crate::session) fn noise(&mut self, from: OwnerId, at: Vec3, volume: f32) {
+    pub(in crate::session) fn noise(&mut self, from: OwnerId, at: Vec3, volume: f32, weapon: bool) {
         if !self.brains.is_empty() && self.noises.len() < MAX_STIMULI && at.is_finite() {
-            self.noises.push((from, at, volume));
+            self.noises.push((from, at, volume, weapon));
         }
     }
     /// Something happened a bot may notice; bots look next tick.

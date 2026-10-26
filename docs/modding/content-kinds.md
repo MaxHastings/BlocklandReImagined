@@ -325,7 +325,15 @@ optional `swing_second`, `twist`, radians, 0 to pi, round the pose it died in)
 or a hinge (`hinge: [low, high]`), both about the node's x axis unless
 `axis` (`"y"` or `"z"`) says otherwise, with `damping` (how much it resists
 swinging or turning) and `twist_damping` (twisting; `damping` when left out).
-Limits are hard: there is no spring pulling back from them. The body goes limp at once. `max_speed` and
+Limits are hard unless a ball joint sets `cone_stiffness`: then `swing` and
+`swing_second` are Karma's soft cone (AA2's `CONE_STIFFNESS` and
+`CONE_DAMPING`, taken as stored): no stop, no force inside the cone, and past
+it a spring of `cone_stiffness` (torque per radian past the limit) and a
+damper of `cone_damping` (torque per radian per second) pull the swing back,
+with the implicit spring-damper solve Karma uses. AA2 joints leave `damping`
+at 0 (free swing is resisted only by the bones' own damping) and ignore the
+twist stiffness and damping. The swing is read per axis (y, then z), a box
+rather than Karma's ellipse. The body goes limp at once. `max_speed` and
 `max_spin` cap every bone, `bounce` and each bone's `linear_damping` and
 `angular_damping` shape its fall, and `freeze` seconds after it goes limp
 hold it where it lies (0: never). The killing hit sets it moving:

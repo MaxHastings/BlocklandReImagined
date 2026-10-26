@@ -241,6 +241,11 @@ pub trait World {
         range: f32,
         ignore: Option<u64>,
     ) -> Option<RayHit>;
+    /// How long the sound profile `profile` plays, in seconds, when its
+    /// pack says.
+    fn sound_seconds(&self, _profile: &str) -> Option<f32> {
+        None
+    }
     /// The map's keyed movers (doors), in map order.
     fn movers(&self) -> Vec<MoverInfo> {
         Vec::new()
@@ -3619,6 +3624,15 @@ fn register_presentation(engine: &mut Engine) {
             })
         },
     );
+    // How long a sound profile plays, in seconds, or () when its pack does
+    // not say.
+    engine.register_fn("sound_seconds", |profile: &str| {
+        with_world(|world, _| {
+            Ok(world
+                .sound_seconds(profile)
+                .map_or(Dynamic::UNIT, |s| Dynamic::from_float(f64::from(s))))
+        })
+    });
     engine.register_fn("map_region_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
         let at = [float(&x)?, float(&y)?, float(&z)?];
         with_world(|world, _| {
@@ -4769,8 +4783,18 @@ impl Runtime {
             if behaviour.on_bot_ability {
                 need("on_bot_ability".into(), 4, "on_bot_ability");
             }
-            if behaviour.on_bot_spotted {
-                need("on_bot_spotted".into(), 2, "on_bot_spotted");
+            for (declared, name, arity) in [
+                (behaviour.on_bot_spotted, "on_bot_spotted", 2),
+                (behaviour.on_bot_heard_gunfire, "on_bot_heard_gunfire", 2),
+                (behaviour.on_bot_under_fire, "on_bot_under_fire", 2),
+                (behaviour.on_bot_sees_grenade, "on_bot_sees_grenade", 2),
+                (behaviour.on_bot_friend_died, "on_bot_friend_died", 2),
+                (behaviour.on_bot_lost_enemy, "on_bot_lost_enemy", 2),
+                (behaviour.on_bot_out_of_ammo, "on_bot_out_of_ammo", 1),
+            ] {
+                if declared {
+                    need(name.into(), arity, name);
+                }
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

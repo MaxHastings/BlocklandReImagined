@@ -522,6 +522,8 @@ pub enum Event {
         actor: ActorId,
         hand: u8,
         image: String,
+        /// The muzzle.
+        from: Vec3,
         to: Vec3,
     },
     /// A ricocheting hitscan ray went on from `from` to `to`
@@ -5351,6 +5353,7 @@ impl WeaponsWorld {
                         actor: id,
                         hand: ray.hand,
                         image: ray.image.into(),
+                        from: ray.muzzle,
                         to,
                     });
                 }
