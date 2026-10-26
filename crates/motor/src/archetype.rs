@@ -58,6 +58,14 @@ pub struct Archetype {
     /// squeezed down.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hit_bones_prone: Vec<bri_content::hit_bones::HitBone>,
+    /// What a crouched body takes from a direct hit and from anything else
+    /// (blast, fall, fire), as multipliers on the damage. v20's players take
+    /// 2.1 and 0.75; a body that crouching does not change sets 1 and 1.
+    #[serde(
+        default = "CrouchDamage::v20",
+        skip_serializing_if = "CrouchDamage::is_v20"
+    )]
+    pub crouch_damage: CrouchDamage,
     pub look: Look,
     /// It fires, switches and uses items (`PlayerData::onTrigger` and
     /// `serverCmdUseTool` running as usual). A frozen pre-round body
@@ -83,6 +91,34 @@ fn yes() -> bool {
 fn is_yes(v: &bool) -> bool {
     *v
 }
+/// The damage multipliers of a crouched body (`Archetype::crouch_damage`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrouchDamage {
+    /// On a direct hit (a bullet, a thrown or swung weapon).
+    pub direct: f32,
+    /// On any other damage.
+    pub indirect: f32,
+}
+
+impl CrouchDamage {
+    /// v20's players.
+    pub fn v20() -> Self {
+        Self {
+            direct: 2.1,
+            indirect: 0.75,
+        }
+    }
+    fn is_v20(&self) -> bool {
+        *self == Self::v20()
+    }
+    fn valid(&self) -> bool {
+        [self.direct, self.indirect]
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=100.0).contains(v))
+    }
+}
+
 /// One rider's seat on a rideable archetype.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -612,6 +648,7 @@ impl Archetype {
                 && self.look.corpse_fade.is_finite()
                 && (0.0..=self.look.corpse_seconds).contains(&self.look.corpse_fade)
                 && self.sounds.valid()
+                && self.crouch_damage.valid()
                 && self.hit_bones.len() <= bri_content::hit_bones::MAX_HIT_BONES
                 && self.hit_bones_crouched.len() <= bri_content::hit_bones::MAX_HIT_BONES
                 && self.hit_bones_prone.len() <= bri_content::hit_bones::MAX_HIT_BONES
@@ -670,6 +707,7 @@ impl Archetype {
             hit_bones: Vec::new(),
             hit_bones_crouched: Vec::new(),
             hit_bones_prone: Vec::new(),
+            crouch_damage: CrouchDamage::v20(),
             look: Look {
                 crouch_composition: Default::default(),
                 model: if kind == PlayerType::Horse {

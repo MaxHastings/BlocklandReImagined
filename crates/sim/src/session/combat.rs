@@ -1415,7 +1415,15 @@ impl Session {
         }
         let mut amount = amount;
         if peer.player.state().crouched {
-            amount *= if kind.direct() { 2.1 } else { 0.75 };
+            let crouch = self
+                .archetypes
+                .resolve(peer.player.state().archetype)
+                .crouch_damage;
+            amount *= if kind.direct() {
+                crouch.direct
+            } else {
+                crouch.indirect
+            };
         }
         // Where it struck, measured before any hook moves the body. A body
         // with hit bones is struck at the bone nearest the point: its part

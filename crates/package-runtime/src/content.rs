@@ -1772,6 +1772,16 @@ impl EntityKind {
     }
 }
 
+/// The damage multipliers of a crouched body (`crouch_damage`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrouchDamageDef {
+    /// On a direct hit.
+    pub direct: f32,
+    /// On any other damage.
+    pub indirect: f32,
+}
+
 /// A player archetype: what a player is. It starts from `base` (an
 /// archetype id; v20's standard player by default) and overrides only what
 /// it names. `movement` takes any motor constant by name (`gravity`,
@@ -1819,6 +1829,12 @@ pub struct ArchetypeDef {
     /// Left out, the base's.
     #[serde(default)]
     pub hit_bones_prone: Option<Vec<bri_content::hit_bones::HitBone>>,
+    /// Damage multipliers while the body is crouched, `direct` for direct
+    /// hits and `indirect` for the rest, replacing the base's. v20's
+    /// players take 2.1 and 0.75; `{"direct": 1, "indirect": 1}` makes
+    /// crouching change nothing. Left out, the base's.
+    #[serde(default)]
+    pub crouch_damage: Option<CrouchDamageDef>,
     /// Model id the clients draw: a package model (`namespace:model/name`)
     /// or one of v20's shapes (`v20.shape.m` is the Blockhead).
     #[serde(default)]
@@ -2078,6 +2094,14 @@ impl ArchetypeDef {
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
         );
+        if let Some(crouch) = self.crouch_damage {
+            ensure!(
+                [crouch.direct, crouch.indirect]
+                    .iter()
+                    .all(|v| v.is_finite() && (0.0..=100.0).contains(v)),
+                "crouch_damage multipliers are between 0 and 100"
+            );
+        }
         for (name, bones) in [
             ("hit_bones", &self.hit_bones),
             ("hit_bones_crouched", &self.hit_bones_crouched),
