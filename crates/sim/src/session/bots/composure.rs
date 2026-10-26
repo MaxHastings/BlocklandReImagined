@@ -46,8 +46,7 @@ mod tests {
     use crate::bot_kind::{Blow, BotComposure};
 
     fn brain() -> Brain {
-        let mut kind = BotKind::default();
-        kind.composure = BotComposure {
+        let composure = BotComposure {
             start: 25.0,
             recover_seconds: 2.0,
             panic: -60.0,
@@ -69,6 +68,10 @@ mod tests {
                     },
                 ),
             ]),
+        };
+        let kind = BotKind {
+            composure,
+            ..BotKind::default()
         };
         let mut brain = Brain::new(None, kind, Vec3::ZERO, 1, 0);
         brain.composure = 25.0;
