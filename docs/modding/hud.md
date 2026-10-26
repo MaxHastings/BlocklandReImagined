@@ -250,9 +250,10 @@ back to the stock HUD when nothing claims a region.
   the map (its alpha is the opacity), `back` fills behind it, `ring` is a
   frame drawn over the box and `viewer` the viewer's own icon in the middle
   (`viewer_size`). Marks come from `markers`, up to 8 rule states each
-  holding an array of `{ "icon", "x", "y", "z", "rot", "color", "blink" }`
+  holding an array of `{ "icon", "x", "y", "z", "rot", "color", "blink", "scale" }`
   (world position with y up, `rot` degrees clockwise from north, `color`
-  RGB or RGBA 0..1, `blink` a bool; state values are at most 4096 bytes);
+  RGB or RGBA 0..1, `blink` a bool, `scale` 0.1 to 8 times `mark_size`, 1 if
+  left out: an objective drawn larger than a teammate; state values are at most 4096 bytes);
   `icons` names each `icon`'s texture and `mark_size` is their size. A mark
   more than `height` units above or below the viewer is drawn with the
   `above` or `below` texture instead, tinted by its colour; a blinking mark
