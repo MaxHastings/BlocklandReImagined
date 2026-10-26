@@ -66,6 +66,8 @@ fn cmd_quick(p) { quick_use(p, "probe:weapon/nade"); }
 fn cmd_flash(p) {
     screen_flash(p, [0.3, 0.6, 1.0, 0.5], 0.4);
     body_flash(p, [0.4, 0.8, 1.0, 0.6], 0.5);
+    screen_overlay(p, #{ seconds: 12, peak: 3.0 * 1.5 * 1.5, light: [1, 1, 1], dark: [0, 0, 0],
+        curve: [#{ from: 0, to: 0.15, start: 0, end: 1 }, #{ from: 0.3, start: -1, end: 0, ease: "cosine" }] });
     hud_line(p, "radio", "Moving out", 4.0, #{ color: [0.5, 1.0, 0.5], icon: "radio" });
     hud_line((), "radio", "Clear", 2.0);
 }
@@ -714,6 +716,9 @@ fn view_beams_and_animations_reach_players_as_notices_and_cues() {
     assert!(notices.iter().any(|(owner, n)| *owner == a
         && matches!(n, Notice::Flash { color, seconds }
             if *color == [0.3, 0.6, 1.0, 0.5] && *seconds == 0.4)));
+    assert!(notices.iter().any(|(owner, n)| *owner == a
+        && matches!(n, Notice::Overlay(o)
+            if o.seconds == 12.0 && o.peak == 6.75 && o.curve.len() == 2 && o.curve[1].to.is_none())));
     assert!(g.s.take_cues().iter().any(|c| matches!(&c.kind,
         CueKind::BodyFlash { owner, color, seconds }
             if *owner == a && *color == [0.4, 0.8, 1.0, 0.6] && *seconds == 0.5)));

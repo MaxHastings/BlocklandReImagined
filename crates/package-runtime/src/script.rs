@@ -2852,6 +2852,25 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
+    // screen_overlay(player, #{ seconds, peak, light, dark, curve }): a
+    // full-screen overlay following a curve, `()` as the player for
+    // everyone. See docs/modding/rules.md.
+    engine.register_fn("screen_overlay", |player: Dynamic, spec: Dynamic| {
+        let overlay: bri_content::screen_overlay::Overlay =
+            serde_json::to_value(view::plain(&spec))
+                .and_then(serde_json::from_value)
+                .map_err(|e| {
+                    format!("a screen overlay is #{{ seconds, peak, light, dark, curve }}: {e}")
+                })?;
+        push(Op::ScreenOverlay(ops::ScreenOverlay {
+            player: if player.is_unit() {
+                None
+            } else {
+                Some(id(&player)?)
+            },
+            overlay,
+        }))
+    });
     // Every member of a mini-game, counted once.
     engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
         push(Op::TellMinigame(ops::TellMinigame {

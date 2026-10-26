@@ -258,6 +258,27 @@ impl Perform for ops::ScreenFlash {
         Ok(())
     }
 }
+impl Perform for ops::ScreenOverlay {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::ScreenOverlay { player, overlay } = self;
+        session.take_cue(package)?;
+        let notice = Notice::Overlay(overlay);
+        match player {
+            Some(player) => {
+                ensure!(session.peers.contains_key(&player), "No such player");
+                session.notify(player, notice);
+            }
+            None => {
+                let everyone: Vec<OwnerId> = session.peers.keys().copied().collect();
+                for owner in everyone {
+                    session.notify(owner, notice.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+}
 impl Perform for ops::ShowPanel {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;

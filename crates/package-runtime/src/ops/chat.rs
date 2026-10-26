@@ -176,6 +176,22 @@ impl ScriptOp for ScreenFlash {
     }
 }
 
+/// A full-screen overlay for one player, or everyone with no player, that
+/// follows a curve of seconds (`bri_content::screen_overlay::Overlay`): light
+/// while its value is above zero, dark below. Overlays running together add.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScreenOverlay {
+    pub player: Option<u64>,
+    pub overlay: bri_content::screen_overlay::Overlay,
+}
+impl ScriptOp for ScreenOverlay {
+    const CAPABILITY: &str = "chat";
+    const NAME: &str = "screen_overlay";
+    fn bounded(&self) -> bool {
+        self.overlay.bounded()
+    }
+}
+
 /// One player's plant-error icon and sound, as v20's
 /// `messageClient(%client, 'MsgPlantError_…')`: one of
 /// [`PLANT_ERRORS`]. `flood` (planting too soon) shows what the

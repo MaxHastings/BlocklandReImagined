@@ -530,6 +530,19 @@ fn hud(core: &Core) -> View {
             ],
         );
     }
+    if let Some((light, dark, sum)) = core.overlays.first().map(|(o, _)| {
+        (
+            o.light,
+            o.dark,
+            core.overlays
+                .iter()
+                .map(|(o, ran)| o.value(*ran))
+                .sum::<f32>(),
+        )
+    }) && let Some(rgba) = bri_content::screen_overlay::colour(sum, light, dark)
+    {
+        fill(&mut v, Rect::new(0, 0, w, h), rgba);
+    }
     for tint in &core.underwater {
         let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
         fill(
