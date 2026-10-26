@@ -48,6 +48,16 @@ impl Perform for ops::Obscure {
         Ok(())
     }
 }
+impl Perform for ops::SetComposure {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.check_rest_rules_bot(cx.package, self.bot)
+    }
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetComposure { bot, start } = self;
+        session.set_bot_composure(bot, start);
+        Ok(())
+    }
+}
 impl Perform for ops::DazeBot {
     fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
         ensure!(session.is_bot(self.bot), "No such bot");

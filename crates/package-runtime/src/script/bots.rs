@@ -224,6 +224,13 @@ pub(super) fn register(engine: &mut Engine) {
             }))
         },
     );
+    // `set_composure(bot, start)`: where this bot's composure starts and recovers to.
+    engine.register_fn("set_composure", |bot: Dynamic, start: Dynamic| {
+        push(Op::SetComposure(ops::SetComposure {
+            bot: id(&bot)?,
+            start: float(&start)?,
+        }))
+    });
     // `daze_bot(bot, seconds)`: a flash; it sees nothing meanwhile.
     engine.register_fn("daze_bot", |bot: Dynamic, seconds: Dynamic| {
         push(Op::DazeBot(ops::DazeBot {

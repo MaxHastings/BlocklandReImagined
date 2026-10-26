@@ -674,6 +674,13 @@ impl Session {
             }
         }
     }
+    /// Where `bot`'s composure starts, here and now (`set_composure`).
+    pub(in crate::session) fn set_bot_composure(&mut self, bot: OwnerId, start: f32) {
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.composure_start = Some(start);
+            brain.composure = start;
+        }
+    }
     /// A bot's composure, when its kind has any (`BotComposure`).
     pub(in crate::session) fn bot_composure(&self, bot: OwnerId) -> Option<f32> {
         let brain = self.bots.brains.get(&bot)?;

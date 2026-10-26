@@ -25,13 +25,13 @@ impl Brain {
         self.composure_tick = tick;
         if !table.is_on()
             || table.recover_seconds <= 0.0
-            || self.composure >= table.start
+            || self.composure >= self.composure_start.unwrap_or(table.start)
             || tick < self.nervous_at.saturating_add(ticks(1.0))
         {
             return;
         }
         let back = since as f32 / ticks(table.recover_seconds).max(1) as f32;
-        self.composure = (self.composure + back).min(table.start);
+        self.composure = (self.composure + back).min(self.composure_start.unwrap_or(table.start));
     }
     /// At or below its kind's panic line.
     pub(super) fn panicked(&self) -> bool {
@@ -57,6 +57,7 @@ mod tests {
                     Blow {
                         delta: 30.0,
                         floor: -99.0,
+                        ..Blow::default()
                     },
                 ),
                 (
@@ -64,6 +65,7 @@ mod tests {
                     Blow {
                         delta: 2.0,
                         floor: -10.0,
+                        ..Blow::default()
                     },
                 ),
             ]),

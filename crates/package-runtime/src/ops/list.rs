@@ -208,6 +208,7 @@ macro_rules! for_each_op {
             SetBotIntent = bots,
             Obscure = bots,
             DazeBot = bots,
+            SetComposure = bots,
             FollowPath = player,
             Camera = player,
             OrbitCamera = player,

@@ -454,6 +454,8 @@ struct Brain {
     /// How steady it is under fire (`composure`), and when a blow last
     /// landed and it was last brought back toward its start.
     composure: f32,
+    /// Where it recovers to when the rules gave it its own start.
+    composure_start: Option<f32>,
     nervous_at: u64,
     composure_tick: u64,
     /// A rules bot came back to life: where it stands next is its home.
@@ -736,6 +738,7 @@ impl Brain {
             crossed,
             resting: false,
             composure: kind_composure,
+            composure_start: None,
             nervous_at: 0,
             composure_tick: 0,
             rehome: brick.is_none(),

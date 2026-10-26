@@ -100,6 +100,22 @@ impl ScriptOp for Obscure {
     }
 }
 
+/// Set where a bot's composure starts (`composure.start` of its kind, for this
+/// one): a placed start's own mental state. Composure stands there now and
+/// recovers up to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetComposure {
+    pub bot: u64,
+    pub start: f32,
+}
+impl ScriptOp for SetComposure {
+    const CAPABILITY: &str = "bots";
+    const NAME: &str = "set_composure";
+    fn bounded(&self) -> bool {
+        self.start.is_finite() && (-99.0..=99.0).contains(&self.start)
+    }
+}
+
 /// Longest a cloud hangs, in seconds.
 pub const MAX_OBSCURE_SECONDS: f32 = 120.0;
 

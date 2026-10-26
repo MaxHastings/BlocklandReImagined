@@ -15,13 +15,24 @@ pub const EVENTS: [&str; 3] = ["seen", "heard", "hurt"];
 /// Composure's range: a bot never rises above or sinks below it.
 pub const LIMIT: f32 = 99.0;
 
-/// One event's blow: it takes `delta` off composure while composure is at or
-/// above `floor` (a bot already shaken below the floor is not shaken further by it).
+/// One event's blow: it takes `delta` off composure while composure is within
+/// `floor` to `ceiling`. A bot already shaken below the floor is not shaken
+/// further by it, and some blows only land on a bot not yet steady (a ceiling).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Blow {
     pub delta: f32,
     pub floor: f32,
+    pub ceiling: f32,
+}
+impl Default for Blow {
+    fn default() -> Self {
+        Self {
+            delta: 0.0,
+            floor: -LIMIT,
+            ceiling: LIMIT,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -70,18 +81,22 @@ impl BotComposure {
             ensure!(
                 blow.delta.is_finite()
                     && (-LIMIT..=LIMIT).contains(&blow.delta)
-                    && blow.floor.is_finite()
-                    && (-LIMIT..=LIMIT).contains(&blow.floor),
+                    && [blow.floor, blow.ceiling]
+                        .iter()
+                        .all(|v| v.is_finite() && (-LIMIT..=LIMIT).contains(v))
+                    && blow.floor <= blow.ceiling,
                 "composure event `{event}` is out of range"
             );
         }
         Ok(())
     }
     /// `current` after `event`, or unchanged when the kind has no blow for it
-    /// or composure is already below the blow's floor.
+    /// or composure is outside the blow's floor and ceiling.
     pub fn after(&self, current: f32, event: &str) -> f32 {
         match self.events.get(event) {
-            Some(blow) if current >= blow.floor => (current - blow.delta).clamp(-LIMIT, LIMIT),
+            Some(blow) if (blow.floor..=blow.ceiling).contains(&current) => {
+                (current - blow.delta).clamp(-LIMIT, LIMIT)
+            }
             _ => current,
         }
     }
@@ -91,26 +106,21 @@ impl BotComposure {
 mod tests {
     use super::*;
 
+    fn blow(delta: f32, floor: f32) -> Blow {
+        Blow {
+            delta,
+            floor,
+            ..Blow::default()
+        }
+    }
     fn kind() -> BotComposure {
         BotComposure {
             start: 25.0,
             recover_seconds: 2.0,
             panic: -60.0,
             events: BTreeMap::from([
-                (
-                    "seen".into(),
-                    Blow {
-                        delta: 2.0,
-                        floor: -10.0,
-                    },
-                ),
-                (
-                    "hurt".into(),
-                    Blow {
-                        delta: 30.0,
-                        floor: -60.0,
-                    },
-                ),
+                ("seen".into(), blow(2.0, -10.0)),
+                ("hurt".into(), blow(30.0, -60.0)),
             ]),
         }
     }
@@ -128,34 +138,35 @@ mod tests {
         assert_eq!(c.after(-20.0, "seen"), -20.0, "already below the floor");
         assert_eq!(c.after(-50.0, "hurt"), -80.0);
         assert_eq!(c.after(-70.0, "hurt"), -70.0);
-        assert_eq!(
-            c.after(-50.0, "heard"),
-            -50.0,
-            "an event the kind has no blow for"
-        );
+        assert_eq!(c.after(-50.0, "heard"), -50.0, "an event with no blow");
         let hard = BotComposure {
-            events: BTreeMap::from([(
-                "hurt".into(),
-                Blow {
-                    delta: 500.0,
-                    floor: -99.0,
-                },
-            )]),
+            events: BTreeMap::from([("hurt".into(), blow(500.0, -99.0))]),
             ..kind()
         };
         assert!(hard.validate().is_err());
     }
 
     #[test]
-    fn an_unknown_event_is_refused() {
+    fn a_blow_may_land_only_on_a_bot_not_yet_steady() {
         let c = BotComposure {
             events: BTreeMap::from([(
-                "dazed".into(),
+                "heard".into(),
                 Blow {
                     delta: 1.0,
-                    floor: 0.0,
+                    ceiling: -0.001,
+                    ..Blow::default()
                 },
             )]),
+            ..kind()
+        };
+        assert_eq!(c.after(-5.0, "heard"), -6.0);
+        assert_eq!(c.after(10.0, "heard"), 10.0);
+    }
+
+    #[test]
+    fn an_unknown_event_is_refused() {
+        let c = BotComposure {
+            events: BTreeMap::from([("dazed".into(), blow(1.0, 0.0))]),
             ..kind()
         };
         assert!(c.validate().is_err());
