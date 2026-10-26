@@ -1409,6 +1409,13 @@ tens of thousands deep (`a = [a]` in a loop) overflows the host's stack
 and stops the server, because the script engine has no nesting limit.
 Scripts cannot read files, open sockets or run `eval`.
 
+## Sound lengths
+
+`sound_seconds(sound)` reads how long a weapons-pack sound profile plays, in seconds, from the `seconds` its
+`weapons.json` entry declares (the Add-On check refuses a `seconds` that differs from the file), or `()` when the
+entry says none or there is no such profile. It is read-only and needs no capability: a speech rule uses it to
+let a line finish before the next.
+
 ## Map volumes
 
 `map_region_at(x, y, z)` queries the map's authored plane partition, returning `#{ number, properties }` or `()` if there

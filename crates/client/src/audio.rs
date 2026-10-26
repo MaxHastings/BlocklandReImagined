@@ -1930,6 +1930,7 @@ mod tests {
             music: false,
             package: None,
             stock: true,
+            seconds: None,
         };
         let boom = "addon:sound/boomsound";
         pack.sounds.insert(
@@ -2175,6 +2176,7 @@ mod tests {
                 music: false,
                 package: None,
                 stock: false,
+                seconds: None,
             },
         );
         let heard = |distance: f32| -> Result<f32> {

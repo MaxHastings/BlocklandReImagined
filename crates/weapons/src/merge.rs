@@ -480,6 +480,7 @@ mod tests {
             music: false,
             package: None,
             stock: false,
+            seconds: None,
         };
         tier1
             .sounds

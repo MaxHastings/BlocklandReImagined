@@ -813,6 +813,11 @@ pub struct SoundDef {
     /// Add-On ships none.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stock: bool,
+    /// How long the clip plays, in seconds, for rules' `sound_seconds`
+    /// (a line of speech that must finish before the next). The Add-On
+    /// check compares it with the file and refuses a different length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f32>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4926,8 +4931,11 @@ impl Pack {
                     && !key.chars().any(char::is_control)
                     && sound.volume.is_finite()
                     && (0.0..=1.0).contains(&sound.volume)
+                    && sound
+                        .seconds
+                        .is_none_or(|s| s.is_finite() && s > 0.0 && s <= 600.0)
                     && (lower.ends_with(".wav") || lower.ends_with(".ogg")),
-                "Invalid sound {key}: keys are lower case, volume 0 to 1, file .wav or .ogg"
+                "Invalid sound {key}: keys are lower case, volume 0 to 1, seconds 0 to 600, file .wav or .ogg"
             );
             ensure!(
                 !(sound.stock && sound.package.is_some()),
