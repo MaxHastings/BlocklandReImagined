@@ -96,6 +96,9 @@ pub struct BotKind {
     /// sight that have nothing better to go on go and look where the enemy
     /// was (Bot_Hole's `hAlertOtherBots`).
     pub alerts_allies: bool,
+    /// How close, in world units, a shot at someone else must pass to count
+    /// as fire at this bot (`on_bot_under_fire`). 0: none does.
+    pub under_fire_range: f32,
     /// Weights on its behaviours' scores by name (`carry`, `interact`,
     /// `fight`, `chase`, `search`, `return`, `wander`), and on its route's
     /// legs (`fly`: how readily it jets; 0 never). Ordinary
@@ -426,6 +429,7 @@ impl Default for BotKind {
             emote: None,
             out_of_water_seconds: None,
             alerts_allies: false,
+            under_fire_range: 0.0,
             behaviours: Default::default(),
             objective_radius: 24.0,
             perception: BotPerception::default(),
@@ -639,6 +643,7 @@ impl BotKind {
             ("turn_degrees", self.turn_degrees, 10.0, 3600.0),
             ("aim_error_degrees", self.aim_error_degrees, 0.0, 45.0),
             ("memory_seconds", self.memory_seconds, 0.0, 60.0),
+            ("under_fire_range", self.under_fire_range, 0.0, 64.0),
             ("objective_radius", self.objective_radius, 1.0, 128.0),
             ("hold_seconds", self.hold_seconds, 0.0, 5.0),
             ("perception.salience", self.perception.salience, 0.0, 8.0),

@@ -57,7 +57,7 @@ impl Session {
         gaits.retain(|owner| self.peers.contains_key(&owner));
         self.gaits = gaits;
         for (owner, at, volume) in heard {
-            self.bots.noise(owner, at, volume);
+            self.bots.noise(owner, at, volume, false);
             self.bots
                 .notice(super::perception::Stimulus::sound(at, volume));
         }
@@ -173,7 +173,7 @@ impl Session {
     /// walk there takes and a look round, and acts on it after a moment
     /// (`perception`).
     pub(super) fn hear_fighting(&mut self, tick: u64) {
-        for (from, at, volume) in std::mem::take(&mut self.bots.noises) {
+        for (from, at, volume, weapon) in std::mem::take(&mut self.bots.noises) {
             let hearing = FIGHT_HEARING * volume.clamp(0.0, 1.0);
             if hearing <= 0.0 {
                 continue;
@@ -201,6 +201,9 @@ impl Session {
                     expires: tick + ticks(distance / walk + brain.kind.memory_seconds),
                 };
                 brain.hear(k, bot, tick);
+                if weapon {
+                    self.bots.reports.tell(Report::HeardGunfire(bot, from));
+                }
             }
         }
     }

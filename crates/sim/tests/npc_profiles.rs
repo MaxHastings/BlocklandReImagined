@@ -34,8 +34,23 @@ fn cmd_follow(p, bot, leader) { bot_intent(bot, #{ follow: leader, distance: 3.0
 fn cmd_flee(p, bot, from) { bot_intent(bot, #{ flee: from, seconds: 6.0 }); }
 fn cmd_clear(p, bot) { bot_intent(bot, ()); }
 fn cmd_hurt(p, bot, amount) { damage(bot, amount, p); }
+fn cmd_pair(p, a, b) {
+    let game = minigames()[0].id;
+    set_teams(game, [#{ name: "Red", color: 0 }], #{ friendly_fire: true });
+    set_team(a, 1);
+    set_team(b, 1);
+}
 fn on_bot_spotted(bot, enemy) {
     set("spotted", `${get("spotted")}${bot}>${enemy};`);
+}
+fn on_bot_friend_died(bot, friend) {
+    set("friend", `${get("friend")}${bot}:${friend};`);
+}
+fn on_bot_lost_enemy(bot, enemy) {
+    set("lost", `${get("lost")}${bot}:${enemy};`);
+}
+fn on_bot_sees_grenade(bot, grenade) {
+    set("grenade", `${get("grenade")}${bot};`);
 }
 fn on_bot_ability(bot, kind, ability, target) {
     set("ability", `${kind}|${ability}|${target}`);
@@ -50,6 +65,9 @@ fn behaviour() -> Value {
         "script": "main.rhai",
         "on_bot_ability": true,
         "on_bot_spotted": true,
+        "on_bot_friend_died": true,
+        "on_bot_lost_enemy": true,
+        "on_bot_sees_grenade": true,
         "commands": [
             command("add", &["string", "string"]),
             command("guard", &["int", "float", "float", "float"]),
@@ -58,10 +76,14 @@ fn behaviour() -> Value {
             command("flee", &["int", "int"]),
             command("clear", &["int"]),
             command("hurt", &["int", "float"]),
+            command("pair", &["int", "int"]),
         ],
         "state": { "global": {
             "ability": { "default": "", "visible": "everyone" },
-            "spotted": { "default": "", "visible": "everyone" }
+            "spotted": { "default": "", "visible": "everyone" },
+            "friend": { "default": "", "visible": "everyone" },
+            "lost": { "default": "", "visible": "everyone" },
+            "grenade": { "default": "", "visible": "everyone" }
         } }
     })
 }
@@ -494,6 +516,45 @@ fn an_ability_runs_the_add_ons_hook_and_contact_hurts_on_touch() {
     }
     assert!(pricked, "touching it hurt within 20 seconds");
     assert!(g.text("ability").is_empty(), "no ability of its own");
+}
+
+/// A bot sees an ally die and the rules hear it once; a bot whose enemy
+/// goes out of its sight loses them, and the rules hear that once too.
+#[test]
+fn bots_tell_the_rules_of_an_ally_dying_and_an_enemy_lost() {
+    let mut g = Game::new(vec![], Vec3::new(0.0, 0.05, 0.0), Vec3::new(6.0, 0.05, 0.0));
+    let watcher = g.add("probe:bot/walker", "Watcher");
+    let victim = g.add("probe:bot/walker", "Victim");
+    // Past their spawn protection.
+    g.steps(600);
+    g.run("pair", vec![int(watcher), int(victim)]);
+    g.run("hurt", vec![int(victim), float(100.0)]);
+    g.steps(60);
+    assert_eq!(
+        g.text("friend"),
+        format!("{watcher}:{victim};"),
+        "the watcher saw its ally die, once"
+    );
+    assert!(
+        g.text("spotted").contains(&format!("{watcher}>{};", g.me)),
+        "the watcher had the player in sight: {}",
+        g.text("spotted")
+    );
+    // The player moves out of its sight.
+    g.send(Command::DropPlayerAtCamera(Some(
+        bri_sim::session::CameraView {
+            eye: [AWAY.x, 1.65, AWAY.z],
+            yaw: 0.0,
+            pitch: 0.0,
+        },
+    )))
+    .unwrap();
+    g.steps(240);
+    assert_eq!(
+        g.text("lost"),
+        format!("{watcher}:{};", g.me),
+        "the watcher lost the player, once"
+    );
 }
 
 /// Each body plans with its own reach, measured with its own motor and
