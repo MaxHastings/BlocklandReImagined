@@ -2768,6 +2768,12 @@ pub struct TraceStrength {
     /// Any surface not named above: by default it stops the ray.
     #[serde(default)]
     pub other: TraceSurface,
+    /// What a player's body does to the ray after taking its damage: the
+    /// `penetration` share of its strength goes on out of the body
+    /// (`depth` as for any surface; a body never glances it). The default
+    /// stops the ray at the first player.
+    #[serde(default)]
+    pub players: TraceSurface,
 }
 impl TraceStrength {
     fn default_loss() -> f32 {
@@ -2790,6 +2796,7 @@ impl TraceStrength {
                 .iter()
                 .all(|(k, v)| !k.is_empty() && k.len() <= 128 && v.valid())
             && self.other.valid()
+            && self.players.valid()
     }
 }
 /// What one kind of surface does to a [`TraceStrength`] ray.
@@ -2802,10 +2809,26 @@ pub struct TraceSurface {
     /// The share of its strength the ray keeps going through, 0 to 1; 0
     /// stops it.
     pub penetration: f32,
+    /// Thickness loss, in units, 0 to 1000; 0 is none. Through `t` units
+    /// of the surface the ray also keeps `1 - t * (1 - penetration) /
+    /// depth` of its strength, so a thick slab costs more than a thin one
+    /// of the same stuff.
+    pub depth: f32,
 }
 impl TraceSurface {
     fn valid(&self) -> bool {
-        (0.0..=1.0).contains(&self.ricochet) && (0.0..=1.0).contains(&self.penetration)
+        (0.0..=1.0).contains(&self.ricochet)
+            && (0.0..=1.0).contains(&self.penetration)
+            && (0.0..=1000.0).contains(&self.depth)
+    }
+    /// The share of its strength a ray keeps through `thickness` units of
+    /// this surface, beyond `penetration` ([`Self::depth`]).
+    pub fn thickness_share(&self, thickness: f32) -> f32 {
+        if self.depth > 0.0 {
+            (1.0 - thickness * (1.0 - self.penetration) / self.depth).clamped(0.0, 1.0)
+        } else {
+            1.0
+        }
     }
 }
 /// [`Hitscan::ricochet`]: after each landing the ray turns off the surface
