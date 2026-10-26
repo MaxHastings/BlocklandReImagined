@@ -5324,6 +5324,8 @@ impl WeaponsWorld {
         // The shape a traced shot has gone into: its next landing, on the
         // same shape, is only where it comes out.
         let mut inside: Option<TargetId> = None;
+        // What it went into that shape through, for the way out.
+        let mut went_in: Option<TraceSurface> = None;
         let mut landing = 0;
         for _ in 0..=turns * 2 + 1 {
             if landing > turns {
@@ -5386,6 +5388,13 @@ impl WeaponsWorld {
             };
             let exit_lands = trace.is_some_and(|t| t.exit_lands);
             let came_through = inside.take() == Some(hit.target);
+            // The way out of a shape also wore it by how thick it was.
+            if let (true, Some(surface)) = (came_through, went_in.take()) {
+                strength *= surface.thickness_share(hit.position.distance(from));
+                if trace.is_some_and(|t| strength < t.floor) {
+                    return;
+                }
+            }
             if came_through && !exit_lands {
                 // Out the far side of what it went through: that took
                 // range, and is no landing.
@@ -5436,7 +5445,44 @@ impl WeaponsWorld {
             }
             if let Some(t) = trace {
                 if matches!(hit.target, TargetId::Actor(_)) {
-                    return;
+                    // The body is the ray's landing and, if it lets the
+                    // ray on, a thickness to cross: out of the far side,
+                    // found by sweeping back from beyond it.
+                    if t.players.penetration <= 0.0 {
+                        return;
+                    }
+                    let salt = TRACE_DRAW + u64::from(landing) * 4;
+                    landing += 1;
+                    // Something else right behind it (cover) leaves no
+                    // far side to find: the ray ends in the body.
+                    let Some(exit) = q
+                        .sweep(
+                            hit.position + direction * BODY_SPAN,
+                            hit.position,
+                            Filter {
+                                projectile_age_ticks: Some(u32::MAX),
+                                source: id,
+                                players: true,
+                                world_only: false,
+                            },
+                        )
+                        .filter(|back| back.target == hit.target)
+                        .map(|back| back.position)
+                    else {
+                        return;
+                    };
+                    let thickness = hit.position.distance(exit);
+                    strength *= t.players.penetration * t.players.thickness_share(thickness);
+                    reach -= thickness;
+                    let wander = random_unit(self.tick, id.0, salt + 1, direction);
+                    direction = (direction + wander * (t.scatter * (1.0 - strength)))
+                        .normalize_or(direction);
+                    from = exit + direction * 0.01;
+                    if strength < t.floor || reach <= 0.0 {
+                        return;
+                    }
+                    reach *= strength;
+                    continue;
                 }
                 let surface = q
                     .surface_kind(hit.target, hit.position, normal)
@@ -5465,6 +5511,11 @@ impl WeaponsWorld {
                     from = hit.position + normal * 0.01;
                 } else if passes {
                     strength *= surface.penetration;
+                    if let Some(thickness) = shape.and_then(|s| s.thickness) {
+                        strength *= surface.thickness_share(thickness);
+                    } else {
+                        went_in = Some(surface);
+                    }
                     // The less strength is left, the more it strays.
                     let wander = random_unit(self.tick, id.0, salt + 1, direction);
                     direction = (direction + wander * (t.scatter * (1.0 - strength)))
@@ -6012,6 +6063,9 @@ fn response_velocity(current: Vec3, normal: Vec3, response: ContactResponse) -> 
 const HIT_SOUND_DRAW: u64 = u64::MAX;
 /// The first salt of the draws a trace's glancing takes, four a landing.
 const TRACE_DRAW: u64 = u64::MAX - 128;
+/// How far past where a ray lands on a body its far side is looked for:
+/// longer than any body is across.
+const BODY_SPAN: f32 = 3.0;
 
 /// A direction drawn from the seeded stream, any way round; `fallback` if
 /// the draw came out null.

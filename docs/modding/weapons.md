@@ -360,8 +360,13 @@ far face. A ray that goes through a shape without a `thickness` meets the
 shape's far face as no landing: it spends the range and goes on, unless the trace sets
 `exit_lands` (default off), which makes that face a landing like any other, with
 its own glance draw and the surface's `penetration` share again. A detail
-with no `shot` leaves everything to the surface name. A landing on a player stops it, and
-so does a strength under `floor` or `max_landings` (1 to 16) landings.
+with no `shot` leaves everything to the surface name. A surface's `depth` (units, 0 to
+1000, default 0 for none) makes thickness cost strength too: through `t` units the ray
+keeps a further `1 - t * (1 - penetration) / depth`, `t` being the shape's `thickness` or the way
+measured to its far face. A landing on a player stops it unless `trace.players` (a surface:
+`penetration`, `depth`) gives a share: the body takes its damage, then the ray goes on out of its
+far side with that share of its strength, never glancing off it; with something right behind the
+body (within 3 units) the ray ends in it. A strength under `floor` or `max_landings` (1 to 16) landings stops it.
 `surfaces` names kinds as map materials and `surface_kind` give them (up to
 32); `other` is any kind not named, which stops the ray by default. Each
 landing deals the ray's `damage` times its strength then.
