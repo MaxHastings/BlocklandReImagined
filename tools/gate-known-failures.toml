@@ -276,3 +276,20 @@ target = "bri-client/night_qa"
 [ci_quick]
 slow_packages = ["bri-client", "bri-render", "bri-chaos", "bri-net"]
 keep = ["bri-client/lib", "bri-net/lib"]
+# Single targets that run after merge, not on a pull request: Slayer's teams
+# and Capture the Flag, the ported tiers and the bundled add-ons played in
+# game, 6 minutes of a shard together. They guard add-on features no pull
+# request to the engine core changes by accident.
+later = [
+    "bri-addon-import/bundled_in_game",
+    "bri-addon-import/ports",
+    "bri-addon-import/slayer",
+    "bri-addon-import/tier_port",
+]
+
+# What a shard pays for each test binary before it runs a test, on top of its
+# seconds in tools/ci-timings.json: PR 366's four shards, 2026-10-26, took 18
+# to 27 minutes for 70 to 75 binaries each while the tests themselves summed
+# to 1 to 5 minutes, so build and link cost about 13 s per binary.
+[ci_shards]
+per_binary_seconds = 13.0
