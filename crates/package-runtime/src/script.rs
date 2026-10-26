@@ -241,6 +241,11 @@ pub trait World {
         range: f32,
         ignore: Option<u64>,
     ) -> Option<RayHit>;
+    /// How long the sound profile `profile` plays, in seconds, when its
+    /// pack says.
+    fn sound_seconds(&self, _profile: &str) -> Option<f32> {
+        None
+    }
     /// The map's keyed movers (doors), in map order.
     fn movers(&self) -> Vec<MoverInfo> {
         Vec::new()
@@ -3619,6 +3624,15 @@ fn register_presentation(engine: &mut Engine) {
             })
         },
     );
+    // How long a sound profile plays, in seconds, or () when its pack does
+    // not say.
+    engine.register_fn("sound_seconds", |profile: &str| {
+        with_world(|world, _| {
+            Ok(world
+                .sound_seconds(profile)
+                .map_or(Dynamic::UNIT, |s| Dynamic::from_float(f64::from(s))))
+        })
+    });
     engine.register_fn("map_region_at", |x: Dynamic, y: Dynamic, z: Dynamic| {
         let at = [float(&x)?, float(&y)?, float(&z)?];
         with_world(|world, _| {

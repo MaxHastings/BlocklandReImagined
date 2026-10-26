@@ -299,6 +299,24 @@ pub fn check(folder: &Path) -> Report {
                             bri_audio::bank::SoundAsset::decoded_file(profile, &path, 1.0, 2.0)
                         }
                     });
+            if let (Ok(asset), Some(declared)) = (&loaded, def.seconds) {
+                let actual = match &asset.data {
+                    bri_audio::bank::ClipData::Pcm(pcm) => Some(pcm.duration_seconds()),
+                    bri_audio::bank::ClipData::Stream(_) => None,
+                };
+                if let Some(actual) = actual.filter(|a| (a - f64::from(declared)).abs() > 0.05) {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            "check.sound.seconds",
+                            format!(
+                                "sound {profile} says it plays {declared} s but the file plays {actual:.3} s"
+                            ),
+                        )
+                        .at(format!("{}/assets/{}", manifest.id, def.file))
+                        .hint("set `seconds` to the file's length, or leave it out"),
+                    );
+                }
+            }
             if let Err(e) = loaded {
                 diagnostics.push(
                     Diagnostic::error(

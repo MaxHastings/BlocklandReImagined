@@ -206,6 +206,9 @@ impl World for ScriptWorld<'_> {
             })
             .collect()
     }
+    fn sound_seconds(&self, profile: &str) -> Option<f32> {
+        self.session.weapons.pack.sound(profile)?.seconds
+    }
     fn map_region_at(&self, at: [f32; 3]) -> Option<bri_package_runtime::script::RegionInfo> {
         let (number, region) = self.session.simulation.map_region_at(at)?;
         Some(bri_package_runtime::script::RegionInfo {

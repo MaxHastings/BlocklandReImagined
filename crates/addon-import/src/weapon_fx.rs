@@ -510,6 +510,7 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 music: false,
                 package: None,
                 stock,
+                seconds: None,
             },
         );
         cx.mark(&name, "sound", "converted", vec![id.clone()], None);
