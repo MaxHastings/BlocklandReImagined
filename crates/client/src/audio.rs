@@ -399,6 +399,8 @@ pub struct ClientAudio {
     /// The ambient beds Add-On rules play, by key
     /// ([`ClientAudio::play_ambient`]).
     rule_ambient: BTreeMap<String, RuleMusic>,
+    /// The world turned down by a rule ([`ClientAudio::set_world_volume`]).
+    world_volume: Option<WorldVolume>,
     /// The looping positional sources a game mode asked for, by key ([`ClientAudio::sync_positional_sources`]).
     positional: BTreeMap<u64, PlayingSource>,
     /// Sounds placed in the world that have not yet had their way to the listener judged ([`ClientAudio::hear_world`]).
@@ -521,6 +523,7 @@ impl ClientAudio {
             music_bricks: MusicBricks::default(),
             rule_music: None,
             rule_ambient: BTreeMap::new(),
+            world_volume: None,
             positional: BTreeMap::new(),
             fresh_world: Vec::new(),
             room: Room::DRY,
@@ -866,6 +869,11 @@ impl ClientAudio {
             }
             Err(error) => self.record(Err(error)),
         }
+    }
+    /// Turn the world's sounds down as an Add-On rule asks, replacing any
+    /// before; the ramp runs in [`ClientAudio::update`].
+    pub fn set_world_volume(&mut self, set: bri_sim::session::WorldVolumeSet) {
+        self.world_volume = Some(WorldVolume { set, elapsed: 0.0 });
     }
     /// Play an Add-On rule's ambient bed under its key on the effects bus,
     /// looping at the ears or at a point in the world, replacing the bed
@@ -1245,6 +1253,11 @@ impl ClientAudio {
         self.music_bricks = MusicBricks::default();
         self.rule_music = None;
         self.rule_ambient.clear();
+        self.world_volume = None;
+        let result = self
+            .runtime
+            .set_volume(bri_audio::VolumeControl::World, 1.0);
+        self.record(result);
         for (_, old) in std::mem::take(&mut self.positional) {
             let result = self.runtime.stop(old.handle);
             self.record(result);
@@ -1290,6 +1303,17 @@ impl ClientAudio {
                 self.dropped = self.dropped.saturating_add(1);
             }
         }
+        if let Some(w) = self.world_volume.as_mut() {
+            w.elapsed += seconds;
+            let (gain, over) = (w.gain(), w.elapsed >= w.set.seconds);
+            if over {
+                self.world_volume = None;
+            }
+            let result = self
+                .runtime
+                .set_volume(bri_audio::VolumeControl::World, gain);
+            self.record(result);
+        }
         let fading: Vec<(SoundHandle, f32)> = self
             .rule_music
             .iter_mut()
@@ -1315,9 +1339,60 @@ impl ClientAudio {
     }
 }
 
+/// A rule's `world_volume` as it plays out.
+struct WorldVolume {
+    set: bri_sim::session::WorldVolumeSet,
+    elapsed: f32,
+}
+impl WorldVolume {
+    /// The world's volume now: easing down over `fade`, held, and easing
+    /// back up over the last `fade` seconds.
+    fn gain(&self) -> f32 {
+        let bri_sim::session::WorldVolumeSet {
+            scale,
+            seconds,
+            fade,
+        } = self.set;
+        let into = if fade > 0.0 {
+            (self.elapsed / fade).min(1.0)
+        } else {
+            1.0
+        };
+        let out = if fade > 0.0 {
+            ((seconds - self.elapsed) / fade).clamped(0.0, 1.0)
+        } else {
+            1.0
+        };
+        1.0 - (1.0 - scale) * into.min(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The world eases down over the fade, holds, and eases back up over
+    /// the last fade seconds.
+    #[test]
+    fn a_world_volume_eases_in_holds_and_eases_out() {
+        let at = |elapsed| {
+            WorldVolume {
+                set: bri_sim::session::WorldVolumeSet {
+                    scale: 0.2,
+                    seconds: 10.0,
+                    fade: 2.0,
+                },
+                elapsed,
+            }
+            .gain()
+        };
+        assert_eq!(at(0.0), 1.0);
+        assert!((at(1.0) - 0.6).abs() < 1e-6);
+        assert!((at(2.0) - 0.2).abs() < 1e-6);
+        assert!((at(5.0) - 0.2).abs() < 1e-6);
+        assert!((at(9.0) - 0.6).abs() < 1e-6);
+        assert!((at(10.0) - 1.0).abs() < 1e-6);
+    }
 
     /// The engine runs while its driver's seat is taken, louder and higher
     /// with speed, and stops when the driver gets out or it is destroyed.
@@ -1855,6 +1930,7 @@ mod tests {
             music: false,
             package: None,
             stock: true,
+            seconds: None,
         };
         let boom = "addon:sound/boomsound";
         pack.sounds.insert(
@@ -2100,6 +2176,7 @@ mod tests {
                 music: false,
                 package: None,
                 stock: false,
+                seconds: None,
             },
         );
         let heard = |distance: f32| -> Result<f32> {

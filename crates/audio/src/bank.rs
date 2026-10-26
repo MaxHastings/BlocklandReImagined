@@ -218,7 +218,7 @@ impl SoundAsset {
             max_distance: range.max(1.0),
             falloff: crate::schema::Falloff::Linear,
         });
-        playback.bus = Bus::Effects;
+        playback.bus = Bus::Bed;
         playback.looping = true;
         Self {
             id: self.id.clone(),

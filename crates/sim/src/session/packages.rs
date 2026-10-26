@@ -660,6 +660,12 @@ pub(super) fn archetype(
     if let Some(bones) = &def.hit_bones_prone {
         archetype.hit_bones_prone = bones.clone();
     }
+    if let Some(v) = def.crouch_damage {
+        archetype.crouch_damage = crate::archetype::CrouchDamage {
+            direct: v.direct,
+            indirect: v.indirect,
+        };
+    }
     if let Some(v) = &def.model {
         archetype.look.model = v.clone();
     }
@@ -4110,6 +4116,44 @@ impl Session {
             self.charge_work(package);
         }
         !hooks.is_empty()
+    }
+    /// What a bot noticed (`bots::Report`), told to the hook of every package
+    /// that declares it, in load order: `(bot, other)`, or `(bot)` for
+    /// running out of ammo.
+    pub(super) fn package_bot_report(&mut self, report: super::bots::Report) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let (hook, other) = report.hook();
+        let hears = |b: &bri_package_runtime::content::Behaviour| match hook {
+            "on_bot_spotted" => b.on_bot_spotted,
+            "on_bot_heard_gunfire" => b.on_bot_heard_gunfire,
+            "on_bot_under_fire" => b.on_bot_under_fire,
+            "on_bot_sees_grenade" => b.on_bot_sees_grenade,
+            "on_bot_friend_died" => b.on_bot_friend_died,
+            "on_bot_lost_enemy" => b.on_bot_lost_enemy,
+            _ => b.on_bot_out_of_ammo,
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| hears(b))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut args = vec![Dynamic::from_int(report.bot() as i64)];
+        args.extend(other.map(|o| Dynamic::from_int(o as i64)));
+        for package in &hooks {
+            let _ = self.run_package(
+                package,
+                hook,
+                args.clone(),
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(package);
+        }
     }
     fn deliver_deaths(&mut self) {
         let Some(host) = self.packages.as_mut() else {

@@ -366,6 +366,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             collide_players: flag(d, "collideWithPlayers", true),
             pass_source: false,
             settle_speed: 0.0,
+            collision_radius: 0.0,
             explosion,
             brick: BrickImpact {
                 radius: num(d, "brickExplosionRadius", 0.0),

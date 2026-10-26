@@ -452,6 +452,8 @@ pub struct Core {
     pub underwater: Vec<[f32; 4]>,
     /// Rules' screen flashes: colour, seconds left, seconds in all.
     pub flashes: Vec<([f32; 4], f32, f32)>,
+    /// Rules' screen overlays running, each with the seconds it has run.
+    pub overlays: Vec<(bri_content::screen_overlay::Overlay, f32)>,
     /// `NetGraphGui` while it is on the canvas (`toggleNetGraph`).
     pub net_graph: Option<crate::models::perf::NetGraph>,
     /// The performance overlay (not in v20).
@@ -623,6 +625,7 @@ impl Core {
         self.hud_regions.clear();
         self.whiteout = 0.0;
         self.flashes.clear();
+        self.overlays.clear();
         self.underwater.clear();
         self.lagging = false;
         self.super_shift = false;
@@ -1675,6 +1678,7 @@ impl Ui {
             energy: None,
             whiteout: 0.0,
             flashes: Vec::new(),
+            overlays: Vec::new(),
             underwater: Vec::new(),
             net_graph: None,
             perf: Default::default(),
@@ -2249,6 +2253,26 @@ impl Ui {
                     let seconds = seconds.min(10.0);
                     c.flashes
                         .push((color.map(|v| v.clamped(0.0, 1.0)), seconds, seconds));
+                }
+            }
+            UiUpdate::Overlay(overlay) => {
+                if overlay.bounded() {
+                    let full = bri_content::screen_overlay::MAX_OVERLAYS;
+                    if c.overlays.len() >= full {
+                        // The one with the least time left makes room.
+                        if let Some(least) = c
+                            .overlays
+                            .iter()
+                            .enumerate()
+                            .min_by(|a, b| {
+                                (a.1.0.seconds - a.1.1).total_cmp(&(b.1.0.seconds - b.1.1))
+                            })
+                            .map(|(i, _)| i)
+                        {
+                            c.overlays.remove(least);
+                        }
+                    }
+                    c.overlays.push((overlay, 0.0));
                 }
             }
             UiUpdate::DamageFlash(amount) => {
@@ -2911,6 +2935,10 @@ impl Ui {
             flash.1 -= dt_ms as f32 / 1000.0;
         }
         c.flashes.retain(|f| f.1 > 0.0);
+        for (_, ran) in &mut c.overlays {
+            *ran += dt_ms as f32 / 1000.0;
+        }
+        c.overlays.retain(|(overlay, ran)| *ran < overlay.seconds);
         let now = c.time_ms;
         for cmd in c.repeater.due(now) {
             let (super_mode, base) = match cmd.strip_prefix("super:") {

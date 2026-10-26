@@ -11,7 +11,7 @@
 //! the same budget: a ragdoll that would not fit settles the oldest, and one
 //! that still does not fit is refused, loudly, and the body plays its death
 //! clip.
-use crate::addon_physics::{AddOnPhysics, BoneShape, BoneSpec};
+use crate::addon_physics::{AddOnPhysics, BoneShape, BoneSpec, SoftCone};
 use crate::avatar::BoneFrames;
 use crate::building::Building;
 use anyhow::{Result, bail, ensure};
@@ -264,6 +264,10 @@ impl Ragdolls {
                 } else {
                     joint.twist_damping.unwrap_or(joint.damping)
                 },
+                joint.cone_stiffness.map(|stiffness| SoftCone {
+                    stiffness,
+                    damping: joint.cone_damping,
+                }),
             );
         }
         // The hit's push, at the point it struck, on the bone nearest it.
@@ -536,6 +540,31 @@ mod tests {
         }
         ragdolls.stop(7);
         assert!(!ragdolls.is_live(7));
+    }
+
+    /// A joint with a soft cone has no stop: its spring and damper pull the
+    /// swing back past the cone, and the body still falls to the floor with
+    /// its bones joined.
+    #[test]
+    fn a_soft_cone_joint_lets_the_body_fall_with_its_bones_still_joined() {
+        let mut json = serde_json::to_value(ragdoll()).unwrap();
+        json["bones"][1]["joint"]["cone_stiffness"] = 100.0.into();
+        json["bones"][1]["joint"]["cone_damping"] = 3.0.into();
+        let ragdoll: Ragdoll = serde_json::from_value(json).unwrap();
+        let mut ragdolls = Ragdolls::default();
+        ragdolls.start(7, &frames(2.0), &death(&ragdoll)).unwrap();
+        run(&mut ragdolls, 3.0);
+        let nodes = ragdolls.nodes(7);
+        let (hip, thigh, shin) = (at(&nodes, 0), at(&nodes, 1), at(&nodes, 2));
+        assert!(
+            hip.is_finite() && thigh.is_finite() && shin.is_finite(),
+            "no blow-up: {hip:?} {thigh:?} {shin:?}"
+        );
+        assert!(hip.y < 0.5, "the hip lies on the floor: {hip:?}");
+        assert!(
+            (hip.distance(thigh) - 0.4).abs() < 0.08,
+            "the thigh stays joined: {hip:?} {thigh:?}"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # Content-free checks. Tests that need the generated v20 content are
 # #[ignore]d or listed as ci_skip_target in tools/gate-known-failures.toml;
 # the local push gate (tools/gate.py) runs them all. Pull requests run the
-# quick "pr" tier: every target except the slow packages' end-to-end, GPU and
+# quick "pr" tier, on Linux: every target except the slow packages' end-to-end, GPU and
 # soak suites ([ci_quick] in gate-known-failures.toml). Pushes to main run the
 # "main" tier, everything but the slow offscreen renders (ci_nightly_target);
 # the nightly and manual runs run it all. The push gate runs those too, on a
@@ -107,6 +107,7 @@ jobs:
   # gate's own limit is ten): the hosted runner draws on the WARP software
   # renderer, where the lighting and mirror targets take several minutes.
   test:
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 120
     strategy:
@@ -127,4 +128,33 @@ jobs:
         env:
           WGPU_BACKEND: dx12
           WGPU_DX12_COMPILER: dxc
+          RUST_TEST_THREADS: 1
+
+  # The pull-request test tier, on Linux (software Vulkan; 24.04 for the
+  # tooling's Python 3.11+). PR 371, 2026-10-26: all four shards passed in 9 to
+  # 11 minutes warm (18 cold), against 9 to 22 on Windows runners, whose queue
+  # and 140 MB debug links are slower. Pushes to main and the nightly run
+  # still test on Windows, the platform the game ships on.
+  test-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install native build dependencies and software Vulkan
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers libvulkan1
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-test
+          cache-on-failure: true
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Test (pr tier on Linux, shard ${{ matrix.shard }} of 4)
+        run: python3 tools/gate.py --ci-test --tier pr --shard ${{ matrix.shard }}/4 --binary-timeout 30
+        env:
+          WGPU_BACKEND: vulkan
           RUST_TEST_THREADS: 1

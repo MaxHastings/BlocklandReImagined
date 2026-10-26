@@ -2017,6 +2017,7 @@ mod tests {
                 music: false,
                 package: None,
                 stock: true,
+                seconds: None,
             },
         );
         // Every native file the pack ships, with made-up bytes.
