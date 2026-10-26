@@ -1345,6 +1345,7 @@ impl Session {
         PlayerView {
             id: owner,
             bot_kind: self.bot_kind_id(owner).unwrap_or_default().to_owned(),
+            composure: self.bot_composure(owner),
             key: self.player_key(owner),
             name: p.name.clone(),
             position: p.player.state().feet,

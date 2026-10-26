@@ -139,6 +139,10 @@ pub struct PlayerView {
     /// The brain's authored kind, independently of its current body. Empty for humans.
     #[serde(default)]
     pub bot_kind: String,
+    /// How steady a bot stays under fire, -99 to 99 (`composure` in its kind's
+    /// `bots.json`); `()` to rules for a bot with none and for people.
+    #[serde(default)]
+    pub composure: Option<f32>,
     /// Body scale (1 for a normal body).
     #[serde(default)]
     pub scale: f32,
@@ -914,6 +918,11 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ),
         ("model", p.model.clone().into()),
         ("bot_kind", p.bot_kind.clone().into()),
+        (
+            "composure",
+            p.composure
+                .map_or(Dynamic::UNIT, |c| Dynamic::from_float(f64::from(c))),
+        ),
         float_entry("scale", p.scale),
         float_entry("cx", p.center[0]),
         float_entry("cy", p.center[1]),

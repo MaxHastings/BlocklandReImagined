@@ -44,6 +44,7 @@ mod controls;
 pub(super) use charged_control::FireAdmission;
 mod claims;
 mod combat_objectives;
+mod composure;
 mod contest;
 mod cooldown;
 mod explore;
@@ -450,6 +451,11 @@ struct Brain {
     crossed: u64,
     /// The rules hold its brain still (`rest_bot`).
     resting: bool,
+    /// How steady it is under fire (`composure`), and when a blow last
+    /// landed and it was last brought back toward its start.
+    composure: f32,
+    nervous_at: u64,
+    composure_tick: u64,
     /// A rules bot came back to life: where it stands next is its home.
     rehome: bool,
     sequence: u64,
@@ -719,6 +725,7 @@ impl Brain {
     }
     fn new(brick: Option<BrickId>, kind: BotKind, home: Vec3, bot: OwnerId, crossed: u64) -> Self {
         let return_home = kind.return_home;
+        let kind_composure = kind.composure.start;
         Self {
             brick,
             kind: std::sync::Arc::new(kind),
@@ -728,6 +735,9 @@ impl Brain {
             auto_respawn: true,
             crossed,
             resting: false,
+            composure: kind_composure,
+            nervous_at: 0,
+            composure_tick: 0,
             rehome: brick.is_none(),
             sequence: 0,
             rng: 0x2545_F491_4F6C_DD1D ^ bot.wrapping_mul(0x9E37_79B9),
@@ -1118,6 +1128,9 @@ impl Bots {
     pub(super) fn note_hurt(&mut self, bot: OwnerId, source: Option<(OwnerId, Vec3)>, tick: u64) {
         if source.is_none() && self.brains.contains_key(&bot) {
             self.unnoticed_hits.insert(bot, ("hit by no one", tick));
+        }
+        if let Some(brain) = self.brains.get_mut(&bot) {
+            brain.nervous("hurt", tick);
         }
         if let Some(source) = source.filter(|(s, _)| *s != bot)
             && self.brains.contains_key(&bot)
@@ -2736,6 +2749,7 @@ impl Session {
         if brain.sequence == 0 {
             brain.yaw = state.yaw;
         }
+        brain.recover(tick);
         // Remember enemies seen, and where a hit came from.
         let memory_ticks = ticks(kind.memory_seconds);
         let mut warn = None;
@@ -2745,6 +2759,7 @@ impl Session {
                 if fresh {
                     brain.target = Some(seen.owner);
                     brain.seen_since = tick;
+                    brain.nervous("seen", tick);
                     self.bots.spotted.push((bot, seen.owner));
                 }
                 brain.perceive(seen.owner, seen.real, feet, tick, fresh, damageable);

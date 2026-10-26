@@ -8,9 +8,11 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+mod composure;
 mod surprise;
 mod team;
 pub mod tuning;
+pub use composure::{Blow, BotComposure};
 pub use surprise::{BotSurprise, FLAVOURS};
 pub use team::{BotTeam, CALLOUTS, TERMS};
 
@@ -136,6 +138,9 @@ pub struct BotKind {
     /// Below this share of its health, with an enemy about, it runs away
     /// from them (the `flee` behaviour); 0 never.
     pub flee_below: f32,
+    /// How steady it stays under fire (`composure`): none unless its Add-On
+    /// gives it an events table.
+    pub composure: BotComposure,
 }
 /// What a minimal-profile bot costs as a share of a full Blockhead bot:
 /// measured at 21 to 24 percent (`creature_think_time_16` in
@@ -438,6 +443,7 @@ impl Default for BotKind {
             contact: None,
             ability: None,
             flee_below: 0.0,
+            composure: BotComposure::default(),
         }
     }
 }
@@ -685,6 +691,9 @@ impl BotKind {
             .validate()
             .with_context(|| format!("Bot `{}`", self.id))?;
         self.team
+            .validate()
+            .with_context(|| format!("Bot `{}`", self.id))?;
+        self.composure
             .validate()
             .with_context(|| format!("Bot `{}`", self.id))?;
         Ok(())

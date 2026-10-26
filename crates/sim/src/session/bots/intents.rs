@@ -188,7 +188,8 @@ impl Session {
             _ => None,
         };
         let hurt = brain.kind.flee_below > 0.0
-            && peer.combat.health <= self.max_health(bot) * brain.kind.flee_below;
+            && peer.combat.health <= self.max_health(bot) * brain.kind.flee_below
+            || brain.panicked();
         if !hurt && intent.is_none() {
             return None;
         }

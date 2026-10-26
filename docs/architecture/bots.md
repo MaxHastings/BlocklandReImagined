@@ -999,6 +999,14 @@ its kind and team label. See `bots/looks.rs`.
   - `ability`: an attack its Add-On defines (see Attacks below).
   - `flee_below` (0 to 1): it runs from the enemy it sees or knows of
     once its health is that share of its most or less (`Behaviour::Flee`).
+  - `composure` (`start`, `recover_seconds`, `panic`, `events`): how steady it stays under fire,
+    one number from `start` (-99 to 99 range) that an event table takes points off: `seen`
+    (an enemy newly in view), `heard` (fighting heard), `hurt` (a hit taken), each a `delta`
+    that applies only while composure is at or above its `floor`. One point returns each
+    `recover_seconds` once a second has passed since the last blow. At or below `panic` it runs
+    from what it knows of its enemies, as under `flee_below`. No `events`, no composure (the
+    plain brain); rules read it as `composure` on a bot's view (`()` for none). The mechanism
+    is generic and the numbers are the Add-On's.
   - Cost: a kind with no hand weapons, tactics, seats, teamwork, surprise
     or perception strength is a minimal profile and counts a quarter of a
     bot against the server's bot limit (`BotKind::cost`,

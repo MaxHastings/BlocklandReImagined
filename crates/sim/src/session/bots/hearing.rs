@@ -192,6 +192,7 @@ impl Session {
                 // Remembered long enough to walk there and look round.
                 let walk = self.peers[&bot].player.tuning().forward.max(1.0);
                 let brain = self.bots.brains.get_mut(&bot).unwrap();
+                brain.nervous("heard", tick);
                 let angle = brain.random() * std::f32::consts::TAU;
                 let off = brain.random() * distance * FIGHT_HEARD_ROUGHLY;
                 let k = Knowledge {

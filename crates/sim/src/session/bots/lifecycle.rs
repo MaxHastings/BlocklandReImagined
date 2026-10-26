@@ -674,13 +674,18 @@ impl Session {
             }
         }
     }
-    /// The bot kinds as rules see them (`bot_kinds()`).
+    /// A bot's composure, when its kind has any (`BotComposure`).
+    pub(in crate::session) fn bot_composure(&self, bot: OwnerId) -> Option<f32> {
+        let brain = self.bots.brains.get(&bot)?;
+        brain.kind.composure.is_on().then_some(brain.composure)
+    }
     pub(in crate::session) fn bot_kind_id(&self, bot: OwnerId) -> Option<&str> {
         self.bots
             .brains
             .get(&bot)
             .map(|brain| brain.kind.id.as_str())
     }
+    /// The bot kinds as rules see them (`bot_kinds()`).
     pub(in crate::session) fn bot_kind_views(
         &self,
     ) -> Vec<bri_package_runtime::script::BotKindView> {
