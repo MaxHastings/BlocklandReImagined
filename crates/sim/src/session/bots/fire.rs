@@ -444,6 +444,13 @@ impl Session {
         };
         if let Some(brain) = self.bots.brains.get_mut(&bot) {
             brain.gate = Some((tick, why));
+            if why == "out of ammo" {
+                if !std::mem::replace(&mut brain.out_of_ammo, true) {
+                    self.bots.reports.tell(Report::OutOfAmmo(bot));
+                }
+            } else if matches!(allowed, FireAdmission::Allow) {
+                brain.out_of_ammo = false;
+            }
         }
         Some(allowed)
     }

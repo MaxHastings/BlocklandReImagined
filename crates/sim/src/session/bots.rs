@@ -61,9 +61,11 @@ mod looks;
 mod objectives;
 mod package_objectives;
 mod perception;
+mod reports;
 mod work_objectives;
 pub use perception::BotNotice;
 pub(super) use perception::Stimulus;
+pub(super) use reports::Report;
 mod physical_objectives;
 mod planning;
 mod search_memory;
@@ -362,9 +364,9 @@ pub(super) struct Bots {
     /// Warnings bots gave this tick (`BotKind::alerts_allies`), heard by
     /// their side once every bot has stepped.
     alerts: Vec<Alert>,
-    /// `(bot, enemy)` for each bot that took a new enemy as its target this
-    /// tick, told to the rules (`on_bot_spotted`) once every bot has stepped.
-    spotted: Vec<(OwnerId, OwnerId)>,
+    /// What bots noticed this tick, told to the rules once every bot has
+    /// stepped (`reports`).
+    reports: reports::Reports,
     /// When each bot's failed step was last told (`step_bots`).
     failed_told: BTreeMap<OwnerId, u64>,
     /// When each bot's stall was last told (`tell_stall`).
@@ -390,7 +392,7 @@ pub(super) struct Bots {
     stimuli: Vec<Stimulus>,
     /// Sounds players' weapons made since bots last stepped: who, where
     /// and how loud (`Session::hear_fighting`).
-    noises: Vec<(OwnerId, Vec3, f32)>,
+    noises: Vec<(OwnerId, Vec3, f32, bool)>,
     /// The tick's shared sight-ray budget (`sightlines`).
     sightlines: std::sync::Mutex<sightlines::Sightlines>,
     /// Who sides with whom, as answered this tick (`sight::bot_allies`):
@@ -500,6 +502,9 @@ struct Brain {
     yaw: f32,
     pitch: f32,
     target: Option<OwnerId>,
+    /// It found itself out of rounds and has not fired since
+    /// (`Report::OutOfAmmo`).
+    out_of_ammo: bool,
     /// Tick the current target was first seen.
     seen_since: u64,
     /// Its aim error now, radians (yaw, pitch): a seeded drift.
@@ -753,6 +758,7 @@ impl Brain {
             yaw: 0.0,
             pitch: 0.0,
             target: None,
+            out_of_ammo: false,
             seen_since: 0,
             error: (0.0, 0.0),
             memory: None,
@@ -1373,11 +1379,7 @@ impl Session {
             .retain(|b, _| self.bots.brains.contains_key(b));
         self.bots.stimuli.clear();
         self.hear_alerts(tick);
-        for (bot, enemy) in std::mem::take(&mut self.bots.spotted) {
-            if !self.bot_gone(bot) {
-                self.package_bot_spotted(bot, enemy);
-            }
-        }
+        self.tell_reports(tick);
         self.hear_fighting(tick);
         Ok(())
     }
@@ -2745,7 +2747,7 @@ impl Session {
                 if fresh {
                     brain.target = Some(seen.owner);
                     brain.seen_since = tick;
-                    self.bots.spotted.push((bot, seen.owner));
+                    self.bots.reports.tell(Report::Spotted(bot, seen.owner));
                 }
                 brain.perceive(seen.owner, seen.real, feet, tick, fresh, damageable);
                 let knowledge = Knowledge {
@@ -2761,7 +2763,11 @@ impl Session {
                 }
             }
             None => {
-                brain.target = None;
+                if let Some(lost) = brain.target.take()
+                    && self.peers.get(&lost).is_some_and(|p| p.combat.alive)
+                {
+                    self.bots.reports.tell(Report::LostEnemy(bot, lost));
+                }
                 if let Some(k) = hurt_by.or(followed) {
                     if brain.memory.is_none_or(|old| old.observed <= k.observed) {
                         brain.memory = Some(k);

@@ -432,9 +432,34 @@ pub struct Behaviour {
     /// `on_bot_spotted(bot, enemy)` as a bot takes `enemy` as its target:
     /// once per change of target (it first sees someone, or turns from one
     /// enemy to another), not per tick, for every bot. Every package that
-    /// declares it hears it, in load order.
+    /// declares it hears it, in load order. The perception hooks below
+    /// are delivered the same way, for every bot, each once per occurrence.
     #[serde(default)]
     pub on_bot_spotted: bool,
+    /// `on_bot_heard_gunfire(bot, shooter)` as a bot with nothing else to go
+    /// on hears an enemy's weapon and takes note of where it was.
+    #[serde(default)]
+    pub on_bot_heard_gunfire: bool,
+    /// `on_bot_under_fire(bot, shooter)` as a hitscan shot of an enemy
+    /// passes within the kind's `under_fire_range` of the bot and does not
+    /// hit it.
+    #[serde(default)]
+    pub on_bot_under_fire: bool,
+    /// `on_bot_sees_grenade(bot, projectile)` the first time a bot sees a
+    /// live projectile that explodes (not its own), `projectile` its id.
+    #[serde(default)]
+    pub on_bot_sees_grenade: bool,
+    /// `on_bot_friend_died(bot, friend)` as a bot sees an ally die.
+    #[serde(default)]
+    pub on_bot_friend_died: bool,
+    /// `on_bot_lost_enemy(bot, enemy)` as a bot that had `enemy` in sight
+    /// no longer sees them (they live).
+    #[serde(default)]
+    pub on_bot_lost_enemy: bool,
+    /// `on_bot_out_of_ammo(bot)` as a bot finds it cannot fire its weapon
+    /// for want of rounds; again only after it has fired since.
+    #[serde(default)]
+    pub on_bot_out_of_ammo: bool,
     /// `on_contact(info)` as two bodies begin to touch: `info` is
     /// `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`.
     /// `kind` is `"body"` (a player's body meeting another's), `"vehicle"`

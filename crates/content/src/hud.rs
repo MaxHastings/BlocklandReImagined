@@ -1018,7 +1018,12 @@ pub struct Mark {
     pub rot: f32,
     pub color: [f32; 4],
     pub blink: bool,
+    /// Times the panel's `mark_size`; an objective drawn larger than a teammate.
+    pub scale: f32,
 }
+
+/// The smallest and largest `scale` a mark takes.
+pub const MARK_SCALE: std::ops::RangeInclusive<f32> = 0.1..=8.0;
 impl Mark {
     /// The marks in a rule's state value, an array of objects; one that is
     /// not understood is left out.
@@ -1060,6 +1065,9 @@ impl Mark {
                 .get("blink")
                 .and_then(|b| b.as_bool())
                 .unwrap_or(false),
+            scale: number("scale")
+                .unwrap_or(1.0)
+                .clamped(*MARK_SCALE.start(), *MARK_SCALE.end()),
         })
     }
 }
@@ -2842,10 +2850,10 @@ pub fn resolve_live(
                             texture: key,
                             uv: [0.0, 0.0, 1.0, 1.0],
                             rect: [
-                                cx + mx - mark_size[0] / 2.0,
-                                cy + my - mark_size[1] / 2.0,
-                                mark_size[0],
-                                mark_size[1],
+                                cx + mx - mark_size[0] * mark.scale / 2.0,
+                                cy + my - mark_size[1] * mark.scale / 2.0,
+                                mark_size[0] * mark.scale,
+                                mark_size[1] * mark.scale,
                             ],
                             tint: mark.color,
                             turn: mark.rot.to_radians() + turn,
@@ -3114,6 +3122,7 @@ mod tests {
             rot: 0.0,
             color: [1.0; 4],
             blink: false,
+            scale: 1.0,
         }
     }
     /// What a panel draws for a viewer at `position`, `altitude`, facing
@@ -3363,7 +3372,7 @@ mod tests {
     fn mark_lists_are_read_leniently_and_a_radar_is_checked() {
         let marks = Mark::parse_list(&serde_json::json!([
             { "icon": "friend", "x": 1, "y": 2, "z": 3, "rot": 90, "color": [1, 0, 0], "blink": true },
-            { "icon": "friend", "x": 1, "z": 3 },
+            { "icon": "friend", "x": 1, "z": 3, "scale": 1.5 },
             { "icon": "friend", "x": 1 },
             { "x": 1, "z": 3 },
             "junk"
@@ -3374,6 +3383,11 @@ mod tests {
             ([1.0, 2.0, 3.0], 90.0, [1.0, 0.0, 0.0, 1.0], true)
         );
         assert_eq!((marks[1].at, marks[1].blink), ([1.0, 0.0, 3.0], false));
+        // A mark is its panel's size unless it says larger, within limits.
+        assert_eq!((marks[0].scale, marks[1].scale), (1.0, 1.5));
+        let huge =
+            Mark::parse_list(&serde_json::json!([{ "icon": "a", "x": 0, "z": 0, "scale": 99 }]));
+        assert_eq!(huge[0].scale, *MARK_SCALE.end());
         assert!(Mark::parse_list(&serde_json::json!({ "icon": "friend" })).is_empty());
         for bad in [
             serde_json::json!({ "range": [] }),

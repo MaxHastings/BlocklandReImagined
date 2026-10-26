@@ -4117,26 +4117,36 @@ impl Session {
         }
         !hooks.is_empty()
     }
-    /// `on_bot_spotted(bot, enemy)` of every package that declares it, in
-    /// load order: `bot` has taken `enemy` as its target.
-    pub(super) fn package_bot_spotted(&mut self, bot: OwnerId, enemy: OwnerId) {
+    /// What a bot noticed (`bots::Report`), told to the hook of every package
+    /// that declares it, in load order: `(bot, other)`, or `(bot)` for
+    /// running out of ammo.
+    pub(super) fn package_bot_report(&mut self, report: super::bots::Report) {
         let Some(host) = self.packages.as_ref() else {
             return;
+        };
+        let (hook, other) = report.hook();
+        let hears = |b: &bri_package_runtime::content::Behaviour| match hook {
+            "on_bot_spotted" => b.on_bot_spotted,
+            "on_bot_heard_gunfire" => b.on_bot_heard_gunfire,
+            "on_bot_under_fire" => b.on_bot_under_fire,
+            "on_bot_sees_grenade" => b.on_bot_sees_grenade,
+            "on_bot_friend_died" => b.on_bot_friend_died,
+            "on_bot_lost_enemy" => b.on_bot_lost_enemy,
+            _ => b.on_bot_out_of_ammo,
         };
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
-            .filter(|(_, b)| b.on_bot_spotted)
+            .filter(|(_, b)| hears(b))
             .map(|(id, _)| id.clone())
             .collect();
+        let mut args = vec![Dynamic::from_int(report.bot() as i64)];
+        args.extend(other.map(|o| Dynamic::from_int(o as i64)));
         for package in &hooks {
             let _ = self.run_package(
                 package,
-                "on_bot_spotted",
-                vec![
-                    Dynamic::from_int(bot as i64),
-                    Dynamic::from_int(enemy as i64),
-                ],
+                hook,
+                args.clone(),
                 Budget::Command,
                 None,
                 None,

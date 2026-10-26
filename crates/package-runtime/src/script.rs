@@ -4769,8 +4769,18 @@ impl Runtime {
             if behaviour.on_bot_ability {
                 need("on_bot_ability".into(), 4, "on_bot_ability");
             }
-            if behaviour.on_bot_spotted {
-                need("on_bot_spotted".into(), 2, "on_bot_spotted");
+            for (declared, name, arity) in [
+                (behaviour.on_bot_spotted, "on_bot_spotted", 2),
+                (behaviour.on_bot_heard_gunfire, "on_bot_heard_gunfire", 2),
+                (behaviour.on_bot_under_fire, "on_bot_under_fire", 2),
+                (behaviour.on_bot_sees_grenade, "on_bot_sees_grenade", 2),
+                (behaviour.on_bot_friend_died, "on_bot_friend_died", 2),
+                (behaviour.on_bot_lost_enemy, "on_bot_lost_enemy", 2),
+                (behaviour.on_bot_out_of_ammo, "on_bot_out_of_ammo", 1),
+            ] {
+                if declared {
+                    need(name.into(), arity, name);
+                }
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
