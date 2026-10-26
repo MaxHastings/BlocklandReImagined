@@ -4731,6 +4731,9 @@ impl Runtime {
             if behaviour.on_bot_ability {
                 need("on_bot_ability".into(), 4, "on_bot_ability");
             }
+            if behaviour.on_bot_spotted {
+                need("on_bot_spotted".into(), 2, "on_bot_spotted");
+            }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
             }

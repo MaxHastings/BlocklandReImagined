@@ -429,6 +429,12 @@ pub struct Behaviour {
     /// `kind` for its own.
     #[serde(default)]
     pub on_bot_ability: bool,
+    /// `on_bot_spotted(bot, enemy)` as a bot takes `enemy` as its target:
+    /// once per change of target (it first sees someone, or turns from one
+    /// enemy to another), not per tick, for every bot. Every package that
+    /// declares it hears it, in load order.
+    #[serde(default)]
+    pub on_bot_spotted: bool,
     /// `on_contact(info)` as two bodies begin to touch: `info` is
     /// `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`.
     /// `kind` is `"body"` (a player's body meeting another's), `"vehicle"`
