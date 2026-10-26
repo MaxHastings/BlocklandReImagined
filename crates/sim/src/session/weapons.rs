@@ -661,7 +661,7 @@ impl Session {
                     self.bots
                         .notice(super::bots::Stimulus::sound(position, volume));
                     if let TargetId::Actor(actor) = source {
-                        self.bots.noise(actor.0, position, volume);
+                        self.bots.noise(actor.0, position, volume, true);
                     }
                     self.cues.emit(
                         tick,
@@ -864,15 +864,22 @@ impl Session {
                     );
                 }
                 WeaponEvent::Tracer {
-                    actor, hand, to, ..
-                } => self.cues.emit(
-                    tick,
-                    crate::presentation::CueKind::Tracer {
-                        actor: actor.0,
-                        hand,
-                    },
-                    to.to_array(),
-                ),
+                    actor,
+                    hand,
+                    from,
+                    to,
+                    ..
+                } => {
+                    self.bots.note_shot(actor.0, from, to);
+                    self.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::Tracer {
+                            actor: actor.0,
+                            hand,
+                        },
+                        to.to_array(),
+                    )
+                }
                 // A ricochet's further streak, in the image's tracer style,
                 // as a beam: it starts where the ray turned, not a muzzle.
                 WeaponEvent::Ricochet {
