@@ -429,6 +429,12 @@ pub struct Behaviour {
     /// `kind` for its own.
     #[serde(default)]
     pub on_bot_ability: bool,
+    /// `on_bot_spotted(bot, enemy)` as a bot takes `enemy` as its target:
+    /// once per change of target (it first sees someone, or turns from one
+    /// enemy to another), not per tick, for every bot. Every package that
+    /// declares it hears it, in load order.
+    #[serde(default)]
+    pub on_bot_spotted: bool,
     /// `on_contact(info)` as two bodies begin to touch: `info` is
     /// `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`.
     /// `kind` is `"body"` (a player's body meeting another's), `"vehicle"`
@@ -1772,6 +1778,16 @@ impl EntityKind {
     }
 }
 
+/// The damage multipliers of a crouched body (`crouch_damage`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrouchDamageDef {
+    /// On a direct hit.
+    pub direct: f32,
+    /// On any other damage.
+    pub indirect: f32,
+}
+
 /// A player archetype: what a player is. It starts from `base` (an
 /// archetype id; v20's standard player by default) and overrides only what
 /// it names. `movement` takes any motor constant by name (`gravity`,
@@ -1811,6 +1827,20 @@ pub struct ArchetypeDef {
     /// damage multiplier, replacing the base's. Left out, the base's.
     #[serde(default)]
     pub hit_bones: Option<Vec<bri_content::hit_bones::HitBone>>,
+    /// The bones where a crouched body's animation holds them, replacing the
+    /// base's. Left out, the base's.
+    #[serde(default)]
+    pub hit_bones_crouched: Option<Vec<bri_content::hit_bones::HitBone>>,
+    /// The bones where a body lying prone holds them, replacing the base's.
+    /// Left out, the base's.
+    #[serde(default)]
+    pub hit_bones_prone: Option<Vec<bri_content::hit_bones::HitBone>>,
+    /// Damage multipliers while the body is crouched, `direct` for direct
+    /// hits and `indirect` for the rest, replacing the base's. v20's
+    /// players take 2.1 and 0.75; `{"direct": 1, "indirect": 1}` makes
+    /// crouching change nothing. Left out, the base's.
+    #[serde(default)]
+    pub crouch_damage: Option<CrouchDamageDef>,
     /// Model id the clients draw: a package model (`namespace:model/name`)
     /// or one of v20's shapes (`v20.shape.m` is the Blockhead).
     #[serde(default)]
@@ -1857,6 +1887,10 @@ pub struct ArchetypeDef {
     /// the base's.
     #[serde(default)]
     pub deaths: Option<bri_content::body::Deaths>,
+    /// A body that goes limp when it dies, drawn on each screen only and
+    /// replacing its death clip (see the content kinds document: `ragdoll`).
+    #[serde(default)]
+    pub ragdoll: Option<bri_content::body::Ragdoll>,
     /// The model's clip for each of its movement controller's intents
     /// (`{"11": "triple"}`), replacing the base's.
     #[serde(default)]
@@ -1883,6 +1917,9 @@ pub struct ArchetypeDef {
     /// Seconds a dead body lies before it is gone (v20's 5), 0 to 600.
     #[serde(default)]
     pub corpse_seconds: Option<f32>,
+    /// The body lies until its player spawns again, whatever `corpse_seconds` says.
+    #[serde(default)]
+    pub corpse_stays: Option<bool>,
     /// The last of those seconds the body fades out over, instead of
     /// vanishing in a puff; 0 to `corpse_seconds`.
     #[serde(default)]
@@ -1942,7 +1979,7 @@ pub struct ArchetypeSounds {
     /// The noise of landing from a fall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land_noise: Option<LandNoiseDef>,
-    /// A sound for entering each posture (`stand`, `crouch`, `prone`).
+    /// A sound for entering each posture (`stand`, `crouch`, `prone`, `climb`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub postures: BTreeMap<String, String>,
     /// Taking off in a jump sounds like a footfall on the surface underfoot.
@@ -2063,14 +2100,28 @@ impl ArchetypeDef {
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
         );
-        if let Some(bones) = &self.hit_bones {
+        if let Some(crouch) = self.crouch_damage {
             ensure!(
-                bones.len() <= bri_content::hit_bones::MAX_HIT_BONES,
-                "hit_bones names up to {} bones",
-                bri_content::hit_bones::MAX_HIT_BONES
+                [crouch.direct, crouch.indirect]
+                    .iter()
+                    .all(|v| v.is_finite() && (0.0..=100.0).contains(v)),
+                "crouch_damage multipliers are between 0 and 100"
             );
-            for bone in bones {
-                bone.validate()?;
+        }
+        for (name, bones) in [
+            ("hit_bones", &self.hit_bones),
+            ("hit_bones_crouched", &self.hit_bones_crouched),
+            ("hit_bones_prone", &self.hit_bones_prone),
+        ] {
+            if let Some(bones) = bones {
+                ensure!(
+                    bones.len() <= bri_content::hit_bones::MAX_HIT_BONES,
+                    "{name} names up to {} bones",
+                    bri_content::hit_bones::MAX_HIT_BONES
+                );
+                for bone in bones {
+                    bone.validate()?;
+                }
             }
         }
         if let Some(sockets) = &self.sockets {
@@ -2099,6 +2150,9 @@ impl ArchetypeDef {
         }
         if let Some(deaths) = &self.deaths {
             deaths.validate()?;
+        }
+        if let Some(ragdoll) = &self.ragdoll {
+            ragdoll.validate()?;
         }
         ensure!(
             self.max_time_scale
@@ -2154,9 +2208,9 @@ impl ArchetypeDef {
             "sounds.surfaces names up to 16 surface kinds, each with 1 to 8 sound profiles"
         );
         ensure!(
-            self.sounds.posture_steps.len() <= 3
+            self.sounds.posture_steps.len() <= 4
                 && self.sounds.posture_steps.iter().all(|(posture, p)| {
-                    ["stand", "crouch", "prone"].contains(&posture.as_str())
+                    ["stand", "crouch", "prone", "climb"].contains(&posture.as_str())
                         && p.footsteps.len() <= 8
                         && p.footsteps.iter().all(|s| text(s, 128))
                         && p.surfaces.len() <= 16
@@ -2166,7 +2220,7 @@ impl ArchetypeDef {
                                 && ids.iter().all(|s| text(s, 128))
                         })
                 }),
-            "sounds.posture_steps names up to 3 postures (stand, crouch, prone), each with up to 8 footsteps and up to 16 surface kinds of 1 to 8 sound profiles"
+            "sounds.posture_steps names up to 4 postures (stand, crouch, prone, climb), each with up to 8 footsteps and up to 16 surface kinds of 1 to 8 sound profiles"
         );
         ensure!(
             self.sounds
@@ -2183,7 +2237,8 @@ impl ArchetypeDef {
         ensure!(
             self.sounds.postures.len() <= 3
                 && self.sounds.postures.iter().all(|(posture, sound)| {
-                    ["stand", "crouch", "prone"].contains(&posture.as_str()) && text(sound, 128)
+                    ["stand", "crouch", "prone", "climb"].contains(&posture.as_str())
+                        && text(sound, 128)
                 }),
             "sounds.postures names stand, crouch or prone, each with a sound profile"
         );

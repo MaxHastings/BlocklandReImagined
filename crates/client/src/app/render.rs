@@ -588,10 +588,17 @@ impl App {
         // shadow without being drawn.
         let casts = renderer.shadow_settings().is_some();
         // Held and dropped items take the light of where they are, as bodies do.
+        let sky = self
+            .scene
+            .cpu_scene
+            .as_ref()
+            .zip(self.scene.receiver_index.as_deref())
+            .map(|(scene, index)| lighting::Sky { scene, index });
         let item_light = |at: [f32; 3]| {
             let near = |sign: f32| at.map(|v| v + sign * ITEM_LIGHT_REACH);
             self.lighting.light_volume.actor_light(
                 self.scene.regions.as_ref(),
+                sky,
                 near(-1.0),
                 near(1.0),
             )
@@ -1021,6 +1028,18 @@ impl App {
                     || (others_see && elsewhere.sees_sphere(c, radius))
             };
             if !seen(center) && through.is_none_or(|c| !seen(c)) {
+                // A body culled where the game presents it in view is a
+                // body that cannot be seen: its sphere is not where it is.
+                if let Some(shown) = self.motion.presented().get(owner)
+                    && !own_hidden
+                    && in_view.sees_sphere(Vec3::from(shown.feet) + Vec3::Y, 0.1)
+                    && self.avatar.disagreed.insert(*owner)
+                {
+                    bri_console::warn(format!(
+                        "Body of player {owner} is culled though it is presented in view at {:?}: its sphere is at {center} radius {radius}",
+                        shown.feet
+                    ));
+                }
                 continue;
             }
             let full = avatar.needs_full_upload();
@@ -1028,7 +1047,14 @@ impl App {
                 continue;
             }
             let started = full.then(std::time::Instant::now);
-            avatar.build_pending(&self.avatar.avatar_assets)?;
+            // One body that cannot be built or uploaded is reported and not
+            // drawn; it does not stop the bodies after it.
+            if let Err(error) = avatar.build_pending(&self.avatar.avatar_assets) {
+                if self.avatar.disagreed.insert(*owner) {
+                    bri_console::warn(format!("Body of player {owner} is not drawn: {error:#}"));
+                }
+                continue;
+            }
             // Where it stands decides the ambient and suns a lit body takes:
             // its zone's, and the light of the room it stands in (the map's
             // baked volume) as a floor under the ambient, so a body in a lit
@@ -1036,6 +1062,11 @@ impl App {
             let (low, high) = avatar.render_box();
             avatar.light = self.lighting.light_volume.actor_light(
                 self.scene.regions.as_ref(),
+                self.scene
+                    .cpu_scene
+                    .as_ref()
+                    .zip(self.scene.receiver_index.as_deref())
+                    .map(|(scene, index)| lighting::Sky { scene, index }),
                 low.to_array(),
                 high.to_array(),
             );
@@ -1044,9 +1075,27 @@ impl App {
                 .body_textures
                 .entry(avatar.model.clone())
                 .or_default();
-            avatar.upload_sharing(renderer, frame.device, frame.queue, Some(textures))?;
+            if let Err(error) =
+                avatar.upload_sharing(renderer, frame.device, frame.queue, Some(textures))
+            {
+                if self.avatar.disagreed.insert(*owner) {
+                    bri_console::warn(format!(
+                        "Body of player {owner} is not drawn: {error:#} (light {:?})",
+                        avatar.light
+                    ));
+                }
+                continue;
+            }
             if let Some(started) = started {
                 whole.done(started.elapsed());
+            }
+            if let Some(shown) = self.motion.presented().get(owner)
+                && let Some(what) = avatar.disagreement(Vec3::from(shown.feet))
+                && self.avatar.disagreed.insert(*owner)
+            {
+                bri_console::warn(format!(
+                    "Body of player {owner} is drawn away from where it is presented: {what}"
+                ));
             }
             bodies_drawn.insert(*owner);
         }
@@ -1463,6 +1512,7 @@ impl App {
             lights.len(),
         );
         lights.extend(overflow);
+        renderer.set_body_reach(self.lighting.light_volume.body_reach());
         renderer.update_lights(frame.queue, &lights)?;
         let effects_renderer = self
             .gpu

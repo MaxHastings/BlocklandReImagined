@@ -3114,6 +3114,11 @@ pub struct ProjectileDef {
     /// 0 leaves every bounce an impact.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub settle_speed: f32,
+    /// Native units from its centre to what it rests on: a grenade lies this far above the floor
+    /// it touched, so where it goes off (`on_explosion`'s `body`) is the contact point lifted by it.
+    /// 0 for a point projectile.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub collision_radius: f32,
     /// Explode on this bounce (a grenade that pops on its third knock);
     /// 0 leaves bounces to `arm_ticks` and the lifetime.
     #[serde(skip_serializing_if = "is_zero_u32")]
@@ -3741,6 +3746,7 @@ impl Default for ProjectileDef {
             collide_players: true,
             pass_source: false,
             settle_speed: 0.0,
+            collision_radius: 0.0,
             explosion: Explosion::default(),
             brick: BrickImpact::default(),
             bounce_effect: String::new(),
@@ -3802,6 +3808,10 @@ pub struct DamageType {
     /// between the names (its death icon).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub special: bool,
+    /// What a kill of this type gives a ragdoll body, in place of the
+    /// archetype's own kick (a grenade throws a body further than a bullet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub death_kick: Option<bri_content::body::DeathKick>,
 }
 impl DamageType {
     /// Lower-case ids of the icons both templates show.
@@ -4272,6 +4282,10 @@ impl Pack {
                     }),
                 "Invalid damage type {key}"
             );
+            if let Some(kick) = &t.death_kick {
+                kick.validate()
+                    .map_err(|e| anyhow::anyhow!("Invalid damage type {key}: {e}"))?;
+            }
         }
         for (key, e) in &self.explosions {
             ensure!(

@@ -1078,13 +1078,19 @@ pub struct ActorSun {
     pub color: [f32; 3],
 }
 /// The light one lit moving body ([`MaterialKind::ActorLit`]) takes in place of the scene's: an ambient colour and the run of the camera's
-/// [`ActorSun`]s that reach it (`sun_count` of them from `sun_first`, at most [`MAX_BODY_SUNS`]). A body with `scene_sun` keeps the scene's
-/// own sun and takes `ambient` only as a floor under the scene's ambient (the light of the room it stands in).
+/// [`ActorSun`]s that reach it (`sun_count` of them from `sun_first`, at most [`MAX_BODY_SUNS`]; bit `i` of `sun_mask` says sun
+/// `sun_first + i` can see the body, a sun the map's geometry hides from it lighting nothing). A body with `scene_sun` keeps the scene's
+/// own sun and takes `ambient` only as a floor under the scene's ambient (the light of the room it stands in). `radius` is the body's
+/// bounding sphere, added to a lamp's radius when the lamp is ranked and reached, as the original does.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActorLight {
     pub ambient: [f32; 3],
+    pub radius: f32,
+    /// The sphere's middle: lamps are ranked and fitted at it, and the vertices lit by distance from the lamp.
+    pub centre: [f32; 3],
     pub sun_first: u8,
     pub sun_count: u8,
+    pub sun_mask: u8,
     pub scene_sun: bool,
 }
 impl ActorLight {
@@ -1092,6 +1098,9 @@ impl ActorLight {
         self.ambient
             .iter()
             .all(|v| v.is_finite() && (0.0..=MAX_TINT).contains(v))
+            && self.radius.is_finite()
+            && self.radius >= 0.0
+            && self.centre.iter().all(|v| v.is_finite())
             && self.sun_count <= MAX_BODY_SUNS
             && usize::from(self.sun_first) + usize::from(self.sun_count) <= MAX_ACTOR_SUNS
     }
@@ -1564,9 +1573,14 @@ impl SceneTransform {
                     if l.scene_sun {
                         -1.0
                     } else {
-                        f32::from(l.sun_first) + 256.0 * f32::from(l.sun_count)
+                        f32::from(l.sun_first)
+                            + 256.0 * f32::from(l.sun_count)
+                            + 65536.0 * f32::from(l.sun_mask)
                     },
                 ]
+            }),
+            reach: light.map_or([0.0; 4], |l| {
+                [l.radius, l.centre[0], l.centre[1], l.centre[2]]
             }),
         }
     }
@@ -1585,6 +1599,8 @@ struct InstanceRecord {
     clip: ClipPlane,
     /// A lit moving body's own light: ambient rgb and its suns (first + 256 * count), or w -1 for the scene's sun (ambient then a floor).
     light: [f32; 4],
+    /// The lit body's bounding sphere: radius (added to a lamp's radius), then its centre.
+    reach: [f32; 4],
 }
 
 /// One bounded persistent instance buffer per shared model group. Update at most
@@ -1708,6 +1724,10 @@ impl GpuInstances {
         self.lights = lights.to_vec();
         self.revision = next_unique();
         Ok(true)
+    }
+    /// The transforms the last update wrote: where the instances draw.
+    pub fn transforms(&self) -> &[SceneTransform] {
+        &self.transforms
     }
     /// Whether some instance is cut by a clip plane.
     pub fn clipped(&self) -> bool {
@@ -2369,8 +2389,8 @@ impl TextureFiltering {
     }
 }
 const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2,3=>Float32x2,4=>Float32x4,10=>Float32x4];
-const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
-    5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4,11=>Float32x4,12=>Float32x4
+const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
+    5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4,11=>Float32x4,12=>Float32x4,13=>Float32x4
 ];
 /// Scene vertices plus per-instance model matrix, tint and clip plane.
 fn vertex_layouts() -> [Option<wgpu::VertexBufferLayout<'static>>; 2] {
@@ -3331,6 +3351,8 @@ pub struct SceneRenderer {
     /// The lights' grid: cell table and per-cell lists (`light_grid`).
     light_grid: wgpu::Buffer,
     light_counts: std::cell::Cell<(u32, u32)>,
+    /// The largest lit body's radius, which the light grid's reach is widened by ([`Self::set_body_reach`]).
+    body_reach: std::cell::Cell<f32>,
     uploads: std::cell::Cell<UploadCounts>,
     volume: VolumeBinding,
     map_lights: MapLightBinding,
@@ -3614,6 +3636,7 @@ impl SceneRenderer {
             light_buffer,
             light_grid,
             light_counts: Default::default(),
+            body_reach: Default::default(),
             uploads: Default::default(),
             volume,
             map_lights,
@@ -4708,6 +4731,11 @@ impl SceneRenderer {
             Vec4::from(camera.eye).truncate(),
         )
     }
+    /// The largest radius of any [`ActorLight`] body drawn: lamps are binned a body's radius further out, so one at the edge of a lamp's
+    /// reach still finds it (the original adds the body's radius to the lamp's).
+    pub fn set_body_reach(&self, radius: f32) {
+        self.body_reach.set(radius.max(0.0));
+    }
     /// Validate before writing, including an empty update to clear the previous frame.
     pub fn update_lights(&self, queue: &wgpu::Queue, lights: &[PointLight]) -> Result<()> {
         ensure!(
@@ -4726,7 +4754,7 @@ impl SceneRenderer {
                 "Invalid point light"
             );
         }
-        let grid = crate::light_grid::LightGrid::build(lights);
+        let grid = crate::light_grid::LightGrid::build_for_bodies(lights, self.body_reach.get());
         queue.write_buffer(
             &self.light_buffer,
             0,
@@ -6481,20 +6509,25 @@ mod tests {
         let at = SceneTransform::default();
         let room = ActorLight {
             ambient: [0.3, 0.2, 0.1],
+            radius: 40.0,
+            centre: [1.0, 2.0, 3.0],
             sun_first: 0,
             sun_count: 0,
+            sun_mask: 0,
             scene_sun: true,
         };
         assert_eq!(at.record(KEEP_ALL, Some(room)).light, [0.3, 0.2, 0.1, -1.0]);
+        assert_eq!(at.record(KEEP_ALL, Some(room)).reach, [40.0, 1.0, 2.0, 3.0]);
         let zone = ActorLight {
             scene_sun: false,
             sun_first: 2,
             sun_count: 3,
+            sun_mask: 0b101,
             ..room
         };
         assert_eq!(
             at.record(KEEP_ALL, Some(zone)).light,
-            [0.3, 0.2, 0.1, 2.0 + 256.0 * 3.0]
+            [0.3, 0.2, 0.1, 2.0 + 256.0 * 3.0 + 65536.0 * 5.0]
         );
         assert_eq!(at.record(KEEP_ALL, None).light, [0.0, 0.0, 0.0, -1.0]);
     }

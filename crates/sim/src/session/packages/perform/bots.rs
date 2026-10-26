@@ -37,6 +37,28 @@ impl Perform for ops::RestBot {
         session.rest_rules_bot(package, bot, rest)
     }
 }
+impl Perform for ops::Obscure {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::Obscure {
+            at,
+            radius,
+            seconds,
+        } = self;
+        session.bot_cloud(Vec3::from(at), radius, seconds);
+        Ok(())
+    }
+}
+impl Perform for ops::DazeBot {
+    fn check(&self, session: &Session, _cx: OpCall<'_>) -> Result<()> {
+        ensure!(session.is_bot(self.bot), "No such bot");
+        Ok(())
+    }
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::DazeBot { bot, seconds } = self;
+        session.bot_daze(bot, seconds);
+        Ok(())
+    }
+}
 impl Perform for ops::BotTool {
     fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
         session.check_rules_bot_tool(cx.package, self.bot)

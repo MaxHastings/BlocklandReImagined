@@ -316,6 +316,7 @@ impl App {
                 flash_cues: Vec::new(),
                 flash_showing: None,
                 brick_debris: Default::default(),
+                ragdolls: Default::default(),
                 debris_models: Default::default(),
                 brick_fades: Default::default(),
                 fade_models: Default::default(),
@@ -365,6 +366,7 @@ impl App {
             avatar: Avatars {
                 avatar_assets,
                 avatars: BTreeMap::new(),
+                disagreed: Default::default(),
                 mount_meshes: BTreeMap::new(),
                 avatar_actions: BTreeMap::new(),
                 avatar_threads: BTreeMap::new(),

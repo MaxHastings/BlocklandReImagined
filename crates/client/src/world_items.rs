@@ -1499,8 +1499,11 @@ impl WorldItems {
                     .map(|t| {
                         light_at(t.transform.w_axis.truncate().to_array()).unwrap_or(ActorLight {
                             ambient: [0.0; 3],
+                            radius: 0.0,
+                            centre: [0.0; 3],
                             sun_first: 0,
                             sun_count: 0,
+                            sun_mask: 0,
                             scene_sun: true,
                         })
                     })

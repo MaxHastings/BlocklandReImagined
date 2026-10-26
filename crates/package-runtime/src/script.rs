@@ -2852,6 +2852,25 @@ fn register_api(engine: &mut Engine) {
             }))
         },
     );
+    // screen_overlay(player, #{ seconds, peak, light, dark, curve }): a
+    // full-screen overlay following a curve, `()` as the player for
+    // everyone. See docs/modding/rules.md.
+    engine.register_fn("screen_overlay", |player: Dynamic, spec: Dynamic| {
+        let overlay: bri_content::screen_overlay::Overlay =
+            serde_json::to_value(view::plain(&spec))
+                .and_then(serde_json::from_value)
+                .map_err(|e| {
+                    format!("a screen overlay is #{{ seconds, peak, light, dark, curve }}: {e}")
+                })?;
+        push(Op::ScreenOverlay(ops::ScreenOverlay {
+            player: if player.is_unit() {
+                None
+            } else {
+                Some(id(&player)?)
+            },
+            overlay,
+        }))
+    });
     // Every member of a mini-game, counted once.
     engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
         push(Op::TellMinigame(ops::TellMinigame {
@@ -3436,6 +3455,44 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("stop_ambient_all", |key: &str, fade: Dynamic| {
         stop_ambient(None, key, float(&fade)?)
     });
+    // world_volume(player, scale, seconds[, fade]) / world_volume_all(scale,
+    // seconds[, fade]): the world's sounds at `scale` (0 to 1) times their
+    // volume for `seconds`, easing in and out over `fade`. See
+    // docs/modding/rules.md.
+    fn world_volume(player: Option<u64>, scale: f32, seconds: f32, fade: f32) -> Fallible<INT> {
+        push(Op::WorldVolume(ops::WorldVolume {
+            player,
+            scale,
+            seconds,
+            fade,
+        }))
+    }
+    engine.register_fn(
+        "world_volume",
+        |p: Dynamic, scale: Dynamic, seconds: Dynamic| {
+            world_volume(Some(id(&p)?), float(&scale)?, float(&seconds)?, 0.0)
+        },
+    );
+    engine.register_fn(
+        "world_volume",
+        |p: Dynamic, scale: Dynamic, seconds: Dynamic, fade: Dynamic| {
+            world_volume(
+                Some(id(&p)?),
+                float(&scale)?,
+                float(&seconds)?,
+                float(&fade)?,
+            )
+        },
+    );
+    engine.register_fn("world_volume_all", |scale: Dynamic, seconds: Dynamic| {
+        world_volume(None, float(&scale)?, float(&seconds)?, 0.0)
+    });
+    engine.register_fn(
+        "world_volume_all",
+        |scale: Dynamic, seconds: Dynamic, fade: Dynamic| {
+            world_volume(None, float(&scale)?, float(&seconds)?, float(&fade)?)
+        },
+    );
     // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`
     // `after` seconds later.
     fn play_thread(player: Dynamic, thread: i64, sequence: &str, after: f64) -> Fallible<INT> {
@@ -4711,6 +4768,9 @@ impl Runtime {
             }
             if behaviour.on_bot_ability {
                 need("on_bot_ability".into(), 4, "on_bot_ability");
+            }
+            if behaviour.on_bot_spotted {
+                need("on_bot_spotted".into(), 2, "on_bot_spotted");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

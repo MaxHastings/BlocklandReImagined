@@ -361,6 +361,7 @@ impl AudioRuntime {
                 channel: 3,
                 gain: value,
             },
+            VolumeControl::World => Command::SetWorld(value),
             VolumeControl::Music => Command::SetMusicGain(value),
             VolumeControl::Channel(c) => Command::SetChannel {
                 channel: c,

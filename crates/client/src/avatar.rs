@@ -23,6 +23,19 @@ use glam::{Mat4, Quat, Vec3};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
+/// A drawn body's nodes as a ragdoll is built from them
+/// ([`AvatarMesh::bone_frames`]).
+pub struct BoneFrames {
+    /// Each node's parent in the rig.
+    pub parents: Vec<Option<usize>>,
+    /// The node of each bone asked for, in the order asked.
+    pub index: Vec<usize>,
+    /// Every node's world transform.
+    pub world: Vec<Mat4>,
+    /// How much the body is scaled.
+    pub scale: f32,
+}
+
 pub struct AvatarAssets {
     pub package: Package,
     pub rig: Rig,
@@ -898,6 +911,7 @@ impl AvatarAssets {
             light: None,
             instance: None,
             drawn_pose: None,
+            posed_feet: None,
             vertices_dirty: true,
             outfit,
             materials,
@@ -1004,6 +1018,9 @@ pub struct AvatarMesh {
     pub straddle: Option<crate::portal_view::Straddle>,
     /// The pose last written into `data`, to skip rewriting an equal one.
     drawn_pose: Option<bri_content::animation::Pose>,
+    /// The feet the last pose was made for, and the feet the GPU instance
+    /// last drew the body at: where the body should be and where it is.
+    posed_feet: Option<Vec3>,
     /// `data` holds vertices not yet sent to the GPU.
     vertices_dirty: bool,
     outfit: Outfit,
@@ -1599,6 +1616,38 @@ impl AvatarMesh {
         };
         Some(middle(&self.posed_nodes) - middle(&self.animated_nodes))
     }
+    /// How the drawn body disagrees with where the game presents it
+    /// (`shown`, its feet): the body was posed for other feet than it is
+    /// shown at, or the GPU draws it away from where it was posed. `None`
+    /// while they agree to within the body's own size.
+    pub fn disagreement(&self, shown: Vec3) -> Option<String> {
+        let scale = self.model_transform.x_axis.truncate().length();
+        let tolerance = bri_sim::player::nominal_middle(scale);
+        let far = |at: Option<Vec3>, from: Vec3| at.is_some_and(|at| at.distance(from) > tolerance);
+        let model = self.model_transform.w_axis.truncate();
+        // Where the GPU instance itself draws the body, not only what was
+        // last asked of it.
+        let instance = self.instance.as_ref().map(|i| {
+            i.transforms()
+                .first()
+                .map(|t| t.transform.w_axis.truncate())
+        });
+        let instanced = self.instanced
+            && match instance {
+                None => true,
+                Some(None) => true,
+                Some(Some(at)) => at.distance(model) > tolerance,
+            };
+        (far(self.posed_feet, shown) || instanced || far(self.posed_feet, model)).then(|| {
+            format!(
+                "presented at {shown}, posed for {:?}, body transform at {model}, drawn at {:?} by its instance ({} vertices, {} batches)",
+                self.posed_feet,
+                instance,
+                self.data.vertices.len(),
+                self.data.batches.len(),
+            )
+        })
+    }
     /// A sphere round the drawn body (centre, radius), for culling.
     /// Where openings carry the body: the middle of a standing body of its
     /// scale, as replicated bodies are carried.
@@ -1672,6 +1721,34 @@ impl AvatarMesh {
                 .collect(),
             bounds,
         }
+    }
+    /// The drawn body's node tree and world poses, with the index of each
+    /// of `names` (a ragdoll's bones), for a body that goes limp where it
+    /// stands. Names the rig lacks are returned, all together.
+    pub fn bone_frames(
+        &mut self,
+        assets: &AvatarAssets,
+        names: &[&str],
+    ) -> Result<BoneFrames, Vec<String>> {
+        let assets = assets.for_mesh(self);
+        let missing: Vec<String> = names
+            .iter()
+            .filter(|n| assets.node(n).is_none())
+            .map(|n| n.to_string())
+            .collect();
+        if !missing.is_empty() {
+            return Err(missing);
+        }
+        Ok(BoneFrames {
+            parents: assets.rig.shape.nodes.iter().map(|n| n.parent).collect(),
+            index: names.iter().filter_map(|n| assets.node(n)).collect(),
+            world: self
+                .posed_nodes
+                .iter()
+                .map(|node| self.model_transform * *node)
+                .collect(),
+            scale: self.model_transform.x_axis.truncate().length(),
+        })
     }
     /// Place `nodes` (index, world position, world rotation) for Add-On
     /// code, after this frame's animation. Nodes it leaves out keep their
@@ -2515,6 +2592,7 @@ impl AvatarMesh {
             _ => model_transform,
         };
         self.model_transform = model_transform;
+        self.posed_feet = Some(Vec3::from(player.feet));
         self.held = (holds.raised, holds.pitch);
         // Stock and authored-hand poses without seat holds need no IK inputs.
         if self
@@ -4655,6 +4733,7 @@ mod tests {
             sitting: false,
             ghost: None,
             base_body: None,
+            held: false,
         }
     }
     #[test]

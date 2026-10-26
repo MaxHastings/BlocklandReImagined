@@ -34,6 +34,9 @@ fn cmd_follow(p, bot, leader) { bot_intent(bot, #{ follow: leader, distance: 3.0
 fn cmd_flee(p, bot, from) { bot_intent(bot, #{ flee: from, seconds: 6.0 }); }
 fn cmd_clear(p, bot) { bot_intent(bot, ()); }
 fn cmd_hurt(p, bot, amount) { damage(bot, amount, p); }
+fn on_bot_spotted(bot, enemy) {
+    set("spotted", `${get("spotted")}${bot}>${enemy};`);
+}
 fn on_bot_ability(bot, kind, ability, target) {
     set("ability", `${kind}|${ability}|${target}`);
     if target != () { damage(target, 25.0, bot); }
@@ -46,6 +49,7 @@ fn behaviour() -> Value {
         "schema_version": 1,
         "script": "main.rhai",
         "on_bot_ability": true,
+        "on_bot_spotted": true,
         "commands": [
             command("add", &["string", "string"]),
             command("guard", &["int", "float", "float", "float"]),
@@ -56,7 +60,8 @@ fn behaviour() -> Value {
             command("hurt", &["int", "float"]),
         ],
         "state": { "global": {
-            "ability": { "default": "", "visible": "everyone" }
+            "ability": { "default": "", "visible": "everyone" },
+            "spotted": { "default": "", "visible": "everyone" }
         } }
     })
 }
@@ -471,6 +476,11 @@ fn an_ability_runs_the_add_ons_hook_and_contact_hurts_on_touch() {
     );
     assert!(g.health(g.me) < 100.0, "the Add-On's bite hurt");
     assert!(g.s.vitals()[&biter].alive);
+    assert_eq!(
+        g.text("spotted"),
+        format!("{biter}>{};", g.me),
+        "`on_bot_spotted` fired once, when it took the player as its target"
+    );
 
     let mut g = Game::new(vec![], Vec3::new(0.0, 0.05, 0.0), Vec3::new(6.0, 0.05, 0.0));
     g.add("probe:bot/prickle", "Prickle");

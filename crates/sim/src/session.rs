@@ -111,9 +111,9 @@ pub use admin::{
 };
 pub use bri_world::authority::WrenchProperties;
 pub use combat::{
-    AmbientPlay, DEATH_PROJECTILE, DeathPose, HeldAmmo, HitSide, InventoryAmmo, InventoryAmmoSlots,
-    KillLine, MAX_HEALTH, MiniGameRequest, MiniGameView, MusicPlay, Notice, SPAWN_PROJECTILE,
-    Vitals,
+    AmbientPlay, DEATH_PROJECTILE, DeathHit, DeathPose, HeldAmmo, HitSide, InventoryAmmo,
+    InventoryAmmoSlots, KillLine, MAX_HEALTH, MiniGameRequest, MiniGameView, MusicPlay, Notice,
+    SPAWN_PROJECTILE, Vitals, WorldVolumeSet,
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
@@ -3281,6 +3281,18 @@ impl Session {
                     });
                 } else {
                     peer.player.look(&peer.input);
+                }
+                peer.player.hold(&mut self.simulation.physics);
+                continue;
+            }
+            if peer.combat.held {
+                peer.input_budget = (peer.input_budget + 1.0).min(INPUT_BURST);
+                // A player a rule holds out of the world has no body to
+                // move: its inputs are answered and dropped, and the
+                // placeholder stays where it is.
+                while let Some((sequence, _)) = peer.inputs.pop_front() {
+                    peer.processed_move = sequence;
+                    peer.last_input_tick = tick;
                 }
                 peer.player.hold(&mut self.simulation.physics);
                 continue;

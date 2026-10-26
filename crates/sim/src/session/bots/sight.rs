@@ -36,6 +36,26 @@ impl Session {
         self.can_damage_player(bot, other, false)
             || self.bot_team_relation(bot, other) == Some(false) && self.bot_can_shove(bot)
     }
+    /// Hang smoke at `at` for `seconds` (`obscure`): bots see through none of it.
+    pub(in crate::session) fn bot_cloud(&self, at: Vec3, radius: f32, seconds: f32) {
+        let until =
+            self.simulation.state().tick + (seconds * bri_world::TICKS_PER_SECOND as f32) as u64;
+        self.bots
+            .sightlines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .add_cloud(at, radius, until);
+    }
+    /// Dazzle `bot` for `seconds` (`daze_bot`): it sees nothing until then.
+    pub(in crate::session) fn bot_daze(&self, bot: OwnerId, seconds: f32) {
+        let until =
+            self.simulation.state().tick + (seconds * bri_world::TICKS_PER_SECOND as f32) as u64;
+        self.bots
+            .sightlines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .daze(bot, until);
+    }
     /// It holds an attack that pushes a player (`Capability::push`).
     fn bot_can_shove(&self, bot: OwnerId) -> bool {
         let scale = self.peers.get(&bot).map_or(1.0, |p| p.player.state().scale);

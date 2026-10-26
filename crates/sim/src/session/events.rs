@@ -1823,7 +1823,9 @@ impl EventHost<'_> {
             return Ok(Apply::Applied);
         }
         match op {
-            PlayerOp::Kill => self.session.kill(owner, None, combat::DamageKind::Event)?,
+            PlayerOp::Kill => self
+                .session
+                .kill(owner, None, combat::DamageKind::Event, None)?,
             PlayerOp::SetVelocity(v) => {
                 let peer = self.session.peers.get_mut(&owner).unwrap();
                 let current = Vec3::from(peer.player.state().velocity);

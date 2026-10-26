@@ -22,6 +22,8 @@ struct PendingBlast {
     position: Vec3,
     radius: f32,
     normal: Option<Vec3>,
+    /// The projectile's `collision_radius`.
+    body: f32,
 }
 
 /// What `on_pickup` decided for an item a player touches.
@@ -310,7 +312,15 @@ impl Session {
             );
             return;
         }
+        let body = self
+            .weapons
+            .pack
+            .projectiles
+            .get(&projectile)
+            .map_or(0.0, |def| def.collision_radius);
+        let host = self.packages.as_mut().expect("hooked packages run");
         host.item_hooks.blasts.push_back(PendingBlast {
+            body,
             projectile,
             source,
             position,
@@ -320,7 +330,7 @@ impl Session {
     }
 
     /// `on_explosion(blast)` for each explosion since the last tick, in
-    /// order: `#{ projectile, by, x, y, z, radius, nx, ny, nz }`.
+    /// order: `#{ projectile, by, x, y, z, radius, body, nx, ny, nz }`.
     /// Normal components are `()` when there was no collision.
     pub(super) fn deliver_blasts(&mut self) {
         let Some(host) = self.packages.as_mut() else {
@@ -333,6 +343,7 @@ impl Session {
             position,
             radius,
             normal,
+            body,
         } in blasts
         {
             let by = Some(source.0).filter(|o| self.peers.contains_key(o));
@@ -346,6 +357,7 @@ impl Session {
                 m.insert(key.into(), Dynamic::from_float(f64::from(v)));
             }
             m.insert("radius".into(), Dynamic::from_float(f64::from(radius)));
+            m.insert("body".into(), Dynamic::from_float(f64::from(body)));
             for (axis, key) in ["nx", "ny", "nz"].into_iter().enumerate() {
                 m.insert(
                     key.into(),

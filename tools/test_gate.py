@@ -92,6 +92,12 @@ class CiShards(unittest.TestCase):
                          {"bri-client/flow", "bri-render/gpu", "bri-render/x"})
         self.assertEqual(gate.ci_left_out(data, "main", labels), {"bri-render/gpu"})
 
+    def test_the_pr_tier_leaves_out_the_later_targets_and_main_runs_them(self):
+        data = {"ci_quick": {"later": ["bri-addon-import/slayer"]}}
+        labels = ["bri-addon-import/slayer", "bri-addon-import/lib"]
+        self.assertEqual(gate.ci_left_out(data, "pr", labels), {"bri-addon-import/slayer"})
+        self.assertEqual(gate.ci_left_out(data, "main", labels), set())
+
     def test_every_nightly_target_is_named_once_with_a_reason(self):
         import tomllib
         path = Path(__file__).with_name("gate-known-failures.toml")
@@ -131,11 +137,19 @@ class CiShards(unittest.TestCase):
         self.assertEqual(sorted(sum(parts, [])), sorted(labels))
         self.assertTrue(all(sum(label.startswith("a/") for label in p) == 1 for p in parts))
 
+    def test_a_cost_per_binary_spreads_instant_targets_evenly(self):
+        labels = [f"a/t{i}" for i in range(9)] + ["a/slow"]
+        weights = {"a/slow": 30.0, **{label: 0.0 for label in labels if label != "a/slow"}}
+        parts = [gate.shard(labels, (k, 2), weights, per_binary=10.0) for k in range(2)]
+        self.assertEqual(sorted(len(p) for p in parts), [4, 6])
+        bare = [gate.shard(labels, (k, 2), weights) for k in range(2)]
+        self.assertEqual(sorted(len(p) for p in bare), [1, 9])
+
     def test_the_committed_weights_name_only_real_shapes(self):
         path = Path(__file__).with_name("ci-timings.json")
         weights = json.loads(path.read_text(encoding="utf-8"))
         self.assertTrue(weights)
-        self.assertTrue(all(isinstance(v, float) and v > 0 for v in weights.values()))
+        self.assertTrue(all(isinstance(v, float) and v >= 0 for v in weights.values()))
 
     def test_one_shard_is_all_of_them(self):
         self.assertEqual(gate.shard(["b", "a"], (0, 1)), ["a", "b"])

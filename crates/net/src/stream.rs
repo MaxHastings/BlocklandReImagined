@@ -914,6 +914,22 @@ mod tests {
         assert!(larger > 0 && larger <= 8, "{larger} extra bytes");
     }
 
+    /// Others are told a body holds a ladder, through the real datagram.
+    #[test]
+    fn others_see_a_body_on_a_ladder() {
+        let mut state = pose(4, 1_000_000, 123.456).player;
+        state.posture.climbing = true;
+        let bytes =
+            crate::codec::encode_datagram_item(&Datagram::Remote(RemotePose::of(0, &state)))
+                .unwrap();
+        let Datagram::Remote(wire) = crate::codec::decode_datagram::<Datagram>(&bytes).unwrap()
+        else {
+            panic!("a remote pose")
+        };
+        let back = wire.into_pose().player;
+        assert!(back.posture.climbing && !back.posture.prone);
+    }
+
     /// Others see a body its movement controller turned itself (Mario
     /// running across the camera) face its own way, with its intent's clip;
     /// the controller's memory stays its owner's, and a blank controller

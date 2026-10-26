@@ -362,6 +362,9 @@ pub(super) struct Bots {
     /// Warnings bots gave this tick (`BotKind::alerts_allies`), heard by
     /// their side once every bot has stepped.
     alerts: Vec<Alert>,
+    /// `(bot, enemy)` for each bot that took a new enemy as its target this
+    /// tick, told to the rules (`on_bot_spotted`) once every bot has stepped.
+    spotted: Vec<(OwnerId, OwnerId)>,
     /// When each bot's failed step was last told (`step_bots`).
     failed_told: BTreeMap<OwnerId, u64>,
     /// When each bot's stall was last told (`tell_stall`).
@@ -1370,6 +1373,11 @@ impl Session {
             .retain(|b, _| self.bots.brains.contains_key(b));
         self.bots.stimuli.clear();
         self.hear_alerts(tick);
+        for (bot, enemy) in std::mem::take(&mut self.bots.spotted) {
+            if !self.bot_gone(bot) {
+                self.package_bot_spotted(bot, enemy);
+            }
+        }
         self.hear_fighting(tick);
         Ok(())
     }
@@ -1655,7 +1663,7 @@ impl Session {
         brain.dry = if gasping.is_some() { brain.dry + 1 } else { 0 };
         if gasping.is_some_and(|seconds| brain.dry as f32 >= seconds * 120.0) {
             brain.dry = 0;
-            self.kill(bot, None, combat::DamageKind::Suicide)?;
+            self.kill(bot, None, combat::DamageKind::Suicide, None)?;
             return Ok(true);
         }
         // Harm on touch, whatever it is doing (`ability`).
@@ -2737,6 +2745,7 @@ impl Session {
                 if fresh {
                     brain.target = Some(seen.owner);
                     brain.seen_since = tick;
+                    self.bots.spotted.push((bot, seen.owner));
                 }
                 brain.perceive(seen.owner, seen.real, feet, tick, fresh, damageable);
                 let knowledge = Knowledge {

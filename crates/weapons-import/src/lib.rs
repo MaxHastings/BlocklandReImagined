@@ -182,6 +182,7 @@ pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
                 vehicle_scale: c[6].trim().parse().unwrap_or(1.0),
                 direct: matches!(c[7].trim(), "1" | "true"),
                 special: false,
+                death_kick: None,
             }
         })
         .collect())
@@ -210,6 +211,7 @@ pub fn special_kills(text: &str) -> Result<Vec<DamageType>> {
                 vehicle_scale: 1.0,
                 direct: false,
                 special: true,
+                death_kick: None,
             }
         })
         .collect())
@@ -364,6 +366,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             collide_players: flag(d, "collideWithPlayers", true),
             pass_source: false,
             settle_speed: 0.0,
+            collision_radius: 0.0,
             explosion,
             brick: BrickImpact {
                 radius: num(d, "brickExplosionRadius", 0.0),

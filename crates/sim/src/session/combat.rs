@@ -116,6 +116,9 @@ pub const MAX_HEALTH: f32 = 100.0;
 /// `$CorpseTimeoutValue`, 5 s, unless its archetype sets it); then
 /// `Player::RemoveBody` deletes the corpse.
 fn corpse_ticks(look: &bri_motor::archetype::Look) -> u64 {
+    if look.corpse_stays {
+        return u64::MAX;
+    }
     (look.corpse_seconds * bri_weapons::TICK_HZ as f32).round() as u64
 }
 /// `Armor::damage` sums hits less than 300 ms apart into one pain level.
@@ -157,6 +160,10 @@ pub(super) struct Combat {
     /// Last direct damage type and tick (death messages prefer it).
     pub last_direct: Option<(String, u64)>,
     pub corpse_cleared: bool,
+    /// A rule holds this player out of the world (`Effect::Held`: before a
+    /// round's first spawn, out of lives): no body is simulated or drawn
+    /// until the next spawn.
+    pub held: bool,
     pub pain_level: f32,
     pub pain_tick: u64,
     /// The share of their speeds an Add-On's `set_speed_scale` gives.
@@ -220,12 +227,32 @@ impl HitSide {
 /// How a body died, for every client to pick the same death clip
 /// (`Look::deaths`): the side the killing hit came from, if it had one,
 /// and a roll that picks among the clips for it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeathPose {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<HitSide>,
     pub roll: u8,
+    /// The killing hit, for a body that goes limp (`Look::ragdoll`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hit: Option<DeathHit>,
+}
+
+/// The hit that killed a body, as every client's ragdoll takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeathHit {
+    /// Which way it was travelling (a unit vector), if it had a way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f32; 3]>,
+    /// Where it struck, in the world, if it had a place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<[f32; 3]>,
+    /// What it gives the body: its damage type's kick, else the archetype's.
+    pub kick: bri_content::body::DeathKick,
+    /// A shot killed a body lying prone, which a ragdoll takes gently.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prone_shot: bool,
 }
 
 impl Combat {
@@ -314,6 +341,10 @@ pub struct Vitals {
     /// the body looks and moves for a while.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_body: Option<crate::archetype::ArchetypeId>,
+    /// A rule holds the player out of the world: it has no body, so none is
+    /// drawn and no corpse lies (`Combat::held`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 /// Replicated minigame listing for the Mini-Games dialog.
@@ -438,6 +469,18 @@ pub struct KillLine {
     pub weapon: String,
 }
 
+/// The world's sounds turned down for a player ([`Notice::WorldVolume`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorldVolumeSet {
+    /// 0 to 1, times the world's volume.
+    pub scale: f32,
+    /// Seconds it lasts, easing included.
+    pub seconds: f32,
+    /// Seconds it eases in, and again out.
+    pub fade: f32,
+}
+
 /// An ambient bed a rule plays for a player ([`Notice::Ambient`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -481,6 +524,8 @@ pub enum Notice {
         color: [f32; 4],
         seconds: f32,
     },
+    /// A full-screen overlay on a curve (rules' `screen_overlay`).
+    Overlay(bri_content::screen_overlay::Overlay),
     /// The aim kicked by a rule (`view_shake`): out along `direction` to
     /// `max`, back to `min`, radians and radians a second.
     ViewShake {
@@ -520,6 +565,9 @@ pub enum Notice {
     /// Add-On rule ambience (`play_ambient`, `stop_ambient`): a looping
     /// bed this player hears on the effects bus, by key.
     Ambient(AmbientPlay),
+    /// Add-On rule `world_volume`: the world's sounds this player hears
+    /// turned down for a while.
+    WorldVolume(WorldVolumeSet),
     /// A death line: a client with a kill feed shows it there, else in chat.
     Kill(KillLine),
     /// `MessageBoxOK` from the server.
@@ -1057,6 +1105,7 @@ impl Session {
             light: false,
             last_direct: None,
             corpse_cleared: false,
+            held: false,
             pain_level: 0.0,
             pain_tick: 0,
             speed_rule: 1.0,
@@ -1118,7 +1167,10 @@ impl Session {
                         spawn_tick: peer.combat.spawn_tick,
                         died_tick: (peer.combat.died_tick > 0 || !peer.combat.alive)
                             .then_some(peer.combat.died_tick),
-                        death: peer.combat.death.filter(|_| !peer.combat.alive),
+                        death: peer
+                            .combat
+                            .death
+                            .filter(|_| !peer.combat.alive && !peer.combat.held),
                         firing: peer.combat.alive
                             && self
                                 .weapons
@@ -1147,6 +1199,7 @@ impl Session {
                         sitting: peer.sitting,
                         ghost: self.ghost_brick(*owner),
                         base_body: peer.overlays.as_ref().map(|o| o.base),
+                        held: peer.combat.held,
                     },
                 )
             })
@@ -1379,7 +1432,15 @@ impl Session {
         }
         let mut amount = amount;
         if peer.player.state().crouched {
-            amount *= if kind.direct() { 2.1 } else { 0.75 };
+            let crouch = self
+                .archetypes
+                .resolve(peer.player.state().archetype)
+                .crouch_damage;
+            amount *= if kind.direct() {
+                crouch.direct
+            } else {
+                crouch.indirect
+            };
         }
         // Where it struck, measured before any hook moves the body. A body
         // with hit bones is struck at the bone nearest the point: its part
@@ -1477,7 +1538,40 @@ impl Session {
         if alive {
             return Ok(());
         }
-        self.kill(target, source, kind)
+        self.kill(target, source, kind, at)
+    }
+
+    /// The killing hit as a ragdoll body takes it: none for a body without
+    /// one. A damage type's own kick wins over the archetype's.
+    fn death_hit(
+        &self,
+        state: &crate::player::PlayerState,
+        kind: &DamageKind,
+        direction: Option<Vec3>,
+        at: Option<Vec3>,
+    ) -> Option<DeathHit> {
+        let ragdoll = self
+            .archetypes
+            .resolve(state.archetype)
+            .look
+            .ragdoll
+            .as_ref()?;
+        let own = match kind {
+            DamageKind::Weapon { name, .. } => self
+                .weapons
+                .pack
+                .damage_type(name)
+                .and_then(|t| t.death_kick),
+            _ => None,
+        };
+        Some(DeathHit {
+            direction: direction
+                .and_then(Vec3::try_normalize)
+                .map(|d| d.to_array()),
+            point: at.map(|p| p.to_array()),
+            kick: own.unwrap_or(ragdoll.kick),
+            prone_shot: state.posture.prone && kind.projectile().is_some(),
+        })
     }
 
     pub(super) fn kill(
@@ -1485,6 +1579,7 @@ impl Session {
         victim: OwnerId,
         killer: Option<OwnerId>,
         kind: DamageKind,
+        at: Option<Vec3>,
     ) -> Result<()> {
         let tick = self.simulation.state().tick;
         let Some(peer) = self.peers.get(&victim) else {
@@ -1513,6 +1608,7 @@ impl Session {
             roll: (victim ^ tick)
                 .wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 .to_be_bytes()[0],
+            hit: self.death_hit(state, &kind, direction, at),
         };
         // A killer from another minigame (or none) cannot be credited.
         let killer = killer.filter(|k| *k == victim || self.game_of(*k) == self.game_of(victim));
@@ -1776,13 +1872,15 @@ impl Session {
         self.release_riders(owner);
         {
             let peer = self.peers.get_mut(&owner).unwrap();
-            let look = &self.archetypes.resolve(peer.player.state().archetype).look;
             peer.combat.alive = false;
             peer.player.set_corpse(&mut self.simulation.physics, true);
             peer.combat.health = 0.0;
-            // Past the corpse timeout: the next step clears the body.
-            peer.combat.died_tick = tick.saturating_sub(corpse_ticks(look));
-            peer.combat.corpse_cleared = false;
+            // Held out of the world: no body to lie, fall or be drawn.
+            peer.combat.held = true;
+            peer.combat.death = None;
+            peer.combat.died_tick = tick;
+            peer.player.set_solid(&mut self.simulation.physics, false);
+            peer.combat.corpse_cleared = true;
             peer.discard_inputs();
             peer.control = super::ControlObject::Corpse;
         }
@@ -1876,7 +1974,7 @@ impl Session {
     pub(super) fn suicide(&mut self, owner: OwnerId) -> Result<()> {
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         ensure!(peer.combat.alive, "You are already dead");
-        self.kill(owner, Some(owner), DamageKind::Suicide)
+        self.kill(owner, Some(owner), DamageKind::Suicide, None)
     }
 
     /// Click-to-respawn after death.
@@ -2718,6 +2816,7 @@ impl Session {
             let _ = self.weapons.reset_ammo(ActorId(owner));
             let _ = self.weapons.respawned(ActorId(owner));
             peer.combat.corpse_cleared = false;
+            peer.combat.held = false;
             // `serverCmdLight` mounts its fxLight on the player object, which
             // stays with the corpse: a new body starts dark.
             peer.combat.light = false;
@@ -3360,6 +3459,49 @@ mod tests {
             s.step()?;
         }
         assert!(cleared(&s, slow), "20 s are up");
+        Ok(())
+    }
+
+    #[test]
+    fn a_body_that_stays_lies_until_its_player_spawns_again() -> Result<()> {
+        let mut s = session()?;
+        let mut stays = s.archetypes.resolve(Default::default()).clone();
+        stays.id = "test:archetype/stays".into();
+        stays.look.corpse_stays = true;
+        let stays = s.archetypes.add(stays)?;
+        let who = s.join("Stays".into(), Vec3::new(0.0, 0.1, 0.0), false)?;
+        s.set_player_archetype(who, stays)?;
+        s.damage_player(who, 1000.0, DamageKind::Event, None)?;
+        for _ in 0..bri_weapons::TICK_HZ as usize * 700 {
+            s.step()?;
+        }
+        assert!(
+            !s.peers[&who].combat.corpse_cleared,
+            "past the longest timeout"
+        );
+        assert!(s.archetypes.resolve(stays).look.corpse_opacity(1.0e6) == Some(1.0));
+        Ok(())
+    }
+
+    #[test]
+    fn a_held_player_has_no_body_to_move_or_draw() -> Result<()> {
+        let mut s = session()?;
+        let who = s.join("Held".into(), Vec3::new(0.0, 0.1, 0.0), false)?;
+        s.clear_body(who)?;
+        let at = s.peers[&who].player.state().feet;
+        for sequence in 1..=5 {
+            s.movement(who, sequence, MoveInput::default())?;
+        }
+        for _ in 0..bri_weapons::TICK_HZ as usize * 3 {
+            s.step()?;
+        }
+        let peer = &s.peers[&who];
+        assert_eq!(peer.player.state().feet, at, "nothing moves or falls");
+        assert!(
+            peer.inputs.is_empty() && peer.processed_move == 5,
+            "inputs are drained"
+        );
+        assert!(s.vitals()[&who].held && s.vitals()[&who].death.is_none());
         Ok(())
     }
 

@@ -213,4 +213,22 @@ pub(super) fn register(engine: &mut Engine) {
             rest,
         }))
     });
+    // `obscure(x, y, z, radius, seconds)`: smoke bots cannot see through.
+    engine.register_fn(
+        "obscure",
+        |x: Dynamic, y: Dynamic, z: Dynamic, radius: Dynamic, seconds: Dynamic| {
+            push(Op::Obscure(ops::Obscure {
+                at: [float(&x)?, float(&y)?, float(&z)?],
+                radius: float(&radius)?,
+                seconds: float(&seconds)?,
+            }))
+        },
+    );
+    // `daze_bot(bot, seconds)`: a flash; it sees nothing meanwhile.
+    engine.register_fn("daze_bot", |bot: Dynamic, seconds: Dynamic| {
+        push(Op::DazeBot(ops::DazeBot {
+            bot: id(&bot)?,
+            seconds: float(&seconds)?,
+        }))
+    });
 }

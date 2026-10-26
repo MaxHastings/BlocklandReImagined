@@ -49,6 +49,10 @@ pub struct ReceiverIndex {
     big: Vec<u32>,
     /// Per triangle: 0 takes no decal (additive and other effect surfaces), 1 flat surface, 2 ground, 3 alpha-blended surface.
     class: Vec<u8>,
+    /// Per triangle: whether light passes through part of it (an alpha-tested leaf card, glass), so it is no solid occluder.
+    see_through: Vec<bool>,
+    /// The longest straight line the scene's triangles span (the diagonal of their box): how far a ray must reach to leave the map.
+    extent: f32,
 }
 
 fn pack(x: i32, y: i32, z: i32) -> u64 {
@@ -69,7 +73,10 @@ impl ReceiverIndex {
             cells: HashMap::new(),
             big: Vec::new(),
             class: vec![0; triangles],
+            see_through: vec![false; triangles],
+            extent: 0.0,
         };
+        let (mut box_lo, mut box_hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         for batch in &scene.batches {
             let Some(material) = scene.materials.get(batch.material) else {
                 continue;
@@ -91,10 +98,13 @@ impl ReceiverIndex {
             for t in (batch.indices.start / 3)..(batch.indices.end / 3) {
                 let t = t as usize;
                 index.class[t] = class;
+                index.see_through[t] = !matches!(material.alpha, AlphaMode::Opaque);
                 let p = [0, 1, 2].map(|k| {
                     Vec3::from(scene.vertices[scene.indices[t * 3 + k] as usize].position)
                 });
                 let (lo, hi) = (p[0].min(p[1]).min(p[2]), p[0].max(p[1]).max(p[2]));
+                box_lo = box_lo.min(lo);
+                box_hi = box_hi.max(hi);
                 let (a, b) = (index.coords(lo), index.coords(hi));
                 let span = (b.0 - a.0 + 1) * (b.1 - a.1 + 1) * (b.2 - a.2 + 1);
                 if span > Self::MAX_SPAN {
@@ -110,7 +120,107 @@ impl ReceiverIndex {
                 }
             }
         }
+        if box_lo.cmple(box_hi).all() {
+            index.extent = (box_hi - box_lo).length();
+        }
         index
+    }
+
+    /// How far a ray from inside the scene must go to leave it.
+    pub fn extent(&self) -> f32 {
+        self.extent
+    }
+
+    /// Whether a triangle of `scene` that takes decals (opaque, masked, or alpha-blended; not an effect surface) crosses the
+    /// segment from `from` to `to`, a hit nearer `from` than `skin` ignored (the surface a body stands on).
+    pub fn segment_blocked(&self, scene: &SceneData, from: Vec3, to: Vec3, skin: f32) -> bool {
+        self.blocked(scene, from, to, skin, false)
+    }
+
+    /// As [`Self::segment_blocked`], but only a triangle that is solid across its whole face blocks: a leaf card (alpha-tested) or
+    /// a pane of glass lets light through the parts of it the picture leaves clear, and a canopy of them is not a roof.
+    pub fn segment_blocked_by_solid(
+        &self,
+        scene: &SceneData,
+        from: Vec3,
+        to: Vec3,
+        skin: f32,
+    ) -> bool {
+        self.blocked(scene, from, to, skin, true)
+    }
+
+    fn blocked(
+        &self,
+        scene: &SceneData,
+        from: Vec3,
+        to: Vec3,
+        skin: f32,
+        solid_only: bool,
+    ) -> bool {
+        let line = to - from;
+        let length = line.length();
+        if length <= skin || !length.is_finite() {
+            return false;
+        }
+        let direction = line / length;
+        let crosses = |t: u32| {
+            let t = t as usize;
+            if self.class[t] == 0 || (solid_only && self.see_through[t]) {
+                return false;
+            }
+            let p = [0, 1, 2]
+                .map(|k| Vec3::from(scene.vertices[scene.indices[t * 3 + k] as usize].position));
+            ray_triangle(from, direction, p).is_some_and(|d| d > skin && d < length)
+        };
+        for &t in &self.big {
+            if crosses(t) {
+                return true;
+            }
+        }
+        // Walk the cells the segment passes through (Amanatides and Woo).
+        let mut cell = self.coords(from);
+        let last = self.coords(to);
+        let mut step = [0i32; 3];
+        let mut next = [f32::INFINITY; 3];
+        let mut per = [f32::INFINITY; 3];
+        for a in 0..3 {
+            let edge = |c: i32| c as f32 * self.cell;
+            let c = [cell.0, cell.1, cell.2][a];
+            if direction[a] > 0.0 {
+                step[a] = 1;
+                next[a] = (edge(c + 1) - from[a]) / direction[a];
+                per[a] = self.cell / direction[a];
+            } else if direction[a] < 0.0 {
+                step[a] = -1;
+                next[a] = (edge(c) - from[a]) / direction[a];
+                per[a] = -self.cell / direction[a];
+            }
+        }
+        let cells = (last.0 - cell.0).abs() + (last.1 - cell.1).abs() + (last.2 - cell.2).abs() + 1;
+        for _ in 0..cells {
+            if let Some(list) = self.cells.get(&pack(cell.0, cell.1, cell.2))
+                && list.iter().any(|&t| crosses(t))
+            {
+                return true;
+            }
+            let axis = if next[0] <= next[1] && next[0] <= next[2] {
+                0
+            } else if next[1] <= next[2] {
+                1
+            } else {
+                2
+            };
+            if next[axis] > length {
+                break;
+            }
+            match axis {
+                0 => cell.0 += step[0],
+                1 => cell.1 += step[1],
+                _ => cell.2 += step[2],
+            }
+            next[axis] += per[axis];
+        }
+        false
     }
 
     fn coords(&self, p: Vec3) -> (i32, i32, i32) {
@@ -152,6 +262,29 @@ impl ReceiverIndex {
         out.dedup();
         out
     }
+}
+
+/// Where a ray from `origin` along the unit `direction` meets the triangle `p` (either face): its distance, if ahead of the origin.
+fn ray_triangle(origin: Vec3, direction: Vec3, p: [Vec3; 3]) -> Option<f32> {
+    let (e1, e2) = (p[1] - p[0], p[2] - p[0]);
+    let h = direction.cross(e2);
+    let det = e1.dot(h);
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let s = origin - p[0];
+    let u = s.dot(h) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let v = direction.dot(q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = e2.dot(q) * inv;
+    (t > 0.0).then_some(t)
 }
 
 /// The triangles of `scene` a decal draws on, three vertices each. Alpha-blended surfaces take the flat-surface rule; additive and other effect surfaces take none; ground is the terrain materials.

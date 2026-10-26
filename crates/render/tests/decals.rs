@@ -133,3 +133,65 @@ fn glass_takes_a_decal_but_an_additive_surface_does_not() {
     glass.materials[0].alpha = AlphaMode::Additive;
     assert!(gather(&glass, &decal(-0.0001)).1.is_empty());
 }
+
+#[test]
+fn a_segment_is_blocked_by_a_triangle_between_its_ends_and_only_then() {
+    use bri_render::decals::ReceiverIndex;
+    use glam::Vec3;
+    let scene = scene();
+    let index = ReceiverIndex::build(&scene);
+    // The near triangle lies in y = 0 about the origin; the other is 100 units away.
+    assert!(index.segment_blocked(
+        &scene,
+        Vec3::new(0.2, 3.0, 0.2),
+        Vec3::new(0.2, -3.0, 0.2),
+        0.0
+    ));
+    // Both ends on one side: nothing crossed.
+    assert!(!index.segment_blocked(
+        &scene,
+        Vec3::new(0.2, 3.0, 0.2),
+        Vec3::new(0.2, 1.0, 0.2),
+        0.0
+    ));
+    // Past the triangle's edge.
+    assert!(!index.segment_blocked(
+        &scene,
+        Vec3::new(5.0, 3.0, 5.0),
+        Vec3::new(5.0, -3.0, 5.0),
+        0.0
+    ));
+    // A hit within the skin of the start is the surface stood on.
+    assert!(!index.segment_blocked(
+        &scene,
+        Vec3::new(0.2, 0.1, 0.2),
+        Vec3::new(0.2, -3.0, 0.2),
+        0.25
+    ));
+    // A long diagonal through several cells finds the far triangle too.
+    assert!(index.segment_blocked(
+        &scene,
+        Vec3::new(100.2, 40.0, 100.2),
+        Vec3::new(100.2, -40.0, 100.2),
+        0.0
+    ));
+    assert!(index.extent() > 100.0);
+}
+
+#[test]
+fn leaf_cards_and_glass_do_not_block_a_sun_sight_but_solid_surfaces_do() {
+    use bri_render::decals::ReceiverIndex;
+    use bri_render::scene::AlphaMode;
+    use glam::Vec3;
+    let (above, below) = (Vec3::new(0.2, 3.0, 0.2), Vec3::new(0.2, -3.0, 0.2));
+    let mut scene = scene();
+    let index = ReceiverIndex::build(&scene);
+    assert!(index.segment_blocked_by_solid(&scene, above, below, 0.0));
+    for alpha in [AlphaMode::Mask(0.5), AlphaMode::Blend] {
+        scene.materials[0].alpha = alpha;
+        let index = ReceiverIndex::build(&scene);
+        // A decal still lands on the card, and a ray still meets it, but light passes through its clear parts.
+        assert!(index.segment_blocked(&scene, above, below, 0.0));
+        assert!(!index.segment_blocked_by_solid(&scene, above, below, 0.0));
+    }
+}

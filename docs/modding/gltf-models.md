@@ -120,6 +120,7 @@ action. Name them by role (the names are not case-sensitive):
 | `aim_right`, `aim_left`, `aim_both` | holding an item in that hand, or both | a held pose: the body holds the last frame. Key only the arm bones |
 | `sit` | seated in a vehicle or on a rideable | a held pose; one frame is enough. If missing it sits in `idle` |
 | `death` | on death | once; it holds the last frame |
+| `ladder_up`, `ladder_down` | holding a ladder, rising or sinking | loops. They play at the rate the body gains height (`ground_speeds`); a body holding still holds the pose. If `ladder_down` is missing it plays `ladder_up` reversed, and if both are it stays in `idle` |
 | `swim` | in water | a loop |
 | `look` | looking up and down | first frame looking straight up, middle frame level, last frame straight down. Key only head, neck, spine and arms |
 | `look_crouch` | looking up and down while crouched | the same frames as `look`. If missing a crouched body uses `look` |
@@ -173,9 +174,19 @@ default) or `flat` (a torso, a foot), and `region` is `head`, `torso` or
 multiplied by the bone's `modifier`; with 0 a shot passes through the bone, and
 a shot that meets no bone goes on past the body. Bones follow the body's
 facing and scale, and a crouched or lying body's lower box squeezes them down
-with it; they do not follow the body's animation. A splash is not multiplied.
+with it; they do not follow the body's animation. `hit_bones_crouched` and
+`hit_bones_prone` give the same bones where the body's crouch or prone clip
+holds them (the original tests bones where the animation holds them): a body in
+that posture is hit through them, unsqueezed, and its hit box reaches as far as
+they do, so a body lying along the ground is hit along its length. A splash is not multiplied.
 An archetype with none is hit as one box and its region read from the height
 of the hit, as before.
+
+**Crouch damage (optional).** `crouch_damage` is `{ "direct": 2.1, "indirect": 0.75 }`:
+the multipliers a crouched body's damage takes, `direct` for direct hits and
+`indirect` for the rest (blast, fall, fire). Left out, the base archetype's,
+and v20's players take those values. `{ "direct": 1, "indirect": 1 }` makes
+crouching change nothing, as in Army Operations.
 
 **Prone and lean (optional).** `movement.prone` lets the body lie down
 (`set_prone` in rules): `{ "height": 0.5, "eye": 0.35, "seconds": 0.7, "forward": 1,

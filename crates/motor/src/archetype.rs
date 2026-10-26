@@ -50,6 +50,22 @@ pub struct Archetype {
     /// damage multiplier ([`crate::bones`]). None: it is hit as one box.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hit_bones: Vec<bri_content::hit_bones::HitBone>,
+    /// The same bones where a crouched body's animation holds them, in the
+    /// feet frame like `hit_bones`; none: the standing ones squeezed down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hit_bones_crouched: Vec<bri_content::hit_bones::HitBone>,
+    /// The same where a body lying prone holds them; none: the standing ones
+    /// squeezed down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hit_bones_prone: Vec<bri_content::hit_bones::HitBone>,
+    /// What a crouched body takes from a direct hit and from anything else
+    /// (blast, fall, fire), as multipliers on the damage. v20's players take
+    /// 2.1 and 0.75; a body that crouching does not change sets 1 and 1.
+    #[serde(
+        default = "CrouchDamage::v20",
+        skip_serializing_if = "CrouchDamage::is_v20"
+    )]
+    pub crouch_damage: CrouchDamage,
     pub look: Look,
     /// It fires, switches and uses items (`PlayerData::onTrigger` and
     /// `serverCmdUseTool` running as usual). A frozen pre-round body
@@ -75,6 +91,34 @@ fn yes() -> bool {
 fn is_yes(v: &bool) -> bool {
     *v
 }
+/// The damage multipliers of a crouched body (`Archetype::crouch_damage`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrouchDamage {
+    /// On a direct hit (a bullet, a thrown or swung weapon).
+    pub direct: f32,
+    /// On any other damage.
+    pub indirect: f32,
+}
+
+impl CrouchDamage {
+    /// v20's players.
+    pub fn v20() -> Self {
+        Self {
+            direct: 2.1,
+            indirect: 0.75,
+        }
+    }
+    fn is_v20(&self) -> bool {
+        *self == Self::v20()
+    }
+    fn valid(&self) -> bool {
+        [self.direct, self.indirect]
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=100.0).contains(v))
+    }
+}
+
 /// One rider's seat on a rideable archetype.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -268,7 +312,7 @@ impl Sounds {
     /// Most surface kinds with their own footfalls.
     pub const MAX_SURFACES: usize = 16;
     /// The postures a body enters, as `postures` names them.
-    pub const POSTURES: [&'static str; 3] = ["stand", "crouch", "prone"];
+    pub const POSTURES: [&'static str; 4] = ["stand", "crouch", "prone", "climb"];
     /// Most surface kinds (and `*`) with footfall marks and dust.
     pub const MAX_CONTACTS: usize = 17;
     /// The falling speed (units/s) a landing must reach to be heard.
@@ -463,6 +507,9 @@ pub struct Look {
     /// random; none plays the `death` role's clip.
     #[serde(default, skip_serializing_if = "bri_content::body::Deaths::is_empty")]
     pub deaths: bri_content::body::Deaths,
+    /// A body that goes limp when it dies, in place of its death clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ragdoll: Option<bri_content::body::Ragdoll>,
     /// The body's camera: field of view, first-person offset, bob, weapon
     /// sway and third-person pivot. The default is the stock camera.
     #[serde(default, skip_serializing_if = "CameraProfile::is_default")]
@@ -512,6 +559,10 @@ pub struct Look {
         skip_serializing_if = "is_default_corpse_seconds"
     )]
     pub corpse_seconds: f32,
+    /// The body lies until the player spawns again (a round's reset), however
+    /// long that is: `corpse_seconds` and `corpse_fade` do not apply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub corpse_stays: bool,
     /// The last of `corpse_seconds` the body fades out over, instead of
     /// vanishing in v20's puff; 0 vanishes at once.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -546,6 +597,9 @@ impl Look {
     /// `None` once `corpse_seconds` are up, otherwise its opacity, 1 until
     /// `corpse_fade` before the end and falling to 0 across it.
     pub fn corpse_opacity(&self, lying: f32) -> Option<f32> {
+        if self.corpse_stays {
+            return Some(1.0);
+        }
         let left = self.corpse_seconds - lying;
         if left <= 0.0 {
             return None;
@@ -594,7 +648,10 @@ impl Archetype {
                 && self.look.corpse_fade.is_finite()
                 && (0.0..=self.look.corpse_seconds).contains(&self.look.corpse_fade)
                 && self.sounds.valid()
+                && self.crouch_damage.valid()
                 && self.hit_bones.len() <= bri_content::hit_bones::MAX_HIT_BONES
+                && self.hit_bones_crouched.len() <= bri_content::hit_bones::MAX_HIT_BONES
+                && self.hit_bones_prone.len() <= bri_content::hit_bones::MAX_HIT_BONES
                 && self.mount_points.len() <= MAX_MOUNT_POINTS
                 && self.mount_points.iter().all(|m| {
                     !m.node.is_empty()
@@ -607,11 +664,19 @@ impl Archetype {
             self.id
         );
         self.sockets.validate()?;
-        for bone in &self.hit_bones {
+        for bone in self
+            .hit_bones
+            .iter()
+            .chain(&self.hit_bones_crouched)
+            .chain(&self.hit_bones_prone)
+        {
             bone.validate()?;
         }
         bri_content::body::validate_animations(&self.look.animations)?;
         self.look.deaths.validate()?;
+        if let Some(ragdoll) = &self.look.ragdoll {
+            ragdoll.validate()?;
+        }
         if !self.look.deaths.is_empty() {
             ensure!(
                 !self.look.deaths.crouched.is_empty(),
@@ -640,6 +705,9 @@ impl Archetype {
             can_ride: kind.can_ride(),
             mount_points: kind.mount_points(),
             hit_bones: Vec::new(),
+            hit_bones_crouched: Vec::new(),
+            hit_bones_prone: Vec::new(),
+            crouch_damage: CrouchDamage::v20(),
             look: Look {
                 crouch_composition: Default::default(),
                 model: if kind == PlayerType::Horse {
@@ -652,6 +720,7 @@ impl Archetype {
                 third_person_only: false,
                 animations: Animations::new(),
                 deaths: Default::default(),
+                ragdoll: None,
                 camera: CameraProfile::default(),
                 intent_clips: BTreeMap::new(),
                 intent_sounds: BTreeMap::new(),
@@ -660,6 +729,7 @@ impl Archetype {
                 action_blend: 0.0,
                 locomotion_pick: Default::default(),
                 corpse_seconds: CORPSE_SECONDS,
+                corpse_stays: false,
                 corpse_fade: 0.0,
             },
             uses_items: true,

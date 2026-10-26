@@ -596,6 +596,9 @@ pub struct RemoteController {
 pub struct RemotePosture {
     pub prone: bool,
     pub lean: i8,
+    /// Holding a ladder.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub climbing: bool,
 }
 const CENTIMETRES: f32 = 100.0;
 const LOOK_UNITS: f32 = 10_000.0;
@@ -632,13 +635,14 @@ impl RemotePose {
                 let controller = p
                     .controller
                     .filter(|c| c.intent != 0 || c.heading.is_some());
-                let posed = p.posture.prone || p.posture.lean != 0.0;
+                let posed = p.posture.prone || p.posture.lean != 0.0 || p.posture.climbing;
                 (controller.is_some() || posed).then(|| RemoteController {
                     intent: controller.map_or(0, |c| c.intent),
                     heading: controller.and_then(|c| c.heading),
                     posture: posed.then(|| RemotePosture {
                         prone: p.posture.prone,
                         lean: (p.posture.lean * 100.0).round().clamped(-100.0, 100.0) as i8,
+                        climbing: p.posture.climbing,
                     }),
                 })
             },
@@ -693,7 +697,7 @@ impl RemotePose {
                             prone: p.prone,
                             lean,
                             lean_to: lean,
-                            climbing: false,
+                            climbing: p.climbing,
                             held_crouch: false,
                             drive: None,
                         }

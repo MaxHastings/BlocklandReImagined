@@ -654,6 +654,18 @@ pub(super) fn archetype(
     if let Some(bones) = &def.hit_bones {
         archetype.hit_bones = bones.clone();
     }
+    if let Some(bones) = &def.hit_bones_crouched {
+        archetype.hit_bones_crouched = bones.clone();
+    }
+    if let Some(bones) = &def.hit_bones_prone {
+        archetype.hit_bones_prone = bones.clone();
+    }
+    if let Some(v) = def.crouch_damage {
+        archetype.crouch_damage = crate::archetype::CrouchDamage {
+            direct: v.direct,
+            indirect: v.indirect,
+        };
+    }
     if let Some(v) = &def.model {
         archetype.look.model = v.clone();
     }
@@ -681,6 +693,9 @@ pub(super) fn archetype(
     if let Some(v) = &def.deaths {
         archetype.look.deaths = v.clone();
     }
+    if let Some(v) = &def.ragdoll {
+        archetype.look.ragdoll = Some(v.clone());
+    }
     if let Some(v) = def.max_time_scale {
         archetype.look.max_time_scale = v;
     }
@@ -692,6 +707,9 @@ pub(super) fn archetype(
     }
     if let Some(v) = def.corpse_seconds {
         archetype.look.corpse_seconds = v;
+    }
+    if let Some(v) = def.corpse_stays {
+        archetype.look.corpse_stays = v;
     }
     if let Some(v) = def.corpse_fade {
         archetype.look.corpse_fade = v;
@@ -4098,6 +4116,34 @@ impl Session {
             self.charge_work(package);
         }
         !hooks.is_empty()
+    }
+    /// `on_bot_spotted(bot, enemy)` of every package that declares it, in
+    /// load order: `bot` has taken `enemy` as its target.
+    pub(super) fn package_bot_spotted(&mut self, bot: OwnerId, enemy: OwnerId) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_bot_spotted)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in &hooks {
+            let _ = self.run_package(
+                package,
+                "on_bot_spotted",
+                vec![
+                    Dynamic::from_int(bot as i64),
+                    Dynamic::from_int(enemy as i64),
+                ],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(package);
+        }
     }
     fn deliver_deaths(&mut self) {
         let Some(host) = self.packages.as_mut() else {

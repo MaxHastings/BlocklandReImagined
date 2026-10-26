@@ -129,6 +129,7 @@ fn weapons() -> Arc<Pack> {
         collide_players: false,
         pass_source: false,
         settle_speed: 0.0,
+        collision_radius: 0.0,
         explosion: Default::default(),
         brick: Default::default(),
         bounce_effect: String::new(),

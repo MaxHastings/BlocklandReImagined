@@ -22,7 +22,7 @@ pub struct Walk {
     pub velocity: [f32; 3],
     pub grounded: bool,
     pub scale: f32,
-    /// The posture it holds: `stand`, `crouch` or `prone`.
+    /// The posture it holds: `stand`, `crouch`, `prone` or `climb`.
     pub posture: &'static str,
 }
 impl From<&PlayerState> for Walk {
@@ -34,7 +34,9 @@ impl From<&PlayerState> for Walk {
             velocity: p.velocity,
             grounded: p.grounded,
             scale: p.scale,
-            posture: if p.posture.prone {
+            posture: if p.posture.climbing {
+                "climb"
+            } else if p.posture.prone {
                 "prone"
             } else if p.crouched {
                 "crouch"

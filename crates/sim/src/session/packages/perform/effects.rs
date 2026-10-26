@@ -201,6 +201,36 @@ impl Perform for ops::Sound {
         Ok(())
     }
 }
+impl Perform for ops::WorldVolume {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::WorldVolume {
+            player,
+            scale,
+            seconds,
+            fade,
+        } = self;
+        session.take_cue(package)?;
+        let set = crate::session::WorldVolumeSet {
+            scale,
+            seconds,
+            fade,
+        };
+        match player {
+            Some(player) => {
+                ensure!(session.peers.contains_key(&player), "No such player");
+                session.notify(player, Notice::WorldVolume(set));
+            }
+            None => {
+                let peers: Vec<u64> = session.peers.keys().copied().collect();
+                for peer in peers {
+                    session.notify(peer, Notice::WorldVolume(set));
+                }
+            }
+        }
+        Ok(())
+    }
+}
 impl Perform for ops::Ambient {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
