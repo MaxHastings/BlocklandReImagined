@@ -1396,16 +1396,18 @@ def run_binaries(units, log, jobs, exclusive=(), env=None):
     return seconds
 
 
-def shard(labels, part, weights=None):
+def shard(labels, part, weights=None, per_binary=0.0):
     """The labels of shard `part` = (k, n), so the n shards together run each
     label exactly once and take about equally long: heaviest label first onto
     the lightest shard so far. `weights` is {label: seconds}; a label it does
     not name weighs the mean of those it does, and with no weights at all
-    this deals the sorted labels out in turn."""
+    this deals the sorted labels out in turn. Every label also costs
+    `per_binary` seconds, the build and link a shard pays for each test
+    binary however fast it then runs."""
     k, n = part
     known = [weights[label] for label in labels if label in weights] if weights else []
     default = sum(known) / len(known) if known else 1.0
-    cost = {label: (weights or {}).get(label, default) for label in labels}
+    cost = {label: (weights or {}).get(label, default) + per_binary for label in labels}
     loads = [0.0] * n
     mine = []
     for label in sorted(labels, key=lambda label: (-cost[label], label)):
@@ -1455,7 +1457,8 @@ def ci_test(part=(0, 1), tier="full"):
         if label in skipped and label not in nightly:
             say(f"skipping {label} (needs generated content)")
     weights = json.loads((top / "tools" / "ci-timings.json").read_text(encoding="utf-8"))
-    mine = set(shard([label for label in labels if label not in skipped], part, weights))
+    per_binary = data.get("ci_shards", {}).get("per_binary_seconds", 0.0)
+    mine = set(shard([label for label in labels if label not in skipped], part, weights, per_binary))
     say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(labels) - len(skipped)} test targets")
     if not mine:
         return True
@@ -1587,8 +1590,8 @@ def ci_left_out(data, tier, labels=()):
     """Targets a CI run of `tier` does not run, from the known-failures
     table `data`: content targets always; on "main" and "pr" the nightly
     targets too; on "pr" also every target of a [ci_quick] slow package
-    (end-to-end, GPU and soak suites) except the named keep targets, which
-    the run after merge covers."""
+    (end-to-end, GPU and soak suites) except the named keep targets, and the
+    named `later` targets, which the run after merge covers."""
     left_out = {entry["target"] for entry in data.get("ci_skip_target", [])}
     if tier in ("pr", "main"):
         left_out |= {entry["target"] for entry in data.get("ci_nightly_target", [])}
@@ -1598,6 +1601,7 @@ def ci_left_out(data, tier, labels=()):
         keep = set(quick.get("keep", []))
         left_out |= {label for label in labels
                      if label.split("/", 1)[0] in slow and label not in keep}
+        left_out |= set(quick.get("later", []))
     return left_out
 
 

@@ -1660,6 +1660,8 @@ impl Session {
         {
             let peer = self.peers.get_mut(&victim).unwrap();
             peer.combat.alive = false;
+            self.bots
+                .note_death(victim, Vec3::from(peer.player.state().feet));
             peer.player.set_corpse(&mut self.simulation.physics, true);
             peer.combat.health = 0.0;
             peer.combat.died_tick = tick;

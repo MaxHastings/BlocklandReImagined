@@ -1114,6 +1114,19 @@ kind attacks with its hands (weapons), its body (`melee`), a touch
   target (first sight, or turning from one enemy to another), every package
   declaring it hears it once, after all bots have stepped that tick. It is
   not repeated while the target holds, and it is the same for every kind.
+- Perception hooks, all told the same way (once per occurrence, to every
+  package declaring them, after the bots have stepped, for every kind;
+  `bots/reports.rs`): `on_bot_heard_gunfire(bot, shooter)` as a bot with
+  nothing else to go on hears an enemy's weapon (what makes it go and look);
+  `on_bot_under_fire(bot, shooter)` as an enemy's hitscan ray passes within
+  the kind's `under_fire_range` (0, the default, never) of it without
+  hitting it (projectiles do not count); `on_bot_sees_grenade(bot,
+  projectile)` the first time it sees a live exploding projectile that is not
+  its own; `on_bot_friend_died(bot, friend)` as it sees an ally die;
+  `on_bot_lost_enemy(bot, enemy)` as the enemy it had in sight, alive, is no
+  longer in it; `on_bot_out_of_ammo(bot)` as it finds it cannot fire for want
+  of rounds, and again only after it has fired since. Bots never jam, so
+  there is no jam hook.
 - Body contact (`on_contact(info)`): as two bodies begin to touch, every
   package declaring it hears who met whom (`by`, `target`), how (`kind`:
   `"body"`, or `"vehicle"` with the `vehicle` and its driver as `by`),
