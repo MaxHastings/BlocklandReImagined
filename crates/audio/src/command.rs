@@ -45,6 +45,8 @@ pub enum VolumeControl {
     Effects,
     /// Vanilla channel 3 (no stock slider).
     Message,
+    /// The world's sounds (the effects bus) as one, under master; a rule turns it down.
+    World,
     /// Native music bus, multiplied on top of the sound's vanilla channel.
     Music,
     /// Any vanilla channel 0..=8.
@@ -95,6 +97,8 @@ pub(crate) enum Command {
     /// At most `spatial::MAX_WINDOWS`.
     SetWindows(Box<[crate::spatial::Window]>),
     SetMaster(f32),
+    /// How much of the world (effects bus) is heard, 0 to 1.
+    SetWorld(f32),
     SetChannel {
         channel: u8,
         gain: f32,

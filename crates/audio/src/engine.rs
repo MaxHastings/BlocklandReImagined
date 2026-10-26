@@ -150,6 +150,7 @@ pub(crate) struct Engine {
     /// What the listener also hears through (`Command::SetWindows`).
     windows: Vec<crate::spatial::Window>,
     master: f32,
+    world_gain: f32,
     channel_gain: [f32; 9],
     music_gain: f32,
     music_enabled: bool,
@@ -184,6 +185,7 @@ impl Engine {
             listener: Listener::default(),
             windows: Vec::with_capacity(crate::spatial::MAX_WINDOWS),
             master: sanitize_gain(master),
+            world_gain: 1.0,
             channel_gain: channel_gain.map(sanitize_gain),
             music_gain: 1.0,
             music_enabled,
@@ -268,7 +270,7 @@ impl Engine {
             }
             if v.real {
                 // Effects go through the reverb when a room is set; music and the rest stay dry.
-                let bus = if ringing && v.asset.playback.bus == Bus::Effects {
+                let bus = if ringing && matches!(v.asset.playback.bus, Bus::Effects | Bus::Bed) {
                     &mut self.effects[..]
                 } else {
                     &mut *out
@@ -375,8 +377,10 @@ impl Engine {
             .copied()
             .unwrap_or(1.0);
         let mut base = pb.gain * gain_scale * channel;
-        if pb.bus == Bus::Music {
-            base *= self.music_gain;
+        match pb.bus {
+            Bus::Music => base *= self.music_gain,
+            Bus::Effects => base *= self.world_gain,
+            _ => {}
         }
         // A placed 3D sound is heard where it is whatever its channel
         // count: a stereo clip is folded to mono first (`mix_voice`).
@@ -590,6 +594,7 @@ impl Engine {
                 );
             }
             Command::SetMaster(g) => self.master = sanitize_gain(g),
+            Command::SetWorld(g) => self.world_gain = sanitize_gain(g),
             Command::SetChannel { channel, gain } => {
                 if let Some(slot) = self.channel_gain.get_mut(usize::from(channel)) {
                     *slot = sanitize_gain(gain);

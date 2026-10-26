@@ -250,6 +250,36 @@ impl ScriptOp for Ambient {
             && (1.0..=MAX_AMBIENT_RANGE).contains(range)
     }
 }
+/// Turn the world's sounds (everything but music and a rule's own ambient
+/// beds) down to `scale` times their volume for `seconds`, easing in and
+/// back out over `fade` seconds each: the ringing after a flashbang. A
+/// newer one replaces the one running. For one player, or everyone
+/// (`player` none), who is here when it is called.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldVolume {
+    pub player: Option<u64>,
+    pub scale: f32,
+    pub seconds: f32,
+    pub fade: f32,
+}
+impl ScriptOp for WorldVolume {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "world_volume";
+    fn bounded(&self) -> bool {
+        let WorldVolume {
+            scale,
+            seconds,
+            fade,
+            ..
+        } = self;
+        (0.0..=1.0).contains(scale)
+            && (0.0..=MAX_WORLD_VOLUME_SECONDS).contains(seconds)
+            && (0.0..=seconds / 2.0).contains(fade)
+    }
+}
+/// The longest `world_volume` runs, in seconds.
+pub const MAX_WORLD_VOLUME_SECONDS: f32 = 120.0;
+
 /// The farthest a placed ambient sound carries, in units.
 pub const MAX_AMBIENT_RANGE: f32 = 2000.0;
 /// Most ambient keys playing for everyone at once.
@@ -322,5 +352,26 @@ impl ScriptOp for PlayThread {
             && sequence
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    }
+}
+
+#[cfg(test)]
+mod world_volume_tests {
+    use super::*;
+
+    #[test]
+    fn a_world_volume_is_a_scale_for_a_time_with_fades_that_fit() {
+        let op = |scale, seconds, fade| WorldVolume {
+            player: None,
+            scale,
+            seconds,
+            fade,
+        };
+        assert!(op(0.15, 3.0, 0.0).bounded());
+        assert!(op(0.0, 3.0, 1.5).bounded());
+        assert!(!op(1.5, 3.0, 0.0).bounded());
+        assert!(!op(0.5, 3.0, 2.0).bounded());
+        assert!(!op(0.5, 500.0, 0.0).bounded());
+        assert!(!op(f32::NAN, 3.0, 0.0).bounded());
     }
 }
