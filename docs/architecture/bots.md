@@ -1110,6 +1110,10 @@ kind attacks with its hands (weapons), its body (`melee`), a touch
   target)` is told, and the Add-On makes it happen: the Fizzer fires its
   own explosive projectile at its feet (`fire`, so brick damage is the
   mini-game's) and dies with it.
+- Spotting (`on_bot_spotted(bot, enemy)`): when a bot takes a new enemy as its
+  target (first sight, or turning from one enemy to another), every package
+  declaring it hears it once, after all bots have stepped that tick. It is
+  not repeated while the target holds, and it is the same for every kind.
 - Body contact (`on_contact(info)`): as two bodies begin to touch, every
   package declaring it hears who met whom (`by`, `target`), how (`kind`:
   `"body"`, or `"vehicle"` with the `vehicle` and its driver as `by`),

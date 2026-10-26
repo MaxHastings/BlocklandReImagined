@@ -4111,6 +4111,34 @@ impl Session {
         }
         !hooks.is_empty()
     }
+    /// `on_bot_spotted(bot, enemy)` of every package that declares it, in
+    /// load order: `bot` has taken `enemy` as its target.
+    pub(super) fn package_bot_spotted(&mut self, bot: OwnerId, enemy: OwnerId) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_bot_spotted)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in &hooks {
+            let _ = self.run_package(
+                package,
+                "on_bot_spotted",
+                vec![
+                    Dynamic::from_int(bot as i64),
+                    Dynamic::from_int(enemy as i64),
+                ],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(package);
+        }
+    }
     fn deliver_deaths(&mut self) {
         let Some(host) = self.packages.as_mut() else {
             return;
