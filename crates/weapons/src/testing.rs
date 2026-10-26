@@ -1023,6 +1023,7 @@ pub fn pack() -> Pack {
         collide_players: true,
         pass_source: false,
         settle_speed: 0.0,
+        collision_radius: 0.0,
         explosion: explosion(effect, 0.0, 0.0, 0.0),
         ..projectile(id, name)
     };
