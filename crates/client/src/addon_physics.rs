@@ -16,6 +16,7 @@ use crate::local_physics::{
 };
 use anyhow::{Result, ensure};
 use bri_client_sandbox::bodies::{BodySpec, BodyState, JointSpec, PhysicsCommand, Shape};
+use bri_console::Clamp;
 use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, HashMap};
@@ -147,8 +148,31 @@ fn rotation(q: Quat) -> Rotation {
     Rotation::from_array(q.to_array())
 }
 
+/// A ball joint's cone as a soft limit (Karma's skeletal joint): a spring
+/// and damper that act only on the angle past the cone, none inside it.
+/// `stiffness` is torque per radian past the limit and `damping` torque per
+/// radian per second, as Karma has them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoftCone {
+    pub stiffness: f32,
+    pub damping: f32,
+}
+
+/// A joint whose swing limits are soft (see [`SoftCone`]), driven each step.
+struct SoftJoint {
+    joint: ImpulseJointHandle,
+    first: RigidBodyHandle,
+    second: RigidBodyHandle,
+    /// The joint's frame in each body.
+    frames: [Pose; 2],
+    /// Half angles of the cone about the joint's y and z axes.
+    limits: [f32; 2],
+    cone: SoftCone,
+}
+
 pub struct AddOnPhysics {
     world: PhysicsWorld,
+    soft: Vec<SoftJoint>,
     bodies: BTreeMap<u32, Body>,
     surroundings: Surroundings,
     pushers: Pushers,
@@ -168,6 +192,7 @@ impl Default for AddOnPhysics {
                 world.integration_parameters.num_internal_pgs_iterations = JOINT_PASSES;
                 world
             },
+            soft: Vec::new(),
             bodies: BTreeMap::new(),
             surroundings: Surroundings::default(),
             pushers: Pushers::default(),
@@ -262,6 +287,43 @@ impl AddOnPhysics {
             rb.set_linvel(vector(Vec3::ZERO), false);
             rb.set_angvel(vector(Vec3::ZERO), false);
             rb.set_body_type(RigidBodyType::Fixed, true);
+        }
+    }
+    /// Set each soft joint's spring and damper for the coming step: on, aimed
+    /// at the limit, for a swing past the cone, and off inside it.
+    fn drive_soft_joints(&mut self) {
+        let world = &mut self.world;
+        self.soft
+            .retain(|j| world.impulse_joints.get(j.joint).is_some());
+        for j in &self.soft {
+            let pose = |h: RigidBodyHandle, frame: &Pose| world.bodies[h].position() * *frame;
+            let (p1, p2) = (pose(j.first, &j.frames[0]), pose(j.second, &j.frames[1]));
+            // The second body's frame as seen from the first's, and the
+            // angle the solver itself reads about each axis of it: twice
+            // the arcsine of that axis's part of the turn (the sign of the
+            // quaternion made so the real part is not negative).
+            let mut relative = quat(p1.rotation).inverse() * quat(p2.rotation);
+            if relative.w < 0.0 {
+                relative = -relative;
+            }
+            let about = |part: f32| 2.0 * part.clamped(-1.0, 1.0).asin();
+            let (pitch, yaw) = (about(relative.y), about(relative.z));
+            let Some(joint) = world.impulse_joints.get_mut(j.joint, false) else {
+                continue;
+            };
+            for (axis, angle, limit) in [
+                (JointAxis::AngY, pitch, j.limits[0]),
+                (JointAxis::AngZ, yaw, j.limits[1]),
+            ] {
+                let past = angle.abs() > limit;
+                let target = limit.copysign(angle);
+                let (k, c) = if past {
+                    (j.cone.stiffness, j.cone.damping)
+                } else {
+                    (0.0, 0.0)
+                };
+                joint.data.set_motor_position(axis, target, k, c);
+            }
         }
     }
     /// Take body `id` out of the world, with its joints and everything
@@ -499,13 +561,26 @@ impl AddOnPhysics {
     /// the spec's axis, limited round where the bodies are now.
     fn join(&mut self, a: u32, b: u32, spec: &JointSpec) {
         let frame = Quat::from_rotation_arc(Vec3::X, Vec3::from(spec.axis));
-        self.join_framed(a, b, Vec3::from(spec.anchor), frame, spec, spec.friction);
+        self.join_framed(
+            a,
+            b,
+            Vec3::from(spec.anchor),
+            frame,
+            spec,
+            spec.friction,
+            None,
+        );
     }
 
     /// [`Self::join`] with the joint's whole frame given (its x axis the
     /// twist axis, `spec.axis` unused) and the resistance to twisting
     /// apart from `spec.friction`, which resists swinging: a ragdoll joins
     /// in the bone's own.
+    ///
+    /// With a `soft` cone the swing about the joint's y and z axes has no
+    /// stop; the spring and damper pull it back past the limit instead, as
+    /// Karma's skeletal joints do.
+    #[allow(clippy::too_many_arguments)]
     pub fn join_framed(
         &mut self,
         a: u32,
@@ -514,6 +589,7 @@ impl AddOnPhysics {
         frame: Quat,
         spec: &JointSpec,
         twist_friction: f32,
+        soft: Option<SoftCone>,
     ) {
         let (Some(first), Some(second)) = (self.bodies.get(&a), self.bodies.get(&b)) else {
             return;
@@ -529,18 +605,37 @@ impl AddOnPhysics {
         } else {
             ([-spec.twist, spec.twist], spec.swing, spec.swing_second)
         };
-        let joint = SphericalJointBuilder::new()
+        let soft = soft.filter(|_| !spec.hinge);
+        let mut joint = SphericalJointBuilder::new()
             .local_frame1(frame1)
             .local_frame2(frame2)
             .contacts_enabled(false)
             .limits(JointAxis::AngX, twist)
-            .limits(JointAxis::AngY, [-swing, swing])
-            .limits(JointAxis::AngZ, [-swing_second, swing_second])
-            .motor_velocity(JointAxis::AngX, 0.0, twist_friction)
-            .motor_velocity(JointAxis::AngY, 0.0, spec.friction)
-            .motor_velocity(JointAxis::AngZ, 0.0, spec.friction);
-        self.world
-            .insert_impulse_joint(first.handle, second.handle, joint);
+            .motor_velocity(JointAxis::AngX, 0.0, twist_friction);
+        if soft.is_none() {
+            joint = joint
+                .limits(JointAxis::AngY, [-swing, swing])
+                .limits(JointAxis::AngZ, [-swing_second, swing_second])
+                .motor_velocity(JointAxis::AngY, 0.0, spec.friction)
+                .motor_velocity(JointAxis::AngZ, 0.0, spec.friction);
+        } else {
+            // Torque per radian, not per unit of inertia.
+            joint = joint
+                .motor_model(JointAxis::AngY, MotorModel::ForceBased)
+                .motor_model(JointAxis::AngZ, MotorModel::ForceBased);
+        }
+        let (first, second) = (first.handle, second.handle);
+        let handle = self.world.insert_impulse_joint(first, second, joint);
+        if let Some(cone) = soft {
+            self.soft.push(SoftJoint {
+                joint: handle,
+                first,
+                second,
+                frames: [frame1, frame2],
+                limits: [swing, swing_second],
+                cone,
+            });
+        }
     }
 
     /// Advance by `dt` seconds with this frame's pushers and shots.
@@ -645,6 +740,7 @@ impl AddOnPhysics {
                 self.pushers
                     .drive(&mut self.world, step as f32 / steps as f32);
                 let touched = self.forces(STEP);
+                self.drive_soft_joints();
                 self.world.step_with_events(&Groups, &());
                 for body in self.bodies.values() {
                     let Some((speed, spin)) = body.limits else {

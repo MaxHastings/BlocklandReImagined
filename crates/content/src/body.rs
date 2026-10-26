@@ -611,6 +611,17 @@ pub struct RagdollJoint {
     /// How much it resists swinging (a hinge: turning); 0 swings freely.
     #[serde(default, skip_serializing_if = "zero_f32")]
     pub damping: f32,
+    /// Karma's skeletal joint cone as a soft limit: with this set, `swing`
+    /// and `swing_second` are not stops but the cone past which a spring of
+    /// this stiffness (torque per radian past it) and a damper of
+    /// `cone_damping` (torque per radian per second) pull the swing back,
+    /// as in AA2 (`CONE_STIFFNESS`, `CONE_DAMPING`). Nothing acts inside the
+    /// cone. A ball joint only. Left out, the swing stops at its limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cone_stiffness: Option<f32>,
+    /// The soft cone's damper; see `cone_stiffness`.
+    #[serde(default, skip_serializing_if = "zero_f32")]
+    pub cone_damping: f32,
     /// How much it resists twisting; `damping` when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub twist_damping: Option<f32>,
@@ -712,6 +723,9 @@ impl Ragdoll {
                             .is_none_or(|[low, high]| finite(low, -pi, pi) && finite(high, low, pi))
                         && finite(joint.damping, 0.0, 1000.0)
                         && joint.twist_damping.is_none_or(|v| finite(v, 0.0, 1000.0))
+                        && joint.cone_stiffness.is_none_or(|v| finite(v, 0.0, 1.0e6))
+                        && finite(joint.cone_damping, 0.0, 1.0e6)
+                        && (joint.cone_stiffness.is_none() || joint.hinge.is_none())
                         && joint.axis.is_none_or(|a| matches!(a, 'x' | 'y' | 'z')),
                     "ragdoll bone {}: joint angles are 0 to pi radians (a hinge from -pi, rising), damping 0 to 1000 and axis x, y or z",
                     bone.node
