@@ -1,7 +1,7 @@
 # Content-free checks. Tests that need the generated v20 content are
 # #[ignore]d or listed as ci_skip_target in tools/gate-known-failures.toml;
 # the local push gate (tools/gate.py) runs them all. Pull requests run the
-# quick "pr" tier: every target except the slow packages' end-to-end, GPU and
+# quick "pr" tier, on Linux: every target except the slow packages' end-to-end, GPU and
 # soak suites ([ci_quick] in gate-known-failures.toml). Pushes to main run the
 # "main" tier, everything but the slow offscreen renders (ci_nightly_target);
 # the nightly and manual runs run it all. The push gate runs those too, on a
@@ -107,6 +107,7 @@ jobs:
   # gate's own limit is ten): the hosted runner draws on the WARP software
   # renderer, where the lighting and mirror targets take several minutes.
   test:
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 120
     strategy:
@@ -129,15 +130,15 @@ jobs:
           WGPU_DX12_COMPILER: dxc
           RUST_TEST_THREADS: 1
 
-  # An experiment beside the Windows shards: the pull-request tier on Linux
-  # (software Vulkan; 24.04 for the tooling's Python 3.11+), where linking 70 test binaries is far quicker. It never
-  # blocks a pull request; its wall time against `test` decides whether the
-  # quick tier moves here.
+  # The pull-request test tier, on Linux (software Vulkan; 24.04 for the
+  # tooling's Python 3.11+). PR 371, 2026-10-26: all four shards passed in 9 to
+  # 11 minutes warm (18 cold), against 9 to 22 on Windows runners, whose queue
+  # and 140 MB debug links are slower. Pushes to main and the nightly run
+  # still test on Windows, the platform the game ships on.
   test-linux:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
