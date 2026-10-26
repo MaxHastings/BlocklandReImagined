@@ -130,12 +130,12 @@ jobs:
           RUST_TEST_THREADS: 1
 
   # An experiment beside the Windows shards: the pull-request tier on Linux
-  # (software Vulkan), where linking 70 test binaries is far quicker. It never
+  # (software Vulkan; 24.04 for the tooling's Python 3.11+), where linking 70 test binaries is far quicker. It never
   # blocks a pull request; its wall time against `test` decides whether the
   # quick tier moves here.
   test-linux:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     continue-on-error: true
     strategy:
