@@ -347,3 +347,237 @@ fn fan(scene: &mut SceneData, polygon: Vec<SceneVertex>, center: Vec3) {
         scene.indices.extend([first, first + i, first + i + 1]);
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use bri_content::brick::{BRICK_SCHEMA, Face as Side, Quad, Surface, Vertex};
+
+    /// A plain box brick, `width` x `depth` studs and `plates` high, its
+    /// six sides wound counterclockwise seen from outside.
+    pub(crate) fn box_mesh(id: &str, width: u32, depth: u32, plates: u32) -> BrickMesh {
+        let half = Vec3::new(
+            width as f32 * STUD,
+            plates as f32 * PLATE,
+            depth as f32 * STUD,
+        ) * 0.5;
+        let sides = [
+            (Side::Top, Vec3::Y),
+            (Side::Bottom, Vec3::NEG_Y),
+            (Side::North, Vec3::NEG_Z),
+            (Side::South, Vec3::Z),
+            (Side::East, Vec3::X),
+            (Side::West, Vec3::NEG_X),
+        ];
+        let quads = sides
+            .into_iter()
+            .map(|(face, normal)| {
+                let (u, v) = normal.any_orthonormal_pair();
+                let corners = wind(
+                    [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                        .into_iter()
+                        .map(|(a, b)| (normal + u * a + v * b) * half)
+                        .collect(),
+                    normal,
+                );
+                Quad {
+                    face,
+                    surface: if face == Side::Top {
+                        Surface::Top
+                    } else {
+                        Surface::Side
+                    },
+                    vertices: std::array::from_fn(|i| Vertex {
+                        position: corners[i].to_array(),
+                        normal: normal.to_array(),
+                        uv: [0.0; 2],
+                    }),
+                    colors: None,
+                }
+            })
+            .collect();
+        BrickMesh {
+            schema_version: BRICK_SCHEMA,
+            id: id.into(),
+            footprint_studs: [width, depth],
+            height_plates: plates,
+            attachment_rows: vec!["b".repeat(width as usize); (depth * plates) as usize],
+            collision_boxes: vec![],
+            needs_external_collision: false,
+            coverage: None,
+            quads,
+        }
+    }
+
+    /// The scene a brick's look draws, straight from its quads.
+    fn scene(mesh: &BrickMesh) -> SceneData {
+        let mut scene = SceneData::default();
+        for quad in &mesh.quads {
+            let first = scene.vertices.len() as u32;
+            scene
+                .vertices
+                .extend(quad.vertices.iter().map(|v| SceneVertex {
+                    position: v.position,
+                    normal: v.normal,
+                    uv: v.uv,
+                    lightmap_uv: [0.0; 2],
+                    color: [1.0; 4],
+                    fx: [0.0; 4],
+                }));
+            scene
+                .indices
+                .extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+        }
+        scene.batches.push(MeshBatch {
+            indices: 0..scene.indices.len() as u32,
+            material: 0,
+            center: [0.0; 3],
+            zone: None,
+        });
+        scene
+    }
+
+    fn area(scene: &SceneData, batch: &MeshBatch) -> f32 {
+        scene.indices[batch.indices.start as usize..batch.indices.end as usize]
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] =
+                    [0, 1, 2].map(|i| Vec3::from(scene.vertices[t[i] as usize].position));
+                (b - a).cross(c - a).length() * 0.5
+            })
+            .sum()
+    }
+
+    fn volume(hull: &[Vec3]) -> f32 {
+        use rapier3d::prelude::*;
+        let points: Vec<Vector> = hull
+            .iter()
+            .map(|p| Vector::from_array(p.to_array()))
+            .collect();
+        ColliderBuilder::convex_hull(&points)
+            .expect("a shard is a solid")
+            .density(1.0)
+            .build()
+            .mass()
+    }
+
+    /// Fixed "random" leans, for repeatable cracks.
+    fn leaning(leans: &[f32]) -> impl FnMut() -> f32 + '_ {
+        let mut i = 0;
+        move || {
+            i += 1;
+            leans[(i - 1) % leans.len()]
+        }
+    }
+
+    #[test]
+    fn plastic_cracks_between_studs_and_only_where_there_is_room() {
+        let impact = Vec3::new(0.1, 0.0, 0.3);
+        let count = |w, d, p| cracks(&box_mesh("b", w, d, p), impact, leaning(&[0.7, -1.0])).len();
+        assert_eq!(count(1, 1, 3), 0, "a 1x1 brick stays whole");
+        assert_eq!(count(1, 1, 1), 0, "a 1x1 plate stays whole");
+        assert_eq!(count(1, 4, 3), 1, "a 1x4 breaks in two");
+        assert_eq!(count(2, 4, 3), 2, "a 2x4 breaks in four");
+        assert_eq!(count(2, 4, 1), 2, "a 2x4 plate breaks in four");
+        assert_eq!(count(4, 4, 12), 3, "a 4x cube cracks across its height too");
+    }
+
+    #[test]
+    fn a_crack_stays_within_half_a_stud_of_the_row_nearest_the_blow() {
+        let mesh = box_mesh("b", 2, 8, 3);
+        let half = mesh.half_size();
+        // Struck near one end: the crack takes the row nearest it, never
+        // the brick's own end, however it leans.
+        for impact in [Vec3::new(0.2, 0.1, -1.9), Vec3::new(-0.4, 0.0, 0.6)] {
+            for lean in [-1.0, 1.0] {
+                let found = cracks(&mesh, impact, leaning(&[lean]));
+                let across = found
+                    .iter()
+                    .max_by(|a, b| a.normal.z.abs().total_cmp(&b.normal.z.abs()))
+                    .expect("cracked across its length");
+                let row = ((impact.z + half.z) / STUD).round().clamp(1.0, 7.0) * STUD - half.z;
+                for corner in [-1.0, 1.0]
+                    .into_iter()
+                    .flat_map(|x| [-1.0, 1.0].map(move |y| Vec3::new(x * half.x, y * half.y, 0.0)))
+                {
+                    // Where the crack crosses this edge of the brick.
+                    let z =
+                        (across.offset - across.normal.x * corner.x - across.normal.y * corner.y)
+                            / across.normal.z;
+                    assert!((z - row).abs() <= STUD * 0.5 + 1e-4, "{z} off row {row}");
+                    assert!(z.abs() < half.z, "crack left through an end");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shards_fill_the_brick_exactly() {
+        for (w, d, p) in [(2, 4, 3), (1, 4, 3), (4, 4, 12), (2, 2, 1)] {
+            let mesh = box_mesh("b", w, d, p);
+            let half = mesh.half_size();
+            let found = cracks(
+                &mesh,
+                Vec3::new(0.05, 0.1, -0.2),
+                leaning(&[0.9, -0.6, 0.3]),
+            );
+            let pieces = shards(half, &found);
+            assert_eq!(pieces.len(), 1 << found.len(), "{w}x{d}x{p}");
+            let total: f32 = pieces.iter().map(|s| volume(&s.hull)).sum();
+            let whole = 8.0 * half.x * half.y * half.z;
+            assert!((total - whole).abs() < whole * 1e-3, "{total} of {whole}");
+            for s in &pieces {
+                for p in &s.hull {
+                    let p = *p + s.center;
+                    assert!(
+                        (p.abs() - half).max_element() < 1e-4,
+                        "{p} outside the brick"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn each_shard_draws_its_part_of_the_brick_and_caps_its_cuts() {
+        let mesh = box_mesh("b", 2, 4, 3);
+        let half = mesh.half_size();
+        let whole = scene(&mesh);
+        let skin = area(&whole, &whole.batches[0]);
+        let found = cracks(&mesh, Vec3::new(0.1, 0.0, 0.4), leaning(&[0.5, -0.8]));
+        let (mut outside, mut cuts) = (0.0, 0.0);
+        for shard in shards(half, &found) {
+            let drawn = shard_scene(&whole, half, &found, &shard);
+            assert_eq!(drawn.batches.len(), 2, "its share of the skin and its cuts");
+            outside += area(&drawn, &drawn.batches[0]);
+            cuts += area(&drawn, &drawn.batches[1]);
+            // Every corner is on its side of each crack, about its middle.
+            for v in &drawn.vertices {
+                let p = Vec3::from(v.position) + shard.center;
+                for (i, crack) in found.iter().enumerate() {
+                    assert!(crack.distance(p) * side(shard.index, i) > -1e-4);
+                }
+            }
+            // Cuts face out of the shard and are wound to be seen.
+            let batch = &drawn.batches[1];
+            for t in drawn.indices[batch.indices.start as usize..batch.indices.end as usize]
+                .chunks_exact(3)
+            {
+                let [a, b, c] = [0, 1, 2].map(|i| drawn.vertices[t[i] as usize]);
+                let n = Vec3::from(a.normal);
+                let wound = (Vec3::from(b.position) - Vec3::from(a.position))
+                    .cross(Vec3::from(c.position) - Vec3::from(a.position));
+                assert!(wound.dot(n) > 0.0, "a cut wound away from its normal");
+                assert!(
+                    Vec3::from(a.position).dot(n) > -1e-4,
+                    "a cut facing into its shard"
+                );
+            }
+        }
+        assert!((outside - skin).abs() < skin * 1e-3, "{outside} of {skin}");
+        // Each crack is cut twice, once on each side; across a 2x4 brick each
+        // is at least as big as the brick's section along it.
+        let section = 2.0 * half.y * 2.0 * half.x + 2.0 * half.y * 2.0 * half.z;
+        assert!(cuts > section * 2.0 * 0.999, "{cuts}");
+    }
+}
