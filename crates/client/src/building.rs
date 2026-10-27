@@ -1495,6 +1495,11 @@ impl Building {
         Ok(patches)
     }
 
+    /// A brick definition this client knows.
+    pub fn definition(&self, definition: &str) -> Option<&bri_sim::definitions::Definition> {
+        self.definitions.entries.get(definition)
+    }
+
     /// Half size of a brick definition's grid volume in its own frame.
     pub fn definition_half_extents(&self, definition: &str) -> Option<Vec3> {
         let mesh = &self.definitions.entries.get(definition)?.mesh;

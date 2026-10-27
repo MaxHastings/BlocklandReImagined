@@ -16,6 +16,7 @@ pub mod body_shell;
 pub mod brick_cover;
 pub mod brick_debris;
 pub mod brick_fade;
+pub mod brick_shards;
 pub mod building;
 pub mod client_code;
 pub mod clip_sounds;
