@@ -51,7 +51,8 @@ pub struct ExtraCommand {
 }
 
 /// Not in v20: the performance overlay and its capture sit with v20's
-/// Toggle NetGraph (F3 and Ctrl+F3 are unbound in v20).
+/// Toggle NetGraph (F3 and Ctrl+F3 are unbound in v20), and voice chat's
+/// push-to-talk follows them (V is unbound in v20).
 pub const EXTRA_COMMANDS: &[ExtraCommand] = &[
     ExtraCommand {
         after: "toggleNetGraph",
@@ -64,6 +65,14 @@ pub const EXTRA_COMMANDS: &[ExtraCommand] = &[
         name: "Save Performance Capture",
         command: "savePerfCapture",
         key: "ctrl f3",
+    },
+    // Not in v20: proximity voice chat. Held to talk; with voice activation
+    // chosen the key does nothing.
+    ExtraCommand {
+        after: "savePerfCapture",
+        name: "Push To Talk",
+        command: "voiceTalk",
+        key: "v",
     },
 ];
 

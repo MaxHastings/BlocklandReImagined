@@ -363,11 +363,26 @@ impl App {
                 }
                 settings::save(&self.state_dir.join("settings.json"), &value).and_then(|()| {
                     self.audio.apply_settings(&value);
+                    self.voice.apply_settings(&value);
                     self.graphics = crate::graphics::Graphics::from_settings(&value);
                     self.weather.apply_settings(&value)
                 })
             }
+            // Voice chat's own volume: not a channel of the game's sounds.
+            UiAction::SetVolume { channel, value } if channel == "voice" => {
+                anyhow::ensure!(
+                    value.is_finite() && (0.0..=1.).contains(&value),
+                    "Invalid audio volume"
+                );
+                self.voice.set_volume(value);
+                Ok(())
+            }
             UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
+            UiAction::RefreshVoiceDevices => {
+                self.ui
+                    .apply(UiUpdate::VoiceDevices(crate::voice::input_devices()));
+                Ok(())
+            }
             UiAction::OpenSavesFolder => show_drop_folder(self.files.old_saves.saves_folder()),
             UiAction::RefreshHostColorsets => {
                 self.ui
@@ -468,6 +483,10 @@ impl App {
                     self.ui.apply(UiUpdate::Connection(ConnectionState::Idle));
                 }
                 Ok(())
+            }
+            UiAction::Game(GameAction::Voice { down }) => {
+                self.voice.set_talking(down);
+                return Ok(());
             }
             UiAction::Game(GameAction::ToggleFullscreen) => {
                 platform.push(PlatformCommand::ToggleFullscreen);

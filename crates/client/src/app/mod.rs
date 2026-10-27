@@ -552,6 +552,10 @@ pub struct App {
     /// Everything uploaded to the graphics card, and the renderers that draw it.
     gpu: GpuState,
     audio: crate::audio::ClientAudio,
+    /// Proximity voice chat: the microphone out, other players' voices in.
+    voice: crate::voice::VoiceClient,
+    /// The voice indicator's pictures.
+    voice_icons: crate::voice_icons::VoiceIcons,
     menu_backgrounds: crate::menu_backgrounds::Backgrounds,
     pub ui: Ui,
     pub content: ClientContent,
@@ -872,6 +876,7 @@ fn name_tags(
     size: (f32, f32),
     scale: f32,
     controlling_body: bool,
+    speaking: &BTreeSet<bri_world::OwnerId>,
     passages: &bri_content::passage::Passages,
     drop_center: impl Fn(&bri_weapons::Drop) -> Vec3,
     claim: Option<&bri_ui::api::HudRegionDraw>,
@@ -967,10 +972,13 @@ fn name_tags(
             .or_else(|| game.and_then(|m| m.paint_color).and_then(paint))
             .or_else(|| game.and_then(|m| crate::minigame_ui::color_rgb(m.color)))
             .unwrap_or([255; 3]);
+        // Only the actual in-world tag gets the stock-font speech brackets;
+        // the F2 list deliberately remains untouched.
+        let text = player_name_tag(name, speaking.contains(owner));
         tags.push(bri_ui::api::NameTag {
             x,
             y,
-            text: plain_chat(name),
+            text,
             opacity,
             color: style.color.map_or(color, |c| {
                 [0, 1, 2].map(|i| (c[i].clamped(0.0, 1.0) * 255.0).round() as u8)
@@ -1052,6 +1060,18 @@ fn name_tags(
     }
     tags
 }
+/// The in-world name-tag text for a player. Use ordinary brackets because
+/// the in-game tag editor does not reliably preserve extended ASCII characters.
+/// Keep this separate from the F2 player list.
+fn player_name_tag(name: &str, speaking: bool) -> String {
+    let name = plain_chat(name);
+    if speaking {
+        format!("[ {} ]", name)
+    } else {
+        name
+    }
+}
+
 /// How far Add-On code moved the orbit camera's target from where the game
 /// has it ([`crate::avatar::AvatarMesh::drawn_offset`]): the dead watch
 /// their ragdoll wherever it slid, not the spot where they died.
@@ -1764,6 +1784,7 @@ impl PlatformApp for App {
         self.menu_backgrounds.gpu_stopped();
         self.addons.hud_regions.gpu_stopped();
         self.addons.panel_textures.gpu_stopped();
+        self.voice_icons.gpu_stopped();
         self.scene.scenery.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
@@ -1944,6 +1965,7 @@ impl PlatformApp for App {
         self.addons.item_skins.gpu_stopped();
         self.item_ui.gpu_stopped();
         self.addons.hud_regions.gpu_stopped();
+        self.voice_icons.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
         self.fx.explosion_shapes.gpu_stopped();

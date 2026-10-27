@@ -30,4 +30,5 @@ mod tick_clock;
 pub mod timer_resolution;
 pub mod traffic;
 pub mod upnp;
+pub mod voice;
 pub mod wire;

@@ -325,6 +325,9 @@ pub struct Core {
     pub remap_target: Option<usize>,
     pub remap_all: bool,
     pub options_open: bool,
+    /// The Audio options pane is visible, so the voice settings microphone
+    /// meter may keep the existing capture stream open.
+    pub voice_preview_active: bool,
     /// Options opens on the pane holding this section (an Add-On's
     /// Options key), once.
     pub options_section: Option<String>,
@@ -482,6 +485,12 @@ pub struct Core {
     pub scope_fit: crate::api::ScopeFit,
     /// A flash added to the screen's light, if one is showing.
     pub screen_flash: Option<crate::api::ScreenFlashDraw>,
+    /// The voice indicator, when voice chat is on in a game.
+    pub voice: Option<crate::api::VoiceIndicator>,
+    /// Current capture level and availability for the Voice settings meter.
+    pub voice_preview: crate::api::VoicePreview,
+    /// The microphones voice chat can listen to (the Voice options).
+    pub voice_devices: Vec<String>,
     pub cursor_forced: bool,
     /// The chat input (newMessageHud) is open under the chat.
     pub chat_input_open: bool,
@@ -636,6 +645,7 @@ impl Core {
         self.scope_overlay = None;
         self.scope_fit = Default::default();
         self.screen_flash = None;
+        self.voice = None;
         self.cursor_forced = false;
         self.print_aspect = None;
         self.last_print.clear();
@@ -1296,6 +1306,8 @@ impl Core {
                 }
             }
             "togglesupershift" => self.toggle_super_shift(down),
+            // Held to talk: the release must reach the voice chat too.
+            "voicetalk" => self.game(GameAction::Voice { down }),
             _ if !down => {}
             "toggleconsole" => self.toggle_console(),
             "escapemenu.toggle();" => self.escape_toggle(),
@@ -1596,6 +1608,7 @@ impl Ui {
             remap_target: None,
             remap_all: false,
             options_open: false,
+            voice_preview_active: false,
             options_section: None,
             help_open: false,
             name_asked: false,
@@ -1695,6 +1708,9 @@ impl Ui {
             scope_overlay: None,
             scope_fit: Default::default(),
             screen_flash: None,
+            voice: None,
+            voice_preview: crate::api::VoicePreview::default(),
+            voice_devices: Vec::new(),
             cursor_forced: false,
             chat_input_open: false,
             print_aspect: None,
@@ -2225,6 +2241,19 @@ impl Ui {
                     f.size.iter().chain(&f.center).all(|v| v.is_finite())
                         && f.size[0] * f.size[1] > 0.0
                 })
+            }
+            UiUpdate::VoiceDevices(devices) => c.voice_devices = devices,
+            UiUpdate::VoiceIndicator(indicator) => c.voice = indicator,
+            UiUpdate::VoicePreview(preview) => {
+                c.voice_preview = crate::api::VoicePreview {
+                    level: if preview.level.is_finite() {
+                        preview.level.clamped(0.0, 1.0)
+                    } else {
+                        0.0
+                    },
+                    available: preview.available,
+                    enabled: preview.enabled,
+                };
             }
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {

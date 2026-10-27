@@ -211,6 +211,23 @@ impl App {
         self.end_session_on_fault(presented);
         let span = crate::frame_trace::span("audio");
         self.hear_world(&listener);
+        // Proximity voice: the player's voice out, the others' in, placed
+        // by the same listener as the game's own sounds.
+        let voice_link = self
+            .net
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| a.worker.probes.get())
+            .map(|probes| &probes.voice);
+        self.voice
+            .set_preview_active(self.ui.core.voice_preview_active);
+        self.voice
+            .update(voice_link, listener, std::time::Instant::now());
+        if let Some(indicator) = self.voice.indicator_change() {
+            self.ui.apply(UiUpdate::VoiceIndicator(indicator));
+        }
+        self.ui.apply(UiUpdate::VoicePreview(self.voice.preview()));
         self.audio.tick(elapsed.as_secs_f32(), listener);
         drop(span);
         self.view.drawn_controls = Some(self.controls.clone());
@@ -999,6 +1016,7 @@ impl App {
             && let Some(building) = &self.build.building
         {
             let presented = self.motion.presented();
+            let voice_speakers = self.voice.speaking_owners(view.owner);
             // Balls, projectiles, dropped items and package entities move at
             // the frame rate between the host's 20 Hz updates.
             let projectiles = &self.content.weapons.pack.projectiles;
@@ -1359,6 +1377,7 @@ impl App {
                         .cloned()
                         .filter(|_| !dead),
                     gesture: threads[3].clone(),
+                    voice_talking: !dead && voice_speakers.contains(owner),
                     body: [threads[0].clone(), threads[1].clone()],
                     dead: dead && !limp,
                     death: view

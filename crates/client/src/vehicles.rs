@@ -1963,6 +1963,7 @@ pub(crate) mod tests {
                             serde_json::json!({"owner":1,"feet":origin.to_array(),"velocity":[0.,0.,0.],"yaw":0.,"pitch":0.,"grounded":true,"crouched":false,"jetting":false,"scale":rider_scale}),
                         )?;
                         let input = crate::avatar::AvatarAnimationInput {
+                            voice_talking: false,
                             sitting: true,
                             mount_rotation: Some(rider_rotation),
                             seat_pose: Some(if owns { "sit" } else { "test_missing" }.into()),

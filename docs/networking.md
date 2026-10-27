@@ -132,6 +132,31 @@ router, probe it, and tell the host in plain words whether friends can reach
 them. No outside service is contacted. See
 [architecture/hosting.md](architecture/hosting.md).
 
+## Proximity voice chat
+
+Voice travels as QUIC datagrams beside the movement and state datagrams
+(`crates/net/src/voice.rs`). Every voice datagram starts with the marker byte
+0xC1, which MessagePack never uses, so readers tell voice apart from a
+movement or state datagram without decoding. The payload is opaque to the net
+crate: the audio crate's encoded frames (163 bytes each; at most 256).
+
+- Upstream carries `marker, direction, sequence (u16), payload`; downstream
+  adds the speaker's owner and position, stamped by the host from its own
+  world state, never believed from the client. All little endian.
+- The host relays each frame only to players within 48 world units of the
+  speaker (`voice::RANGE`), so a voice never reaches a player who could not
+  hear it.
+- Upstream is rate-limited (75 frames/s sustained, burst 25) and the relay
+  inbox drops the oldest frame when the game falls behind (256 deep).
+- Speech state rides separate `VoiceActivity` datagrams: upstream from a
+  client, downstream keyed by owner with an active-speaking boolean. The host
+  broadcasts them beyond proximity range so name tags can show who is talking,
+  and expires stale active states.
+- Wire changes are recorded in
+  `crates/net/protocol-changes/proximity-voice-chat.md` and
+  `crates/net/protocol-changes/voice-activity-indicator.md`; the client side
+  (capture, playback, options) lives in `crates/client/src/voice.rs`.
+
 ## Executable host
 
 ```powershell

@@ -1311,6 +1311,10 @@ pub struct AvatarAnimationInput {
     /// Current thread-3 builder or chat animation (`playThread(3, ...)`):
     /// brick shifts, rotations, plant, undo, activate and talk.
     pub gesture: Option<ActionAnimation>,
+    /// Voice-activity signal from the local audio/network state. This adds
+    /// the existing additive `talk` clip without replacing any animation
+    /// thread.
+    pub voice_talking: bool,
     /// Dead bodies hold the original `death1` sequence.
     pub dead: bool,
     /// How a dead body fell (the host's [`bri_sim::session::DeathPose`]):
@@ -2395,7 +2399,7 @@ impl AvatarMesh {
             })
             .collect();
         let bri_content::body_pose::BodyLayerPlan {
-            layers,
+            mut layers,
             unacted,
             transition_at: at,
             unacted_transition_at,
@@ -2424,6 +2428,29 @@ impl AvatarMesh {
                 prone: player.posture.prone,
             },
         )?;
+        // Voice activity composes the stock additive talk clip over locomotion
+        // and any other thread. Cycling this short one-shot is important: the
+        // authored Blockhead clip is non-looping, and should be held only while
+        // actual speech remains active. A thread-3 talk action already provides
+        // the same pose, so don't layer it twice.
+        let gesture_is_talk = animation_input
+            .gesture
+            .as_ref()
+            .is_some_and(|a| a.sequence.eq_ignore_ascii_case("talk"));
+        if animation_input.voice_talking
+            && !animation_input.dead
+            && !gesture_is_talk
+            && let Some(clip) = assets.rig.sequence("talk")
+            && clip.additive
+            && clip.duration.is_finite()
+            && clip.duration > 0.0
+        {
+            layers.push(Layer {
+                animation: clip,
+                time: (time.max(0.0) % f64::from(clip.duration)) as f32,
+                weight: 1.0,
+            });
+        }
         self.skipped.extend(skipped);
         // A foreign body need not borrow a punch/throw to use a stock tool.
         // Sample only the reference tool action's socket displacement, keeping
@@ -2985,6 +3012,7 @@ impl Preview {
             },
             time * 0.85,
             &AvatarAnimationInput {
+                voice_talking: false,
                 // Original AvatarGui sets body thread 1 to run at 0.85.
                 // Head-up remains the outfit's existing accessory layer.
                 body: [
@@ -3388,6 +3416,7 @@ mod tests {
             &player(),
             0.0,
             &AvatarAnimationInput {
+                voice_talking: false,
                 water_coverage: 1.0,
                 ..Default::default()
             },
@@ -3403,6 +3432,7 @@ mod tests {
             &player(),
             0.2,
             &AvatarAnimationInput {
+                voice_talking: false,
                 water_coverage: 1.0,
                 dead: true,
                 ..Default::default()
@@ -3843,6 +3873,7 @@ mod tests {
                 ..player()
             };
             let mut input = AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Right,
                 ..Default::default()
             };
@@ -3914,6 +3945,7 @@ mod tests {
         body.pose_with_animation(&assets, &p, 0., &Default::default())?;
         p.velocity = [0., 0., -2.];
         let input = AvatarAnimationInput {
+            voice_talking: false,
             held_tool_pose: HeldToolPose::Right,
             action: Some(ActionAnimation {
                 sequence: "activate2".into(),
@@ -3969,6 +4001,7 @@ mod tests {
             ..player()
         };
         let mut input = AvatarAnimationInput {
+            voice_talking: false,
             sitting: true,
             held_tool_pose: HeldToolPose::Right,
             ..Default::default()
@@ -4016,6 +4049,7 @@ mod tests {
                     ..player()
                 };
                 let mut input = AvatarAnimationInput {
+                    voice_talking: false,
                     sitting: true,
                     mount_rotation: Some(Quat::from_rotation_y(0.6) * Quat::from_rotation_z(0.3)),
                     seat_pose: Some("missing-seat".into()),
@@ -4105,6 +4139,7 @@ mod tests {
         });
         body.set_body_kind(kind);
         let mut input = AvatarAnimationInput {
+            voice_talking: false,
             held_tool_pose: HeldToolPose::Both,
             support: Some(Vec3::new(-0.4, 0.1, 0.)),
             action: Some(ActionAnimation {
@@ -4242,6 +4277,7 @@ mod tests {
             &player(),
             0.,
             &AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Both,
                 support: Some(Vec3::splat(4.)),
                 ..Default::default()
@@ -4394,6 +4430,7 @@ mod tests {
                 &mut mesh,
                 player(),
                 AvatarAnimationInput {
+                    voice_talking: false,
                     held_tool_pose: held,
                     ..Default::default()
                 },
@@ -4403,6 +4440,7 @@ mod tests {
             &mut mesh,
             player(),
             AvatarAnimationInput {
+                voice_talking: false,
                 sitting: true,
                 ..Default::default()
             },
@@ -4412,6 +4450,7 @@ mod tests {
             &mut mesh,
             player(),
             AvatarAnimationInput {
+                voice_talking: false,
                 dead: true,
                 ..Default::default()
             },
@@ -4433,6 +4472,7 @@ mod tests {
             &mut mesh,
             player(),
             AvatarAnimationInput {
+                voice_talking: false,
                 action: Some(ActionAnimation {
                     sequence: "armreadyboth".into(),
                     started_at: 0.0,
@@ -4503,6 +4543,7 @@ mod tests {
             let mut mesh = assets.body_mesh(&model, assets.package.defaults.clone())?;
             mesh.set_body_kind(BodyKind::of(&archetype, false));
             let input = AvatarAnimationInput {
+                voice_talking: false,
                 sitting: true,
                 mount_rotation: Some(rotation),
                 seat_pose: Some(
@@ -4552,14 +4593,17 @@ mod tests {
         mesh.set_body_kind(BodyKind::of(&archetype, false));
         for (t, input) in [
             AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Both,
                 ..Default::default()
             },
             AvatarAnimationInput {
+                voice_talking: false,
                 sitting: true,
                 ..Default::default()
             },
             AvatarAnimationInput {
+                voice_talking: false,
                 dead: true,
                 ..Default::default()
             },
@@ -4637,6 +4681,7 @@ mod tests {
         // Seated, tilted with the seat.
         let tilt = Quat::from_rotation_x(0.2);
         let seated = AvatarAnimationInput {
+            voice_talking: false,
             sitting: true,
             mount_rotation: Some(tilt),
             ..Default::default()
@@ -5222,6 +5267,7 @@ mod tests {
         let assets = &fx.assets;
         let p = player();
         let dead = AvatarAnimationInput {
+            voice_talking: false,
             dead: true,
             ..Default::default()
         };
@@ -5260,6 +5306,7 @@ mod tests {
         let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let input = AvatarAnimationInput {
+            voice_talking: false,
             held_tool_pose: HeldToolPose::Right,
             ..Default::default()
         };
@@ -5354,6 +5401,7 @@ mod tests {
             &p,
             0.25,
             &AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Right,
                 action: Some(ActionAnimation {
                     sequence: "wrench".into(),
@@ -5389,6 +5437,7 @@ mod tests {
             &p,
             0.5,
             &AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::None,
                 action: Some(ActionAnimation {
                     sequence: "missing-original-clip".into(),
@@ -5415,6 +5464,7 @@ mod tests {
         let mut baseline = assets.mesh(assets.package.defaults.clone())?;
         baseline.pose(assets, &p, 1.0)?;
         let acting = |sequence: &str| AvatarAnimationInput {
+            voice_talking: false,
             action: Some(ActionAnimation {
                 sequence: sequence.into(),
                 started_at: 0.0,
@@ -5457,6 +5507,7 @@ mod tests {
             &p,
             0.0,
             &AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Right,
                 action: None,
                 ..Default::default()
@@ -5523,6 +5574,7 @@ mod tests {
         p.pitch = 0.4;
         p.velocity = [0.0, 0.0, -4.0];
         let input = |gesture: Option<&str>| AvatarAnimationInput {
+            voice_talking: false,
             held_tool_pose: HeldToolPose::Right,
             gesture: gesture.map(|sequence| ActionAnimation {
                 sequence: sequence.into(),
@@ -5554,6 +5606,7 @@ mod tests {
             &player(),
             0.0,
             &AvatarAnimationInput {
+                voice_talking: false,
                 mount_rotation: Some(tilt),
                 sitting: true,
                 ..Default::default()
@@ -5567,6 +5620,7 @@ mod tests {
         let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let mut input = AvatarAnimationInput {
+            voice_talking: false,
             mount_rotation: Some(Quat::from_rotation_y(0.4)),
             sitting: true,
             ..Default::default()
@@ -5755,6 +5809,7 @@ mod tests {
                     .player;
                 let time = tick as f64 * 0.032;
                 let input = AvatarAnimationInput {
+                    voice_talking: false,
                     held_tool_pose: held,
                     ..Default::default()
                 };
@@ -5819,6 +5874,7 @@ mod tests {
                 motor.state(),
                 6.0,
                 &AvatarAnimationInput {
+                    voice_talking: false,
                     held_tool_pose: held,
                     ..Default::default()
                 },
@@ -5849,6 +5905,7 @@ mod tests {
             &presented,
             0.064,
             &AvatarAnimationInput {
+                voice_talking: false,
                 tick_state: Some(p.clone()),
                 ..Default::default()
             },
@@ -5865,6 +5922,7 @@ mod tests {
                 &presented,
                 0.096 + i as f64 / 60.0,
                 &AvatarAnimationInput {
+                    voice_talking: false,
                     tick_state: Some(p.clone()),
                     ..Default::default()
                 },
@@ -5904,6 +5962,7 @@ mod tests {
             }
             let before = mesh.posed_nodes.clone();
             let started = AvatarAnimationInput {
+                voice_talking: false,
                 body: [
                     Some(ActionAnimation {
                         sequence: clip.into(),
@@ -5964,6 +6023,7 @@ mod tests {
         let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let sitting = AvatarAnimationInput {
+            voice_talking: false,
             sitting: true,
             ..Default::default()
         };

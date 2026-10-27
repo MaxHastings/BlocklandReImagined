@@ -131,6 +131,8 @@ pub struct Client {
     /// The newest host tick a pose datagram brought, as it arrived: where
     /// the host is, however far behind this client is in reading.
     heard: Arc<std::sync::atomic::AtomicU64>,
+    /// Proximity voice: frames out to the host, relayed frames in.
+    voice: crate::voice::VoiceLink,
     /// Movement datagrams leave on a millisecond clock while connected.
     _timers: crate::timer_resolution::Guard,
 }
@@ -833,8 +835,22 @@ impl Client {
         let datagram_connection = connection.clone();
         let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let heard_tick = heard.clone();
+        let (voice_inbox, voice_heard) = crate::voice::inbox();
+        let (voice_activity_inbox, voice_activity) = crate::voice::activity_inbox();
+        let voice = crate::voice::VoiceLink::new(connection.clone(), voice_heard, voice_activity);
         let datagrams = tokio::spawn(async move {
             while let Ok(bytes) = datagram_connection.read_datagram().await {
+                // Voice is told apart by its first byte and goes straight to
+                // the audio; a full inbox drops the frame.
+                if crate::voice::is_voice(&bytes) {
+                    if let Some(heard) = crate::voice::decode_downstream(&bytes) {
+                        let _ = voice_inbox.try_send(heard);
+                    } else if let Some(activity) = crate::voice::decode_downstream_activity(&bytes)
+                    {
+                        let _ = voice_activity_inbox.try_send(activity);
+                    }
+                    continue;
+                }
                 let Ok(items) = codec::decode_datagram::<Vec<Datagram>>(&bytes) else {
                     continue;
                 };
@@ -875,6 +891,7 @@ impl Client {
             sequence: 0,
             updates: Arc::default(),
             heard,
+            voice,
             _timers: crate::timer_resolution::Guard::acquire(),
         })
     }
@@ -1179,6 +1196,11 @@ impl Client {
             connection: self.connection.clone(),
             updates: self.updates.clone(),
         }
+    }
+    /// A handle proximity voice sends and receives through, usable from any
+    /// thread while this connection lasts.
+    pub fn voice_link(&self) -> crate::voice::VoiceLink {
+        self.voice.clone()
     }
     pub fn close(&self) {
         self.connection.close(0_u32.into(), b"Client disconnect");

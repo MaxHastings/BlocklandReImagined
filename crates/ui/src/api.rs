@@ -573,6 +573,10 @@ pub enum GameAction {
     },
     /// Write the performance overlay's recent history to a file.
     SavePerfCapture,
+    /// The push-to-talk key of proximity voice chat went down or up.
+    Voice {
+        down: bool,
+    },
     ToggleFullscreen,
     Emote {
         name: String,
@@ -810,6 +814,9 @@ pub enum UiAction {
         channel: String,
         value: f32,
     },
+    /// List the microphones again (Options opened): the answer is
+    /// [`UiUpdate::VoiceDevices`].
+    RefreshVoiceDevices,
     /// Open a web page in the player's browser (a new release's page).
     OpenUrl(String),
     /// Show the saves folder, where old `.bls` saves can be dropped, in
@@ -1828,6 +1835,45 @@ pub struct DisplayModes {
     pub windowed: Vec<(u32, u32)>,
 }
 
+/// How the player's voice is sent in proximity voice chat.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VoiceMode {
+    /// Only while the push-to-talk control is held.
+    #[default]
+    PushToTalk,
+    /// Whenever the microphone is louder than its threshold.
+    VoiceActivity,
+    /// Never: no microphone is opened; other players are still heard.
+    Disabled,
+}
+
+/// The voice indicator's state, for the HUD ([`UiUpdate::VoiceIndicator`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct VoiceIndicator {
+    pub mode: VoiceMode,
+    /// The push-to-talk control is held.
+    pub key_held: bool,
+    /// A voice was heard on the microphone a moment ago.
+    pub active: bool,
+    /// A microphone stream actually opened; `enabled` means preview capture
+    /// is requested and allowed by the user's settings. Level is finite and
+    /// normalized to 0..=1.
+    pub microphone: bool,
+}
+/// Live microphone input state for the Voice settings meter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct VoicePreview {
+    pub level: f32,
+    pub available: bool,
+    pub enabled: bool,
+}
+
+/// Texture keys of the voice indicator's two pictures, which the host
+/// supplies (`UiRenderer::set_external`): a white microphone and a red
+/// no-entry sign, both with transparent backgrounds.
+pub const VOICE_ICON_MICROPHONE: u64 = 0x564F_4943;
+pub const VOICE_ICON_NO_ENTRY: u64 = 0x564F_4944;
+
 /// A picture added to the screen's light for a moment ([`UiUpdate::ScreenFlash`]).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ScreenFlashDraw {
@@ -1978,6 +2024,13 @@ pub enum UiUpdate {
     /// A muzzle flash picture added to the screen's light, or `None` once
     /// it is over (`bri_weapons::ScreenFlash`).
     ScreenFlash(Option<ScreenFlashDraw>),
+    /// The microphones voice chat can listen to, by name.
+    VoiceDevices(Vec<String>),
+    /// The voice indicator's state; None hides it (voice chat is off or not
+    /// in a game).
+    VoiceIndicator(Option<VoiceIndicator>),
+    /// Live microphone input state for the Voice settings meter.
+    VoicePreview(VoicePreview),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.

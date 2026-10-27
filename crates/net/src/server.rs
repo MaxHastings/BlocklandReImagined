@@ -690,6 +690,20 @@ enum Event {
         generation: usize,
         movement: Movement,
     },
+    /// A voice frame, to relay to the players near the speaker.
+    Voice {
+        owner: OwnerId,
+        generation: usize,
+        sequence: u16,
+        payload: Vec<u8>,
+    },
+    /// Voice activity is speech detected by the client's encoder, not a
+    /// microphone-enabled or push-to-talk-key state.
+    VoiceActivity {
+        owner: OwnerId,
+        generation: usize,
+        active: bool,
+    },
     Lost {
         owner: OwnerId,
         generation: usize,
@@ -1186,8 +1200,33 @@ async fn connection_task(
         // tick. Excess is dropped here so one flooding peer cannot crowd the
         // shared event queue that every other player's commands pass through.
         let mut allowance = MovementAllowance::new(tokio::time::Instant::now());
+        // Voice has its own allowance, so talking never costs movement.
+        let mut voice_allowance = MovementAllowance::voice(tokio::time::Instant::now());
         loop {
             let bytes = connection.read_datagram().await?;
+            if crate::voice::is_voice(&bytes) {
+                if voice_allowance.take(tokio::time::Instant::now()) {
+                    if let Some((sequence, payload)) = crate::voice::decode_upstream(&bytes) {
+                        events
+                            .send(Event::Voice {
+                                owner,
+                                generation,
+                                sequence,
+                                payload: payload.to_vec(),
+                            })
+                            .await?;
+                    } else if let Some(active) = crate::voice::decode_upstream_activity(&bytes) {
+                        events
+                            .send(Event::VoiceActivity {
+                                owner,
+                                generation,
+                                active,
+                            })
+                            .await?;
+                    }
+                }
+                continue;
+            }
             if !allowance.take(tokio::time::Instant::now()) {
                 continue;
             }
@@ -1216,20 +1255,35 @@ async fn connection_task(
 struct MovementAllowance {
     tokens: f64,
     at: tokio::time::Instant,
+    rate: f64,
+    burst: f64,
 }
 impl MovementAllowance {
     const RATE: f64 = 240.0;
     const BURST: f64 = 60.0;
     fn new(now: tokio::time::Instant) -> Self {
+        Self::with(now, Self::RATE, Self::BURST)
+    }
+    /// The same bucket sized for a peer's voice frames.
+    fn voice(now: tokio::time::Instant) -> Self {
+        Self::with(
+            now,
+            crate::voice::UPSTREAM_RATE,
+            crate::voice::UPSTREAM_BURST,
+        )
+    }
+    fn with(now: tokio::time::Instant, rate: f64, burst: f64) -> Self {
         Self {
-            tokens: Self::BURST,
+            tokens: burst,
             at: now,
+            rate,
+            burst,
         }
     }
     fn take(&mut self, now: tokio::time::Instant) -> bool {
         let elapsed = now.saturating_duration_since(self.at).as_secs_f64();
         self.at = now;
-        self.tokens = (self.tokens + elapsed * Self::RATE).min(Self::BURST);
+        self.tokens = (self.tokens + elapsed * self.rate).min(self.burst);
         if self.tokens < 1.0 {
             return false;
         }
@@ -1421,6 +1475,52 @@ fn send_package_views(
         }
     }
 }
+/// Relay one voice frame to every other player within earshot of the speaker.
+/// The host's own view of where players stand decides who hears, and is
+/// stamped on the frame: a client cannot place its voice anywhere else.
+fn relay_voice(
+    session: &Session,
+    peers: &BTreeMap<OwnerId, Peer>,
+    traffic: &Traffic,
+    speaker: OwnerId,
+    sequence: u16,
+    payload: &[u8],
+) {
+    let Some(from) = session.viewpoint(speaker) else {
+        return;
+    };
+    let bytes = crate::voice::encode_downstream(speaker, from, sequence, payload);
+    for (owner, peer) in peers {
+        if *owner == speaker {
+            continue;
+        }
+        let Some(at) = session.viewpoint(*owner) else {
+            continue;
+        };
+        if crate::voice::audible(from, at, crate::voice::RANGE)
+            && peer.connection.send_datagram(bytes.clone().into()).is_ok()
+        {
+            traffic.add(Kind::Voice, bytes.len(), 1);
+        }
+    }
+}
+/// Broadcast a compact speech-state update to every other connected player.
+/// It is intentionally not proximity-limited: the in-world name tag and pose
+/// should identify speakers even when their audio is out of range.
+fn relay_voice_activity(
+    peers: &BTreeMap<OwnerId, Peer>,
+    traffic: &Traffic,
+    speaker: OwnerId,
+    active: bool,
+) {
+    let bytes = crate::voice::encode_downstream_activity(speaker, active);
+    for (owner, peer) in peers {
+        if *owner != speaker && peer.connection.send_datagram(bytes.clone().into()).is_ok() {
+            traffic.add(Kind::Voice, bytes.len(), 1);
+        }
+    }
+}
+
 /// Encode each state item once, then pack what each peer should get into as
 /// few datagrams as fit.
 fn send_state(
@@ -1652,6 +1752,9 @@ async fn run(
     let bulk_budget = Arc::new(Semaphore::new(codec::BULK_REQUEST_BUDGET));
     let mut tasks = tokio::task::JoinSet::new();
     let mut peers = BTreeMap::<OwnerId, Peer>::new();
+    // Speech activity is broadcast independently of the proximity audio
+    // range so name tags and the talking pose can stay visible at a distance.
+    let mut voice_active = BTreeMap::<OwnerId, std::time::Instant>::new();
     // Players accepted and still loading: chat only, until their game join.
     let mut lobbies = BTreeMap::<OwnerId, Lobby>::new();
     // Resume tokens are server-issued capabilities. Retain the host bit bound to
@@ -1880,11 +1983,22 @@ async fn run(
                     }
                 }
             },
+            Event::Voice{owner,generation,sequence,payload}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&session,&peers,&traffic,owner,sequence,&payload);}},
+            Event::VoiceActivity{owner,generation,active}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&peers,&traffic,owner,active);}}},
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=recorder.seat_report(&mut session,owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=recorder.movement(&mut session,owner,sequence,input);}if let Some(camera)=movement.camera{let _=recorder.camera_report(&mut session,owner,camera);}}},
         }},
         _=ticker.tick()=>{
             players.store((peers.len()+lobbies.len()) as u32,std::sync::atomic::Ordering::Relaxed);
             let now=std::time::Instant::now();
+            // A lost final state packet or a wedged client must not leave a
+            // permanent talking indicator. Active clients refresh every 500 ms.
+            let stale_speakers: Vec<_> = voice_active.iter()
+                .filter_map(|(owner, seen)| (now.saturating_duration_since(*seen) > Duration::from_millis(1_500)).then_some(*owner))
+                .collect();
+            for owner in stale_speakers {
+                voice_active.remove(&owner);
+                relay_voice_activity(&peers, &traffic, owner, false);
+            }
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             // Ticks the clock dropped still passed for every client.
             let skipped=clock.dropped-recorded_dropped;if skipped>0{recorded_dropped=clock.dropped;recorder.skipped_ticks(&mut session,skipped);}
