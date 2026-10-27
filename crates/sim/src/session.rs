@@ -45,6 +45,7 @@ pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera,
 pub mod camera_path;
 pub use camera_path::CameraPath;
 mod debris;
+mod fracture;
 pub use debris::MAX_BLAST_DEBRIS;
 mod dirty;
 mod events;
