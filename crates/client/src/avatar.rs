@@ -2291,22 +2291,47 @@ impl AvatarMesh {
             None => (None, false),
         };
         let duration = clip.map_or(0.0, |c| c.duration);
-        let phase_before = self.phase;
+        let continued = next.and_then(|action| {
+            let previous = named(self.mode)?;
+            if !previous.looping || !clip.is_some_and(|c| c.looping) {
+                return None;
+            }
+            bri_sim::gait::ground_phase(
+                movement_role(self.mode),
+                movement_role(action.sequence),
+                self.phase,
+                [previous.duration, duration],
+                [self.forward, action.forward != reversed],
+            )
+        });
+        let restart = first || (next.is_some() && continued.is_none());
         if let Some(action) = next {
             if action.sequence == SIT {
                 self.stood_at = None;
             } else if self.mode == SIT {
                 self.stood_at = Some(time);
             }
-            self.transition = self
-                .channels
-                .take()
-                .filter(|_| !first)
-                .map(|channels| (channels, time));
+            // A direction boundary may be crossed every frame. Let an active
+            // ground blend finish instead of continually freezing a new source
+            // pose and postponing its completion.
+            if continued.is_none()
+                || self
+                    .transition
+                    .as_ref()
+                    .is_none_or(|(_, start)| time - start >= TRANSITION_TIME)
+            {
+                self.transition = self
+                    .channels
+                    .take()
+                    .filter(|_| !first)
+                    .map(|channels| (channels, time));
+            }
             self.mode = action.sequence;
             self.forward = action.forward != reversed;
-            self.phase = if self.forward { 0.0 } else { duration };
-        } else {
+            self.phase = continued.unwrap_or(if self.forward { 0.0 } else { duration });
+        }
+        let phase_before = self.phase;
+        if !restart {
             // A locomotion clip plays at the speed the body moves.
             let rate = clip.map_or(1.0, |clip| {
                 let local = Quat::from_rotation_y(movement.body_yaw())
@@ -2323,15 +2348,11 @@ impl AvatarMesh {
         let mode = self.mode;
         let span = clip.map(|c| crate::footsteps::ClipSpan {
             clip: c.name.to_ascii_lowercase(),
-            from: if next.is_some() {
-                self.phase
-            } else {
-                phase_before
-            },
+            from: phase_before,
             to: self.phase,
             duration,
             looping: c.looping,
-            restart: next.is_some() || first,
+            restart,
         });
         // Posed again before the footfalls were taken: one stretch.
         self.clip_span = match (self.clip_span.take(), span) {
@@ -4276,6 +4297,34 @@ mod tests {
             ),
             "host and client preserve the same authored frame"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn turning_across_a_diagonal_keeps_walking_instead_of_restarting() -> Result<()> {
+        let assets = crate::testing::avatar::assets()?;
+        for (crouched, right) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+            let mut p = player();
+            p.crouched = crouched;
+            let mut restarts = 0;
+            let mut advanced = 0.0;
+            let mut starts = 0;
+            for frame in 0..600 {
+                // Turning moves the object-space velocity across the run/strafe
+                // boundary in both directions. Both are still one continuous walk.
+                p.yaw = if frame % 2 == 0 { -0.002 } else { 0.002 };
+                p.velocity = [if right { 4.0 } else { -4.0 }, 0.0, -4.0];
+                mesh.pose(&assets, &p, frame as f64 / 60.0)?;
+                let span = mesh.take_clip_span().context("walking span")?;
+                restarts += usize::from(span.restart);
+                starts += usize::from(span.passes(0.0));
+                advanced += (span.to - span.from).abs();
+            }
+            assert_eq!(restarts, 1, "crouched={crouched}, right={right}");
+            assert!(advanced > 9.0, "walking froze: {advanced}");
+            assert!(starts < 50, "clip-start footfall spam: {starts}");
+        }
         Ok(())
     }
 

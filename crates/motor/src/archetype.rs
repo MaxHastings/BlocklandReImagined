@@ -735,9 +735,21 @@ impl Archetype {
             uses_items: true,
             sockets: Sockets::default(),
             controller: None,
-            sounds: Sounds {
-                jump: (kind == PlayerType::Horse).then(|| "HorseJumpSound".into()),
-                ..Default::default()
+            sounds: if kind == PlayerType::Horse {
+                Sounds {
+                    jump: Some("HorseJumpSound".into()),
+                    ..Default::default()
+                }
+            } else {
+                // First-party game policy, kept as authored data. Other bodies
+                // can still supply or clear their own Sounds through archetypes.
+                static BLOCKHEAD: std::sync::LazyLock<Sounds> = std::sync::LazyLock::new(|| {
+                    serde_json::from_str(include_str!(
+                        "../../../assets/blockhead-footsteps/sounds.json"
+                    ))
+                    .expect("valid base Blockhead sound policy")
+                });
+                BLOCKHEAD.clone()
             },
         }
     }
@@ -996,7 +1008,9 @@ mod tests {
         let horse = table.resolve(PlayerType::Horse.archetype());
         assert_eq!(horse.sounds.jump.as_deref(), Some("HorseJumpSound"));
         let standard = table.resolve(PlayerType::Standard.archetype());
-        assert!(standard.sounds.is_standard());
+        assert!(standard.sounds.jump.is_none());
+        assert_eq!(standard.sounds.footsteps.len(), 4);
+        assert!(horse.sounds.footsteps.is_empty());
         let mut loud = horse.clone();
         loud.sounds.pain = Some("x".repeat(Sounds::MAX_NAME + 1));
         assert!(loud.validate().is_err());

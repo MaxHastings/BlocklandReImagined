@@ -9,6 +9,7 @@ use std::{
     io::Read,
     path::Path,
 };
+pub mod foley;
 pub mod stock;
 /// Where the base game's recovered script is said to come from.
 const CORE_SCRIPT: &str = "base/server/scripts/allGameScripts.cs (recovered)";
@@ -950,6 +951,7 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
             });
         }
     }
+    foley::install(&mut pack, out)?;
     pack.validate()?;
     std::fs::write(out.join("weapons.json"), serde_json::to_vec_pretty(&pack)?)?;
     Ok(pack)

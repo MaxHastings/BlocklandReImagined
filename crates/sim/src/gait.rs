@@ -13,6 +13,45 @@ pub struct LocomotionAction {
     pub forward: bool,
 }
 
+/// Transfer a looping ground gait's progress when it changes direction within
+/// the same posture. Direction picks may alternate while turning across a
+/// diagonal; that changes the pose, not the fact that the body is mid-stride.
+/// Idle, airborne, ladder and posture changes still start a new action.
+/// `durations` and `forwards` describe the old and new clips respectively.
+pub fn ground_phase(
+    previous: Role,
+    next: Role,
+    phase: f32,
+    durations: [f32; 2],
+    forwards: [bool; 2],
+) -> Option<f32> {
+    let posture = |role| match role {
+        Role::Run | Role::Back | Role::Side | Role::SideRight => Some(0),
+        Role::CrouchRun | Role::CrouchBack | Role::CrouchSide | Role::CrouchSideRight => Some(1),
+        Role::ProneRun | Role::ProneBack | Role::ProneSide | Role::ProneSideRight => Some(2),
+        _ => None,
+    };
+    if posture(previous).is_none() || posture(previous) != posture(next) {
+        return None;
+    }
+    if !phase.is_finite() || durations.iter().any(|d| !d.is_finite() || *d <= 0.0) {
+        return None;
+    }
+    let progress = phase / durations[0];
+    let progress = if forwards[0] {
+        progress
+    } else {
+        1.0 - progress
+    };
+    Some(
+        if forwards[1] {
+            progress
+        } else {
+            1.0 - progress
+        } * durations[1],
+    )
+}
+
 /// Speeds within this of each other tie. v20 rotates velocity into object
 /// space with the transpose of the same z rotation that built it, so a
 /// 45 degree move yields bit-identical forward and side components. Our
@@ -306,13 +345,32 @@ impl Gaits {
         let (name, reversed) = roles.clip(role)?;
         let (duration, looping) = clip(name)?;
         let pace = self.bodies.entry(owner).or_default();
-        let restart = pace.mode != action.sequence;
-        let before = pace.phase;
-        if restart {
-            pace.mode = action.sequence.to_owned();
-            pace.forward = action.forward != reversed;
-            pace.phase = if pace.forward { 0.0 } else { duration };
+        let changed = pace.mode != action.sequence;
+        let forward = action.forward != reversed;
+        let continued = if changed && looping {
+            Role::from_blockhead_clip(&pace.mode).and_then(|previous| {
+                let (old_name, _) = roles.clip(previous)?;
+                let (old_duration, old_looping) = clip(old_name)?;
+                old_looping.then_some(())?;
+                ground_phase(
+                    previous,
+                    role,
+                    pace.phase,
+                    [old_duration, duration],
+                    [pace.forward, forward],
+                )
+            })
         } else {
+            None
+        };
+        let restart = changed && continued.is_none();
+        if changed {
+            pace.mode = action.sequence.to_owned();
+            pace.forward = forward;
+            pace.phase = continued.unwrap_or(if pace.forward { 0.0 } else { duration });
+        }
+        let before = pace.phase;
+        if !restart {
             let local = Quat::from_rotation_y(player.body_yaw()) * Vec3::from(player.velocity)
                 / player.scale.max(0.01);
             let rate = time_scale(
@@ -331,7 +389,7 @@ impl Gaits {
         }
         let span = ClipSpan {
             clip: name.to_owned(),
-            from: if restart { pace.phase } else { before },
+            from: before,
             to: pace.phase,
             duration,
             looping,
@@ -423,6 +481,35 @@ mod tests {
     }
 
     #[test]
+    fn ground_direction_changes_keep_progress_in_either_play_direction() {
+        for old_forward in [false, true] {
+            for new_forward in [false, true] {
+                let old = if old_forward { 0.2 } else { 0.6 };
+                let new = ground_phase(
+                    Role::Run,
+                    Role::Side,
+                    old,
+                    [0.8, 0.4],
+                    [old_forward, new_forward],
+                )
+                .unwrap();
+                let expected = if new_forward { 0.1 } else { 0.3 };
+                assert!((new - expected).abs() < 1e-6);
+            }
+        }
+        for next in [
+            Role::Idle,
+            Role::Jump,
+            Role::CrouchRun,
+            Role::ProneRun,
+            Role::LadderUp,
+        ] {
+            assert!(ground_phase(Role::Run, next, 0.2, [0.8, 0.4], [true; 2]).is_none());
+        }
+        assert!(ground_phase(Role::Run, Role::Side, 0.2, [0.0, 0.4], [true; 2]).is_none());
+    }
+
+    #[test]
     fn the_host_walks_the_clip_at_the_rate_a_client_would() {
         let mut look = Archetypes::default()
             .resolve(Default::default())
@@ -461,5 +548,48 @@ mod tests {
         let span = gaits.advance(2, 0.02, &still, &look, clips).unwrap();
         assert_eq!(span.clip, "root");
         assert!(span.restart);
+    }
+
+    #[test]
+    fn host_turning_walk_does_not_repeatedly_fire_clip_start_marks() {
+        let look = Archetypes::default()
+            .resolve(Default::default())
+            .look
+            .clone();
+        let clips = |name: &str| match name {
+            "run" => Some((0.63333434, true)),
+            "side" => Some((0.23333433, true)),
+            "root" | "jump" | "fall" => Some((1.0, true)),
+            _ => None,
+        };
+        for right in [false, true] {
+            for fps in [30, 60, 144] {
+                let mut gaits = Gaits::default();
+                let mut p = running(4.0);
+                p.velocity[0] = if right { 4.0 } else { -4.0 };
+                let mut restarts = 0;
+                let mut contacts = 0;
+                for frame in 0..fps * 10 {
+                    p.yaw = if frame % 2 == 0 { -0.002 } else { 0.002 };
+                    let span = gaits
+                        .advance(1, 1.0 / fps as f32, &p, &look, clips)
+                        .unwrap();
+                    restarts += usize::from(span.restart);
+                    contacts += usize::from(span.passes(0.0));
+                }
+                assert_eq!(restarts, 1, "right={right}, fps={fps}");
+                assert!((10..50).contains(&contacts), "{contacts} at {fps} fps");
+                p.grounded = false;
+                p.velocity[1] = 4.0;
+                let jump = gaits.advance(1, 0.02, &p, &look, clips).unwrap();
+                assert_eq!(jump.clip, "jump");
+                assert!(jump.restart);
+                p.grounded = true;
+                p.velocity = [0.0; 3];
+                let stopped = gaits.advance(1, 0.02, &p, &look, clips).unwrap();
+                assert_eq!(stopped.clip, "root");
+                assert!(stopped.restart);
+            }
+        }
     }
 }
