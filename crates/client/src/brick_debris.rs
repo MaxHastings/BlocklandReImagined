@@ -19,6 +19,14 @@
 //! are alive at once; the oldest make way for new ones. The player picks the
 //! bound with Options' Physics Quality; nothing else thins the debris (Max,
 //! 2026-10-04: a little lag over less destruction).
+//!
+//! Bricks behave as plastic ([`PLASTIC_BOUNCE`], [`PLASTIC_FRICTION`]), with
+//! v20's throws. Where this departs from real plastic, it is on purpose:
+//! outcomes real plastic rarely shows come up often enough to be seen,
+//! never bigger than real (Max, 2026-10-27). The departures, all here:
+//! - Every brick a blow lands on squarely cracks into shards
+//!   ([`crate::brick_shards`]); real plastic usually survives a blow. The
+//!   bricks around it, the common case, pop off whole as plastic does.
 use crate::brick_shards::{Crack, Shard, cracks, shard_scene, shards};
 use crate::building::Building;
 use crate::local_physics::{MAX_STEPS, PUSHER_REACH, Pushers, STEP, Shots, Surroundings};
@@ -59,6 +67,16 @@ const MAX_BLASTS: usize = 64;
 const BODY_SHRINK: f32 = 0.96;
 /// Momentum a projectile gives each body it passes, per unit of speed.
 const PROJECTILE_MASS: f32 = 0.2;
+/// How much of its speed a plastic brick keeps bouncing off something
+/// hard: plastic on steel keeps 0.45 to 0.55
+/// (<https://www.samaterials.com/content/coefficient-of-restitution.html>).
+/// The map, bricks and terrain carry no bounce of their own, so the
+/// debris' own is the one that counts (`CoefficientCombineRule::Max`).
+const PLASTIC_BOUNCE: f32 = 0.5;
+/// Plastic sliding on plastic: polystyrene on polystyrene grips at 0.5
+/// (<https://blog.misumiusa.com/coefficient-of-friction/>); LEGO's ABS is a
+/// styrene plastic.
+const PLASTIC_FRICTION: f32 = 0.5;
 /// Mass per cubic unit of debris: a 2x4 brick weighs 6.
 const DENSITY: f32 = 5.0;
 /// Distinct brick looks kept on the GPU.
@@ -633,8 +651,9 @@ impl BrickDebris {
         let collider = hull
             .unwrap_or_else(|| ColliderBuilder::cuboid(h.x.max(0.01), h.y.max(0.01), h.z.max(0.01)))
             .density(DENSITY)
-            .friction(0.7)
-            .restitution(0.25);
+            .friction(PLASTIC_FRICTION)
+            .restitution(PLASTIC_BOUNCE)
+            .restitution_combine_rule(CoefficientCombineRule::Max);
         let (handle, _) = self.world.insert(body, collider);
         self.bodies.insert(
             (id, piece),
@@ -1888,6 +1907,142 @@ pub(crate) mod tests {
         debris.advance(5.0, &building).unwrap();
         assert!(debris.diagnostics.dropped_steps > 0);
         assert!(debris.positions().iter().all(|p| p.is_finite()));
+    }
+
+    /// A rocket landing on the brick itself: `kill` with the blow on it.
+    fn hit(id: u64, brick: BrickId, at: [f32; 3], origin: [f32; 3]) -> Cue {
+        let mut cue = kill(id, brick, at, origin, 30.0, 0.02);
+        if let CueKind::BrickKill { death, .. } = &mut cue.kind {
+            *death = BrickDeath::Hit;
+        }
+        cue
+    }
+
+    fn mass(debris: &BrickDebris) -> f32 {
+        debris
+            .bodies
+            .values()
+            .map(|b| debris.world.bodies[b.handle].mass())
+            .sum()
+    }
+
+    #[test]
+    fn a_struck_brick_cracks_into_shards_that_weigh_what_it_did() {
+        let (building, _) = building(&[]);
+        let mut whole = BrickDebris::new();
+        whole
+            .cues(
+                &[kill(1, 1, [0.0, 0.3, 0.0], [0.2, 0.6, 0.1], 30.0, 0.02)],
+                &building,
+            )
+            .unwrap();
+        let mut cracked = BrickDebris::new();
+        cracked
+            .cues(&[hit(1, 1, [0.0, 0.3, 0.0], [0.2, 0.6, 0.1])], &building)
+            .unwrap();
+        assert_eq!(whole.len(), 1, "a blast beside it throws it whole");
+        // A 2x2 brick cracks once each way.
+        assert_eq!(cracked.len(), 4);
+        assert!((mass(&cracked) - mass(&whole)).abs() < mass(&whole) * 0.01);
+        let looks: BTreeSet<_> = cracked
+            .bodies
+            .values()
+            .map(|b| b.look.shard.as_ref().map(|s| s.index))
+            .collect();
+        assert_eq!(looks.len(), 4, "each shard wears its own model");
+        // They fly apart from where it was struck, and every client sees
+        // the same pieces go the same way.
+        let mut again = BrickDebris::new();
+        again
+            .cues(&[hit(1, 1, [0.0, 0.3, 0.0], [0.2, 0.6, 0.1])], &building)
+            .unwrap();
+        run(&mut cracked, &building, 0.5);
+        run(&mut again, &building, 0.5);
+        assert_eq!(cracked.positions(), again.positions());
+        let spread = cracked.positions();
+        for (i, a) in spread.iter().enumerate() {
+            for b in &spread[i + 1..] {
+                assert!(a.distance(*b) > 0.3, "shards stuck together: {a} {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn shards_live_within_the_physics_quality_limit() {
+        let (building, _) = building(&[]);
+        // No room for its shards: it flies whole, as before.
+        let mut debris = BrickDebris::new();
+        debris.set_limit(3);
+        debris
+            .cues(&[hit(1, 1, [0.0, 0.3, 0.0], [0.0, 0.6, 0.0])], &building)
+            .unwrap();
+        assert_eq!(debris.len(), 1);
+        // Room for one cracked brick: the next one's shards replace it.
+        let mut debris = BrickDebris::new();
+        debris.set_limit(4);
+        let hits = [
+            hit(1, 1, [0.0, 0.3, 0.0], [0.0, 0.6, 0.0]),
+            hit(2, 2, [3.0, 0.3, 0.0], [3.0, 0.6, 0.0]),
+        ];
+        debris.cues(&hits, &building).unwrap();
+        assert_eq!(debris.len(), 4);
+        assert_eq!(debris.diagnostics.evicted, 4);
+        assert!(debris.bodies.keys().all(|(cue, _)| *cue == 2));
+        // Physics Quality Off: nothing at all.
+        let mut debris = BrickDebris::new();
+        debris.set_limit(0);
+        debris
+            .cues(&[hit(1, 1, [0.0, 0.3, 0.0], [0.0, 0.6, 0.0])], &building)
+            .unwrap();
+        assert!(debris.is_empty());
+    }
+
+    #[test]
+    fn a_shard_look_builds_its_own_piece_of_the_brick() {
+        let mesh = crate::brick_shards::tests::box_mesh("mesh/box", 2, 4, 3);
+        let meshes = BTreeMap::from([("definition/box".to_owned(), mesh.clone())]);
+        let materials = crate::materials::BrickMaterials::in_memory();
+        let palette = BrickPalette::new(&materials).unwrap();
+        let colors = [[0.9, 0.2, 0.1, 1.0]];
+        let whole = Look {
+            definition: "definition/box".into(),
+            color: 0,
+            color_effect: 0,
+            shape_effect: 0,
+            print: None,
+            shard: None,
+        };
+        let full = look_scene(&whole, &meshes, &palette, &materials, &colors)
+            .unwrap()
+            .unwrap();
+        let mut rng = Seeded::new(7);
+        let found = cracks(&mesh, Vec3::new(0.1, 0.0, 0.2), || rng.signed());
+        let pieces = shards(mesh.half_size(), &found);
+        assert_eq!(pieces.len(), 4);
+        for shard in &pieces {
+            let look = Look {
+                shard: Some(ShardLook {
+                    cue: 9,
+                    index: shard.index,
+                    cracks: found.clone(),
+                }),
+                ..whole.clone()
+            };
+            let piece = look_scene(&look, &meshes, &palette, &materials, &colors)
+                .unwrap()
+                .unwrap();
+            assert!(piece.images.is_empty(), "shards share the brick palette");
+            assert_eq!(piece.materials, full.materials);
+            let reach = piece
+                .vertices
+                .iter()
+                .map(|v| Vec3::from(v.position).length())
+                .fold(0.0, f32::max);
+            assert!(
+                reach < mesh.half_size().length(),
+                "a shard bigger than its brick"
+            );
+        }
     }
 
     #[test]
