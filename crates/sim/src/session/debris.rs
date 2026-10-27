@@ -31,6 +31,8 @@ pub struct BrickBlast {
     pub force: f32,
     /// Falloff distance; direct hits and events use v20's tiny radii.
     pub radius: f32,
+    /// The blow landed on this brick itself (see `BrickDeath::Hit`).
+    pub struck: bool,
 }
 impl BrickBlast {
     /// A `killBrick` pop: straight up from just below the brick's center.
@@ -39,6 +41,7 @@ impl BrickBlast {
             origin: center - Vec3::Y,
             force: KILL_POP_FORCE,
             radius: 0.,
+            struck: false,
         }
     }
     /// `fakeKillBrick(vector, time)`: thrown along `velocity`.
@@ -48,6 +51,7 @@ impl BrickBlast {
             origin,
             force,
             radius: 1.,
+            struck: false,
         }
     }
 }
@@ -191,6 +195,7 @@ impl Session {
             .get(&brick)
             .context("Unknown brick")?;
         let (death, blast) = match blast {
+            Some(blast) if blast.struck => (BrickDeath::Hit, blast),
             Some(blast) => (BrickDeath::Blast, blast),
             None => (BrickDeath::Kill, BrickBlast::pop(Vec3::from(b.position))),
         };

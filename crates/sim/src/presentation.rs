@@ -16,6 +16,11 @@ pub enum BrickDeath {
     /// `transmitBrickExplosion` (`fakeKillBrick`, weapon blasts): a physics
     /// body thrown from `origin` that tumbles against the world.
     Blast,
+    /// A blast's own target, struck directly (a rocket's hit, a vehicle
+    /// ramming it): thrown like [`Self::Blast`], but a plain brick long
+    /// enough to crack comes apart into a few shards, as plastic does
+    /// under a hard blow.
+    Hit,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

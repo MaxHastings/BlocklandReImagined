@@ -1050,6 +1050,7 @@ impl Session {
                     } else {
                         0.02
                     },
+                    struck: target == Some(brick),
                 };
                 (brick, blast)
             })

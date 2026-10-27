@@ -2548,6 +2548,7 @@ impl Session {
                 origin: center,
                 force: 20.0,
                 radius: brick_radius,
+                struck: false,
             };
             for (_, brick) in hit.into_iter().take(MAX_BLAST_BRICKS) {
                 let spent = self

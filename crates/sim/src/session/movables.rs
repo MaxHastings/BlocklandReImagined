@@ -1497,6 +1497,7 @@ impl Session {
             origin: point - heading * 1.5,
             force: smash.force,
             radius: smash.radius.max(1.0) + 1.5,
+            struck: false,
         };
         let mut left = energy;
         let mut kills = Vec::new();
@@ -1509,7 +1510,13 @@ impl Session {
                 continue;
             }
             left -= price;
-            kills.push((id, blast));
+            kills.push((
+                id,
+                super::debris::BrickBlast {
+                    struck: id == brick,
+                    ..blast
+                },
+            ));
         }
         self.knock_out_bricks(source, &kills)?;
         self.movables.smash_energy.retain(|_, (at, _)| *at == tick);
