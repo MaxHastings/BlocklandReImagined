@@ -2291,22 +2291,71 @@ impl AvatarMesh {
             None => (None, false),
         };
         let duration = clip.map_or(0.0, |c| c.duration);
-        let phase_before = self.phase;
+        let continued = next.and_then(|action| {
+            let previous = named(self.mode)?;
+            if !previous.looping || !clip.is_some_and(|c| c.looping) {
+                return None;
+            }
+            // This interval elapsed before the new direction was selected.
+            // Finish it on the old clock so its last contact is not lost.
+            let local = Quat::from_rotation_y(movement.body_yaw()) * Vec3::from(movement.velocity)
+                / movement.scale.max(0.01);
+            let delta = elapsed
+                * self
+                    .kind
+                    .time_scale(previous, movement_role(self.mode), local);
+            let to = self.phase + if self.forward { delta } else { -delta };
+            let phase = bri_sim::gait::ground_phase(
+                movement_role(self.mode),
+                movement_role(action.sequence),
+                to,
+                [previous.duration, duration],
+                [self.forward, action.forward != reversed],
+            )?;
+            Some((
+                phase,
+                crate::footsteps::ClipSpan {
+                    clip: previous.name.to_ascii_lowercase(),
+                    from: self.phase,
+                    to,
+                    duration: previous.duration,
+                    looping: true,
+                    restart: false,
+                },
+            ))
+        });
+        let restart = first || (next.is_some() && continued.is_none());
         if let Some(action) = next {
             if action.sequence == SIT {
                 self.stood_at = None;
             } else if self.mode == SIT {
                 self.stood_at = Some(time);
             }
-            self.transition = self
-                .channels
-                .take()
-                .filter(|_| !first)
-                .map(|channels| (channels, time));
+            // A direction boundary may be crossed every frame. Let an active
+            // ground blend finish instead of continually freezing a new source
+            // pose and postponing its completion.
+            if continued.is_none()
+                || self
+                    .transition
+                    .as_ref()
+                    .is_none_or(|(_, start)| time - start >= TRANSITION_TIME)
+            {
+                self.transition = self
+                    .channels
+                    .take()
+                    .filter(|_| !first)
+                    .map(|channels| (channels, time));
+            }
             self.mode = action.sequence;
             self.forward = action.forward != reversed;
-            self.phase = if self.forward { 0.0 } else { duration };
-        } else {
+            self.phase = continued
+                .as_ref()
+                .map_or(if self.forward { 0.0 } else { duration }, |(phase, _)| {
+                    *phase
+                });
+        }
+        let phase_before = self.phase;
+        if !restart && continued.is_none() {
             // A locomotion clip plays at the speed the body moves.
             let rate = clip.map_or(1.0, |clip| {
                 let local = Quat::from_rotation_y(movement.body_yaw())
@@ -2321,17 +2370,15 @@ impl AvatarMesh {
             }
         }
         let mode = self.mode;
-        let span = clip.map(|c| crate::footsteps::ClipSpan {
-            clip: c.name.to_ascii_lowercase(),
-            from: if next.is_some() {
-                self.phase
-            } else {
-                phase_before
-            },
-            to: self.phase,
-            duration,
-            looping: c.looping,
-            restart: next.is_some() || first,
+        let span = continued.map(|(_, span)| span).or_else(|| {
+            clip.map(|c| crate::footsteps::ClipSpan {
+                clip: c.name.to_ascii_lowercase(),
+                from: phase_before,
+                to: self.phase,
+                duration,
+                looping: c.looping,
+                restart,
+            })
         });
         // Posed again before the footfalls were taken: one stretch.
         self.clip_span = match (self.clip_span.take(), span) {
@@ -4276,6 +4323,82 @@ mod tests {
             ),
             "host and client preserve the same authored frame"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_turn_keeps_the_contact_in_the_old_clips_last_interval() -> Result<()> {
+        let assets = crate::testing::avatar::assets()?;
+        for (before, after, old_clip, new_clip, fraction, forward) in [
+            (
+                [0.0, 0.0, -4.0],
+                [-4.0, 0.0, 0.0],
+                "run",
+                "side",
+                0.25,
+                true,
+            ),
+            (
+                [4.0, 0.0, 0.0],
+                [0.0, 0.0, -4.0],
+                "side",
+                "run",
+                0.75,
+                false,
+            ),
+        ] {
+            let duration = assets.rig.sequence(old_clip).context("old clip")?.duration;
+            let contact = duration * fraction;
+            let at = f64::from(if forward { contact } else { duration - contact });
+            let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+            let mut p = player();
+            p.velocity = before;
+            mesh.pose(&assets, &p, 0.0)?;
+            mesh.take_clip_span();
+            mesh.pose(&assets, &p, at - 0.01)?;
+            mesh.take_clip_span();
+            p.velocity = after;
+            mesh.pose(&assets, &p, at + 0.01)?;
+            let last = mesh.take_clip_span().context("turn span")?;
+            assert_eq!(last.clip, old_clip, "finish the elapsed old interval first");
+            assert!(
+                last.passes(contact),
+                "lost the contact before the turn: {last:?}"
+            );
+            assert!(!last.restart);
+            mesh.pose(&assets, &p, at + 0.02)?;
+            let next = mesh.take_clip_span().context("new clip span")?;
+            assert_eq!(next.clip, new_clip);
+            assert!(!next.restart);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn turning_across_a_diagonal_keeps_walking_instead_of_restarting() -> Result<()> {
+        let assets = crate::testing::avatar::assets()?;
+        for (crouched, right) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+            let mut p = player();
+            p.crouched = crouched;
+            let mut restarts = 0;
+            let mut advanced = 0.0;
+            let mut starts = 0;
+            for frame in 0..600 {
+                // Turning moves the object-space velocity across the run/strafe
+                // boundary in both directions. Both are still one continuous walk.
+                p.yaw = if frame % 2 == 0 { -0.002 } else { 0.002 };
+                p.velocity = [if right { 4.0 } else { -4.0 }, 0.0, -4.0];
+                mesh.pose(&assets, &p, frame as f64 / 60.0)?;
+                let span = mesh.take_clip_span().context("walking span")?;
+                restarts += usize::from(span.restart);
+                starts += usize::from(span.passes(0.0));
+                advanced += (span.to - span.from).abs();
+            }
+            assert_eq!(restarts, 1, "crouched={crouched}, right={right}");
+            assert!(advanced > 9.0, "walking froze: {advanced}");
+            assert!(starts < 50, "clip-start footfall spam: {starts}");
+        }
         Ok(())
     }
 

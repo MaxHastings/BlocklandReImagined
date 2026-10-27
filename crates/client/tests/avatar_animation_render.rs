@@ -17,6 +17,7 @@ synthetic_and_release_content!(
     AvatarFixture: diagonal_walk_keeps_a_continuous_leg_cycle,
     builder_animations_render_on_the_avatar,
     uploads_follow_posed_topology_changes,
+    turning_footfalls_follow_the_gait_through_movement_states,
 );
 
 const CELL: (u32, u32) = (200, 260);
@@ -24,6 +25,178 @@ const COLUMNS: u32 = 10;
 const FRAMES: usize = 90;
 const SHOWN: usize = 30;
 const DT: f64 = 1.0 / 60.0;
+
+/// Exercise the real pose -> clip span -> marker -> sound selection chain,
+/// including the zero-time strafe mark which exposed restart spam. The made-up
+/// rig's four-key strides plant at quarter cycles; a separate origin probe
+/// stresses clip starts without pretending it is another physical foot plant.
+/// The converted body uses the actual base-game contact policy.
+fn turning_footfalls_follow_the_gait_through_movement_states(f: &AvatarFixture) -> Result<()> {
+    use bri_client::footsteps::{Footsteps, Walk};
+    use bri_sim::archetype::{Archetypes, Sounds, StepEvent};
+    const ORIGIN_PROBE: &str = "test:clip_origin_probe";
+    let assets = &f.assets;
+    let mut sounds = Sounds {
+        footsteps: (1..=4).map(|i| format!("test:step_{i}")).collect(),
+        ..Default::default()
+    };
+    for name in [
+        "run",
+        "back",
+        "side",
+        "crouchrun",
+        "crouchback",
+        "crouchside",
+    ] {
+        let clip = assets.rig.sequence(name).with_context(|| name)?;
+        let fractions: &[f32] = if name.ends_with("side") {
+            &[0.0, 0.25, 0.75]
+        } else {
+            &[0.25, 0.75]
+        };
+        sounds.steps.insert(
+            name.into(),
+            fractions
+                .iter()
+                .map(|fraction| StepEvent {
+                    seconds: Some(fraction * clip.duration),
+                    sound: (*fraction == 0.0).then(|| ORIGIN_PROBE.into()),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+    }
+    if f.content {
+        sounds = Archetypes::default()
+            .resolve(Default::default())
+            .sounds
+            .clone();
+    }
+    let mut report = Vec::new();
+    for crouched in [false, true] {
+        for right in [false, true] {
+            let mut counts = Vec::new();
+            for fps in [30, 60, 144] {
+                let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+                let mut footsteps = Footsteps::default();
+                let archetypes = Archetypes::default();
+                let mut tick = None;
+                let mut count = 0;
+                let mut probes = 0;
+                let mut restarts = 0;
+                let mut last_sound = None;
+                let mut progress = 0.0;
+                let mut previous_clip = None;
+                let mut changes = 0;
+                let mut now = 0.0;
+                for frame in 0..fps * 10 {
+                    let (mut p, _) = player(0, &mut tick, "forward");
+                    p.crouched = crouched;
+                    // The same state changes at the same half-second boundaries
+                    // for every frame rate. A sampled 6 Hz sine gave 30 fps a
+                    // different run/strafe duty cycle than 60/144 fps.
+                    p.yaw = if (frame * 2 / fps) % 2 == 0 {
+                        -0.002
+                    } else {
+                        0.002
+                    };
+                    p.velocity = [if right { 4.0 } else { -4.0 }, 0.0, -4.0];
+                    mesh.pose(assets, &p, now)?;
+                    let span = mesh.take_clip_span().context("walking span")?;
+                    changes += usize::from(
+                        previous_clip
+                            .as_ref()
+                            .is_some_and(|last| last != &span.clip),
+                    );
+                    previous_clip = Some(span.clip.clone());
+                    restarts += usize::from(span.restart);
+                    progress += (span.to - span.from).abs() / span.duration;
+                    for fall in
+                        footsteps.on_clip(1, &sounds, &span, |_| p.feet, |_| "default".into())
+                    {
+                        if fall.sound == ORIGIN_PROBE {
+                            probes += 1;
+                            continue;
+                        }
+                        ensure!(
+                            last_sound.as_ref() != Some(&fall.sound),
+                            "consecutive identical sample"
+                        );
+                        last_sound = Some(fall.sound);
+                        count += 1;
+                    }
+                    now += 1.0 / fps as f64;
+                }
+                ensure!(restarts == 1, "{restarts} restarts at {fps} fps");
+                ensure!(
+                    changes >= 19,
+                    "directional transitions were not exercised: {changes}"
+                );
+                ensure!(progress > 4.0, "gait did not advance: {progress}");
+                ensure!(
+                    probes <= progress.ceil() as usize + 1,
+                    "clip-origin spam: {probes} over {progress} cycles"
+                );
+                ensure!(
+                    (8..90).contains(&count),
+                    "{count} contacts at {fps} fps (crouched={crouched}, right={right}, cycles={progress})"
+                );
+                // Stop, jump, fall, jet and sit: none of these clips marks a
+                // walking contact. Return to walking once, then stop again.
+                for state in ["stop", "jump", "fall", "jet", "sit", "walk", "stop"] {
+                    let before = count;
+                    for _ in 0..fps {
+                        let (mut p, _) = player(0, &mut tick, "forward");
+                        p.crouched = crouched;
+                        p.velocity = match state {
+                            "walk" => [0.0, 0.0, -7.0],
+                            "jump" => [3.0, 4.0, -3.0],
+                            "fall" => [3.0, -12.0, -3.0],
+                            "jet" => [3.0, 7.0, -3.0],
+                            _ => [0.0; 3],
+                        };
+                        p.grounded = !matches!(state, "jump" | "fall" | "jet");
+                        p.jetting = state == "jet";
+                        mesh.pose_with_animation(
+                            assets,
+                            &p,
+                            now,
+                            &AvatarAnimationInput {
+                                sitting: state == "sit",
+                                ..Default::default()
+                            },
+                        )?;
+                        footsteps.update(1.0 / fps as f32, [Walk::from(&p)], &archetypes, |_| {
+                            "default".into()
+                        });
+                        let span = mesh.take_clip_span().context("state span")?;
+                        count += footsteps
+                            .on_clip(1, &sounds, &span, |_| p.feet, |_| "default".into())
+                            .len();
+                        now += 1.0 / fps as f64;
+                    }
+                    if state == "walk" {
+                        ensure!(count > before, "walking did not resume");
+                    } else {
+                        ensure!(count == before, "walking sounds during {state}");
+                    }
+                }
+                counts.push(count);
+                report.push(serde_json::json!({"crouched":crouched, "right":right,
+                    "fps":fps, "restarts":restarts, "contacts":count, "cycles":progress, "gait_changes":changes, "origin_probes":probes}));
+            }
+            let range = counts.iter().max().unwrap() - counts.iter().min().unwrap();
+            ensure!(
+                range <= 5,
+                "contact count changed with frame rate: {counts:?}"
+            );
+        }
+    }
+    let path = f.out("avatar-animation")?.join("turning-footfalls.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&report)?)?;
+    println!("turning footfall report: {}", path.display());
+    Ok(())
+}
 
 /// Holding forward and right: the body yaw follows the mouse every frame
 /// while velocity runs toward the 45 degree move direction on 32 ms ticks.

@@ -1,0 +1,94 @@
+{
+  "selection": "F",
+  "selected_by": "Maxwell: choose middle ground between D and E; no further preview requested.",
+  "body_gain_db_relative_to_D": -3,
+  "overall_gain_db_relative_to_D": -2,
+  "pitch_semitones_relative_to_original": -2,
+  "attack": "Retains accepted C softened attack.",
+  "body_recipe": "Same source/filter/envelope/pairings as D, with body gain reduced 3 dB.",
+  "normalization": "Retains D recipe normalization; no subsequent normalization reverses selected gains.",
+  "sources": {
+    "impact_hard1.wav": "c7f1dd94deaa7589431dac7f04f55bd3b36d13d0c82d4ef9c76d2b0b9e9caa45",
+    "impact_hard2.wav": "e2b2a73dfe688d96c11738e27661a15f139b8095a195c989c35070c569101da8",
+    "impact_hard3.wav": "5beca2867929e3b8dbcf4ec19f7724a2793bce24ab8c594936c8c93112ee942a",
+    "impact_land_light.wav": "78ec569e0ec0221cf8cfee3c0590bfff318b80c55cad12a04b946e3226a663a0",
+    "impact_land_light1.wav": "4dfca3e02c1e5c9c41cf06bfdad180fe567ef0bcf37db775391686f0766a3368",
+    "impact_land_light2.wav": "7ebab0cda1dc9d8928f825dc89bf39f2d1066a860b3cf2e1b3652a9c8b4bdbb5",
+    "impact_medium1.wav": "2c0aa6fe4b3e8fc2f09a7020dd130b78f7da5e2e68e6d52c11d736cd3e8e3b44",
+    "impact_medium2.wav": "979d1ab9478bbe72e19f5821f8d840c891ac9568c17f1025fbb2af3daf334bca",
+    "impact_medium3.wav": "516a6b1084e18bc92caf03b2336fd5ef22c4cde6fd134522449ba2f5bcbb5b8e",
+    "jet_loop.wav": "c152f8dc1ac104d01cf80e5eb687926d9cef0e5a677f0b17f52c204cc5a1e972",
+    "jet_start.wav": "b21986606340dc5c503de7da20683e0f0592f5db425391418de455f79fbb4dfc",
+    "walk_conc_1.wav": "137528431758f7d32247e0bc09c1fff75e031c7e5c6580d9ec341f812736ae09",
+    "walk_conc_2.wav": "b48df86965fac7c0a65ec38a6cc8d2eb68be94c0752f27a1b890fd472191de77",
+    "walk_conc_3.wav": "1e6d638cefc6f3aacf3a0d6cc66ed8b727a2a7beeb867f3ab675421df9ce941e",
+    "walk_conc_4.wav": "914fe9ed656721beb95889a4755c59692c5de2715568ed90eb2bd6131bc5271c",
+    "walk_q_conc_1.wav": "606365b6e16f14d33ef6dc0e84b4fe6b1d0d4777df3521ae741ab7586a6d7dda",
+    "walk_q_conc_2.wav": "c15ea392eed574f769e95c1b263c0f2d65d0229b6189b4c1adc2905bab83548f",
+    "walk_q_conc_3.wav": "788ed16cc70a98fb0bfe938eae2878314d1f8d21152384fe67b9507a4ee9ff62",
+    "walk_q_conc_4.wav": "7ffe473c888ca9c6bdfb2b1cf745e539f953f3b0c21ab80c8df29bbe30c76200"
+  },
+  "intermediate_hashes": {
+    "03-lower-pitch-softer-attack.wav": "fec244412902a62535894a97da6d1924bc1ed73418681b7388dece7a4e203b7d",
+    "04-C-with-subtle-body.wav": "7fa54600b02be99d55c91b417ff9b605c055fa9eb0921de16bc30c189e2ae750",
+    "05-quieter-lighter-body.wav": "f3eba2cbd2148845830f9c52c6d6a3ce359dcd4c6eeccd3b169493733f5f36c0"
+  },
+  "D_recipe_normalization": 0.930287643059461,
+  "outputs": [
+    {
+      "file": "step_01.wav",
+      "sha256": "7ce85130fbccca1dec5635c25635afb1233f338f483fbbe2af62231e8af3929d",
+      "sample_rate": 48000,
+      "channels": 1,
+      "subtype": "PCM_16",
+      "duration_seconds": 0.28,
+      "peak_dbfs": -11.294888003717137
+    },
+    {
+      "file": "step_02.wav",
+      "sha256": "e0cbb52825aadd5d68249f2e52b44c1c923eaa460914acf9a1855d117288f19b",
+      "sample_rate": 48000,
+      "channels": 1,
+      "subtype": "PCM_16",
+      "duration_seconds": 0.28,
+      "peak_dbfs": -11.79038674182493
+    },
+    {
+      "file": "step_03.wav",
+      "sha256": "66a3921ddd616020d3c08e567ee431d2faea8d2172e46a78a4f92195e609fb15",
+      "sample_rate": 48000,
+      "channels": 1,
+      "subtype": "PCM_16",
+      "duration_seconds": 0.28,
+      "peak_dbfs": -10.726229308258162
+    },
+    {
+      "file": "step_04.wav",
+      "sha256": "a4368a7c9300e2a4473d9aa65d6c173f194f785d4cba85bdf09fbc128a3c95e4",
+      "sample_rate": 48000,
+      "channels": 1,
+      "subtype": "PCM_16",
+      "duration_seconds": 0.28,
+      "peak_dbfs": -10.048038776889726
+    }
+  ],
+  "cadence": "No change selected; use existing full-speed contact estimates for subsequent integration.",
+  "transition_accents": "First/last contact weight idea remains unimplemented and unaccepted.",
+  "status": "First-party base-game F baseline; gameplay acceptance pending Maxwell.",
+  "next": "Validate normal gameplay; once stable and comfortable, park footstep polish and audit missing action feedback.",
+  "limitations": "Derived from offline C master and earlier source processing. Actual game mixer, other gaits, transitions, local/remote behavior and busy-scene voice competition remain unverified.",
+  "revision_02": {
+    "playback_gain_db_relative_to_first_F_playtest": 2.5,
+    "playback_gain": 1.333521432163324,
+    "samples": "The same four selected F WAVs, byte-identical.",
+    "selection": "Client shuffled bag per walker and sound pool; no identical seam repeat.",
+    "limits": "No additional pitch, timing jitter, processing or recordings. Gameplay listening acceptance pending."
+  },
+  "distribution": "Maxwell confirmed cleared for public distribution on 2026-10-27.",
+  "revision_03": {
+    "request": "Lower by 1.5 dB after in-game feedback; retain four recordings and selection.",
+    "profile_gain_db": -1.5,
+    "profile_volume": 0.84139514,
+    "combined_gain_db_relative_to_initial_F": 1.0
+  }
+}
