@@ -110,6 +110,35 @@ so net playback is +1 dB over initial F. No further sound-design expansion.
 
 ## Acceptance handoff
 
+### Final contact-interval correction
+
+The first full candidate gate caught the new synthetic turning regression:
+its side-only zero marker and frame-dependent sine input did not represent
+equivalent physical plants at 30/60/144 fps. The fixture now counts regular
+quarter/three-quarter plants separately from a diagnostic clip-origin marker,
+and turns at identical half-second boundaries at each frame rate. The converted
+Blockhead case uses the actual stock F policy.
+
+That correction exposed a real remaining edge: transferring phase and then
+advancing the new clip discarded the old clip's final elapsed interval. Client
+and host now finish that interval on the old clock before transferring phase.
+Forward and reversed contact-boundary regressions fail before the correction
+and pass after it. No cooldown, cadence tuning or additional sounds were added.
+
+Both synthetic and converted turning/state checks pass at 30/60/144 fps.
+Converted contact counts by frame rate: standing left 38/38/38, standing right
+43/43/43, crouched left 59/59/60, crouched right 56/56/56; each has 19 direction
+changes and one initial restart. Stop/jump/fall/jet/sit suppress walking audio,
+and movement resumes. Evidence: `artifacts/footstep-turning-f/contact-verified.log`
+and `artifacts/avatar-animation/turning-footfalls.json` in this worktree.
+Final quick passes (696 client and 429 sim tests). Final focused passes
+(942 seconds): changed-crate Clippy, five direct-dependent crate suites,
+696 client tests and four synthetic avatar integration checks. The actual
+converted contact check was run separately above. The corrected full candidate
+gate must also pass before merge. The earlier full gate passed
+build/content/Clippy but failed the synthetic assertion; an unrelated attachment
+render failure passed alone and was classified flaky by the gate.
+
 Maxwell bounded this pass: dependable triggering/animation, F at +2.5 dB and
 balanced selection, then one ordinary listening session without repeated
 distraction. If it passes, park further footstep polish and audit missing action

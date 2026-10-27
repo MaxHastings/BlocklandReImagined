@@ -330,6 +330,8 @@ impl Gaits {
     /// Advance `owner` by `seconds` and return the stretch of its clip it
     /// played. `clip` gives a clip's duration and whether it loops, by
     /// lower-case name; none when the body lacks the clip.
+    /// A continuous ground-direction change finishes this interval on the old
+    /// clip before transferring its phase, retaining contacts just before a turn.
     pub fn advance(
         &mut self,
         owner: u64,
@@ -352,13 +354,36 @@ impl Gaits {
                 let (old_name, _) = roles.clip(previous)?;
                 let (old_duration, old_looping) = clip(old_name)?;
                 old_looping.then_some(())?;
-                ground_phase(
+                let local = Quat::from_rotation_y(player.body_yaw()) * Vec3::from(player.velocity)
+                    / player.scale.max(0.01);
+                let delta = seconds
+                    * time_scale(
+                        &look.ground_speeds,
+                        look.locomotion_pick,
+                        look.max_time_scale,
+                        None,
+                        previous,
+                        local,
+                    );
+                let to = pace.phase + if pace.forward { delta } else { -delta };
+                let phase = ground_phase(
                     previous,
                     role,
-                    pace.phase,
+                    to,
                     [old_duration, duration],
                     [pace.forward, forward],
-                )
+                )?;
+                Some((
+                    phase,
+                    ClipSpan {
+                        clip: old_name.to_owned(),
+                        from: pace.phase,
+                        to,
+                        duration: old_duration,
+                        looping: true,
+                        restart: false,
+                    },
+                ))
             })
         } else {
             None
@@ -367,10 +392,14 @@ impl Gaits {
         if changed {
             pace.mode = action.sequence.to_owned();
             pace.forward = forward;
-            pace.phase = continued.unwrap_or(if pace.forward { 0.0 } else { duration });
+            pace.phase = continued
+                .as_ref()
+                .map_or(if pace.forward { 0.0 } else { duration }, |(phase, _)| {
+                    *phase
+                });
         }
         let before = pace.phase;
-        if !restart {
+        if !restart && continued.is_none() {
             let local = Quat::from_rotation_y(player.body_yaw()) * Vec3::from(player.velocity)
                 / player.scale.max(0.01);
             let rate = time_scale(
@@ -387,14 +416,14 @@ impl Gaits {
                 -seconds * rate
             };
         }
-        let span = ClipSpan {
+        let span = continued.map(|(_, span)| span).unwrap_or_else(|| ClipSpan {
             clip: name.to_owned(),
             from: before,
             to: pace.phase,
             duration,
             looping,
             restart,
-        };
+        });
         pace.phase = if looping && duration > 0.0 {
             pace.phase.rem_euclid(duration)
         } else {
@@ -548,6 +577,45 @@ mod tests {
         let span = gaits.advance(2, 0.02, &still, &look, clips).unwrap();
         assert_eq!(span.clip, "root");
         assert!(span.restart);
+    }
+
+    #[test]
+    fn a_turn_finishes_the_old_contact_interval_before_transferring_phase() {
+        let look = Archetypes::default()
+            .resolve(Default::default())
+            .look
+            .clone();
+        let clips = |name: &str| match name {
+            "run" => Some((0.8, true)),
+            "side" => Some((0.7, true)),
+            "root" => Some((1.0, true)),
+            _ => None,
+        };
+        for (before, after, old_clip, new_clip, contact, at) in [
+            ([0.0, 0.0, -4.0], [-4.0, 0.0, 0.0], "run", "side", 0.2, 0.2),
+            (
+                [4.0, 0.0, 0.0],
+                [0.0, 0.0, -4.0],
+                "side",
+                "run",
+                0.525,
+                0.175,
+            ),
+        ] {
+            let mut gaits = Gaits::default();
+            let mut p = running(4.0);
+            p.velocity = before;
+            gaits.advance(1, 0.0, &p, &look, clips);
+            gaits.advance(1, at - 0.01, &p, &look, clips);
+            p.velocity = after;
+            let last = gaits.advance(1, 0.02, &p, &look, clips).unwrap();
+            assert_eq!(last.clip, old_clip);
+            assert!(last.passes(contact), "{last:?}");
+            assert!(!last.restart);
+            let next = gaits.advance(1, 0.01, &p, &look, clips).unwrap();
+            assert_eq!(next.clip, new_clip);
+            assert!(!next.restart);
+        }
     }
 
     #[test]
