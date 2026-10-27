@@ -1349,6 +1349,41 @@ impl Simulation {
         self.note_stack(id);
         Ok(id)
     }
+    /// Put `bricks` in as they are, owner and all, where the engine knows
+    /// they belong: the pieces a big brick splits into, which stand in its
+    /// place while it waits, hidden, to come back whole. They pass no plant
+    /// rule (they fill the brick's own room), only the brick limit, and
+    /// collisions are refreshed once for them all.
+    pub fn insert_pieces(&mut self, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        let mut ids = Vec::with_capacity(bricks.len());
+        for brick in bricks {
+            if self.state().bricks.len() >= bri_world::MAX_BRICKS {
+                return Err(PlantFailure::Limit.into());
+            }
+            let bounds = Bounds::new(&brick, &self.definitions.get(&brick)?.mesh)?;
+            let id = self.authority.restore(&engine, brick)?;
+            self.attach(id)?;
+            self.index.insert(id, bounds);
+            self.note_stack(id);
+            ids.push(id);
+        }
+        if !ids.is_empty() {
+            self.detect_collisions();
+        }
+        Ok(ids)
+    }
+    /// Whether brick `id` rests on the map itself (terrain or the ground).
+    pub fn rests_on_map(&self, id: BrickId) -> bool {
+        on_ground(
+            &self.physics,
+            self.terrain.as_ref(),
+            self.index.bounds(id),
+        )
+    }
     /// Refresh collisions after bricks went in a slice at a time.
     pub fn settle(&mut self) {
         self.detect_collisions();
