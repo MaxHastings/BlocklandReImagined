@@ -1166,6 +1166,31 @@ fn camera_eye(
         },
     }
 }
+/// Apply presentation effects to an already composed camera. Input look limits
+/// belong to Controls: the chase boom's cameraTilt can put the actual view past
+/// vertical. Clamping it here turns the picture away from the boom's pivot.
+fn finish_camera(
+    controls: &Controls,
+    eye: Vec3,
+    (yaw, pitch, roll): (f32, f32, f32),
+    lean_tilt: f32,
+) -> (Vec3, f32, f32, f32) {
+    // A rule's camera_shake jitters the view alone, not the aim.
+    let jolt = controls.camera_jolt();
+    let eye = if jolt.offset == [0.0, 0.0] {
+        eye
+    } else {
+        let right = Vec3::new(yaw.cos(), 0.0, yaw.sin());
+        eye + right * jolt.offset[0] + Vec3::Y * jolt.offset[1]
+    };
+    (
+        eye,
+        yaw + jolt.yaw,
+        pitch + jolt.pitch,
+        roll - lean_tilt + jolt.roll,
+    )
+}
+
 /// The view's forward, right and up for a look turned by `yaw` then pitched
 /// by `pitch`, as Torque builds the eye transform (`zmat(yaw) * xmat(pitch)`).
 /// Right stays level, so looking straight up or down (v20's look limits are

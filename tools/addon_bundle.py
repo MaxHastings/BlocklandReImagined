@@ -62,10 +62,11 @@ sys.path.insert(0, str(REPO / 'tools'))
 import ci_content  # noqa: E402
 import content_packs  # noqa: E402
 import generated_addons  # noqa: E402
+import imported_addons  # noqa: E402
 
 LIST_SCHEMA = 3
-# 2: each original's host rules ship beside it (`companions`).
-BUNDLE_SCHEMA = 3
+# 4: imported Add-Ons carry importer/port identity and output inventories.
+BUNDLE_SCHEMA = 4
 TAG = 'addon-bundle'
 ASSET = 'addon-bundle.zip'
 BUNDLE = REPO / 'dist' / 'addon-bundle'
@@ -208,6 +209,59 @@ def classic_addons(roots):
         for sub in scan(root):
             scan(sub)
     return found
+
+
+def source_sha(path):
+    """The native importer's source identity (source.rs), without converting it."""
+    if path.is_file():
+        with path.open('rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+    digest = hashlib.sha256()
+    files = (p for p in path.rglob('*') if p.is_file() and not p.is_symlink())
+    for file in sorted(files, key=lambda p: p.relative_to(path).as_posix()):
+        digest.update(file.relative_to(path).as_posix().encode())
+        with file.open('rb') as stream:
+            digest.update(hashlib.file_digest(stream, 'sha256').hexdigest().encode())
+    return digest.hexdigest()
+
+
+def reference_view(v20, available, addons, target):
+    """Read dependencies from the selected pinned copies, not ambient variants.
+
+    Only this disposable copy is written. The original install and searched
+    archives stay read-only, including when a selected dependency replaces one.
+    """
+    for top in ('base', 'Add-Ons'):
+        source = v20 / top
+        if source.is_dir():
+            shutil.copytree(source, target / top)
+        else:
+            (target / top).mkdir(parents=True)
+    chosen = {}
+    for addon in originals(addons):
+        if not ships(addon):
+            continue
+        original = addon['original']
+        source = next((p for p in available.get(original['addon'].lower(), [])
+                       if source_sha(p) in original['sha256']), None)
+        if source is None:
+            continue  # The ordinary build loop reports the pinned-copy error.
+        name = original['addon']
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
+            fail(f'Invalid reference Add-On name: {name!r}')
+        for old in (target / 'Add-Ons').iterdir():
+            if old.stem.lower() == name.lower():
+                if old.is_dir():
+                    shutil.rmtree(old)
+                else:
+                    old.unlink()
+        destination = target / 'Add-Ons' / (name + source.suffix if source.is_file() else name)
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copyfile(source, destination)
+        chosen[name] = source_sha(source)
+    return chosen
 
 
 def importer_path(arg):
@@ -401,6 +455,10 @@ def build(args):
     shutil.rmtree(work, ignore_errors=True)
     (work / 'addons').mkdir(parents=True)
     entries, unpinned = [], []
+    recipe = imported_addons.recipe_hash(args.repo)
+    reference_temp = tempfile.TemporaryDirectory(prefix='addon-reference-', dir=out.parent)
+    reference = pathlib.Path(reference_temp.name)
+    reference_sources = reference_view(v20, available, addons, reference)
     for addon in originals(addons):
         original = addon['original']
         if original.get('withdrawn'):
@@ -419,7 +477,7 @@ def build(args):
         # its port's host rules land beside it at addons/<id>-rules.
         fresh = work / 'addons' / addon['id']
         for copy in copies:
-            report = import_copy(importer, copy, fresh, original['version'], v20, core, installed)
+            report = import_copy(importer, copy, fresh, original['version'], reference, core, installed)
             sha = report['source']['sha256']
             if sha in original['sha256']:
                 chosen = (copy, fresh, report)
@@ -454,7 +512,8 @@ def build(args):
             f"The authors' original Add-On, bundled with Blockland ReImagined with credit to them. "
             f"To have it left out, open an issue at {ISSUES}.")
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-        bad = problems(fresh, addon, args.repo)
+        imported_addons.write_receipt(fresh, recipe)
+        bad = problems(fresh, addon, args.repo, recipe)
         if bad:
             fail(f"{copy} imported incomplete: {'; '.join(bad)}")
         entries.append({'id': addon['id'], 'addon': original['addon'], 'title': original['title'],
@@ -463,11 +522,13 @@ def build(args):
                         'companions': rules, 'enabled': addon.get('enabled', True)})
         print(f"Bundled {original['addon']} from {copy}" + (f" with port {port['port']}" if port else ', no port')
               + (f" and its host rules {', '.join(rules)}." if rules else '.'))
+    reference_temp.cleanup()
     build_generated(args.repo, addons, work, entries)
     commit = subprocess.run(['git', 'rev-parse', '--short=9', 'HEAD'], cwd=args.repo,
                             capture_output=True, text=True).stdout.strip()
     (work / 'bundle.json').write_text(json.dumps({
         'schema_version': BUNDLE_SCHEMA, 'built_at_commit': commit or None,
+        'reference_sources': reference_sources,
         'built_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'addons': entries}, indent=2) + '\n', encoding='utf-8')
     (work / CREDITS).write_text(credits_text(entries), encoding='utf-8')
@@ -490,11 +551,11 @@ def read_bundle(bundle):
     data = json.loads(path.read_text(encoding='utf-8'))
     if data.get('schema_version') != BUNDLE_SCHEMA:
         fail(f"{path} is bundle schema {data.get('schema_version')}, not {BUNDLE_SCHEMA}: an older build, "
-             'without the host rules. Rebuild it (python tools/addon_bundle.py build, or upload for releases).')
+             'without current generation receipts. Rebuild it (python tools/addon_bundle.py build, or upload for releases).')
     return data
 
 
-def problems(directory, addon, repo=REPO):
+def problems(directory, addon, repo=REPO, recipe=None):
     """Why directory is not a whole copy of the default Add-On (empty when it is)."""
     manifest_path = directory / 'package.json'
     if not manifest_path.is_file():
@@ -505,6 +566,7 @@ def problems(directory, addon, repo=REPO):
         out.append(f"{manifest_path} names {manifest.get('id')!r}, not {addon['id']!r}")
     original = addon.get('original')
     if original:
+        out += imported_addons.problems(directory, recipe or imported_addons.recipe_hash(repo))
         sha = pinned_sha(manifest)
         if sha not in original['sha256']:
             out.append(f"{manifest_path} was imported from a copy of {original['addon']} the list does not pin "
@@ -556,7 +618,10 @@ def default_sources(repo, bundle, without_originals=False):
     original; and the bundle's credits file when any original ships. Fails
     on one missing or incomplete. The release packagers all use this."""
     out = []
-    for addon in read_list(repo):
+    addons = read_list(repo)
+    recipe = imported_addons.recipe_hash(repo) if not without_originals and any(
+        'original' in a and ships(a) for a in addons) else None
+    for addon in addons:
         if not ships(addon):
             continue
         if 'original' in addon or 'generated' in addon:
@@ -569,7 +634,7 @@ def default_sources(repo, bundle, without_originals=False):
                      f'(python tools/addon_bundle.py build); see docs/release-builds.md.')
         else:
             directory = repo / 'packages' / addon['path']
-        bad = problems(directory, addon, repo)
+        bad = problems(directory, addon, repo, recipe)
         if bad:
             fail(f"Default Add-On {addon['id']} is missing or incomplete: {'; '.join(bad)}")
         out.append({'id': addon['id'], 'path': str(directory), 'enabled': addon.get('enabled', True),
@@ -597,7 +662,10 @@ def verify_defaults(repo, content, credits, without_originals=False):
     enabled = json.loads((content / 'packages.json').read_text(encoding='utf-8-sig'))['packages']
     text = credits.read_text(encoding='utf-8') if credits and credits.is_file() else ''
     shipped = []
-    for addon in read_list(repo):
+    addons = read_list(repo)
+    recipe = imported_addons.recipe_hash(repo) if not without_originals and any(
+        'original' in a and ships(a) for a in addons) else None
+    for addon in addons:
         if not ships(addon) or (('original' in addon or 'generated' in addon) and without_originals):
             continue
         entry = [p for p in enabled if p.get('id') == addon['id']]
@@ -606,7 +674,7 @@ def verify_defaults(repo, content, credits, without_originals=False):
                 fail(f"The release turns on {addon['id']}, which ships turned off.")
         elif len(entry) != 1 or entry[0].get('dir') != f"addons/{addon['id']}":
             fail(f"The release does not turn on the default Add-On {addon['id']} at addons/{addon['id']}.")
-        bad = problems(content / 'addons' / addon['id'], addon, repo)
+        bad = problems(content / 'addons' / addon['id'], addon, repo, recipe)
         if bad:
             fail(f"Default Add-On {addon['id']} is incomplete: {'; '.join(bad)}")
         listed = [p.get('id') for p in enabled]
