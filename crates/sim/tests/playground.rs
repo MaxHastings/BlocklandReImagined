@@ -291,6 +291,9 @@ impl Game {
     /// A server running every Add-On, in the mode or (`mode` false) as a
     /// plain building server with no mini-game.
     fn server(world: World, mode: bool) -> Self {
+        Self::server_with_pack(world, mode, weapons())
+    }
+    fn server_with_pack(world: World, mode: bool, pack: bri_weapons::Pack) -> Self {
         let mut s = Session::new(
             Simulation::new(
                 world,
@@ -302,7 +305,7 @@ impl Game {
             )
             .unwrap(),
         );
-        s.set_weapon_pack(weapons()).unwrap();
+        s.set_weapon_pack(pack).unwrap();
         // A host measures these from the item's model as it loads content.
         s.set_item_bounds(
             [(
@@ -1114,7 +1117,18 @@ fn a_builder_spawns_the_carbine_and_the_buggy_from_bricks_without_a_mini_game() 
 fn a_bot_drives_the_look_steered_buggy_at_a_runner() {
     let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
     bot_spawn(&mut world, [40.0, 0.1, 40.25]);
-    let mut g = Game::with(world);
+    // This scenario measures pursuit/steering, so the passive target must
+    // outlive boarding. A valid on-foot carbine kill otherwise ends the
+    // pursuit before driving can be observed. Keep the real weapon/motor
+    // paths and every travel assertion; change only this fixture's damage.
+    let mut pack = weapons();
+    for id in [
+        "playground-rifle:projectile/pulse",
+        "playground-buggy:projectile/bolt",
+    ] {
+        pack.projectiles.get_mut(id).unwrap().damage = 0.1;
+    }
+    let mut g = Game::server_with_pack(world, true, pack);
     g.s.set_spawn_points(vec![
         Vec3::new(0.0, 0.05, 30.0),
         Vec3::new(40.0, 0.05, 44.0),

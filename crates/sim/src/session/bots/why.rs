@@ -99,7 +99,22 @@ impl BotThought {
             noticed.push_str(&format!("; {}", n.why));
         }
         out.push(noticed);
-        out.push(self.acted.clone());
+        let action = if let Some(drive) = self.driving {
+            format!(
+                "Drive {}: throttle {:+.2}, brake {}, obstacle {}, edge {}, crew wait {}, recovery {}, idle {:.1}s",
+                drive.vehicle,
+                drive.throttle,
+                drive.brake,
+                drive.obstacle,
+                drive.edge,
+                drive.waiting,
+                drive.recovering,
+                drive.idle_ticks as f32 / 120.0,
+            )
+        } else {
+            self.acted.clone()
+        };
+        out.push(action);
         out.truncate(WHY_LINES);
         out
     }
@@ -113,6 +128,7 @@ impl Session {
             .iter()
             .map(|(bot, b)| BotThought {
                 bot: *bot,
+                driving: b.driving,
                 sight_starved: self
                     .bots
                     .sightlines
@@ -284,6 +300,7 @@ mod tests {
             team: Default::default(),
             acted: "Acts: walk route, look route, trigger none".into(),
             input: MoveInput::default(),
+            driving: None,
             planned: None,
             gate: None,
             surprise: BotSurpriseView {
