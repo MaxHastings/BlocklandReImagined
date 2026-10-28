@@ -297,7 +297,7 @@ impl Game {
         goal.name = Some(v.name("goal"));
         goal.colliding = false;
         goal.raycast = false;
-        goal.rule_region = Some([3., 4., 3.]);
+        goal.rule_region = Some(Box::new([3., 4., 3.]));
         goal.events = vec![
             Row {
                 enabled: true,
@@ -471,7 +471,7 @@ impl Game {
     fn loss_frame(&self, loss_tick: Option<u64>) -> String {
         let source = &self.s.simulation().state().bricks[&self.id("goal")];
         let bounds = bri_world::regions::bounds(
-            source.rule_region,
+            source.rule_region(),
             self.s.simulation().brick_box(self.id("goal")).unwrap(),
         );
         let inside = self
@@ -793,7 +793,7 @@ fn tool_loss_case(v: Variant, revoke_goal: bool) -> bool {
                 .as_u64()
                 .is_some_and(|p| g.bots.contains(&p));
         let bounds = bri_world::regions::bounds(
-            g.s.simulation().state().bricks[&goal].rule_region,
+            g.s.simulation().state().bricks[&goal].rule_region(),
             g.s.simulation().brick_box(goal).unwrap(),
         );
         let inside = g

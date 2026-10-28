@@ -192,10 +192,15 @@ pub struct Building {
     /// The replica's bricks as last synced: a structurally shared handle to
     /// the replica's own map, not a second copy of every brick.
     bricks: bri_world::Bricks,
+    world_tick: Option<u64>,
+    damage_sections: std::collections::BTreeMap<[u64; 2], std::collections::BTreeSet<BrickId>>,
+    damage_generation: u64,
     index: Index,
     camera_index: Index,
     visibility_index: Index,
     query_generation: u64,
+    query_edits: std::collections::VecDeque<(u64, Bounds)>,
+    query_history_floor: u64,
     /// The openings of linked bricks (portals), as the local world has
     /// them: aiming a brick goes on through them, as the host's tools do.
     passages: bri_content::passage::Passages,
@@ -257,11 +262,16 @@ impl Building {
             surfaces: Default::default(),
             terrain: Vec::new(),
             bricks: Default::default(),
+            world_tick: None,
+            damage_sections: Default::default(),
+            damage_generation: 0,
             index: Index::default(),
             camera_index: Index::default(),
             visibility_index: Index::default(),
             passages: Default::default(),
             query_generation: 0,
+            query_edits: Default::default(),
+            query_history_floor: 0,
             map_generation: next_map_generation(),
         })
     }
@@ -374,6 +384,89 @@ impl Building {
         }
     }
 
+    pub fn set_world_tick(&mut self, tick: u64) {
+        self.world_tick = Some(tick);
+    }
+    pub(crate) fn world_at(&self, tick: u64) -> bool {
+        self.world_tick.is_some_and(|at| at >= tick)
+    }
+    pub(crate) fn damage_generation(&self) -> u64 {
+        self.damage_generation
+    }
+    pub(crate) fn section_bricks(
+        &self,
+        key: [u64; 2],
+        after: Option<BrickId>,
+        limit: usize,
+    ) -> Vec<(BrickId, &Brick)> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        self.damage_sections
+            .get(&key)
+            .into_iter()
+            .flat_map(|ids| ids.range((after.map_or(Unbounded, Excluded), Unbounded)))
+            .take(limit)
+            .filter_map(|id| self.bricks.get(id).map(|brick| (*id, brick)))
+            .collect()
+    }
+    pub(crate) fn restored_after(&self, id: BrickId, tick: u64) -> bool {
+        self.world_tick.is_some_and(|at| at >= tick)
+            && self.bricks.get(&id).is_some_and(|b| !b.damage_hidden)
+    }
+    pub(crate) fn section_source_retired_after(
+        &self,
+        id: BrickId,
+        tick: u64,
+        key: [u64; 2],
+    ) -> bool {
+        self.world_at(tick)
+            && self
+                .bricks
+                .get(&id)
+                .is_none_or(|b| b.damage_section.as_deref() != Some(&key))
+    }
+    pub(crate) fn section_solid_step(
+        &self,
+        cursor: &mut grid::QueryCursor,
+    ) -> Option<Option<(BrickId, SharedShape, Pose)>> {
+        cursor
+            .step(&self.camera_index)
+            .map(|id| id.and_then(|id| self.solid_brick(id).map(|(shape, pose)| (id, shape, pose))))
+    }
+    pub(crate) fn section_probe(&self, from: Vec3, to: Vec3) -> SectionProbe {
+        let reach = from.distance(to).max(0.001);
+        let direction = (to - from).normalize_or(Vec3::NEG_Y);
+        let nearest = self.map_ray(from, direction, reach).map(|h| h.0);
+        SectionProbe {
+            from,
+            direction,
+            reach,
+            nearest,
+            query: grid::QueryCursor::new(query_bounds(from.min(to), from.max(to))),
+        }
+    }
+    pub(crate) fn step_section_probe(
+        &self,
+        p: &mut SectionProbe,
+        work: &mut u32,
+        skip: impl Fn(BrickId) -> bool,
+    ) -> Result<Option<Option<f32>>> {
+        while *work > 0 {
+            *work -= 1;
+            match p.query.step(&self.camera_index) {
+                None => return Ok(Some(p.nearest)),
+                Some(Some(id)) if !skip(id) && !self.bricks[&id].damage_hidden => {
+                    let mut hit = None;
+                    self.trace_brick(id, p.from, p.direction, p.reach, &mut hit)?;
+                    if let Some(hit) = hit {
+                        p.nearest = Some(p.nearest.map_or(hit.distance, |d| d.min(hit.distance)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
+    }
+
     /// Terrain or interiors between two points (`GuiShapeNameHud` sight test).
     pub fn map_blocks(&self, from: Vec3, to: Vec3) -> bool {
         let delta = to - from;
@@ -474,7 +567,17 @@ impl Building {
         };
         // Validate all changed candidates first: malformed updates are atomic.
         let mut changed = Vec::new();
+        let mut section_changes = Vec::new();
         for (&id, brick) in candidates {
+            let old = self
+                .bricks
+                .get(&id)
+                .and_then(|b| b.damage_section.as_deref())
+                .copied();
+            let new = brick.damage_section.as_deref().copied();
+            if old != new {
+                section_changes.push((id, old, new));
+            }
             if self
                 .bricks
                 .get(&id)
@@ -507,6 +610,49 @@ impl Building {
                 .collect(),
         };
         let dirty = !changed.is_empty() || !removed.is_empty();
+        for id in &removed {
+            if let Some(old) = self
+                .bricks
+                .get(id)
+                .and_then(|b| b.damage_section.as_deref())
+                .copied()
+            {
+                section_changes.push((*id, Some(old), None));
+            }
+        }
+        if !section_changes.is_empty() {
+            self.damage_generation = self.damage_generation.wrapping_add(1);
+            for (id, old, new) in section_changes {
+                if let Some(key) = old
+                    && let Some(ids) = self.damage_sections.get_mut(&key)
+                {
+                    ids.remove(&id);
+                    if ids.is_empty() {
+                        self.damage_sections.remove(&key);
+                    }
+                }
+                if let Some(key) = new {
+                    self.damage_sections.entry(key).or_default().insert(id);
+                }
+            }
+        }
+        if dirty {
+            let generation = self.query_generation.wrapping_add(1);
+            for id in removed.iter().chain(changed.iter().map(|(id, _, _)| id)) {
+                if let Some(old) = self.bricks.get(id) {
+                    let bounds = Bounds::new(old, &self.definitions.get(old)?.mesh)?;
+                    self.query_edits.push_back((generation, bounds.expanded(1)));
+                }
+            }
+            for (_, _, bounds) in &changed {
+                self.query_edits.push_back((generation, bounds.expanded(1)));
+            }
+            while self.query_edits.len() > 512 {
+                if let Some((generation, _)) = self.query_edits.pop_front() {
+                    self.query_history_floor = generation;
+                }
+            }
+        }
         // A blast through a big build changes thousands of bricks in one
         // update: each index takes them all in one pass.
         let mut leaving: Vec<BrickId> = removed.clone();
@@ -819,6 +965,30 @@ impl Building {
     }
     pub fn query_generation(&self) -> u64 {
         self.query_generation
+    }
+    /// Conservative local invalidation; lost history and map changes recheck.
+    pub(crate) fn query_changed_since(&self, since: u64, low: Vec3, high: Vec3) -> bool {
+        if since == self.query_generation {
+            return false;
+        }
+        if since < self.query_history_floor {
+            return true;
+        }
+        if self
+            .query_edits
+            .front()
+            .is_none_or(|(g, _)| since.saturating_add(1) < *g)
+            || self
+                .query_edits
+                .back()
+                .is_none_or(|(g, _)| *g != self.query_generation)
+        {
+            return true;
+        }
+        let area = query_bounds(low, high);
+        self.query_edits
+            .iter()
+            .any(|(generation, bounds)| *generation > since && bounds.intersection(area).is_some())
     }
     /// Changes when the map's solid shapes do (another map, or a shape
     /// smashed), and differs between any two buildings.
@@ -1493,6 +1663,11 @@ impl Building {
             )?);
         }
         Ok(patches)
+    }
+
+    /// A brick definition this client knows.
+    pub fn definition(&self, definition: &str) -> Option<&bri_sim::definitions::Definition> {
+        self.definitions.entries.get(definition)
     }
 
     /// Half size of a brick definition's grid volume in its own frame.
@@ -3624,4 +3799,13 @@ pub struct ImageKeys {
     /// Stays in hand when a paint or FX can is picked (the image's
     /// `paint_picker`, as the Fill Can): the pick goes to the host as ever.
     pub paint_picker: bool,
+}
+
+/// A local cosmetic contact query can pause without walking a huge tower in one frame.
+pub(crate) struct SectionProbe {
+    from: Vec3,
+    direction: Vec3,
+    reach: f32,
+    nearest: Option<f32>,
+    query: grid::QueryCursor,
 }

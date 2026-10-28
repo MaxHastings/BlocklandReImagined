@@ -43,6 +43,38 @@ pub struct Definition {
     /// A hole brick's bot kind (`CatalogEntry::bot`).
     pub bot: Option<String>,
 }
+impl Definition {
+    /// A plain box of plastic: its collision is one box filling its grid
+    /// volume, and every face lies on that box (no slope, no round side,
+    /// no opening onto a linked brick, nothing the game treats specially).
+    /// Only such a brick can be cut along its grid into smaller boxes of
+    /// the same shape and still look like itself.
+    pub fn is_plain_box(&self) -> bool {
+        use bri_content::brick::{Face, Surface};
+        use bri_content::collision::Part;
+        let half = self.mesh.half_size();
+        let fills = |center: &[f32; 3], size: &[f32; 3]| {
+            let (c, s) = (glam::Vec3::from(*center), glam::Vec3::from(*size) * 0.5);
+            c.abs().max_element() < 1e-3 && (s - half).abs().max_element() < 1e-3
+        };
+        let one_box = matches!(
+            self.collision.parts.as_slice(),
+            [Part::Box { center, size }] if fills(center, size)
+        );
+        one_box
+            && self.special == Special::None
+            && self.link.is_none()
+            && !self.mesh.quads.iter().any(|q| {
+                q.face == Face::Omni
+                    || q.surface == Surface::Ramp
+                    || q.vertices
+                        .iter()
+                        // convert::brick expands standard faces by 0.0012
+                        // for the native plastic rim; collision stays exact.
+                        .any(|v| (glam::Vec3::from(v.position).abs() - half).max_element() > 0.0013)
+            })
+    }
+}
 /// World-space box of a placed brick's logical grid volume.
 /// Every brick's catalog entry the game knows: the base game's in
 /// `catalog_dir` and each Add-On's in `extras`, the same set

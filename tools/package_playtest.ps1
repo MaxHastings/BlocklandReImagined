@@ -415,6 +415,9 @@ try {
     $packagedContent = Join-Path $releasePath 'content'
     [IO.Directory]::CreateDirectory($packagedContent) | Out-Null
     foreach ($package in $selected) {
+        # Bundled mods are copied fresh below. Copying both trees would nest
+        # existing directories (assets/assets) on Windows PowerShell.
+        if (@($modPackages | Where-Object { $_.dir -eq $package.name }).Count -gt 0) { continue }
         $destination = Join-Path $packagedContent $package.name
         [IO.Directory]::CreateDirectory($destination) | Out-Null
         foreach ($child in Get-ChildItem -LiteralPath $package.path -Force) {
@@ -429,7 +432,18 @@ try {
             Copy-Item -LiteralPath $child.FullName -Destination (Join-Path $destination $child.Name) -Recurse
         }
         if ($null -ne $mod.PSObject.Properties['enabled'] -and -not $mod.enabled) { continue }
-        $list.packages += [pscustomobject][ordered]@{ id = $mod.id; version = $mod.version; side = $mod.side; dir = $mod.dir }
+        # An installed content/packages.json may already list bundled Add-Ons.
+        # Files were refreshed above; keep one identity with current metadata.
+        $existing = @($list.packages | Where-Object { $_.id -eq $mod.id -or $_.dir -eq $mod.dir })
+        if ($existing.Count -gt 0) {
+            if ($existing.Count -ne 1 -or $existing[0].id -ne $mod.id -or $existing[0].dir -ne $mod.dir) {
+                throw "Conflicting package identity or directory for $($mod.id): $($mod.dir)"
+            }
+            $existing[0].version = $mod.version
+            $existing[0].side = $mod.side
+        } else {
+            $list.packages += [pscustomobject][ordered]@{ id = $mod.id; version = $mod.version; side = $mod.side; dir = $mod.dir }
+        }
     }
     $configJson = ConvertTo-Json -InputObject $list -Depth 5
     [IO.File]::WriteAllText((Join-Path $packagedContent 'packages.json'), $configJson + "`n", [Text.UTF8Encoding]::new($false))

@@ -106,7 +106,7 @@ fn source(v: Variant, x: f32, y: f32, z: f32, name: &str, rows: Vec<Row>, sensor
     b.name = Some(v.name(name));
     b.events = rows;
     if sensor {
-        b.rule_region = Some([3.0, 4.0, 3.0]);
+        b.rule_region = Some(Box::new([3.0, 4.0, 3.0]));
         b.visible = false;
         b.colliding = false;
         b.raycast = false;
@@ -734,7 +734,7 @@ fn an_unreachable_sensor_produces_a_bounded_failure_without_success() {
             winning("onRegionEnter", 79, vec![], 0),
             true,
         );
-        high.rule_region = Some([2.0, 1.0, 2.0]);
+        high.rule_region = Some(Box::new([2.0, 1.0, 2.0]));
         let mut g = Game::new(v, vec![high], false);
         g.steps(120 * 34);
         g.assert_no_success();

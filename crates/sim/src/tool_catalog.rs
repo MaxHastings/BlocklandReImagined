@@ -26,6 +26,15 @@ impl ToolCatalog {
             .resolve("Letters/A")
             .context("Native tool catalog requires the original Letters/A default")?;
         Ok(Self {
+            foundation_bricks: catalog
+                .bricks
+                .iter()
+                .filter(|b| {
+                    b.category.eq_ignore_ascii_case("Baseplates")
+                        || b.subcategory.eq_ignore_ascii_case("Baseplates")
+                })
+                .map(|b| b.id.clone())
+                .collect(),
             lights: effects
                 .lights
                 .iter()

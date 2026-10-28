@@ -465,7 +465,10 @@ async fn kills_on_every_screen(f: &HostContent) -> Result<()> {
                 screen.name, feel.visible, feel.colliding, feel.in_the_way
             );
             if what == "rocket" {
-                ensure!(*death == BrickDeath::Blast, "{what}: {death:?}");
+                ensure!(
+                    matches!(death, BrickDeath::Blast | BrickDeath::Hit),
+                    "{what}: {death:?}"
+                );
                 // Blasts stay physics debris that tumbles on the ground.
                 ensure!(feel.colliding > 1.0, "{}: {what} {feel:?}", screen.name);
             } else {

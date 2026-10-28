@@ -27,7 +27,7 @@ fn shape(b: &bri_world::Brick) -> String {
         b.name,
         b.vehicle.as_ref().map(|v| (&v.vehicle, v.team)),
         b.events.len(),
-        b.rule_region
+        b.rule_region()
     )
 }
 

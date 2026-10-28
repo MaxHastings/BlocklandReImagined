@@ -387,7 +387,7 @@ fn fixed_navigation_does_not_discover_the_physically_valid_actor_support() {
 fn scoring_goal(at: [f32; 3]) -> Brick {
     let mut goal = Brick::new(ContentRef::Resolved(fixture::PLATE.into()), at, 1);
     goal.name = Some("distant_authored_finish".into());
-    goal.rule_region = Some([3., 4., 3.]);
+    goal.rule_region = Some(Box::new([3., 4., 3.]));
     goal.colliding = false;
     goal.visible = false;
     goal.raycast = false;

@@ -67,6 +67,10 @@ pub enum ToolAction {
 /// catalog permits native colors/flags but denies nonempty content assignments.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCatalog {
+    /// Authored foundation category from the validated catalog, independent
+    /// of menu display names. Only plates actually resting on the map anchor.
+    #[serde(default)]
+    pub foundation_bricks: BTreeSet<String>,
     pub lights: BTreeSet<String>,
     pub emitters: BTreeSet<String>,
     /// ItemData choices installed by the host from the validated native item

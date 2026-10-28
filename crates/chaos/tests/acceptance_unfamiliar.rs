@@ -268,7 +268,7 @@ fn arena(v: Variant, d: &Definitions) -> Vec<Brick> {
         zone.name = Some(format!("zone{}", scoring));
         zone.colliding = false;
         zone.raycast = false;
-        zone.rule_region = Some(ZONE_HALF.map(|h| h * 2.0));
+        zone.rule_region = Some(Box::new(ZONE_HALF.map(|h| h * 2.0)));
         zone.events = rows(v, scoring);
         bricks.push(zone);
     }

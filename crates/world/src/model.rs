@@ -257,6 +257,14 @@ pub struct Brick {
     pub raycast: bool,
     pub colliding: bool,
     pub visible: bool,
+    /// Transient authoritative absence after destruction. Separate from
+    /// authored visibility/collision flags; saved_world clears it on originals.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub damage_hidden: bool,
+    /// Transient section generation [started tick, group]. Boxed so ordinary
+    /// bricks do not pay two u64s; canonical saves clear it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damage_section: Option<Box<[u64; 2]>>,
     pub name: Option<String>,
     // Rare settings are boxed: a brick without them pays a pointer, not the
     // whole setting (a million-brick world is mostly plain bricks).
@@ -274,13 +282,16 @@ pub struct Brick {
     pub events: Vec<EventRow>,
     /// Authored region dimensions in world axes (width, height, depth).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rule_region: Option<[f32; 3]>,
+    pub rule_region: Option<Box<[f32; 3]>>,
     /// Opaque source records survive native save/reload; never executed.
     pub source_records: Vec<SourceRecord>,
     /// A package block's faces drawn in place of the colour.
     pub look: Option<Box<BlockLook>>,
 }
 impl Brick {
+    pub fn rule_region(&self) -> Option<[f32; 3]> {
+        self.rule_region.as_deref().copied()
+    }
     pub fn new(definition: ContentRef, position: [f32; 3], owner: OwnerId) -> Self {
         Self {
             definition,
@@ -295,6 +306,8 @@ impl Brick {
             raycast: true,
             colliding: true,
             visible: true,
+            damage_hidden: false,
+            damage_section: None,
             name: None,
             light: None,
             emitter: None,
@@ -402,7 +415,13 @@ impl Brick {
         bytes
     }
     pub fn validate(&self, palette_len: usize) -> Result<()> {
-        if let Some(size) = self.rule_region {
+        ensure!(
+            self.damage_section
+                .as_ref()
+                .is_none_or(|key| key[1] > 0 && self.damage_hidden),
+            "Invalid damage section identity"
+        );
+        if let Some(size) = &self.rule_region {
             ensure!(
                 size.iter()
                     .all(|v| v.is_finite() && *v > 0.0 && *v <= 100.0),

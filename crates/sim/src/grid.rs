@@ -226,36 +226,39 @@ impl ConnectionCells {
 }
 /// A bounded spatial query cursor. Each step visits at most one bucket entry
 /// (or one empty bucket), without eagerly collecting a potentially huge set.
-pub(crate) struct QueryCursor {
+pub struct QueryCursor {
     bounds: Bounds,
     min: [i32; 3],
     max: [i32; 3],
     key: Option<[i32; 3]>,
-    entry: usize,
+    after: Option<BrickId>,
 }
 impl QueryCursor {
-    pub(crate) fn new(bounds: Bounds) -> Self {
+    pub fn new(bounds: Bounds) -> Self {
         let (min, max) = bucket_span(bounds);
         Self {
             bounds,
             min,
             max,
             key: Some(min),
-            entry: 0,
+            after: None,
         }
     }
-    pub(crate) fn step(&mut self, index: &Index) -> Option<Option<BrickId>> {
+    pub fn step(&mut self, index: &Index) -> Option<Option<BrickId>> {
         let key = self.key?;
         let entries = index.bucket_bounds((key[0], key[1], key[2]));
-        if let Some(&(id, bounds)) = entries.get(self.entry) {
-            self.entry += 1;
+        let entry = self
+            .after
+            .map_or(0, |after| entries.partition_point(|(id, _)| *id <= after));
+        if let Some(&(id, bounds)) = entries.get(entry) {
+            self.after = Some(id);
             let admitted = bounds.intersection(self.bounds).is_some_and(|overlap| {
                 // Report an id only in the first bucket shared by both boxes.
                 bucket_span(overlap).0 == key
             });
             return Some(admitted.then_some(id));
         }
-        self.entry = 0;
+        self.after = None;
         let mut next = key;
         next[2] += 1;
         if next[2] > self.max[2] {
@@ -280,6 +283,14 @@ fn keys(bounds: Bounds) -> impl Iterator<Item = (i32, i32, i32)> {
 }
 /// Bucket edge in grid cells (eight native units on every axis).
 pub(crate) const BUCKET: [i32; 3] = [16, 40, 16];
+/// Allocation/work bound for inserting a logical brick into this index.
+pub fn bucket_count(bounds: Bounds) -> usize {
+    (0..3).fold(1usize, |count, axis| {
+        let low = bounds.min[axis].div_euclid(BUCKET[axis]);
+        let high = (bounds.max()[axis] - 1).div_euclid(BUCKET[axis]);
+        count.saturating_mul((high - low + 1).max(0) as usize)
+    })
+}
 pub(crate) fn bucket_span(bounds: Bounds) -> ([i32; 3], [i32; 3]) {
     let min: [i32; 3] = std::array::from_fn(|a| bounds.min[a].div_euclid(BUCKET[a]));
     let max: [i32; 3] = std::array::from_fn(|a| (bounds.max()[a] - 1).div_euclid(BUCKET[a]));
@@ -854,5 +865,27 @@ mod tests {
             resumed.next(0, &m, 0, &m),
             Some(([32, 0, 0], [32, 1, 0], true))
         );
+    }
+}
+
+#[cfg(test)]
+mod cursor_mutation_tests {
+    use super::*;
+    #[test]
+    fn deleting_an_earlier_bucket_entry_does_not_skip_the_next_candidate() {
+        let mut index = Index::default();
+        let b = Bounds {
+            min: [0; 3],
+            size: [1; 3],
+        };
+        for id in [1, 2, 3] {
+            index.insert(id, b);
+        }
+        let mut cursor = QueryCursor::new(b);
+        assert_eq!(cursor.step(&index), Some(Some(1)));
+        index.remove(1);
+        assert_eq!(cursor.step(&index), Some(Some(2)));
+        index.remove(2);
+        assert_eq!(cursor.step(&index), Some(Some(3)));
     }
 }

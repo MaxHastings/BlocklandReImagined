@@ -6,11 +6,49 @@ use bri_world::OwnerId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Poses kept per player: over six seconds at the slowest remote rate.
 pub const POSE_HISTORY: usize = 32;
+/// Keep terminal controls and a geometry seed; tagged world state recovers
+/// any section members a bounded presentation backlog cannot retain.
+fn bound_presentation(cues: &mut Vec<bri_sim::presentation::Cue>) -> usize {
+    let before = cues.len();
+    let limit = bri_sim::presentation::MAX_CUES;
+    let mut excess = before.saturating_sub(limit);
+    if excess == 0 {
+        return 0;
+    }
+    cues.retain(|cue| {
+        if excess > 0 && cue.kind.section_generation().is_none() {
+            excess -= 1;
+            false
+        } else {
+            true
+        }
+    });
+    if excess > 0 {
+        let mut seeds = BTreeSet::new();
+        cues.retain(|cue| {
+            if cue.kind.is_section_member()
+                && let Some(key) = cue.kind.section_generation()
+                && !seeds.insert(key)
+                && excess > 0
+            {
+                excess -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    }
+    if cues.len() > limit {
+        cues.drain(..cues.len() - limit);
+    }
+    before - cues.len()
+}
 pub struct Replica {
     pub weapons: bri_sim::session::WeaponView,
     pub tools: BTreeMap<OwnerId, bri_sim::session::ToolInventory>,
     pub cue_cursor: u64,
     pub dropped_cues: u64,
+    pub local_dropped_cues: u64,
     cues: Vec<bri_sim::presentation::Cue>,
     pub cursor: u64,
     pub tick: u64,
@@ -320,6 +358,7 @@ impl Replica {
             tools: checkpoint.tools,
             cue_cursor: checkpoint.cue_cursor,
             dropped_cues: checkpoint.dropped_cues,
+            local_dropped_cues: 0,
             cues: Vec::new(),
             cursor: checkpoint.cursor,
             tick: checkpoint.tick,
@@ -405,11 +444,6 @@ impl Replica {
         ensure!(
             missing <= delta.dropped_cues - self.dropped_cues,
             "Unreported presentation gap"
-        );
-        let new_cues = delta.cues.iter().filter(|c| c.id > self.cue_cursor).count();
-        ensure!(
-            self.cues.len() + new_cues <= bri_sim::presentation::MAX_CUES,
-            "Client presentation backlog exceeded"
         );
         for (id, b) in &delta.bricks {
             ensure!(*id > 0, "Invalid brick identity");
@@ -601,6 +635,9 @@ impl Replica {
                 self.cues.push(cue);
             }
         }
+        self.local_dropped_cues = self
+            .local_dropped_cues
+            .saturating_add(bound_presentation(&mut self.cues) as u64);
         self.dropped_cues = delta.dropped_cues;
         self.tick = delta.tick;
         Ok(())

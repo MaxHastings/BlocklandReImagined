@@ -25,6 +25,7 @@ const RAYCAST: u8 = 1 << 3;
 const COLLIDING: u8 = 1 << 4;
 const VISIBLE: u8 = 1 << 5;
 const PRINTED: u8 = 1 << 6;
+const DAMAGE_HIDDEN: u8 = 1 << 7;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Packed {
@@ -53,6 +54,8 @@ pub struct Packed {
     whole: Vec<Brick>,
     /// Source records of plain bricks that have them, by entry index.
     records: Vec<(u32, Vec<SourceRecord>)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sections: Vec<(u32, [u64; 2])>,
 }
 
 fn plain(brick: &Brick) -> bool {
@@ -111,6 +114,9 @@ impl Packed {
                 continue;
             }
             out.kinds.push(PLAIN);
+            if let Some(section) = &brick.damage_section {
+                out.sections.push((entry as u32, **section));
+            }
             out.definitions.push(names.of(&brick.definition));
             let mut bytes = [0; 12];
             for (axis, value) in brick.position.iter().enumerate() {
@@ -123,6 +129,7 @@ impl Packed {
                 (brick.raycast, RAYCAST),
                 (brick.colliding, COLLIDING),
                 (brick.visible, VISIBLE),
+                (brick.damage_hidden, DAMAGE_HIDDEN),
                 (brick.print.is_some(), PRINTED),
             ] {
                 if set {
@@ -181,6 +188,11 @@ impl Packed {
             || self.prints.len() != printed
             || self.whole.len() != whole
             || self.records.windows(2).any(|w| w[0].0 >= w[1].0)
+            || self.sections.windows(2).any(|w| w[0].0 >= w[1].0)
+            || self
+                .sections
+                .iter()
+                .any(|(entry, key)| self.kinds.get(*entry as usize) != Some(&PLAIN) || key[1] == 0)
             || self
                 .records
                 .iter()
@@ -203,6 +215,7 @@ impl Packed {
         let (mut p, mut printed) = (0, 0);
         let mut id = 0u64;
         let mut records = self.records.into_iter().peekable();
+        let mut sections = self.sections.into_iter().peekable();
         for (entry, (kind, gap)) in self.kinds.iter().zip(&self.ids).enumerate() {
             id = id.wrapping_add(*gap as u64);
             let brick = match *kind {
@@ -226,6 +239,7 @@ impl Packed {
                     brick.raycast = flags & RAYCAST != 0;
                     brick.colliding = flags & COLLIDING != 0;
                     brick.visible = flags & VISIBLE != 0;
+                    brick.damage_hidden = flags & DAMAGE_HIDDEN != 0;
                     brick.color_effect = look[2] & 0b111;
                     brick.shape_effect = look[2] >> 3;
                     if flags & PRINTED != 0 {
@@ -234,6 +248,9 @@ impl Packed {
                     }
                     if records.peek().is_some_and(|(at, _)| *at as usize == entry) {
                         brick.source_records = records.next().map(|(_, r)| r).unwrap_or_default();
+                    }
+                    if sections.peek().is_some_and(|(at, _)| *at as usize == entry) {
+                        brick.damage_section = sections.next().map(|(_, key)| Box::new(key));
                     }
                     p += 1;
                     Some(brick)
@@ -291,6 +308,10 @@ pub(crate) mod tests {
                     asset: None,
                     direction: 2,
                 }));
+            }
+            b.damage_hidden = i % 3 == 0;
+            if b.damage_hidden {
+                b.damage_section = Some(Box::new([4, 7]));
             }
             // Ids out of order, as a nearest-first chunk sends them.
             out.push((1000 - i * 3, b));

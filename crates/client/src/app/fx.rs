@@ -310,8 +310,12 @@ impl App {
         self.fx
             .brick_debris
             .explosion_cue(&cue, &self.content.weapons.pack);
-        if matches!(cue.kind, bri_sim::presentation::CueKind::BrickKill { .. })
-            && self.fx.brick_kills.len() < bri_sim::presentation::MAX_CUES
+        if matches!(
+            cue.kind,
+            bri_sim::presentation::CueKind::BrickKill { .. }
+                | bri_sim::presentation::CueKind::BrickSectionReady { .. }
+                | bri_sim::presentation::CueKind::BrickSectionRetired { .. }
+        ) && self.fx.brick_kills.len() < bri_sim::presentation::MAX_CUES
         {
             self.fx.brick_kills.push(cue.clone());
         }

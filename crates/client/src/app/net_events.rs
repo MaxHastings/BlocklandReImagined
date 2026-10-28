@@ -389,6 +389,7 @@ impl App {
                 self.disconnect();
                 return Ok(());
             }
+            building.set_world_tick(view.tick);
             if a.entered
                 && self
                     .scene

@@ -149,7 +149,7 @@ impl Pitch {
                 goal.name = Some(name.into());
                 goal.colliding = false;
                 goal.raycast = false;
-                goal.rule_region = Some([3.0, 4.0, 3.0]);
+                goal.rule_region = Some(Box::new([3.0, 4.0, 3.0]));
                 world.bricks.insert(id, goal);
             }
             world.next_brick_id = 6;

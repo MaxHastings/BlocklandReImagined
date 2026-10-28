@@ -73,6 +73,9 @@ pub(super) struct Events {
     projectile_activations: BTreeMap<u64, ProjectileActivation>,
     /// Bricks killed with `fakeKillBrick` and the tick they come back.
     pub(super) respawns: BTreeMap<BrickId, u64>,
+    pub(super) restore_pending: BTreeSet<BrickId>,
+    respawn_cursor: Option<BrickId>,
+    restore_budget: Option<(u64, usize, u64)>,
     /// Projectiles events spawned, by the owner of the brick whose quota
     /// they count against (`QuotaObject`), newest last.
     pub(super) spawned: BTreeMap<OwnerId, VecDeque<u64>>,
@@ -832,17 +835,47 @@ impl Session {
     pub(super) fn step_events(&mut self, changed: &BTreeSet<BrickId>) -> Result<()> {
         let installed = self.sync_event_programs(changed);
         let tick = self.simulation.state().tick;
-        let due: Vec<BrickId> = self
+        // Bound scanning as well as mutation; future or held deadlines must
+        // not turn each tick into a scan of every knocked-out brick.
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+        let after = self.events.respawn_cursor;
+        let candidates: Vec<_> = self
             .events
             .respawns
-            .iter()
-            .filter(|(_, at)| **at <= tick)
-            .map(|(id, _)| *id)
+            .range((after.map_or(Unbounded, Excluded), Unbounded))
+            .chain(
+                self.events
+                    .respawns
+                    .range((Unbounded, after.map_or(Excluded(0), Included))),
+            )
+            .take(512)
+            .map(|(&id, &at)| (id, at))
             .collect();
+        if let Some((id, _)) = candidates.last() {
+            self.events.respawn_cursor = Some(*id);
+        }
+        let mut due: Vec<_> = self
+            .events
+            .restore_pending
+            .iter()
+            .take(128)
+            .copied()
+            .collect();
+        for (id, at) in candidates {
+            if due.len() >= 128 {
+                break;
+            }
+            if !self.events.restore_pending.contains(&id)
+                && self.simulation.section_due(id).unwrap_or(at) <= tick
+            {
+                due.push(id);
+            }
+        }
         for brick in &due {
             self.events.respawns.remove(brick);
         }
         self.respawn_bricks(&due)?;
+        self.step_damage_support()?;
         let Some(mut world) = self.events.world.take() else {
             return Ok(());
         };
@@ -939,17 +972,72 @@ impl Session {
     /// Bring knocked-out bricks back, all at once: a rocket's worth of
     /// bricks costs one collision refresh, not one per brick. Each then
     /// fires `onRespawn` in order.
-    fn respawn_bricks(&mut self, bricks: &[BrickId]) -> Result<()> {
-        let bricks: Vec<BrickId> = bricks
+    pub(super) fn respawn_bricks(&mut self, bricks: &[BrickId]) -> Result<()> {
+        if bricks.is_empty() {
+            return Ok(());
+        }
+        let tick = self.simulation.state().tick;
+        let budget = self.events.restore_budget.get_or_insert((
+            tick,
+            2049,
+            super::destruction::MUTATION_BYTES_PER_TICK,
+        ));
+        if budget.0 != tick {
+            *budget = (tick, 2049, super::destruction::MUTATION_BYTES_PER_TICK);
+        }
+        let mut ready = Vec::new();
+        for &id in bricks {
+            let Some(brick) = self.simulation.state().bricks.get(&id) else {
+                self.events.restore_pending.remove(&id);
+                continue;
+            };
+            let cost = 1 + self.simulation.damage_family_part_count(id);
+            let bytes = brick
+                .stored_bound()
+                .min(super::destruction::MUTATION_BYTES_PER_TICK);
+            if cost <= budget.1 && bytes <= budget.2 {
+                budget.1 -= cost;
+                budget.2 -= bytes;
+                ready.push(id);
+                self.events.restore_pending.remove(&id);
+            } else {
+                self.events.restore_pending.insert(id);
+                self.events.respawns.entry(id).or_insert(tick);
+            }
+        }
+        let bricks = ready.as_slice();
+        let families: BTreeSet<_> = bricks
+            .iter()
+            .copied()
+            .filter(|id| self.simulation.damage_flags(*id).is_some())
+            .collect();
+        self.simulation.restore_damage_families(bricks)?;
+        let bricks: Vec<_> = bricks
             .iter()
             .copied()
             .filter(|id| self.simulation.state().bricks.contains_key(id))
             .collect();
-        self.simulation.mutate_many(&bricks, |b| {
-            b.visible = true;
-            b.raycast = true;
-            b.colliding = true;
+        self.simulation.damage_transaction(|sim| {
+            sim.mutate_many(
+                &bricks
+                    .iter()
+                    .copied()
+                    .filter(|id| !families.contains(id))
+                    .collect::<Vec<_>>(),
+                |b| {
+                    // Family restoration already restored its saved flags. Ordinary
+                    // fake kills retain the existing all-on respawn contract.
+                    if !b.visible && !b.raycast && !b.colliding {
+                        b.visible = true;
+                        b.raycast = true;
+                        b.colliding = true;
+                        b.damage_hidden = false;
+                        b.damage_section = None;
+                    }
+                },
+            )
         })?;
+        self.sync_damage_lifecycle();
         for &brick in &bricks {
             self.dirty.insert(brick);
             self.fire_input(brick, "onRespawn", None);
@@ -1010,51 +1098,8 @@ impl Session {
         position: Vec3,
         impact: &bri_weapons::BrickImpact,
     ) -> Result<()> {
-        // v20 splits a rocket's brick damage in two: `onCollision` knocks
-        // out only the brick it hit, and `onExplode` searches the radius.
-        let mut hit: Vec<BrickId> = Vec::new();
-        if let Some(brick) = target {
-            if impact.direct {
-                hit.push(brick);
-            }
-        } else if impact.radius > 0.0 {
-            let reach = Vec3::splat(impact.radius);
-            hit.extend(
-                self.simulation
-                    .bricks_in_box(position - reach, position + reach)
-                    .into_iter()
-                    .filter(|id| {
-                        self.simulation.brick_box(*id).is_some_and(|(min, max)| {
-                            position.clamp(min, max).distance(position) <= impact.radius
-                        })
-                    }),
-            );
-        }
-        hit.sort_unstable();
-        hit.dedup();
-        let kills = self
-            .breakable_bricks(
-                source,
-                &hit,
-                impact.max_volume,
-                Some(impact.max_floating_volume),
-            )
-            .into_iter()
-            .map(|(brick, _)| {
-                // v20 throws direct hits with a 0.02 falloff radius.
-                let blast = super::debris::BrickBlast {
-                    origin: position,
-                    force: impact.force,
-                    radius: if target.is_none() && impact.radius > 0.0 {
-                        impact.radius
-                    } else {
-                        0.02
-                    },
-                };
-                (brick, blast)
-            })
-            .collect::<Vec<_>>();
-        self.knock_out_bricks(source, &kills)
+        self.queue_blast(source, target, position, impact);
+        Ok(())
     }
     /// Of `bricks`, in order, those `source` may knock out with a hit that
     /// breaks bricks up to `max_volume`, each with its volume (studs x
@@ -1071,19 +1116,9 @@ impl Session {
         max_floating_volume: Option<f32>,
     ) -> Vec<(BrickId, f32)> {
         let mut out = Vec::new();
-        let Some(player) = self.peers.get(&source).map(|p| p.combat.player) else {
+        let Some(scope) = self.damage_scope(source, Vec3::ZERO) else {
             return out;
         };
-        let Ok(damage_source) = self.minigames.projectile_source(player) else {
-            return out;
-        };
-        // `onCollision` and `onExplode` both return early for 3 s after the
-        // shooter's F8 drop inside a minigame, so a rocket already in flight
-        // breaks nothing either.
-        if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
-            return out;
-        }
-        let game = self.game_of(source);
         for &brick in bricks {
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
@@ -1094,38 +1129,15 @@ impl Session {
             let mesh = &definition.mesh;
             let volume = (mesh.footprint_studs[0] * mesh.footprint_studs[1]) as f32
                 * mesh.height_plates as f32;
-            if self.events.respawns.contains_key(&brick)
+            if self.fake_dead(brick)
                 || !b.colliding
-                || b.base_plate
+                || self.protected_foundation(brick)
                 || definition.indestructible
                 || !self.can_explode(brick, b, volume, max_volume, max_floating_volume)
             {
                 continue;
             }
-            // v20 `ProjectileData::onExplode`: single-player and LAN hosts
-            // ($Server::LAN) only ask the shooter's minigame for brick damage;
-            // internet servers use miniGameCanDamage, or ownership outside
-            // minigames.
-            let allowed = match game {
-                Some(g) if self.lan_host => self
-                    .minigames
-                    .game(g)
-                    .is_ok_and(|g| g.settings.brick_damage),
-                None if self.lan_host => true,
-                Some(g) => {
-                    let owner = self.brick_group_owner_for(b.owner, Some(g));
-                    let target = mg::Target::Object {
-                        kind: mg::ObjectKind::Brick,
-                        owner: Some(mg::AccountId(owner)),
-                        // Outside the game's region it is not the game's.
-                        membership: mg::Membership::OwnerAt(b.position),
-                        spawn_brick: false,
-                    };
-                    self.minigames.can_radius_damage(damage_source, target) == mg::Decision::Allow
-                }
-                None => b.owner == source || self.brick_group_player(b.owner) == Some(source),
-            };
-            if allowed {
+            if scope.allows(b) {
                 out.push((brick, volume));
             }
         }
@@ -1138,7 +1150,7 @@ impl Session {
     /// two limits it never does; in between it breaks only when it is not
     /// held between a live brick below and a live brick above (0x534e80:
     /// a brick on the floor or with nothing on top counts as floating).
-    fn can_explode(
+    pub(super) fn can_explode(
         &self,
         id: BrickId,
         brick: &bri_world::Brick,
@@ -1194,18 +1206,7 @@ impl Session {
         source: OwnerId,
         kills: &[(BrickId, super::debris::BrickBlast)],
     ) -> Result<()> {
-        if kills.is_empty() {
-            return Ok(());
-        }
-        let game = self.game_of(source);
-        let delay = self
-            .minigames
-            .respawn_delay(game, mg::RespawnObject::Brick)
-            .unwrap_or(3600);
-        self.fake_kill_bricks(kills, delay)?;
-        for (brick, _) in kills {
-            self.fire_input(*brick, "onBlownUp", Some(source));
-        }
+        self.queue_knockouts(source, kills);
         Ok(())
     }
     /// Bricks a player's touch (contact entry) reached this tick. Special
@@ -1512,7 +1513,7 @@ impl EventHost<'_> {
                 | BrickOp::SpawnExplosion { .. }
         );
         if spawns {
-            let fake_dead = self.session.events.respawns.contains_key(&brick);
+            let fake_dead = self.session.fake_dead(brick);
             let b = &self.session.simulation.state().bricks[&brick];
             if !ev::semantics::brick_spawn_allowed(
                 if fake_dead { u32::MAX } else { 0 },
@@ -1640,7 +1641,7 @@ impl EventHost<'_> {
             // `fxDTSBrick::playSound` is silent while the brick is fake-dead.
             BrickOp::PlaySound(sound) => {
                 if let Some(profile) = sound.clone()
-                    && !self.session.events.respawns.contains_key(&brick)
+                    && !self.session.fake_dead(brick)
                 {
                     self.session.cues.emit(
                         tick,

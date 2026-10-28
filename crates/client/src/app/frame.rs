@@ -2015,8 +2015,7 @@ impl App {
                     &self.vehicles,
                     &self.vehicle_assets,
                 );
-                let shots: Vec<_> = view
-                    .weapons
+                let shots: Vec<_> = weapons
                     .fired()
                     .map(|p| crate::local_physics::Shot {
                         id: p.id,
@@ -2032,6 +2031,7 @@ impl App {
                 self.fx.brick_debris.push(&pushers);
                 self.fx.brick_debris.shots(&shots);
             }
+            self.fx.brick_debris.prepare_models(&self.fx.debris_models);
             let moved = self
                 .fx
                 .brick_debris

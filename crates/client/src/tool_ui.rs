@@ -763,7 +763,7 @@ fn validate_choice(value: Option<&str>, choices: &BTreeSet<String>, kind: &str) 
 }
 fn wrench_data(brick: &Brick) -> Result<WrenchData> {
     Ok(WrenchData {
-        rule_region: brick.rule_region,
+        rule_region: brick.rule_region(),
         rule_region_default: None,
         region_inputs: bri_world::regions::has_region_input(brick),
         name: brick.name.clone().unwrap_or_default(),
@@ -1585,7 +1585,7 @@ mod tests {
         assert!(ui.install_items([("id".into(), "".into())]).is_err());
         assert_eq!(ui.server_catalog(), before);
         let mut b = brick();
-        b.rule_region = Some([8.0, 5.0, 8.0]);
+        b.rule_region = Some(Box::new([8.0, 5.0, 8.0]));
         b.item_spawn = ItemSpawn {
             item: Some(ContentRef::Resolved("v20.weapon.gunitem".into())),
             position: 4,

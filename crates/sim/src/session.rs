@@ -45,6 +45,9 @@ pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera,
 pub mod camera_path;
 pub use camera_path::CameraPath;
 mod debris;
+mod destruction;
+pub use destruction::DestructionWork;
+mod fracture;
 pub use debris::MAX_BLAST_DEBRIS;
 mod dirty;
 mod events;
@@ -1070,6 +1073,7 @@ pub struct Session {
     animations: animation::AnimationClocks,
     body_poses: body_pose::BodyPoseInputs,
     events: events::Events,
+    destruction: destruction::Destruction,
     specials: special::Specials,
     highlights: highlight::Highlights,
     copy_jobs: copy_jobs::CopyJobs,
@@ -1254,6 +1258,7 @@ impl Session {
         weapons.tick = simulation.state().tick;
         Self {
             events: Default::default(),
+            destruction: Default::default(),
             animations: Default::default(),
             body_poses: Default::default(),
             archetypes: Default::default(),
@@ -2264,11 +2269,21 @@ impl Session {
     }
     pub fn saved_world(&self) -> bri_world::World {
         let mut world = self.simulation.state().clone();
+        for id in self.simulation.damage_pieces() {
+            world.bricks.remove(&id);
+        }
         for id in self.events.respawns.keys() {
+            if self.simulation.damage_ended(*id) {
+                continue;
+            }
             if let Some(b) = world.bricks.get_mut(id) {
-                b.visible = true;
-                b.raycast = true;
-                b.colliding = true;
+                let [visible, raycast, colliding] =
+                    self.simulation.damage_flags(*id).unwrap_or([true; 3]);
+                b.visible = visible;
+                b.raycast = raycast;
+                b.colliding = colliding;
+                b.damage_hidden = false;
+                b.damage_section = None;
             }
         }
         world
@@ -2291,6 +2306,7 @@ impl Session {
     /// Replication takes the changed bricks. Gameplay systems that reconcile
     /// against changes early in a tick keep the ones they have not seen yet.
     pub fn take_dirty(&mut self) -> BTreeSet<BrickId> {
+        self.sync_damage_lifecycle();
         self.dirty.take()
     }
     pub fn take_notices(&mut self) -> Vec<String> {
@@ -2404,6 +2420,7 @@ impl Session {
         persist: impl FnMut(&bri_admin::DurableState) -> Result<()>,
     ) -> Result<Reply> {
         let result = self.command_with_animation_boundary(owner, sequence, command, aim, persist);
+        self.sync_damage_lifecycle();
         self.reconcile_animation_bindings();
         result
     }
@@ -3529,6 +3546,7 @@ impl Session {
         contain("events", self.step_events(&changed));
         contain("items", self.reconcile_items());
         self.load_clock.end_step();
+        self.sync_damage_lifecycle();
         self.reconcile_animation_bindings();
         ensure!(failures.is_empty(), "{}", failures.join("; "));
         Ok(())

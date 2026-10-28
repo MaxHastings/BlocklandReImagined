@@ -1,0 +1,56 @@
+# Destruction preview
+
+This separate build enables the full destruction experience. Use the existing
+Physics Quality setting; there is no extra destruction/shard switch. The server
+and clients must use this same preview version.
+
+First retry the **pirate ship mast**: shoot its base support and watch the
+mast, sails and flag stay recognizable together as they tip. On landing they
+should separate into connected assemblies, keeping their original little
+bricks. Repeat at a lower Physics Quality: breakup should be coarser, without
+losing half the sail. Also try two supported structures losing their supports
+in one blast, and restoration after a large collapse.
+
+Then use **Afghanistan DM**, equip the Rocket Launcher, and use a minigame
+with brick damage enabled (and all players' bricks enabled for the bundled map).
+Try the center of an upper floor, a floor edge, and the ceiling corner by a wall.
+Ordinary small bricks should still pop off whole. Large plain floors/blocks
+should lose stud-aligned chunks. Remaining support should hold; removing the
+final connection should show a section falling and breaking on landing.
+
+Then try a small wall beside an ordinary large block, a ground baseplate, a
+roof baseplate, and a deliberately floating build. Foundations/floating roots
+stay anchored; ordinary ground blocks can split. Try a second shot in a hole,
+wait for restoration, and save/reload after a blast. Transient damage saves the
+original build. Deliberately editing/cutting a surviving part commits the
+remaining parts as authored geometry and cancels that original's restoration.
+
+Watch for wrong-sized/colored debris, duplicate material, floating fragments,
+restored bricks remaining invisible, ugly long delays and noticeable hitches.
+Also judge repeated blasts: the uncommon cracked plastic should add variety
+without becoming noisy or exhausting. Radius and force have not been enlarged.
+
+Falling sections are local visuals: they cannot crush, carry players, block shots
+or leave permanent rubble. Tall sections tip about a base near the hit;
+wide slabs drop and tilt. Landing contact and assembly box colliders are
+cosmetic approximations. Physics Quality controls assembly breakup and bodies,
+not member visibility. Settled assemblies should react when shot again: local chunks wake and move,
+while the authoritative rocket continues through cosmetic rubble. Watch the
+first impact against the deck/hull for clipping, jumps or floating pieces.
+Budget-limited assemblies keep their art through the normal fade, using coarser
+motion or one shared assembly. Large deliveries wait visibly in place until the
+section is sealed and prepared, rather than falling in incomplete batches.
+Extreme structures beyond the server's presentation envelope remain standing;
+temporary capacity pressure defers the next section. This is preferable to
+removing a build and losing its visible collapse. Unsupported printed/special
+shapes retain their previous weapon size rules. At a split resource/catalog
+limit, an oversized brick stays intact instead of vanishing wholesale.
+
+Also shoot settled, still-falling and just-landed rubble. All have a local hit
+response, including shared/frozen assemblies. Rockets remain gameplay pass-through;
+this does not create authoritative rubble cover. Judge reaction strength, repeated
+blasts, restoration during a collapse, and whether nearby effects stay smooth.
+
+Technical checks and Windows packaging precede merge as Maxwell requested.
+Interactive feel and visual acceptance remain pending his playtest; passing
+checks does not establish that the experience is fun or source-identical.
