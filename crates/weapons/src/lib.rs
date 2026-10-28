@@ -794,6 +794,9 @@ pub struct SoundDef {
     /// Plays until its state ends (a charging hum), rather than once.
     #[serde(default)]
     pub looping: bool,
+    /// PCM intro once, then loop from this offset until released.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sustain: Option<SustainDef>,
     /// Heard only by the player who caused it, at their ears (a reload
     /// click), rather than by everyone near where it happens.
     #[serde(default)]
@@ -818,6 +821,13 @@ pub struct SoundDef {
     /// check compares it with the file and refuses a different length.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds: Option<f32>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SustainDef {
+    pub loop_start_seconds: f32,
+    pub attack_seconds: f32,
+    pub release_seconds: f32,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4926,6 +4936,18 @@ impl Pack {
             "Definition budget exceeded"
         );
         for (key, sound) in &self.sounds {
+            ensure!(
+                sound.sustain.is_none_or(|s| sound.looping
+                    && !sound.music
+                    && sound.variants.is_empty()
+                    && s.loop_start_seconds.is_finite()
+                    && (0.0..30.0).contains(&s.loop_start_seconds)
+                    && s.attack_seconds.is_finite()
+                    && (0.0..=2.0).contains(&s.attack_seconds)
+                    && s.release_seconds.is_finite()
+                    && (0.0..=2.0).contains(&s.release_seconds)),
+                "Invalid held sound {key}"
+            );
             ensure!(
                 sound.variants.len() <= 64
                     && (sound.variants.is_empty() || (!sound.looping && !sound.music)),

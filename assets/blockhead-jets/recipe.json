@@ -1,0 +1,23 @@
+{
+  "source_sha256": "d1628f59d9c0aff67d724562ddce839e3208e84a39caaa6fb4e1effb548b503e",
+  "source_seconds": [
+    1.5,
+    7.35
+  ],
+  "processing": "Mono fold, preserve intro, 80ms equal-power tail-to-held crossfade; then accepted PCM gain passes totaling +11dB. EQ and envelopes unchanged.",
+  "sample_rate": 44100,
+  "loop_start_seconds": 0.33,
+  "duration_seconds": 5.85,
+  "attack_seconds": 0.05,
+  "release_seconds": 0.15,
+  "jet_sha256": "97635d15d97765efea7e2f2a93d8c98665fef4d06191f9bcb8ff98dfce52b8b7",
+  "attribution": "20061111AirCompressorRelease.wav by daveincamas, https://freesound.org/s/25709/, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/), excerpted, EQ, mixed and looped. electric toothbrush.wav by conradts, https://freesound.org/s/190579/, CC0 (https://creativecommons.org/publicdomain/zero/1.0/), filtered, repeated and mixed. Additional EQ, mix and lighter attack arrangement supplied by Maxwell; the extra attack sample's source was not identified.",
+  "quality": "Maxwell accepted this MP3-preview-derived mix for inclusion in the base game. Extra attack sample supplied by Maxwell; its source was not identified. Known source credits are retained; no license is asserted for the extra sample.",
+  "gain_db_over_selected_mix": 11.0,
+  "peak_dbfs": -8.661909672574978,
+  "accepted_gain_edits_db": [
+    4.0,
+    4.0,
+    3.0
+  ]
+}

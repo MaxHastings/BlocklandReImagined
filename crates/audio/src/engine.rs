@@ -128,7 +128,53 @@ struct Voice {
     culled_at: u64,
     /// Remaining/total frames of a stop fade.
     stop: Option<(u32, u32)>,
+    envelope: Option<GateEnvelope>,
     done: Option<AudioEvent>,
+}
+
+/// Sample-clock envelope, independent of frame rate and mix block size.
+struct GateEnvelope {
+    level: f32,
+    start: f32,
+    active: bool,
+    elapsed: u32,
+    frames: u32,
+}
+impl GateEnvelope {
+    fn new(seconds: f32, rate: u32) -> Self {
+        Self {
+            level: 0.,
+            start: 0.,
+            active: true,
+            elapsed: 0,
+            frames: (seconds * rate as f32).round().max(1.) as u32,
+        }
+    }
+    fn gate(&mut self, active: bool, seconds: f32, rate: u32) {
+        if self.active == active {
+            return;
+        }
+        self.start = self.level;
+        self.active = active;
+        self.elapsed = 0;
+        self.frames = (seconds * rate as f32).round().max(1.) as u32;
+    }
+    fn next(&mut self) -> f32 {
+        self.advance(1)
+    }
+    fn advance(&mut self, frames: u32) -> f32 {
+        if self.elapsed == self.frames {
+            return self.level;
+        }
+        self.elapsed = self.elapsed.saturating_add(frames).min(self.frames);
+        let t = self.elapsed as f32 / self.frames as f32;
+        let blend = 0.5 - 0.5 * (std::f32::consts::PI * t).cos();
+        self.level = self.start + ((if self.active { 1. } else { 0. }) - self.start) * blend;
+        self.level
+    }
+    fn finished(&self) -> bool {
+        !self.active && self.elapsed == self.frames
+    }
 }
 
 impl Voice {
@@ -216,6 +262,14 @@ impl Engine {
         self.reverb.set_rate(rate);
         self.step_scale = 1.0 / f64::from(rate);
         self.declick_frames = ((self.cfg.declick_ms.max(0.0) / 1000.0) * rate as f32) as u32;
+        for voice in &mut self.voices {
+            if let Some(env) = &mut voice.envelope {
+                env.frames =
+                    (u64::from(env.frames) * u64::from(rate) / u64::from(old)).max(1) as u32;
+                env.elapsed = (u64::from(env.elapsed) * u64::from(rate) / u64::from(old)) as u32;
+                env.elapsed = env.elapsed.min(env.frames);
+            }
+        }
     }
 
     /// Render interleaved output (`out.len()` must be a multiple of channels).
@@ -573,6 +627,24 @@ impl Engine {
                     v.pitch_scale = sanitize_pitch(pitch_scale);
                 }
             }
+            Command::SetSustainGate { handle, active } => {
+                if let Some(v) = self
+                    .voices
+                    .iter_mut()
+                    .find(|v| v.handle == handle && v.done.is_none())
+                    && let (Some(envelope), Some(sustain)) = (&mut v.envelope, v.asset.sustain)
+                {
+                    envelope.gate(
+                        active,
+                        if active {
+                            sustain.attack_seconds
+                        } else {
+                            sustain.release_seconds
+                        },
+                        self.cfg.sample_rate,
+                    );
+                }
+            }
             Command::SetReverb(room) => self.reverb.set_room(room),
             Command::SetVoiceHearing { handle, hearing } => {
                 if let Some(v) = self.voices.iter_mut().find(|v| v.handle == handle) {
@@ -662,6 +734,16 @@ impl Engine {
         placement: Placement,
         gain_scale: f32,
     ) {
+        if let Some(s) = asset.sustain {
+            let valid = matches!(&asset.data, ClipData::Pcm(p) if s.loop_start_frame < p.frames())
+                && asset.playback.looping
+                && [s.attack_seconds, s.release_seconds]
+                    .into_iter()
+                    .all(|v| v.is_finite() && (0.0..=2.0).contains(&v));
+            if !valid {
+                return self.reject(handle, CullReason::StreamError);
+            }
+        }
         let gain_scale = sanitize_gain(gain_scale);
         let (entity, position) = match placement {
             Placement::Listener => (None, None),
@@ -745,6 +827,9 @@ impl Engine {
             ClipData::Pcm(_) => None,
         };
         let now = self.now_ms();
+        let envelope = asset
+            .sustain
+            .map(|s| GateEnvelope::new(s.attack_seconds, self.cfg.sample_rate));
         self.voices.push(Voice {
             handle,
             asset,
@@ -762,6 +847,7 @@ impl Engine {
             score,
             culled_at: now,
             stop: None,
+            envelope,
             done: None,
         });
         self.stats.started.fetch_add(1, Ordering::Relaxed);
@@ -808,6 +894,7 @@ fn pcm_frame(
     frames: usize,
     pos: f64,
     looping: bool,
+    loop_start: usize,
 ) -> Option<[f32; 2]> {
     let i0 = pos as usize;
     if i0 >= frames {
@@ -817,7 +904,7 @@ fn pcm_frame(
     let i1 = if i0 + 1 < frames {
         Some(i0 + 1)
     } else if looping {
-        Some(0)
+        Some(loop_start)
     } else {
         None
     };
@@ -848,6 +935,7 @@ fn mix_voice(
         * f64::from(v.asset.playback.pitch.max(0.01))
         * f64::from(v.pitch_scale);
     let looping = v.looping();
+    let loop_start = v.asset.sustain.map_or(0, |s| s.loop_start_frame);
     let mono_src = src_ch == 1;
     let downmix = !mono_src && spatialised(&v.asset, v.position);
     let from = v.last;
@@ -856,7 +944,7 @@ fn mix_voice(
 
     for n in 0..frames {
         // Stop fade envelope.
-        let env = match v.stop.as_mut() {
+        let mut env = match v.stop.as_mut() {
             Some((remaining, total)) => {
                 if *remaining == 0 {
                     v.done = Some(AudioEvent::Stopped { handle: v.handle });
@@ -868,6 +956,13 @@ fn mix_voice(
             }
             None => 1.0,
         };
+        if let Some(envelope) = &mut v.envelope {
+            env *= envelope.next();
+            if envelope.finished() {
+                v.done = Some(AudioEvent::Stopped { handle: v.handle });
+                break;
+            }
+        }
         let t = n as f32 * inv;
         let gl = (from[0] + (to[0] - from[0]) * t) * env;
         let gr = (from[1] + (to[1] - from[1]) * t) * env;
@@ -875,11 +970,12 @@ fn mix_voice(
         let frame = match (&v.asset.data, v.stream.as_mut()) {
             (ClipData::Pcm(pcm), _) => {
                 let total = pcm.frames();
-                let f = pcm_frame(&pcm.samples, src_ch, total, v.cursor, looping);
+                let f = pcm_frame(&pcm.samples, src_ch, total, v.cursor, looping, loop_start);
                 if f.is_some() {
                     v.cursor += step;
                     if looping && total > 0 && v.cursor >= total as f64 {
-                        v.cursor %= total as f64;
+                        v.cursor = loop_start as f64
+                            + (v.cursor - total as f64) % (total - loop_start) as f64;
                     }
                 }
                 f
@@ -954,7 +1050,7 @@ fn stream_frame(
         }
     }
     let frames = st.buf.len() / ch;
-    Ok(pcm_frame(&st.buf, ch, frames, pos, false))
+    Ok(pcm_frame(&st.buf, ch, frames, pos, false, 0))
 }
 
 fn compact_stream(st: &mut StreamState, ch: usize, cursor: &mut f64) {
@@ -967,6 +1063,13 @@ fn compact_stream(st: &mut StreamState, ch: usize, cursor: &mut f64) {
 
 /// Virtual voices keep time so revived loops continue in phase.
 fn advance_virtual(v: &mut Voice, frames: usize, out_rate: u32) {
+    if let Some(envelope) = &mut v.envelope {
+        envelope.advance(frames as u32);
+        if envelope.finished() {
+            v.done = Some(AudioEvent::Stopped { handle: v.handle });
+            return;
+        }
+    }
     let step = f64::from(v.asset.data.sample_rate()) / f64::from(out_rate.max(1));
     match &v.asset.data {
         ClipData::Pcm(pcm) => {
@@ -974,7 +1077,10 @@ fn advance_virtual(v: &mut Voice, frames: usize, out_rate: u32) {
             v.cursor += step * frames as f64;
             if total > 0.0 {
                 if v.looping() {
-                    v.cursor %= total;
+                    if v.cursor >= total {
+                        let start = v.asset.sustain.map_or(0., |s| s.loop_start_frame as f64);
+                        v.cursor = start + (v.cursor - total) % (total - start);
+                    }
                 } else if v.cursor >= total {
                     v.done = Some(AudioEvent::Finished { handle: v.handle });
                 }

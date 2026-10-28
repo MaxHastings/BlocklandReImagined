@@ -22,7 +22,7 @@ pub mod schema;
 pub mod spatial;
 pub mod wav;
 
-pub use bank::{BankOptions, ClipData, SoundAsset, SoundBank};
+pub use bank::{BankOptions, ClipData, SoundAsset, SoundBank, Sustain};
 pub use command::{AudioEvent, CullReason, EntityKey, Placement, SoundHandle, VolumeControl};
 pub use engine::{EngineConfig, VoicePolicy};
 pub use error::AudioError;

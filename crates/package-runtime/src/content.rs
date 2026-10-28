@@ -1982,6 +1982,9 @@ pub struct ArchetypeSounds {
     /// The sound of landing from a fall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<String>,
+    /// Held propulsion sound, driven by accepted jetting rather than input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jet: Option<String>,
     /// With no `land` sound, landing sounds like a footfall on the surface
     /// underfoot.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -2212,7 +2215,8 @@ impl ArchetypeDef {
                 &self.sounds.jump,
                 &self.sounds.pain,
                 &self.sounds.death,
-                &self.sounds.land
+                &self.sounds.land,
+                &self.sounds.jet
             ]
             .into_iter()
             .flatten()

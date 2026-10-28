@@ -51,6 +51,15 @@ pub struct SoundAsset {
     pub name: Arc<str>,
     pub playback: Playback,
     pub data: ClipData,
+    /// Optional intro followed by a held PCM loop and a cancellable release.
+    pub sustain: Option<Sustain>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Sustain {
+    pub loop_start_frame: usize,
+    pub attack_seconds: f32,
+    pub release_seconds: f32,
 }
 
 /// Most bytes one clip from outside the bank may have (an Add-On's sound).
@@ -190,6 +199,7 @@ impl SoundAsset {
             name: self.name.clone(),
             playback,
             data: self.data.clone(),
+            sustain: self.sustain,
         }
     }
     /// This sound played at `pitch` times its own, heard out to `radius`
@@ -209,6 +219,7 @@ impl SoundAsset {
             name: self.name.clone(),
             playback,
             data: self.data.clone(),
+            sustain: self.sustain,
         }
     }
     pub fn as_ambient(&self, range: Option<f32>) -> Self {
@@ -225,6 +236,7 @@ impl SoundAsset {
             name: self.name.clone(),
             playback,
             data: self.data.clone(),
+            sustain: self.sustain,
         }
     }
     pub fn as_music(&self, looping: bool) -> Self {
@@ -237,6 +249,7 @@ impl SoundAsset {
             name: self.name.clone(),
             playback,
             data: self.data.clone(),
+            sustain: self.sustain,
         }
     }
     /// A world sound `id` playing `data` (a decoded clip, or one of the
@@ -258,6 +271,7 @@ impl SoundAsset {
                 bus: crate::schema::Bus::Effects,
             },
             data,
+            sustain: None,
         }
     }
 }
@@ -426,6 +440,7 @@ impl SoundBank {
                             name: Arc::from(s.name.as_str()),
                             playback: s.playback.clone(),
                             data: data.clone(),
+                            sustain: None,
                         }),
                     );
                 }
