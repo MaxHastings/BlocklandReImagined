@@ -2010,6 +2010,7 @@ mod tests {
             "addon:sound/boom".into(),
             bri_weapons::SoundDef {
                 variants: Vec::new(),
+                sustain: None,
                 file: "base/data/sound/vehicleexplosion.wav".into(),
                 volume: 1.0,
                 looping: false,

@@ -250,6 +250,14 @@ impl AudioRuntime {
         self.play(&id, placement)
     }
 
+    /// Release a sustained voice, or resume its current envelope/phase.
+    pub fn set_sustain_gate(
+        &mut self,
+        handle: SoundHandle,
+        active: bool,
+    ) -> Result<(), AudioError> {
+        self.send(Command::SetSustainGate { handle, active })
+    }
     /// Stop one sound (with a short declick fade).
     pub fn stop(&mut self, handle: SoundHandle) -> Result<(), AudioError> {
         self.send(Command::Stop {

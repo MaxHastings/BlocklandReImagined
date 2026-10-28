@@ -159,6 +159,26 @@ impl PreparedSounds {
         match loaded {
             Ok(mut asset) => {
                 asset.playback.looping = def.looping;
+                if let Some(s) = def.sustain {
+                    let frames = match &asset.data {
+                        ClipData::Pcm(p) => p.frames(),
+                        _ => 0,
+                    };
+                    let start =
+                        (s.loop_start_seconds * asset.data.sample_rate() as f32).round() as usize;
+                    if !def.looping || start >= frames {
+                        self.failed.insert(
+                            profile.to_ascii_lowercase(),
+                            "held loop start must be inside a PCM clip".into(),
+                        );
+                        return;
+                    }
+                    asset.sustain = Some(Sustain {
+                        loop_start_frame: start,
+                        attack_seconds: s.attack_seconds,
+                        release_seconds: s.release_seconds,
+                    });
+                }
                 self.sounds
                     .insert(profile.to_string(), (Arc::new(asset), def.volume));
             }
@@ -377,6 +397,8 @@ pub struct ClientAudio {
     image_loops: BTreeMap<(u64, u8), (String, SoundHandle)>,
     /// Vehicle engine loops keyed by vehicle id; see [`engine_loop`].
     engines: BTreeMap<u64, (String, SoundHandle)>,
+    /// Held actor sounds, including voices completing a cancellable release.
+    held: BTreeMap<u64, HeldVoice>,
     /// Projectile `sound` loops keyed by projectile id.
     projectiles: BTreeSet<u64>,
     /// The player's master volume, before any background mute.
@@ -436,6 +458,12 @@ struct PlayingSource {
     handle: SoundHandle,
     pack_volume: f32,
     source: PositionalSource,
+}
+struct HeldVoice {
+    sound: String,
+    handle: SoundHandle,
+    active: bool,
+    position: [f32; 3],
 }
 /// A rule's music track as it plays, fading in over `fade` seconds.
 struct RuleMusic {
@@ -530,6 +558,7 @@ impl ClientAudio {
             projectiles: BTreeSet::new(),
             image_loops: BTreeMap::new(),
             engines: BTreeMap::new(),
+            held: BTreeMap::new(),
             master: 1.,
             mute_in_background: false,
             focused: true,
@@ -1083,6 +1112,7 @@ impl ClientAudio {
             .positional
             .values()
             .map(|playing| (playing.handle, playing.source.position))
+            .chain(self.held.values().map(|v| (v.handle, v.position)))
             .chain(self.fresh_world.drain(..))
             .map(|(handle, at)| (handle, hearing_at(at)))
             .collect();
@@ -1191,6 +1221,64 @@ impl ClientAudio {
             self.record(result);
         }
     }
+    /// One intro/held-loop voice per actor. A short off/on gap resumes its
+    /// sample-clock envelope and phase; only a completed release restarts.
+    pub fn sync_held(&mut self, wanted: &BTreeMap<u64, (String, [f32; 3], bool)>) {
+        let keys: Vec<_> = self.held.keys().copied().collect();
+        for key in keys {
+            let old = &self.held[&key];
+            if wanted
+                .get(&key)
+                .is_some_and(|(sound, _, _)| sound != &old.sound)
+            {
+                let handle = old.handle;
+                let result = self.runtime.stop(handle);
+                if result.is_ok() {
+                    self.held.remove(&key);
+                }
+                self.record(result);
+                continue;
+            }
+            let active = wanted.get(&key).is_some_and(|(_, _, active)| *active);
+            if old.active != active {
+                let handle = old.handle;
+                let result = self.runtime.set_sustain_gate(handle, active);
+                if result.is_ok() {
+                    self.held.get_mut(&key).unwrap().active = active;
+                }
+                self.record(result);
+            }
+        }
+        for (key, (sound, position, active)) in wanted {
+            if let Some(old) = self.held.get(key) {
+                let result = self.runtime.set_source_position(old.handle, *position);
+                self.record(result);
+                self.held.get_mut(key).unwrap().position = *position;
+            } else if *active && self.held.len() < 64 {
+                if self
+                    .pack_sounds
+                    .get(&sound.to_ascii_lowercase())
+                    .is_none_or(|(asset, _)| asset.sustain.is_none())
+                {
+                    continue;
+                }
+                match self.start(sound, Placement::World(*position), Voice::AS_AUTHORED) {
+                    Ok(handle) => {
+                        self.held.insert(
+                            *key,
+                            HeldVoice {
+                                sound: sound.clone(),
+                                handle,
+                                active: true,
+                                position: *position,
+                            },
+                        );
+                    }
+                    Err(error) => self.record(Err(error)),
+                }
+            }
+        }
+    }
     /// `ProjectileData.sound`: a loop that flies with each projectile and
     /// stops when it explodes or expires.
     pub fn sync_projectiles(
@@ -1265,6 +1353,7 @@ impl ClientAudio {
         self.projectiles.clear();
         self.image_loops.clear();
         self.engines.clear();
+        self.held.clear();
         self.pending.clear();
         self.contact_pending.clear();
         let result = self.runtime.stop_all();
@@ -1329,7 +1418,17 @@ impl ClientAudio {
             self.record(result);
         }
         self.runtime.update(seconds);
-        self.runtime.drain_events();
+        for event in self.runtime.drain_events() {
+            let ended = match event {
+                AudioEvent::Stopped { handle }
+                | AudioEvent::Finished { handle }
+                | AudioEvent::Culled { handle, .. } => Some(handle),
+                _ => None,
+            };
+            if let Some(handle) = ended {
+                self.held.retain(|_, v| v.handle != handle);
+            }
+        }
     }
     pub fn stats(&self) -> AudioStats {
         self.runtime.stats()
@@ -1370,6 +1469,63 @@ impl WorldVolume {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_actor_audio_keeps_one_voice_across_frames_and_short_releases() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let mut pack: bri_weapons::Pack =
+            serde_json::from_str(r#"{"schema_version":1,"id":"held-test"}"#)?;
+        let profile = "test:held";
+        pack.sounds.insert(
+            profile.into(),
+            serde_json::from_value(serde_json::json!({
+                "file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,
+                "sustain":{"loop_start_seconds":0.1,"attack_seconds":0.05,"release_seconds":0.15}
+            }))?,
+        );
+        audio.set_pack_sounds(&pack, &fx.root);
+        assert!(audio.warnings.is_empty(), "{:?}", audio.warnings);
+        let wanted = BTreeMap::from([(1, (profile.into(), [0., 0., -2.], true))]);
+        for _ in 0..60 {
+            audio.sync_held(&wanted);
+            audio.tick(1. / 60., Listener::default());
+        }
+        assert_eq!(audio.stats().started, 1);
+        let handle = audio.held[&1].handle;
+        audio.sync_held(&BTreeMap::from([(
+            1,
+            (profile.into(), [2., 0., -2.], false),
+        )]));
+        audio.tick(0.05, Listener::default());
+        assert_eq!(audio.held[&1].position, [2., 0., -2.]);
+        audio.sync_held(&wanted);
+        audio.tick(0.1, Listener::default());
+        assert_eq!(audio.held[&1].handle, handle);
+        assert_eq!(audio.stats().started, 1);
+        // A full command queue must not consume the release edge. Keep the
+        // previous gate state so next frame retries rather than leaking a loop.
+        while audio
+            .runtime
+            .set_source_position(handle, [0., 0., -2.])
+            .is_ok()
+        {}
+        audio.sync_held(&BTreeMap::new());
+        assert!(audio.held[&1].active);
+        audio.runtime.update(0.01);
+        audio.sync_held(&BTreeMap::new());
+        audio.tick(0.16, Listener::default());
+        assert!(audio.held.is_empty());
+        audio.sync_held(&wanted);
+        audio.tick(0.1, Listener::default());
+        assert_eq!(audio.stats().started, 2);
+        audio.clear();
+        assert!(audio.held.is_empty());
+        // Session clear uses the ordinary5ms declick, rather than an abrupt cut.
+        audio.tick(0.01, Listener::default());
+        assert_eq!(audio.stats().real_voices + audio.stats().virtual_voices, 0);
+        Ok(())
+    }
 
     /// The world eases down over the fade, holds, and eases back up over
     /// the last fade seconds.
@@ -1923,6 +2079,7 @@ mod tests {
             serde_json::from_str(r#"{ "schema_version": 1, "id": "addon" }"#)?;
         let def = |file: &str| bri_weapons::SoundDef {
             variants: Vec::new(),
+            sustain: None,
             file: file.into(),
             volume: 0.5,
             looping: false,
@@ -2169,6 +2326,7 @@ mod tests {
             blast.into(),
             bri_weapons::SoundDef {
                 variants: Vec::new(),
+                sustain: None,
                 file: "blast.wav".into(),
                 volume: 1.0,
                 looping: false,

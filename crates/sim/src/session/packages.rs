@@ -742,6 +742,7 @@ fn apply_sounds(
         (&mut sounds.pain, &from.pain),
         (&mut sounds.death, &from.death),
         (&mut sounds.land, &from.land),
+        (&mut sounds.jet, &from.jet),
     ] {
         if from.is_some() {
             to.clone_from(from);

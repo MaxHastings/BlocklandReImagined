@@ -473,6 +473,7 @@ mod tests {
         let mut tier1 = part("tier1", "%2 shot %1");
         let sound = SoundDef {
             variants: Vec::new(),
+            sustain: None,
             file: "fire.wav".into(),
             volume: 1.0,
             looping: false,
