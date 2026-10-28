@@ -648,16 +648,17 @@ fn a_rocket_knocks_out_every_brick_in_its_blast() {
 }
 
 /// A blast's bricks come back together in one tick with one collision
-/// refresh, not one chunk rebuild and physics pass per brick (which stalled
+/// refresh per bounded batch, not one chunk rebuild and physics pass per brick (which stalled
 /// the host for tens of milliseconds on a big build).
 #[test]
-fn a_blasts_bricks_respawn_together_with_one_collision_refresh() {
+fn a_blasts_bricks_respawn_in_bounded_batches_with_one_collision_refresh() {
     let (mut s, bricks) = rocket_into_160(30.0);
     assert!(
         bricks
             .iter()
             .all(|id| !s.simulation().state().bricks[id].colliding)
     );
+    let mut previous = 0;
     for _ in 0..60 * HZ {
         let before = s.simulation().collision_refreshes();
         s.step().unwrap();
@@ -665,16 +666,20 @@ fn a_blasts_bricks_respawn_together_with_one_collision_refresh() {
             .iter()
             .filter(|id| s.simulation().state().bricks[*id].colliding)
             .count();
-        if back == 0 {
-            continue;
-        }
-        assert_eq!(back, bricks.len(), "every brick respawns in the same tick");
-        let refreshes = s.simulation().collision_refreshes() - before;
         assert!(
-            refreshes <= 2,
-            "{refreshes} collision refreshes in the respawn tick"
+            back >= previous && back - previous <= 128,
+            "restoration must be bounded and monotonic"
         );
-        return;
+        if back > previous {
+            assert!(
+                s.simulation().collision_refreshes() - before <= 2,
+                "one batched refresh"
+            );
+        }
+        if back == bricks.len() {
+            return;
+        }
+        previous = back;
     }
     panic!("bricks never respawned");
 }
@@ -747,7 +752,7 @@ fn rocket_into(
 /// below and a brick above. In a stack of three the floor brick (nothing
 /// below) and the top one (nothing above) break; the middle one stays.
 #[test]
-fn bricks_over_the_volume_limit_break_only_when_floating() {
+fn a_middle_brick_also_falls_when_the_blast_severs_its_final_support() {
     let stack = [
         ([0.5, 0.3, -8.5], 1),
         ([0.5, 0.9, -8.5], 1),
@@ -756,7 +761,7 @@ fn bricks_over_the_volume_limit_break_only_when_floating() {
     let white = vec![[1.0; 4]; 2];
     assert_eq!(
         rocket_into(10.0, 20.0, white.clone(), &stack),
-        [true, false, true]
+        [true, true, true]
     );
     // Over both limits nothing breaks; within the plain limit all do.
     assert_eq!(rocket_into(10.0, 11.0, white.clone(), &stack), [false; 3]);
@@ -851,11 +856,7 @@ fn a_blast_through_thousands_of_bricks_keeps_its_explosion() {
         .filter(|c| matches!(c.kind, CueKind::BrickKill { .. }))
         .map(|c| c.position)
         .collect();
-    assert!(
-        thrown.len() <= bri_sim::session::MAX_BLAST_DEBRIS && thrown.len() >= out / 3,
-        "{} thrown of {out}",
-        thrown.len()
-    );
+    assert!(thrown.len() == out, "{} thrown of {out}", thrown.len());
     // Spread over the blast, not only its nearest bricks.
     let far = thrown.iter().map(|p| -p[2]).fold(0.0f32, f32::max);
     assert!(far > 40.0, "farthest debris {far} units out");

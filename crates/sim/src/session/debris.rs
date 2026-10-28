@@ -163,10 +163,18 @@ impl Session {
             .map(|(brick, blast)| self.brick_kill_cue(*brick, Some(*blast)))
             .collect::<Result<Vec<_>>>()?;
         let bricks: Vec<BrickId> = kills.iter().map(|(brick, _)| *brick).collect();
-        self.simulation.mutate_many(&bricks, |b| {
-            b.visible = false;
-            b.raycast = false;
-            b.colliding = false;
+        for &id in &bricks {
+            if self.simulation.damage_parent(id).is_none() {
+                self.simulation.begin_damage_family(id);
+            }
+        }
+        self.simulation.damage_transaction(|sim| {
+            sim.mutate_many(&bricks, |b| {
+                b.visible = false;
+                b.raycast = false;
+                b.colliding = false;
+                b.damage_hidden = true;
+            })
         })?;
         let tick = self.simulation.state().tick;
         for brick in bricks {
@@ -183,7 +191,7 @@ impl Session {
     /// Capture the brick's look before it changes, so clients can draw the
     /// debris even when the brick is already gone from their world. No
     /// `blast` is a `killBrick`.
-    fn brick_kill_cue(
+    pub(super) fn brick_kill_cue(
         &self,
         brick: BrickId,
         blast: Option<BrickBlast>,
@@ -220,7 +228,10 @@ impl Session {
             b.position,
         ))
     }
-    fn emit_brick_kill(&mut self, (kind, position): (crate::presentation::CueKind, [f32; 3])) {
+    pub(super) fn emit_brick_kill(
+        &mut self,
+        (kind, position): (crate::presentation::CueKind, [f32; 3]),
+    ) {
         let tick = self.simulation.state().tick;
         self.cues.emit(tick, kind, position);
     }

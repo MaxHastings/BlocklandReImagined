@@ -10,8 +10,11 @@ use bri_world::{
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
+mod damage;
 mod scan;
+mod support_probe;
 pub use scan::{BoxScan, StackScan, center_copy, spend, work};
+pub(crate) use support_probe::SupportProbe;
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
 pub const MAP_TAG: u128 = u128::MAX;
 /// How far a brick may dip into an upward-facing map floor. Map floors need
@@ -238,6 +241,9 @@ pub struct Simulation {
     index: Index,
     /// Build-support topology, independent of moving bodies and paint/name edits.
     support_epoch: u64,
+    damage: damage::DamageFamilies,
+    support_edits: Vec<Bounds>,
+    support_map_edit: bool,
     /// Colliders of the bricks that keep one of their own (sensors: not
     /// colliding, or water). Solid bricks are parts of `chunks`.
     handles: BTreeMap<BrickId, ColliderHandle>,
@@ -274,12 +280,23 @@ pub struct Simulation {
     /// [`Self::stack_owner`]). Not saved, as v20's `stackBL_ID` was not.
     stacks: std::collections::HashMap<BrickId, bri_world::OwnerId>,
 }
-fn support_identity(brick: &Brick) -> (bri_world::ContentRef, [f32; 3], u8, bri_world::OwnerId) {
+fn support_identity(
+    brick: &Brick,
+) -> (
+    bri_world::ContentRef,
+    [f32; 3],
+    u8,
+    bri_world::OwnerId,
+    bool,
+    bool,
+) {
     (
         brick.definition.clone(),
         brick.position,
         brick.quarter_turns,
         brick.owner,
+        brick.colliding,
+        brick.damage_hidden,
     )
 }
 fn definition_key(brick: &Brick) -> Option<&str> {
@@ -565,6 +582,9 @@ impl Simulation {
             liquids: std::sync::OnceLock::new(),
             index,
             support_epoch: 0,
+            damage: Default::default(),
+            support_edits: Vec::new(),
+            support_map_edit: false,
             handles,
             chunks,
             parked: Default::default(),
@@ -643,6 +663,7 @@ impl Simulation {
     /// Give a brick in the world its collision: a part of its chunk (built
     /// at the next flush) or, for a sensor, a collider of its own.
     fn attach(&mut self, id: BrickId) -> Result<()> {
+        self.note_support_at(id);
         self.support_epoch = self.support_epoch.wrapping_add(1);
         let brick = &self.authority.state().bricks[&id];
         let definition = self.definitions.get(brick)?;
@@ -662,6 +683,7 @@ impl Simulation {
     /// chunk, waking bodies resting on it, or its own collider handed back
     /// for `parking`.
     fn detach(&mut self, id: BrickId) -> Option<ColliderHandle> {
+        self.note_support_at(id);
         self.support_epoch = self.support_epoch.wrapping_add(1);
         self.note_link(id);
         if let Some(handle) = self.handles.remove(&id) {
@@ -832,7 +854,19 @@ impl Simulation {
         }
         for handle in handles {
             if let Some(collider) = self.physics.colliders.get_mut(*handle) {
+                let old = collider.compute_aabb();
                 collider.set_position(pose);
+                let next = collider.compute_aabb();
+                for aabb in [old, next] {
+                    let min =
+                        std::array::from_fn(|a| (aabb.mins[a] / grid::CELL[a]).floor() as i32 - 1);
+                    let max: [i32; 3] =
+                        std::array::from_fn(|a| (aabb.maxs[a] / grid::CELL[a]).ceil() as i32 + 1);
+                    self.support_edits.push(Bounds {
+                        min,
+                        size: std::array::from_fn(|a| (max[a] - min[a]).max(1)),
+                    });
+                }
             }
         }
         self.support_epoch = self.support_epoch.wrapping_add(1);
@@ -967,6 +1001,7 @@ impl Simulation {
             });
         set_enabled(&mut self.physics, &self.map_handles, colliders, enabled)?;
         if changed {
+            self.support_map_edit = true;
             self.support_epoch = self.support_epoch.wrapping_add(1);
         }
         Ok(())
@@ -1003,6 +1038,7 @@ impl Simulation {
         let mut stream = crate::map::TerrainStream::new(fields, MAP_TAG, anchors)?;
         stream.update(&mut self.physics);
         self.terrain = Some(stream);
+        self.support_map_edit = true;
         self.support_epoch = self.support_epoch.wrapping_add(1);
         Ok(())
     }
@@ -1034,6 +1070,9 @@ impl Simulation {
     /// enter an island and trip Rapier's consistency check on the next step,
     /// so every body is marked modified again afterwards.
     fn detect_collisions(&mut self) {
+        if self.holding {
+            return;
+        }
         self.refreshes += 1;
         self.flush_chunks();
         bri_physics::detect_collisions(&mut self.physics);
@@ -1355,6 +1394,28 @@ impl Simulation {
     /// rule (they fill the brick's own room), only the brick limit, and
     /// collisions are refreshed once for them all.
     pub fn insert_pieces(&mut self, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
+        ensure!(
+            self.state().bricks.len() + bricks.len() <= bri_world::MAX_BRICKS,
+            "Too many split pieces"
+        );
+        for brick in &bricks {
+            brick.validate(self.state().palette.len())?;
+            Bounds::new(brick, &self.definitions.get(brick)?.mesh)?;
+        }
+        ensure!(
+            self.authority.stored_bytes()
+                + bricks.iter().map(|b| b.stored_bound() + 32).sum::<u64>()
+                <= bri_world::MAX_STORED_BYTES,
+            "Split exceeds world storage budget"
+        );
+        self.state()
+            .next_brick_id
+            .checked_add(bricks.len() as u64)
+            .context("Brick IDs exhausted")?;
+        self.state()
+            .revision
+            .checked_add(bricks.len() as u64)
+            .context("Revision exhausted")?;
         let engine = Actor {
             administrator: true,
             ..Default::default()
@@ -1378,11 +1439,7 @@ impl Simulation {
     }
     /// Whether brick `id` rests on the map itself (terrain or the ground).
     pub fn rests_on_map(&self, id: BrickId) -> bool {
-        on_ground(
-            &self.physics,
-            self.terrain.as_ref(),
-            self.index.bounds(id),
-        )
+        on_ground(&self.physics, self.terrain.as_ref(), self.index.bounds(id))
     }
     /// Refresh collisions after bricks went in a slice at a time.
     pub fn settle(&mut self) {
@@ -1700,7 +1757,14 @@ impl Simulation {
         Ok((order, false))
     }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
+        let before = self
+            .state()
+            .bricks
+            .get(&id)
+            .context("Unknown brick")?
+            .clone();
         self.authority.edit(actor, id, edit)?;
+        self.damage_after_mutation(id, &before)?;
         self.note_link(id);
         let _ = self.sync_flags(id);
         self.detect_collisions();
@@ -1719,14 +1783,19 @@ impl Simulation {
     /// removal the whole broad phase's refit.
     pub fn remove_many(&mut self, actor: &Actor, ids: &[BrickId]) -> Result<()> {
         for &id in ids {
-            self.state().bricks.get(&id).context("Unknown brick")?;
+            let brick = self.state().bricks.get(&id).context("Unknown brick")?;
+            ensure!(
+                actor.may_edit(brick.owner, bri_world::authority::trust::FULL),
+                "No removal permission"
+            );
         }
+        let ids = self.damage_before_remove(ids)?;
         self.state()
             .revision
             .checked_add(ids.len() as u64)
             .context("Revision exhausted")?;
         let mut handles = Vec::with_capacity(ids.len());
-        for &id in ids {
+        for &id in &ids {
             // Collision first, while the brick still says where it stood.
             if let Some(handle) = self.detach(id) {
                 handles.push(handle);
@@ -1750,7 +1819,9 @@ impl Simulation {
     /// colliding fall through (`detach` wakes them). Returns whether the
     /// brick's collision changed.
     fn sync_flags(&mut self, id: BrickId) -> bool {
-        let brick = &self.authority.state().bricks[&id];
+        let Some(brick) = self.authority.state().bricks.get(&id) else {
+            return false;
+        };
         let Ok(definition) = self.definitions.get(brick) else {
             return false;
         };
@@ -1769,9 +1840,17 @@ impl Simulation {
     /// change to the brick's collision refreshes collisions: paint, names
     /// and event rows cost no chunk rebuild or physics pass.
     pub fn mutate(&mut self, id: BrickId, change: impl FnOnce(&mut Brick)) -> Result<()> {
+        let original = self
+            .state()
+            .bricks
+            .get(&id)
+            .context("Unknown brick")?
+            .clone();
         let before = self.state().bricks.get(&id).map(support_identity);
         self.authority.mutate(id, change)?;
+        self.damage_after_mutation(id, &original)?;
         if self.state().bricks.get(&id).map(support_identity) != before {
+            self.note_support_at(id);
             self.support_epoch = self.support_epoch.wrapping_add(1);
         }
         self.note_link(id);
@@ -1789,10 +1868,26 @@ impl Simulation {
     ) -> Result<()> {
         let mut changed = false;
         for &id in ids {
+            if !self.state().bricks.contains_key(&id) && self.damage.changed.contains(&id) {
+                continue;
+            }
+            let original = self
+                .state()
+                .bricks
+                .get(&id)
+                .context("Unknown brick")?
+                .clone();
             let before = self.state().bricks.get(&id).map(support_identity);
             self.authority.mutate(id, &mut change)?;
             if self.state().bricks.get(&id).map(support_identity) != before {
+                self.note_support_at(id);
                 self.support_epoch = self.support_epoch.wrapping_add(1);
+            }
+            self.damage_after_mutation(id, &original)?;
+            if self.state().bricks.get(&id).map(support_identity)
+                != Some(support_identity(&original))
+            {
+                self.note_support_at(id);
             }
             self.note_link(id);
             changed |= self.sync_flags(id);
@@ -1808,6 +1903,15 @@ impl Simulation {
     pub fn replace_many(&mut self, bricks: Vec<(BrickId, Brick)>) -> Result<()> {
         let mut changed = false;
         for (id, next) in bricks {
+            if !self.state().bricks.contains_key(&id) && self.damage.changed.contains(&id) {
+                continue;
+            }
+            let original = self
+                .state()
+                .bricks
+                .get(&id)
+                .context("Unknown brick")?
+                .clone();
             self.authority.mutate(id, |b| {
                 let (definition, position, turns, owner) =
                     (b.definition.clone(), b.position, b.quarter_turns, b.owner);
@@ -1815,6 +1919,12 @@ impl Simulation {
                 (b.definition, b.position, b.quarter_turns, b.owner) =
                     (definition, position, turns, owner);
             })?;
+            self.damage_after_mutation(id, &original)?;
+            if self.state().bricks.get(&id).map(support_identity)
+                != Some(support_identity(&original))
+            {
+                self.note_support_at(id);
+            }
             self.note_link(id);
             changed |= self.sync_flags(id);
         }

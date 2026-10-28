@@ -838,11 +838,13 @@ impl Session {
             .iter()
             .filter(|(_, at)| **at <= tick)
             .map(|(id, _)| *id)
+            .take(128)
             .collect();
         for brick in &due {
             self.events.respawns.remove(brick);
         }
         self.respawn_bricks(&due)?;
+        self.step_damage_support()?;
         let Some(mut world) = self.events.world.take() else {
             return Ok(());
         };
@@ -939,17 +941,41 @@ impl Session {
     /// Bring knocked-out bricks back, all at once: a rocket's worth of
     /// bricks costs one collision refresh, not one per brick. Each then
     /// fires `onRespawn` in order.
-    fn respawn_bricks(&mut self, bricks: &[BrickId]) -> Result<()> {
-        let bricks: Vec<BrickId> = bricks
+    pub(super) fn respawn_bricks(&mut self, bricks: &[BrickId]) -> Result<()> {
+        if bricks.is_empty() {
+            return Ok(());
+        }
+        let families: BTreeSet<_> = bricks
+            .iter()
+            .copied()
+            .filter(|id| self.simulation.damage_flags(*id).is_some())
+            .collect();
+        self.simulation.restore_damage_families(bricks)?;
+        let bricks: Vec<_> = bricks
             .iter()
             .copied()
             .filter(|id| self.simulation.state().bricks.contains_key(id))
             .collect();
-        self.simulation.mutate_many(&bricks, |b| {
-            b.visible = true;
-            b.raycast = true;
-            b.colliding = true;
+        self.simulation.damage_transaction(|sim| {
+            sim.mutate_many(
+                &bricks
+                    .iter()
+                    .copied()
+                    .filter(|id| !families.contains(id))
+                    .collect::<Vec<_>>(),
+                |b| {
+                    // Family restoration already restored its saved flags. Ordinary
+                    // fake kills retain the existing all-on respawn contract.
+                    if !b.visible && !b.raycast && !b.colliding {
+                        b.visible = true;
+                        b.raycast = true;
+                        b.colliding = true;
+                        b.damage_hidden = false;
+                    }
+                },
+            )
         })?;
+        self.sync_damage_lifecycle();
         for &brick in &bricks {
             self.dirty.insert(brick);
             self.fire_input(brick, "onRespawn", None);
@@ -1010,52 +1036,8 @@ impl Session {
         position: Vec3,
         impact: &bri_weapons::BrickImpact,
     ) -> Result<()> {
-        // v20 splits a rocket's brick damage in two: `onCollision` knocks
-        // out only the brick it hit, and `onExplode` searches the radius.
-        let mut hit: Vec<BrickId> = Vec::new();
-        if let Some(brick) = target {
-            if impact.direct {
-                hit.push(brick);
-            }
-        } else if impact.radius > 0.0 {
-            let reach = Vec3::splat(impact.radius);
-            hit.extend(
-                self.simulation
-                    .bricks_in_box(position - reach, position + reach)
-                    .into_iter()
-                    .filter(|id| {
-                        self.simulation.brick_box(*id).is_some_and(|(min, max)| {
-                            position.clamp(min, max).distance(position) <= impact.radius
-                        })
-                    }),
-            );
-        }
-        hit.sort_unstable();
-        hit.dedup();
-        let kills = self
-            .breakable_bricks(
-                source,
-                &hit,
-                impact.max_volume,
-                Some(impact.max_floating_volume),
-            )
-            .into_iter()
-            .map(|(brick, _)| {
-                // v20 throws direct hits with a 0.02 falloff radius.
-                let blast = super::debris::BrickBlast {
-                    origin: position,
-                    force: impact.force,
-                    radius: if target.is_none() && impact.radius > 0.0 {
-                        impact.radius
-                    } else {
-                        0.02
-                    },
-                    struck: target == Some(brick),
-                };
-                (brick, blast)
-            })
-            .collect::<Vec<_>>();
-        self.knock_out_bricks(source, &kills)
+        self.queue_blast(source, target, position, impact);
+        Ok(())
     }
     /// Of `bricks`, in order, those `source` may knock out with a hit that
     /// breaks bricks up to `max_volume`, each with its volume (studs x
@@ -1095,9 +1077,9 @@ impl Session {
             let mesh = &definition.mesh;
             let volume = (mesh.footprint_studs[0] * mesh.footprint_studs[1]) as f32
                 * mesh.height_plates as f32;
-            if self.events.respawns.contains_key(&brick)
+            if self.fake_dead(brick)
                 || !b.colliding
-                || b.base_plate
+                || self.protected_foundation(brick)
                 || definition.indestructible
                 || !self.can_explode(brick, b, volume, max_volume, max_floating_volume)
             {
@@ -1112,7 +1094,6 @@ impl Session {
                     .minigames
                     .game(g)
                     .is_ok_and(|g| g.settings.brick_damage),
-                None if self.lan_host => true,
                 Some(g) => {
                     let owner = self.brick_group_owner_for(b.owner, Some(g));
                     let target = mg::Target::Object {
@@ -1139,7 +1120,7 @@ impl Session {
     /// two limits it never does; in between it breaks only when it is not
     /// held between a live brick below and a live brick above (0x534e80:
     /// a brick on the floor or with nothing on top counts as floating).
-    fn can_explode(
+    pub(super) fn can_explode(
         &self,
         id: BrickId,
         brick: &bri_world::Brick,
@@ -1195,18 +1176,7 @@ impl Session {
         source: OwnerId,
         kills: &[(BrickId, super::debris::BrickBlast)],
     ) -> Result<()> {
-        if kills.is_empty() {
-            return Ok(());
-        }
-        let game = self.game_of(source);
-        let delay = self
-            .minigames
-            .respawn_delay(game, mg::RespawnObject::Brick)
-            .unwrap_or(3600);
-        self.fake_kill_bricks(kills, delay)?;
-        for (brick, _) in kills {
-            self.fire_input(*brick, "onBlownUp", Some(source));
-        }
+        self.queue_knockouts(source, kills);
         Ok(())
     }
     /// Bricks a player's touch (contact entry) reached this tick. Special
@@ -1513,7 +1483,7 @@ impl EventHost<'_> {
                 | BrickOp::SpawnExplosion { .. }
         );
         if spawns {
-            let fake_dead = self.session.events.respawns.contains_key(&brick);
+            let fake_dead = self.session.fake_dead(brick);
             let b = &self.session.simulation.state().bricks[&brick];
             if !ev::semantics::brick_spawn_allowed(
                 if fake_dead { u32::MAX } else { 0 },
@@ -1641,7 +1611,7 @@ impl EventHost<'_> {
             // `fxDTSBrick::playSound` is silent while the brick is fake-dead.
             BrickOp::PlaySound(sound) => {
                 if let Some(profile) = sound.clone()
-                    && !self.session.events.respawns.contains_key(&brick)
+                    && !self.session.fake_dead(brick)
                 {
                     self.session.cues.emit(
                         tick,

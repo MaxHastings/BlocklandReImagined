@@ -25,6 +25,7 @@ const RAYCAST: u8 = 1 << 3;
 const COLLIDING: u8 = 1 << 4;
 const VISIBLE: u8 = 1 << 5;
 const PRINTED: u8 = 1 << 6;
+const DAMAGE_HIDDEN: u8 = 1 << 7;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Packed {
@@ -123,6 +124,7 @@ impl Packed {
                 (brick.raycast, RAYCAST),
                 (brick.colliding, COLLIDING),
                 (brick.visible, VISIBLE),
+                (brick.damage_hidden, DAMAGE_HIDDEN),
                 (brick.print.is_some(), PRINTED),
             ] {
                 if set {
@@ -226,6 +228,7 @@ impl Packed {
                     brick.raycast = flags & RAYCAST != 0;
                     brick.colliding = flags & COLLIDING != 0;
                     brick.visible = flags & VISIBLE != 0;
+                    brick.damage_hidden = flags & DAMAGE_HIDDEN != 0;
                     brick.color_effect = look[2] & 0b111;
                     brick.shape_effect = look[2] >> 3;
                     if flags & PRINTED != 0 {
@@ -292,6 +295,7 @@ pub(crate) mod tests {
                     direction: 2,
                 }));
             }
+            b.damage_hidden = i % 3 == 0;
             // Ids out of order, as a nearest-first chunk sends them.
             out.push((1000 - i * 3, b));
         }

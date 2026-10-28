@@ -71,7 +71,13 @@ pub struct StackScan {
 }
 impl StackScan {
     pub fn new(sim: &Simulation, start: BrickId, reach: StackReach, limit: usize) -> Result<Self> {
-        ensure!(sim.state().bricks.contains_key(&start), "Unknown brick");
+        ensure!(
+            sim.state()
+                .bricks
+                .get(&start)
+                .is_some_and(|b| !b.damage_hidden),
+            "Unknown brick"
+        );
         let first = sim.index.bounds(start);
         Ok(Self {
             start,
@@ -118,6 +124,9 @@ impl StackScan {
                 continue;
             };
             for other in sim.connected_bricks(id)? {
+                if world.bricks[&other].damage_hidden {
+                    continue;
+                }
                 let there = sim.index.bounds(other);
                 let above = there.min[1] >= here.max()[1];
                 if id == self.start && above != self.reach.up {
@@ -286,6 +295,9 @@ impl BoxScan {
             *budget = budget.saturating_sub(work::SCAN * (entries.len() as u32 + 1));
             self.next += 1;
             for &(id, b) in entries {
+                if world.bricks[&id].damage_hidden {
+                    continue;
+                }
                 if b.intersection(area).is_none() || home(b) != key {
                     continue;
                 }

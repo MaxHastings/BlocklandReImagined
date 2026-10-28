@@ -21,6 +21,11 @@ pub enum BrickDeath {
     /// enough to crack comes apart into a few shards, as plastic does
     /// under a hard blow.
     Hit,
+    /// One detached stud-connected section. The group is its lowest brick
+    /// ID, not a physics handle. All poses and landing breakup are local.
+    Section { group: u64, started: u64 },
+    /// Hidden original of a stud partition; no duplicate debris is drawn.
+    Partition,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -212,6 +217,16 @@ pub struct Cue {
 impl Cue {
     pub fn validate(&self) -> Result<()> {
         let text = |s: &str| s.len() <= 128 && !s.chars().any(char::is_control);
+        if let CueKind::BrickKill {
+            death: BrickDeath::Section { group, started },
+            ..
+        } = &self.kind
+        {
+            ensure!(
+                *group > 0 && *started <= self.tick,
+                "Invalid section generation"
+            );
+        }
         match &self.kind {
             CueKind::WeaponEffect {
                 definition,

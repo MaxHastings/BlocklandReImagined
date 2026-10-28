@@ -192,6 +192,7 @@ pub struct Building {
     /// The replica's bricks as last synced: a structurally shared handle to
     /// the replica's own map, not a second copy of every brick.
     bricks: bri_world::Bricks,
+    world_tick: Option<u64>,
     index: Index,
     camera_index: Index,
     visibility_index: Index,
@@ -257,6 +258,7 @@ impl Building {
             surfaces: Default::default(),
             terrain: Vec::new(),
             bricks: Default::default(),
+            world_tick: None,
             index: Index::default(),
             camera_index: Index::default(),
             visibility_index: Index::default(),
@@ -372,6 +374,48 @@ impl Building {
             (Some(a), Some(b)) => Some(if b.0 < a.0 { b } else { a }),
             (a, b) => a.or(b),
         }
+    }
+
+    pub fn set_world_tick(&mut self, tick: u64) {
+        self.world_tick = Some(tick);
+    }
+    pub(crate) fn restored_after(&self, id: BrickId, tick: u64) -> bool {
+        self.world_tick.is_some_and(|at| at >= tick)
+            && self.bricks.get(&id).is_some_and(|b| !b.damage_hidden)
+    }
+    pub(crate) fn section_probe(&self, from: Vec3, to: Vec3) -> SectionProbe {
+        let reach = (from.y - to.y).max(0.001);
+        let nearest = self
+            .map_ray(from, Vec3::NEG_Y, reach)
+            .filter(|(_, n, _)| n.y > 0.25)
+            .map(|h| h.0);
+        SectionProbe {
+            from,
+            reach,
+            nearest,
+            query: grid::QueryCursor::new(query_bounds(from.min(to), from.max(to))),
+        }
+    }
+    pub(crate) fn step_section_probe(
+        &self,
+        p: &mut SectionProbe,
+        work: &mut u32,
+    ) -> Result<Option<Option<f32>>> {
+        while *work > 0 {
+            *work -= 1;
+            match p.query.step(&self.camera_index) {
+                None => return Ok(Some(p.nearest)),
+                Some(Some(id)) if !self.bricks[&id].damage_hidden => {
+                    let mut hit = None;
+                    self.trace_brick(id, p.from, Vec3::NEG_Y, p.reach, &mut hit)?;
+                    if let Some(hit) = hit.filter(|h| h.normal.y > 0.25) {
+                        p.nearest = Some(p.nearest.map_or(hit.distance, |d| d.min(hit.distance)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     /// Terrain or interiors between two points (`GuiShapeNameHud` sight test).
@@ -3629,4 +3673,12 @@ pub struct ImageKeys {
     /// Stays in hand when a paint or FX can is picked (the image's
     /// `paint_picker`, as the Fill Can): the pick goes to the host as ever.
     pub paint_picker: bool,
+}
+
+/// A local cosmetic contact query can pause without walking a huge tower in one frame.
+pub(crate) struct SectionProbe {
+    from: Vec3,
+    reach: f32,
+    nearest: Option<f32>,
+    query: grid::QueryCursor,
 }

@@ -69,7 +69,9 @@ impl Definition {
                     || q.surface == Surface::Ramp
                     || q.vertices
                         .iter()
-                        .any(|v| (glam::Vec3::from(v.position).abs() - half).max_element() > 1e-3)
+                        // convert::brick expands standard faces by 0.0012
+                        // for the native plastic rim; collision stays exact.
+                        .any(|v| (glam::Vec3::from(v.position).abs() - half).max_element() > 0.0013)
             })
     }
 }

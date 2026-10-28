@@ -12,9 +12,9 @@
 //! Cuts across the brick take the edge of a brick standing on or under it
 //! when one is near the middle, so a floor does not split under the middle
 //! of a wall.
-use bri_world::{Brick, BrickId};
+use bri_world::Brick;
 use glam::Vec3;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::definitions::Definitions;
 use crate::grid::Bounds;
@@ -27,15 +27,20 @@ const BRICK_PLATES: i32 = 3;
 /// The plain bricks of the catalog by their size on the grid as placed
 /// (studs along x, plates up, studs along z): the definition and the
 /// quarter turns that give that size.
-pub(crate) struct Pieces(BTreeMap<[i32; 3], (String, u8)>);
+pub(crate) struct Pieces(BTreeMap<[i32; 3], (String, u8)>, BTreeSet<i32>);
 impl Pieces {
     /// Every plain box (`Definition::is_plain_box`) a player could break,
     /// without a print; for each size the first by id, so every host picks
     /// the same.
-    pub(crate) fn new(definitions: &Definitions) -> Self {
+    pub(crate) fn in_namespace(definitions: &Definitions, namespace: Option<&str>) -> Self {
         use bri_content::brick::Surface;
         let mut sizes = BTreeMap::new();
         for (id, d) in &definitions.entries {
+            if namespace
+                .is_some_and(|namespace| id.split_once([':', '/']).map_or("", |p| p.0) != namespace)
+            {
+                continue;
+            }
             if !d.is_plain_box()
                 || d.indestructible
                 || d.mesh.quads.iter().any(|q| q.surface == Surface::Print)
@@ -48,7 +53,11 @@ impl Pieces {
                 sizes.entry(size).or_insert_with(|| (id.clone(), turns));
             }
         }
-        Self(sizes)
+        Self::from_sizes(sizes)
+    }
+    fn from_sizes(sizes: BTreeMap<[i32; 3], (String, u8)>) -> Self {
+        let heights = sizes.keys().map(|size| size[1]).collect();
+        Self(sizes, heights)
     }
     fn get(&self, size: [i32; 3]) -> Option<&(String, u8)> {
         self.0.get(&size)
@@ -102,6 +111,9 @@ impl Cell {
         brick.color = like.color;
         brick.color_effect = like.color_effect;
         brick.shape_effect = like.shape_effect;
+        brick.visible = like.visible;
+        brick.raycast = like.raycast;
+        brick.colliding = like.colliding;
         Some(brick)
     }
 }
@@ -133,6 +145,11 @@ pub(crate) fn split(
         size: whole.size,
     }];
     while let Some(cell) = todo.pop() {
+        // Count both surviving and flying material, not just survivors:
+        // a large blast must not allocate millions of cells before failing.
+        if out.standing.len() + out.taken.len() + todo.len() >= most {
+            return None;
+        }
         let reached = cell.reached(reach);
         let volume = if translucent {
             (cell.volume() as f32 * 0.25).floor()
@@ -150,7 +167,7 @@ pub(crate) fn split(
             }
             continue;
         }
-        let (a, b) = halves(cell, edges)?;
+        let (a, b) = halves(cell, edges, pieces)?;
         // Popped last-in first: the half nearer the blast splits first.
         todo.push(b);
         todo.push(a);
@@ -162,20 +179,22 @@ pub(crate) fn split(
 /// edge of a brick on or under it within a quarter of the side from the
 /// middle; a cut up a tall cell falls between brick heights where it can.
 /// None for a single grid cell.
-fn halves(cell: Cell, edges: [&[i32]; 2]) -> Option<(Cell, Cell)> {
-    let axis = (0..3)
-        .filter(|&a| cell.size[a] > 1)
-        .max_by(|&a, &b| {
-            (cell.size[a] as f32 * CELL[a])
-                .total_cmp(&(cell.size[b] as f32 * CELL[b]))
-                .then(b.cmp(&a))
-        })?;
+fn halves(cell: Cell, edges: [&[i32]; 2], pieces: &Pieces) -> Option<(Cell, Cell)> {
+    let axis = (0..3).filter(|&a| cell.size[a] > 1).max_by(|&a, &b| {
+        (cell.size[a] as f32 * CELL[a])
+            .total_cmp(&(cell.size[b] as f32 * CELL[b]))
+            .then(b.cmp(&a))
+    })?;
     let (low, length) = (cell.min[axis], cell.size[axis]);
     let middle = low + length / 2;
     let cut = match axis {
-        1 if length > BRICK_PLATES => {
+        1 if length > BRICK_PLATES && !pieces.1.contains(&(length / 2)) => {
             let course = low + (length / 2 / BRICK_PLATES).max(1) * BRICK_PLATES;
-            if course < low + length { course } else { middle }
+            if course < low + length {
+                course
+            } else {
+                middle
+            }
         }
         1 => middle,
         _ => edges[axis / 2]
@@ -209,48 +228,6 @@ pub(crate) fn edges(around: impl IntoIterator<Item = Bounds>) -> [Vec<i32>; 2] {
     out
 }
 
-/// Bricks the engine put in a split brick's place, by the brick they stand
-/// in for, and back.
-#[derive(Default)]
-pub(crate) struct Fragments {
-    by_whole: BTreeMap<BrickId, Vec<BrickId>>,
-    whole_of: BTreeMap<BrickId, BrickId>,
-}
-impl Fragments {
-    pub(crate) fn add(&mut self, whole: BrickId, pieces: &[BrickId]) {
-        self.by_whole.entry(whole).or_default().extend(pieces);
-        for &p in pieces {
-            self.whole_of.insert(p, whole);
-        }
-    }
-    /// The brick `piece` stands in for, if it is a piece.
-    pub(crate) fn whole_of(&self, piece: BrickId) -> Option<BrickId> {
-        self.whole_of.get(&piece).copied()
-    }
-    pub(crate) fn is_piece(&self, brick: BrickId) -> bool {
-        self.whole_of.contains_key(&brick)
-    }
-    /// Forget a piece that is gone.
-    pub(crate) fn forget(&mut self, piece: BrickId) {
-        if let Some(whole) = self.whole_of.remove(&piece)
-            && let Some(list) = self.by_whole.get_mut(&whole)
-        {
-            list.retain(|&p| p != piece);
-        }
-    }
-    /// The pieces standing in for `whole`, forgotten: it is coming back.
-    pub(crate) fn take(&mut self, whole: BrickId) -> Vec<BrickId> {
-        let pieces = self.by_whole.remove(&whole).unwrap_or_default();
-        for p in &pieces {
-            self.whole_of.remove(p);
-        }
-        pieces
-    }
-    pub(crate) fn pieces(&self) -> impl Iterator<Item = BrickId> + '_ {
-        self.whole_of.keys().copied()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,7 +242,7 @@ mod tests {
                 }
             }
         }
-        Pieces(sizes)
+        Pieces::from_sizes(sizes)
     }
     /// Cubes and plates only, as most catalogs have: 1x1 plates and bricks,
     /// and NxN cubes N plates... and 2^k x 2^k plates.
@@ -278,7 +255,7 @@ mod tests {
             n *= 2;
         }
         sizes.insert([1, 3, 1], ("1x1".into(), 0));
-        Pieces(sizes)
+        Pieces::from_sizes(sizes)
     }
     fn cube(n: i32) -> Bounds {
         Bounds {
@@ -358,7 +335,10 @@ mod tests {
             radius: 2.0,
             max_volume: 30.0,
         };
-        assert_eq!(split(cube(8), &missed, false, &pieces, [&[], &[]], 100), None);
+        assert_eq!(
+            split(cube(8), &missed, false, &pieces, [&[], &[]], 100),
+            None
+        );
         let weak = Reach {
             origin: Vec3::ZERO,
             radius: 2.0,
@@ -375,7 +355,10 @@ mod tests {
             max_volume: 3.0,
         };
         assert!(split(cube(16), &reach, false, &every(48), [&[], &[]], 1000).is_some());
-        assert_eq!(split(cube(16), &reach, false, &every(48), [&[], &[]], 4), None);
+        assert_eq!(
+            split(cube(16), &reach, false, &every(48), [&[], &[]], 4),
+            None
+        );
     }
 
     #[test]
@@ -406,12 +389,52 @@ mod tests {
         // No standing piece ends under the middle of the wall.
         for cell in split.standing.iter().chain(&split.taken) {
             let (low, high) = (cell.min[0], cell.min[0] + cell.size[0]);
-            assert!(!(low > 10 && low < 11) && !(high > 10 && high < 11));
+            assert!(!(low > 10 && low < 11 || high > 10 && high < 11));
         }
         let cut_at_wall = split
             .standing
             .iter()
             .any(|c| c.min[0] == 10 || c.min[0] + c.size[0] == 10 || c.min[0] == 11);
         assert!(cut_at_wall, "{:?}", split.standing);
+    }
+}
+
+#[cfg(test)]
+mod native_partition_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires generated v20 catalog"]
+    fn a_stock_rocket_can_bite_the_actual_64_cube_within_the_piece_budget() -> anyhow::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let definitions = Definitions::load(
+            &bri_package::testing::pack_dir(&root, "brick_catalog"),
+            &bri_package::testing::pack_dir(&root, "geometry"),
+        )?;
+        let d = &definitions.entries["v20/brick/brick64xcubedata"];
+        let half = d.mesh.half_size();
+        let b = Brick::new(
+            bri_world::ContentRef::Resolved("v20/brick/brick64xcubedata".into()),
+            [0., half.y, 0.],
+            0,
+        );
+        let bounds = Bounds::new(&b, &d.mesh)?;
+        let reach = Reach {
+            origin: Vec3::new(half.x, half.y, 0.),
+            radius: 3.,
+            max_volume: 30.,
+        };
+        let pieces = Pieces::in_namespace(&definitions, Some("v20"));
+        let plan = split(bounds, &reach, false, &pieces, [&[], &[]], 2048)
+            .expect("stock rocket must make a hole, not silently leave the 64 cube immune");
+        assert!(!plan.standing.is_empty() && !plan.taken.is_empty());
+        assert_eq!(
+            plan.standing
+                .iter()
+                .chain(&plan.taken)
+                .map(Cell::volume)
+                .sum::<i64>(),
+            bounds.size.into_iter().map(i64::from).product::<i64>()
+        );
+        Ok(())
     }
 }

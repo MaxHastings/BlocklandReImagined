@@ -257,6 +257,10 @@ pub struct Brick {
     pub raycast: bool,
     pub colliding: bool,
     pub visible: bool,
+    /// Transient authoritative absence after destruction. Separate from
+    /// authored visibility/collision flags; saved_world clears it on originals.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub damage_hidden: bool,
     pub name: Option<String>,
     // Rare settings are boxed: a brick without them pays a pointer, not the
     // whole setting (a million-brick world is mostly plain bricks).
@@ -295,6 +299,7 @@ impl Brick {
             raycast: true,
             colliding: true,
             visible: true,
+            damage_hidden: false,
             name: None,
             light: None,
             emitter: None,

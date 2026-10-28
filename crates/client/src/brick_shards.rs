@@ -14,6 +14,7 @@
 //! clipped to each shard and the cut faces are capped in its plastic.
 //! Everything here is in the brick's own frame (no quarter turns) and is
 //! cosmetic: it decides how debris looks, never what is standing.
+use bri_console::Clamp;
 use bri_content::brick::{Brick as BrickMesh, PLATE, STUD};
 use bri_render::scene::{MeshBatch, SceneData, SceneVertex};
 use glam::Vec3;
@@ -52,7 +53,7 @@ pub fn cracks(mesh: &BrickMesh, impact: Vec3, mut random: impl FnMut() -> f32) -
         }
         let along = ((impact[axis] + half[axis]) / unit[axis])
             .round()
-            .clamp(1.0, count - 1.0);
+            .clamped(1.0, count - 1.0);
         let line = -half[axis] + along * unit[axis];
         // Leaning across each other axis moves the crack at most a quarter
         // unit at that axis' ends: half a unit off its line in all.
@@ -193,13 +194,9 @@ fn wind(mut polygon: Vec<Vec3>, normal: Vec3) -> Vec<Vec3> {
 
 /// Sutherland-Hodgman: the part of `polygon` where `inside` is at least 0,
 /// new corners made by `lerp`.
-fn clip<V: Clone>(
-    polygon: &[V],
-    inside: impl Fn(Vec3) -> f32,
-    lerp: impl Fn(&V, &V, f32) -> V,
-) -> Vec<V>
+fn clip<V>(polygon: &[V], inside: impl Fn(Vec3) -> f32, lerp: impl Fn(&V, &V, f32) -> V) -> Vec<V>
 where
-    V: Positioned,
+    V: Positioned + Clone,
 {
     let mut out = Vec::with_capacity(polygon.len() + 1);
     for (i, a) in polygon.iter().enumerate() {
@@ -495,7 +492,7 @@ pub(crate) mod tests {
                     .iter()
                     .max_by(|a, b| a.normal.z.abs().total_cmp(&b.normal.z.abs()))
                     .expect("cracked across its length");
-                let row = ((impact.z + half.z) / STUD).round().clamp(1.0, 7.0) * STUD - half.z;
+                let row = ((impact.z + half.z) / STUD).round().clamped(1.0, 7.0) * STUD - half.z;
                 for corner in [-1.0, 1.0]
                     .into_iter()
                     .flat_map(|x| [-1.0, 1.0].map(move |y| Vec3::new(x * half.x, y * half.y, 0.0)))
