@@ -1,7 +1,9 @@
-# Destruction performance capture — preview.7
+# Destruction performance check — preview.8
 
-This diagnostic copy preserves preview.6 gameplay and adds timing detail to
-the existing session log. The performance cause is still under investigation.
+This copy uses two constraint-solver iterations for client-only rubble instead
+of four. Motion still updates at120Hz, with the same collisions, visible detail
+and Physics Quality body limit. The goal is lower cost during dense destruction;
+visual piles may settle a little differently. Logs retain the detailed timings.
 
 1. Launch this copy and load the same large CTF/TDM build and match settings.
 2. Keep the same Physics Quality and bots/weapons. Play normally until the
@@ -11,6 +13,10 @@ the existing session log. The performance cause is still under investigation.
    preview folder's `logs/`; existing preferences and match recordings use the
    normal application data folder. No profiling toggle or manual log upload is
    needed on this PC.
+
+Also watch the mast/large landing assemblies: they should stay recognizable,
+collide with the deck/floor and respond when shot. Report visible sinking,
+violent jitter or lost material alongside any remaining performance dip.
 
 Slow-frame lines now separate incoming brick changes, hit queries, model
 readiness, surroundings, assembly work, collision preparation and simulation.

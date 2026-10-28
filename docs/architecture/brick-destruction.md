@@ -59,6 +59,12 @@ At the partition/brick budget, retain the oversized original unchanged; a
 capacity limit must never turn a small rocket into removal of an entire wall.
 Physics Quality controls independent motion. Ordinary blast debris retains its existing cosmetic budget; section admission reserves visible material before hiding it.
 
+The cosmetic debris world uses two constraint-solver iterations per120Hz step.
+This reduces dense-pile/catch-up cost by trading precision in visual stacks;
+CCD, collision geometry, motion frequency and material budgets are retained.
+Authoritative physics has its own parameters. See the
+[measured correction](../progress/2026-10-28-cosmetic-debris-solver-cost.md).
+
 Initial implementation supports catalog-representable plain boxes. Curved,
 sloped, special and assigned-print bricks retain their existing whole-brick
 size rules; no guessed collision box or print mapping replaces their shape.

@@ -517,6 +517,7 @@ impl App {
             }
             if let (Some(palette), Some(gpu_palette)) = (&self.scene.palette, &self.gpu.gpu_palette)
             {
+                let _span = crate::frame_trace::span("debris uploads");
                 self.fx.debris_models.upload(
                     &self.fx.brick_debris,
                     renderer,
@@ -534,6 +535,7 @@ impl App {
                 &self.scene.palette,
                 &self.gpu.gpu_palette,
             ) {
+                let _span = crate::frame_trace::span("brick fade uploads");
                 self.fx.fade_models.upload(
                     &self.fx.brick_fades,
                     &self.scene.chunks_left_out,

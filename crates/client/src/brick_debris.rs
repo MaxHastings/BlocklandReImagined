@@ -87,6 +87,11 @@ const PLASTIC_BOUNCE: f32 = 0.5;
 const PLASTIC_FRICTION: f32 = 0.5;
 /// Mass per cubic unit of debris: a 2x4 brick weighs 6.
 const DENSITY: f32 = 5.0;
+/// Debris is a visual response, not a gameplay stack or joint mechanism.
+/// Two constraint iterations retain contact/CCD at 120 Hz while reducing the
+/// cost of dense piles and four-step catch-up frames. Server physics keeps its
+/// own defaults; Physics Quality still controls body count, not visibility.
+const COSMETIC_SOLVER_ITERATIONS: usize = 2;
 /// Distinct brick looks kept on the GPU.
 const MAX_LOOKS: usize = 64;
 /// Most instances one look draws: bodies and ghosts within the limit, plus
@@ -284,8 +289,10 @@ impl Default for BrickDebris {
 
 impl BrickDebris {
     pub fn new() -> Self {
+        let mut world = crate::local_physics::new_world();
+        world.integration_parameters.num_solver_iterations = COSMETIC_SOLVER_ITERATIONS;
         Self {
-            world: crate::local_physics::new_world(),
+            world,
             bodies: BTreeMap::new(),
             sections: BTreeMap::new(),
             section_barriers: BTreeMap::new(),
@@ -2597,16 +2604,20 @@ pub(crate) mod tests {
     #[test]
     fn stress_continuous_world_edits_with_best_quality_rubble() {
         use std::time::{Duration, Instant};
-        for editing in [false, true] {
+        for (iterations, dt) in [(4, 1. / 60.), (2, 1. / 60.), (4, 1. / 30.), (2, 1. / 30.)] {
+            let dt: f32 = dt;
+            let frames = (6. / dt).round() as usize;
             let (mut building, mut world) = building(&[(100000, [4., 0.3, 4.])]);
             let mut debris = BrickDebris::new();
+            debris.world.integration_parameters.num_solver_iterations = iterations;
             debris.set_limit(2048);
             debris.cues(&blast(2048, 1, 8.), &building).unwrap();
             let mut totals = BTreeMap::<&str, Duration>::new();
+            let mut simulation_frames = Vec::with_capacity(frames);
             let mut worst = Duration::ZERO;
             let mut awake = 0;
-            for frame in 0..360 {
-                if editing && frame % 6 == 0 {
+            for frame in 0..frames {
+                if frame % (0.1 / dt).round() as usize == 0 {
                     world.bricks.get_mut(&100000).unwrap().color ^= 1;
                     building
                         .sync_world_changes(
@@ -2619,14 +2630,17 @@ pub(crate) mod tests {
                         .unwrap();
                 }
                 let start = Instant::now();
-                debris.advance(1. / 60., &building).unwrap();
+                debris.advance(dt, &building).unwrap();
                 let elapsed = start.elapsed();
                 worst = worst.max(elapsed);
                 let trace = crate::frame_trace::finish(elapsed, false);
                 for span in trace.spans {
+                    if span.name == "debris simulation" {
+                        simulation_frames.push(span.time);
+                    }
                     *totals.entry(span.name).or_default() += span.time;
                 }
-                if frame >= 240 {
+                if frame >= frames * 2 / 3 {
                     awake += debris.work().awake;
                 }
                 assert_eq!(
@@ -2636,15 +2650,28 @@ pub(crate) mod tests {
                 );
             }
             eprintln!(
-                "continuous rubble: edits={editing}, worst={:.3}ms, average late awake={:.1}",
+                "continuous rubble: iterations={iterations}, dt={dt:.4}, worst={:.3}ms, average late awake={:.1}",
                 worst.as_secs_f64() * 1000.,
-                awake as f64 / 120.
+                awake as f64 / (frames - frames * 2 / 3) as f64
             );
             for (phase, elapsed) in totals {
                 eprintln!(
                     "{phase}: {:.3}ms/frame",
-                    elapsed.as_secs_f64() * 1000. / 360.
+                    elapsed.as_secs_f64() * 1000. / frames as f64
                 );
+            }
+            simulation_frames.sort_unstable();
+            eprintln!(
+                "simulation percentiles: p50={:.3}ms p95={:.3}ms p99={:.3}ms",
+                simulation_frames[simulation_frames.len() / 2].as_secs_f64() * 1000.,
+                simulation_frames[simulation_frames.len() * 95 / 100].as_secs_f64() * 1000.,
+                simulation_frames[simulation_frames.len() * 99 / 100].as_secs_f64() * 1000.,
+            );
+            for at in debris.positions() {
+                assert!(at.is_finite(), "unstable debris pose");
+                if at.x.abs() < 49. && at.z.abs() < 49. {
+                    assert!(at.y >= -0.05, "debris fell through the floor: {at}");
+                }
             }
         }
     }
