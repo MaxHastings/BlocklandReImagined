@@ -339,20 +339,7 @@ impl App {
         } else {
             0.0
         };
-        // A rule's `camera_shake` jitters the view alone, not the aim.
-        let jolt = controls.camera_jolt();
-        let eye = if jolt.offset == [0.0, 0.0] {
-            eye
-        } else {
-            let right = Vec3::new(yaw.cos(), 0.0, yaw.sin());
-            eye + right * jolt.offset[0] + Vec3::Y * jolt.offset[1]
-        };
-        Ok((
-            eye,
-            yaw + jolt.yaw,
-            (pitch + jolt.pitch).clamped(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
-            roll - tilt + jolt.roll,
-        ))
+        Ok(finish_camera(controls, eye, (yaw, pitch, roll), tilt))
     }
     /// The view camera where the body is, and the carry of any opening the
     /// chase camera's boom went back through.
