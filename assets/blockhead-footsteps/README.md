@@ -18,7 +18,8 @@ retain their own configuration. No separate Add-On is required.
 
 `land_01.wav` is Maxwell's selected landing B: a dedicated landing impact plus
 a quieter filtered medium-impact body, with a softened attack. His subsequent
-+3 dB and +1.5 dB adjustments are baked into the clip. `make_landing.py --source
+level adjustments are baked into the clip, finalized at +6 dB over B's audition.
+`make_landing.py --source
 <supplied-foley-directory>` rebuilds it with NumPy, SciPy and SoundFile;
 `landing-recipe.json` records processing and hashes. Source recordings and
 Python libraries are not needed to build or play the game. Maxwell requested

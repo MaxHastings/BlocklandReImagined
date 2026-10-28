@@ -1,6 +1,6 @@
 {
   "selection": "B-round-with-body",
-  "selected_by": "Maxwell chose B, requested +3 dB then +1.5 dB, and requested merge.",
+  "selected_by": "Maxwell chose B, requested a final clean +6 dB over its audition, and requested merge.",
   "distribution": "Inclusion authorized by Maxwell request to merge this selected sound; no broader source license or CC0 assertion.",
   "sources_sha256": {
     "impact_land_light2.wav": "7ebab0cda1dc9d8928f825dc89bf39f2d1066a860b3cf2e1b3652a9c8b4bdbb5",
@@ -27,20 +27,22 @@
     "audition_first150ms_rms_dbfs": -34,
     "accepted_gain_edits_db": [
       3.0,
-      1.5
+      1.5,
+      1.0,
+      0.5
     ],
-    "total_gain_db_over_B": 4.5,
+    "total_gain_db_over_B": 6.0,
     "runtime_profile_volume": 1.0,
     "runtime_pitch": 1.0
   },
   "output": {
     "file": "land_01.wav",
-    "sha256": "9521f48b190f53d8b698d5faa1b242888ef601051decbc1ee890254d39650f62",
+    "sha256": "bf793da0c4c8c779c5f8edc1ff1537ecf0aa694bd630374491a198063f14bbc6",
     "sample_rate": 48000,
     "channels": 1,
     "subtype": "PCM_16",
     "seconds": 0.28,
-    "peak_dbfs": -9.829964550726599
+    "peak_dbfs": -8.329897490424974
   },
   "limits": "One fixed landing level/variation. No surface or hard-fall scaling; new ReImagined feedback."
 }

@@ -14,10 +14,10 @@ automation is needed. This is new ReImagined feedback, not recovered v20 audio.
 - `assets/blockhead-footsteps/land_01.wav` is Maxwell's selected **B**: dedicated
   `impact_land_light2.wav` with a quieter filtered `impact_medium2.wav` body,
   six-ms softened attack and compact decay. He rejected the first F-derived
-  pilot as another footstep/click, selected B, then requested +3 dB and +1.5 dB
-  after playing. The final level is +4.5 dB over B's audition, baked into PCM
+  pilot as another footstep/click, selected B, and finalized the level at a
+  clean +6 dB over B's audition after playing. This gain is baked into PCM
   because native profile volume supports only 0..1. No footstep layer remains.
-  It is mono PCM16 at 48 kHz, 0.28 s, peak -9.83 dBFS, with a silent tail.
+  It is mono PCM16 at 48 kHz, 0.28 s, peak -8.33 dBFS, with a silent tail.
   `make_landing.py --source <supplied-foley-directory>` reproduces the exact
   selected/adjusted bytes; `landing-recipe.json` retains processing/source hashes.
   Maxwell explicitly requested merging this sound. No broader source license
@@ -50,16 +50,25 @@ automation is needed. This is new ReImagined feedback, not recovered v20 audio.
   release checks. Optimized client/server build, full candidate gate and
   installed startup validation follow. Logs are under this worktree's
   `artifacts/landing-playtest`; the installation receipt records exact binaries.
-- The final +1.5 dB edit is installed into the same game folder and actual
-  startup validation passes. Measured increment +1.49998 dB, no clipping.
+- The final +0.5 dB edit (from +5.5 to +6 dB) is installed into the same game
+  folder and actual startup validation passes. Measured increment +0.50000 dB,
+  no clipping.
   Source and installed WAV are byte-identical, SHA-256
-  `9521f48b190f53d8b698d5faa1b242888ef601051decbc1ee890254d39650f62`.
+  `bf793da0c4c8c779c5f8edc1ff1537ecf0aa694bd630374491a198063f14bbc6`.
   Existing executables, walking WAVs/gains and package selection are unchanged.
   `LANDING-B-GAIN-RECEIPT.json` and immutable local revision backups record it.
   Final asset/importer quick checks pass; focused passes in 39 s (all-target
   importer Clippy, importer suite, and real-motor client landing integration).
   The exact source WAV is independently reproduced from the retained recipe.
-  Final candidate gate and remote PR checks precede merge.
+  Full gate passed integration revision `a4f541744`: build/content/Clippy,
+  557 test binaries with no retries, and release bot performance (Collage
+  5.36 ms / 7.00 ms budget; Afghan 3.00 ms / 5.50 ms budget). All PR checks on
+  that revision passed (run 40607778896). Subsequent edits only finalize the
+  requested PCM gain and matching recipe; runtime code/timing are identical.
+  The gain-only edit is validated through the asset/importer and installed
+  startup paths, retaining the completed full engine gate rather than repeating
+  its unaffected simulation/render/stress cases. Windows PR CI must pass on
+  the final head before merge.
 
 Install into `E:\Downloads\BlocklandReImagined-v0.3.7-windows`, with immutable
 backups and rollback on startup-check failure. Preserve all existing catalog

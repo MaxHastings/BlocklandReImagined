@@ -53,13 +53,13 @@ def main():
     body = shape(args.source, 'impact_medium2.wav', 90, 650, 0.055)
     x += body * rms(x) / rms(body) * 10 ** (-8 / 20)
     x *= 10 ** (-34 / 20) / rms(x)
-    # Preserve the audition's PCM encoding, then the two accepted gain edits.
+    # Preserve the audition's PCM encoding, then the accepted gain edits.
     audition = io.BytesIO()
     sf.write(audition, x, RATE, format='WAV', subtype='PCM_16')
     assert hashlib.sha256(audition.getvalue()).hexdigest() == '5469b0bf0e4e5b91f1452682ec878c29d0e53ae3f36b71dc8eec1b9128faf096'
     with wave.open(io.BytesIO(audition.getvalue()), 'rb') as f:
         samples = np.frombuffer(f.readframes(f.getnframes()), dtype='<i2').astype(np.float64)
-    for db in [3.0, 1.5]:
+    for db in [3.0, 1.5, 1.0, 0.5]:
         samples = np.rint(samples * 10 ** (db / 20))
     assert np.isfinite(samples).all() and max(abs(samples)) < 32767
     out = ROOT / 'land_01.wav'
@@ -67,10 +67,10 @@ def main():
         f.setparams((1, 2, RATE, 0, 'NONE', 'not compressed'))
         f.writeframes(samples.astype('<i2').tobytes())
     digest = hashlib.sha256(out.read_bytes()).hexdigest()
-    assert digest == '9521f48b190f53d8b698d5faa1b242888ef601051decbc1ee890254d39650f62'
+    assert digest == 'bf793da0c4c8c779c5f8edc1ff1537ecf0aa694bd630374491a198063f14bbc6'
     report = {
         'selection': 'B-round-with-body',
-        'selected_by': 'Maxwell chose B, requested +3 dB then +1.5 dB, and requested merge.',
+        'selected_by': 'Maxwell chose B, requested a final clean +6 dB over its audition, and requested merge.',
         'distribution': 'Inclusion authorized by Maxwell request to merge this selected sound; no broader source license or CC0 assertion.',
         'sources_sha256': SOURCES,
         'processing': {'sample_rate': RATE, 'onset_threshold_fraction_of_peak': 0.03,
@@ -79,7 +79,7 @@ def main():
                        'body_decay_seconds': 0.055, 'body_relative_rms_db': -8,
                        'attack_seconds': 0.006, 'tail_fade_seconds': 0.04,
                        'last_silent_seconds': 0.015, 'audition_first150ms_rms_dbfs': -34,
-                       'accepted_gain_edits_db': [3.0, 1.5], 'total_gain_db_over_B': 4.5,
+                       'accepted_gain_edits_db': [3.0, 1.5, 1.0, 0.5], 'total_gain_db_over_B': 6.0,
                        'runtime_profile_volume': 1.0, 'runtime_pitch': 1.0},
         'output': {'file': out.name, 'sha256': digest, 'sample_rate': RATE,
                    'channels': 1, 'subtype': 'PCM_16', 'seconds': LENGTH / RATE,
