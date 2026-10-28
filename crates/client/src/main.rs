@@ -116,8 +116,11 @@ fn game() -> Result<()> {
             None
         }
     };
-    // Host and Join hash every package; unchanged files keep their hash.
-    bri_package::environment::remember_file_hashes_in(state.join("package-hashes.json"));
+    // Keep each installed content root's verified hashes independently. Switching
+    // between a private preview and a release must not evict the other's cache.
+    if let Ok(cache) = bri_package::environment::content_hash_cache_file(&content, &state) {
+        bri_package::environment::remember_file_hashes_in(cache);
+    }
     if mode == "--check" {
         // Validation leaves the content as it is (the push gate checks the
         // shared main checkout's); a fresh checkout's own check can opt in.
