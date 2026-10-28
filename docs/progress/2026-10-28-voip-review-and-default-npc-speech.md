@@ -68,3 +68,20 @@ until their actual results are available. This entry does not establish the
 whole alpha contract or multiplayer acceptance. No echo cancellation/noise
 suppression was added: use headphones for voice activity, and test hardware,
 Internet quality, device hot-plug and ordinary gameplay in Maxwell's playtest.
+
+Integration follow-up: the nine-crate quick check passed all 1,789 enabled unit
+tests; the selected session/UI integration targets passed 144 tests (8 existing
+render/content cases remained ignored), in addition to the 39 network/NPC/bundle
+tests above. Final scoped clippy and the 15-frame native UI probe passed. A
+fresh private preview passed packaged `--check` with zero Add-On health problems
+and was handed to Maxwell at his request, using `1b23a9ad0`; no local GPU suite
+or performance campaign runs while he playtests. The uploaded draft bundle was
+downloaded again and matched SHA-256
+`ad7fe3163e7f8f185f23bb5d676b4495cf87f56b3287df01fe0002a5bc58c17b`.
+Windows CI build/import checks and workspace lint passed; Linux shard 3 exposed
+two grappling-tool bundle fixtures still writing default-list schema 2. A search
+found the same stale schema in the hosted-bundle fixture. All three bundle
+fixtures now use `bri_package::defaults::LIST_SCHEMA`, so schema changes do not
+silently leave synthetic checkouts behind. This was a deterministic fixture
+failure, including CI's automatic isolated retries, not a flaky pass. Corrected
+target results and final platform CI are retained in the final handoff receipt.

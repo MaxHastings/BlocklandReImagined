@@ -122,7 +122,10 @@ fn install_bundle(root: &Path, originals: &[(String, String)]) {
     std::fs::create_dir_all(checkout.join("packages")).unwrap();
     std::fs::write(
         checkout.join("packages/default-addons.json"),
-        serde_json::to_vec_pretty(&json!({ "schema_version": 2, "addons": addons })).unwrap(),
+        serde_json::to_vec_pretty(
+            &json!({ "schema_version": bri_package::defaults::LIST_SCHEMA, "addons": addons }),
+        )
+        .unwrap(),
     )
     .unwrap();
     copy_port_entries(&repo(), &checkout);

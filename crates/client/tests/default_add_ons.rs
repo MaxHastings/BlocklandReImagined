@@ -83,13 +83,17 @@ impl Checkout {
     fn content(&self) -> PathBuf {
         self.root.join("content")
     }
-    /// The bundled originals where bootstrap installs them (`addons/<id>`),
-    /// each the stand-in plane under its id.
+    /// External defaults where bootstrap installs them (`addons/<id>`), each
+    /// the stand-in plane under its id. Generated speech's real media/policy
+    /// have separate recipe, runtime and packaged-startup coverage.
     fn install_originals(&self) -> Result<()> {
         let stand_in = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join(STAND_IN);
-        for addon in defaults::list().iter().filter(|a| a.original.is_some()) {
+        for addon in defaults::list()
+            .iter()
+            .filter(|a| a.original.is_some() || a.generated.is_some())
+        {
             stand_in_as(&stand_in, &self.content().join(addon.dir()), &addon.id)?;
         }
         Ok(())
