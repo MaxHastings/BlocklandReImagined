@@ -13,6 +13,8 @@ pub enum AdminRole {
 pub enum AdminFeature {
     Login,
     Kick,
+    /// Mute a player's voice for everyone (the host relays none of it).
+    VoiceMute,
     Ban,
     Unban,
     Spy,
@@ -358,6 +360,10 @@ pub struct AdminSnapshot {
     pub legacy_lan: bool,
     /// Host advertises only operations whose backend is actually installed.
     pub supported: BTreeSet<AdminFeature>,
+    /// The connections whose voice an admin has muted (empty when the
+    /// host does not run voice chat).
+    #[serde(default)]
+    pub voice_muted: BTreeSet<u64>,
     pub players: Vec<AdminPlayer>,
     pub options: Option<AdminOptions>,
 }
@@ -383,6 +389,14 @@ pub enum AdminAction {
         password: AdminSecret,
     },
     Kick {
+        target: u64,
+    },
+    /// Mute a player's voice for everyone (the host relays none of it).
+    MutePlayer {
+        target: u64,
+    },
+    /// Take that voice mute off again.
+    UnmutePlayer {
         target: u64,
     },
     Ban {
@@ -521,6 +535,9 @@ impl AdminModel {
             AdminAction::Refresh => return true,
             AdminAction::Login { .. } => (AdminFeature::Login, None),
             AdminAction::Kick { target } => (AdminFeature::Kick, Some(*target)),
+            AdminAction::MutePlayer { target } | AdminAction::UnmutePlayer { target } => {
+                (AdminFeature::VoiceMute, Some(*target))
+            }
             AdminAction::Ban { target, .. } => (AdminFeature::Ban, Some(*target)),
             AdminAction::Spy { target } => (AdminFeature::Spy, Some(*target)),
             AdminAction::RequestBans | AdminAction::Unban { .. } => (AdminFeature::Unban, None),
@@ -554,8 +571,14 @@ impl AdminModel {
             let Some(p) = self.player(id) else {
                 return false;
             };
-            if matches!(a, AdminAction::Kick { .. })
-                && !p.bot
+            // The host protects the owner, its local player and Super
+            // Admins from kicks and voice mutes alike.
+            if matches!(
+                a,
+                AdminAction::Kick { .. }
+                    | AdminAction::MutePlayer { .. }
+                    | AdminAction::UnmutePlayer { .. }
+            ) && !p.bot
                 && (p.owner || p.local || p.role == AdminRole::SuperAdmin)
             {
                 return false;

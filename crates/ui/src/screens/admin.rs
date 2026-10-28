@@ -296,6 +296,7 @@ impl AdminScreen {
                 ("NativeHostOptions", "Host Options"),
                 ("NativeAdminCredentials", "Passwords"),
                 ("NativeAddOnSettings", "Add-On Settings"),
+                ("NativeMutePlayer", "Mute Voice"),
             ];
             let taken: Vec<Rect> = view.nodes[parent]
                 .children
@@ -665,6 +666,24 @@ impl AdminScreen {
                 let environment = m.available(AdminFeature::Environment);
                 self.view.set_visible(n, environment);
                 self.view.set_active(n, !busy && environment);
+            }
+            // The host runs voice chat (its Add-On on): the button shows and
+            // toggles by whether the selected player is muted.
+            if let Some(n) = self.view.id("NativeMutePlayer") {
+                let voice = m.available(AdminFeature::VoiceMute);
+                self.view.set_visible(n, voice);
+                if voice && t != 0 {
+                    let muted = m
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.voice_muted.contains(&t));
+                    self.view
+                        .set_text(n, if muted { "Unmute Voice" } else { "Mute Voice" });
+                }
+                self.view.set_active(
+                    n,
+                    !busy && voice && t != 0 && m.allowed(&AdminAction::MutePlayer { target: t }),
+                );
             }
             if let Some(n) = self.view.id("NativeHostOptions") {
                 self.view
@@ -1217,6 +1236,22 @@ impl Screen for AdminScreen {
                         format!("Kick {} ({})?", p.name, p.identity_label),
                         AdminAction::Kick { target },
                     );
+                }
+            }
+            // Muting is reversible and costs no bricks, so it goes at once,
+            // as Spy; the button's label says which way it will go.
+            "nativemuteplayer" => {
+                if core.admin.player(target).is_some() {
+                    let muted = core
+                        .admin
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.voice_muted.contains(&target));
+                    core.admin_request(if muted {
+                        AdminAction::UnmutePlayer { target }
+                    } else {
+                        AdminAction::MutePlayer { target }
+                    });
                 }
             }
             "admingui_banplayer();" => core.push(ScreenId::AdminBan),

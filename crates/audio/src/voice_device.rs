@@ -149,6 +149,11 @@ impl VoiceChat {
     pub fn speaking(&self) -> Vec<u64> {
         lock(&self.mixer).speaking(self.opened.output_rate.max(1))
     }
+    /// How loudly each speaker is being heard right now, 0..=1 (a name tag's
+    /// blue shade follows it).
+    pub fn speaker_levels(&self) -> std::collections::BTreeMap<u64, f32> {
+        lock(&self.mixer).levels()
+    }
     /// Move the frames the microphone finished into `out`, oldest first.
     pub fn take_frames(&self, out: &mut Vec<Vec<u8>>) {
         out.extend(self.frames.try_iter());

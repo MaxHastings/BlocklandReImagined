@@ -36,6 +36,20 @@ impl Players {
                 s.view.set_visible(n, false);
             }
         }
+        // The voice chat's mute button: top of the right-hand action column,
+        // above the trust buttons. It shows only when the host runs voice
+        // chat (its Add-On on), which refresh() keeps in step.
+        if let Some(parent) = s.view.id("NPL_Window") {
+            let mut b = button(
+                "BlockButtonProfile",
+                Rect::new(405, 33, 76, 21),
+                "base/client/ui/button1",
+                "Mute",
+                "NativeVoiceMute",
+            );
+            b.name = Some("NativeVoiceMute".into());
+            s.view.add(parent, b);
+        }
         s.refresh(core);
         s
     }
@@ -196,6 +210,20 @@ impl Players {
                 self.view.set_visible(n, !active);
             }
         }
+        // The voice chat's mute button: only when the host runs voice chat,
+        // and it toggles by whether the selected player is muted locally.
+        if let Some(n) = self.view.id("NativeVoiceMute") {
+            let voice = core.voice_on_server;
+            self.view.set_visible(n, voice);
+            if voice && selected_id.is_some() {
+                let muted = selected_id.is_some_and(|id| core.voice_muted.contains(&id));
+                self.view.set_text(n, if muted { "Unmute" } else { "Mute" });
+            }
+            // Muting yourself would only silence you for no one: off.
+            let self_ = row.is_some_and(|p| p.trust == "You");
+            self.view
+                .set_active(n, voice && selected_id.is_some() && !self_);
+        }
     }
     fn selected(&self) -> Option<u64> {
         self.view
@@ -302,6 +330,16 @@ impl Screen for Players {
             "newplayerlistgui.clickunignore();" => {
                 if let Some(target) = self.selected() {
                     core.request(UiAction::UnIgnore { target });
+                }
+            }
+            // Local voice mute: this player's ears only, never the host's.
+            "nativemuteplayer" => {
+                if let Some(target) = self.selected() {
+                    if core.voice_muted.contains(&target) {
+                        core.request(UiAction::VoiceUnmute { target });
+                    } else {
+                        core.request(UiAction::VoiceMute { target });
+                    }
                 }
             }
             "newplayerlistgui.clickminigameinvite();" => {

@@ -198,16 +198,21 @@ fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
         }
         let x = (tag.x - font.width(&tag.text) as f32 / 2.0).round();
         let y = (tag.y - font.line_height() as f32).round();
-        let [r, g, b] = crate::api::name_outline(tag.color);
-        for dx in [-1.0, 0.0, 1.0].into_iter().filter(|_| tag.outline) {
-            for dy in [-1.0, 0.0, 1.0] {
-                if dx != 0.0 || dy != 0.0 {
-                    font.draw(dl, x + dx, y + dy, &tag.text, [r, g, b, alpha], &[]);
+        // A talking player's name is bold: a second pass one pixel over,
+        // the bitmap font having no weight of its own.
+        let passes: &[f32] = if tag.bold { &[x, x + 1.0] } else { &[x] };
+        for &px in passes {
+            let [r, g, b] = crate::api::name_outline(tag.color);
+            for dx in [-1.0, 0.0, 1.0].into_iter().filter(|_| tag.outline) {
+                for dy in [-1.0, 0.0, 1.0] {
+                    if dx != 0.0 || dy != 0.0 {
+                        font.draw(dl, px + dx, y + dy, &tag.text, [r, g, b, alpha], &[]);
+                    }
                 }
             }
+            let [r, g, b] = tag.color;
+            font.draw(dl, px, y, &tag.text, [r, g, b, alpha], &[]);
         }
-        let [r, g, b] = tag.color;
-        font.draw(dl, x, y, &tag.text, [r, g, b, alpha], &[]);
     }
 }
 

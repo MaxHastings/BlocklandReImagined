@@ -63,6 +63,7 @@ fn state(role: AdminRole, local_host: bool) -> AdminSnapshot {
         ]
         .into_iter()
         .collect::<BTreeSet<_>>(),
+        voice_muted: Default::default(),
         players: vec![AdminPlayer {
             connection: 7,
             name: "Builder".into(),

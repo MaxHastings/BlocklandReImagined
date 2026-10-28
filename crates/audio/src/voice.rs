@@ -433,6 +433,10 @@ struct Speaker {
     /// Gains used on the last block, so they change smoothly.
     gains: (f32, f32),
     idle_samples: u64,
+    /// The loudest this speaker's voice was in the recent output, 0..=1:
+    /// fast to rise with a loud frame, falling over about half a second so
+    /// a name tag's blue shade tracks how loudly they are heard.
+    level: f32,
 }
 
 impl Speaker {
@@ -447,6 +451,7 @@ impl Speaker {
             tail: 0.0,
             gains: (0.0, 0.0),
             idle_samples: 0,
+            level: 0.0,
         }
     }
     fn next(&mut self, step: f32) -> f32 {
@@ -564,6 +569,12 @@ impl Mixer {
             .map(|(&id, _)| id)
             .collect()
     }
+    /// How loudly each speaker is being heard right now, 0..=1: the loudest
+    /// of their recent output samples. A speaker who stops talking keeps a
+    /// falling level for about half a second and then reads as silent.
+    pub fn levels(&self) -> BTreeMap<u64, f32> {
+        self.speakers.iter().map(|(&id, s)| (id, s.level)).collect()
+    }
     /// Fill `out` (interleaved, `channels` wide) with the mix; one or two
     /// channels get the voices panned, more carry them on the first two.
     pub fn render(&mut self, out: &mut [f32], channels: usize, sample_rate: u32) {
@@ -578,6 +589,9 @@ impl Mixer {
         let step = SAMPLE_RATE as f32 / sample_rate as f32;
         let forget = (FORGET_AFTER_SECONDS * sample_rate as f32) as u64;
         let listener = self.listener;
+        // The level falls over about half a second of output, so the blue
+        // shade eases off after a sentence ends.
+        let decay = (frames as f32 / (0.5 * sample_rate as f32)).clamped(0.0, 1.0);
         for speaker in self.speakers.values_mut() {
             let distance = length(sub(speaker.position, listener.position));
             let gain = Self::gain_at(distance, range) * volume;
@@ -592,6 +606,7 @@ impl Mixer {
                 )
             };
             let start = speaker.gains;
+            let mut loudest = 0.0f32;
             for frame in 0..frames {
                 let sample = speaker.next(step);
                 let t = (frame + 1) as f32 / frames as f32;
@@ -602,8 +617,13 @@ impl Mixer {
                 if channels > 1 {
                     out[base + 1] += sample * r;
                 }
+                // Both ears: a speaker panned to one side is silent on the
+                // other channel, so neither alone says how loud they are.
+                loudest = loudest.max((sample * l).abs().max((sample * r).abs()));
             }
             speaker.gains = target;
+            // Rise at once with a loud frame, then fall over the decay.
+            speaker.level = speaker.level.max(loudest) * (1.0 - decay);
         }
         self.speakers
             .retain(|_, s| s.playing || s.idle_samples < forget);
@@ -877,6 +897,37 @@ mod tests {
             mixer.render(&mut out, 2, 48_000);
         }
         assert!(mixer.speakers.is_empty());
+    }
+
+    #[test]
+    fn speaker_levels_track_loudness_and_fall_after_silence() {
+        let shared = Arc::new(Shared::new(Settings::default()));
+        let mut mixer = Mixer::new(shared);
+        speak(&mut mixer, 5, [2.0, 0.0, 0.0], 8, 0);
+        let mut out = vec![0.0; 4800 * 2];
+        mixer.render(&mut out, 2, 48_000);
+        // A loud nearby voice reads as loud at once.
+        assert!(mixer.levels()[&5] > 0.1, "loud speaker has a level");
+        let loud = mixer.levels()[&5];
+        // Silence: the level keeps falling over about half a second.
+        for _ in 0..20 {
+            mixer.render(&mut out, 2, 48_000);
+        }
+        assert!(mixer.levels()[&5] < loud / 10.0, "the level falls off");
+        // A quiet voice reads quieter than a loud one at the same spot.
+        let mut soft = Mixer::new(Arc::new(Shared::new(Settings::default())));
+        let audio: Vec<f32> = (0..8 * FRAME_SAMPLES)
+            .map(|i| 0.05 * (i as f32 * 2.0 * std::f32::consts::PI * 440.0 / 16_000.0).sin())
+            .collect();
+        for (n, chunk) in audio.chunks(FRAME_SAMPLES).enumerate() {
+            let bytes = Codec::encode(&pcm(chunk));
+            soft.hear(5, [2.0, 0.0, 0.0], n as u16, &bytes);
+        }
+        soft.render(&mut out, 2, 48_000);
+        assert!(
+            soft.levels()[&5] < loud / 2.0,
+            "quiet reads quieter than loud"
+        );
     }
 
     #[test]

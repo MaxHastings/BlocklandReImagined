@@ -949,6 +949,19 @@ impl App {
             UiAction::UnIgnore { target } => {
                 self.command(id, Command::UnIgnore { target }, action.clone())
             }
+            // Local voice mute: this player's ears only, never the host's.
+            // The list reads it from core, so both are kept in step; the
+            // next session presentation carries the same state.
+            UiAction::VoiceMute { target } | UiAction::VoiceUnmute { target } => {
+                if matches!(action, UiAction::VoiceMute { .. }) {
+                    self.voice.mute(target);
+                    self.ui.core.voice_muted.insert(target);
+                } else {
+                    self.voice.unmute(target);
+                    self.ui.core.voice_muted.remove(&target);
+                }
+                Ok(())
+            }
             UiAction::AnswerTrustInvite { from, answer } => {
                 let command = match answer {
                     TrustAnswer::Accept => Command::AcceptTrust { from },

@@ -1417,6 +1417,7 @@ impl App {
             self.ui.scale(),
             controls.observer().is_none(),
             &self.voice.speaking_owners(view.owner),
+            &self.voice.speaking_levels(view.owner),
             &passages,
             |drop| self.world_items.drop_center(drop),
             self.ui

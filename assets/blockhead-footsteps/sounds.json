@@ -1,0 +1,65 @@
+{
+  "land": "bri:foley/blockhead/land_01",
+  "footsteps": [
+    "bri:footsteps/blockhead/step_01",
+    "bri:footsteps/blockhead/step_02",
+    "bri:footsteps/blockhead/step_03",
+    "bri:footsteps/blockhead/step_04"
+  ],
+  "steps": {
+    "back": [
+      {
+        "seconds": 0.09020960451425128,
+        "foot": "RShoe100",
+        "volume": 1.333521432163324
+      },
+      {
+        "seconds": 0.2920424148020946,
+        "foot": "LShoe100",
+        "volume": 1.333521432163324
+      }
+    ],
+    "crouchback": [
+      {
+        "seconds": 0.048000238835811615,
+        "volume": 0.666760716081662
+      }
+    ],
+    "crouchrun": [
+      {
+        "seconds": 0.07333353906869888,
+        "foot": "RShoe100",
+        "volume": 0.666760716081662
+      },
+      {
+        "seconds": 0.29333415627479553,
+        "foot": "LShoe100",
+        "volume": 0.666760716081662
+      }
+    ],
+    "crouchside": [
+      {
+        "seconds": 0.0,
+        "volume": 0.666760716081662
+      }
+    ],
+    "run": [
+      {
+        "seconds": 0.165379268020828,
+        "foot": "RShoe100",
+        "volume": 1.333521432163324
+      },
+      {
+        "seconds": 0.47602239979501515,
+        "foot": "LShoe100",
+        "volume": 1.333521432163324
+      }
+    ],
+    "side": [
+      {
+        "seconds": 0.0,
+        "volume": 1.333521432163324
+      }
+    ]
+  }
+}

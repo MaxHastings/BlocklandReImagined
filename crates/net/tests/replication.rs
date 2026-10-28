@@ -48,6 +48,7 @@ fn checkpoint() -> Checkpoint {
         brick_events: Default::default(),
         entities: vec![],
         package_state: Default::default(),
+        voice_chat: false,
         projectile_falls: Default::default(),
         world_shapes: Default::default(),
         kept: None,

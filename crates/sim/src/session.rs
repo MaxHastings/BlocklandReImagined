@@ -66,6 +66,7 @@ mod special;
 mod trust;
 mod tutorial;
 mod use_object;
+mod voice;
 mod world_shapes;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod bodies;
@@ -1180,6 +1181,8 @@ pub struct Session {
     admin_disconnects: VecDeque<OwnerId>,
     /// Plain-words close message for a pending admin disconnect.
     admin_disconnect_messages: BTreeMap<OwnerId, String>,
+    /// Players whose voice an admin has muted (the host relays none of it).
+    voice_muted: BTreeSet<OwnerId>,
     /// v20 `$Server::LAN`: single-player and LAN hosts use the looser brick
     /// damage rules.
     lan_host: bool,
@@ -1343,6 +1346,7 @@ impl Session {
             admin: admin::AdminRuntime::default(),
             admin_disconnects: VecDeque::new(),
             admin_disconnect_messages: BTreeMap::new(),
+            voice_muted: BTreeSet::new(),
             lan_host: false,
             loading: None,
             time_scale: 1.0,

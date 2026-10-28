@@ -855,6 +855,19 @@ fn aimed_at(camera: Vec3, aim: Vec3, feet: Vec3, eye: Vec3, radius: f32) -> bool
     let along_aim = (point - camera).dot(aim) / a.max(1e-6);
     along_aim > 0.0 && (camera + aim * along_aim).distance(point) <= radius
 }
+/// The dark blue a talking player's name reaches at full loudness.
+const DARK_BLUE: [u8; 3] = [0, 0, 128];
+
+/// A talking player's name tag: bold, and blue in the shade their loudness
+/// earns — quiet stays near their colour (a fourth of the way over), loud
+/// goes dark blue. The old [ ] brackets are gone with the indicator.
+fn voice_tag(base: [u8; 3], level: f32) -> ([u8; 3], bool) {
+    let t = (0.4 + 0.6 * level.clamped(0.0, 1.0)).clamped(0.0, 1.0);
+    (
+        [0, 1, 2].map(|i| ((base[i] as f32) * (1.0 - t) + DARK_BLUE[i] as f32 * t).round() as u8),
+        true,
+    )
+}
 /// `GuiShapeNameHud::onRender`: every other living player's name above their
 /// eye point (`verticalOffset` 0.85), and any named dropped item's, hidden behind the map and raycasting
 /// bricks ([`crate::building::Building::name_visible`]), faded by
@@ -877,6 +890,8 @@ fn name_tags(
     scale: f32,
     controlling_body: bool,
     speaking: &BTreeSet<bri_world::OwnerId>,
+    // How loudly each speaker is being heard, 0..=1 (the blue shade).
+    levels: &BTreeMap<bri_world::OwnerId, f32>,
     passages: &bri_content::passage::Passages,
     drop_center: impl Fn(&bri_weapons::Drop) -> Vec3,
     claim: Option<&bri_ui::api::HudRegionDraw>,
@@ -972,18 +987,23 @@ fn name_tags(
             .or_else(|| game.and_then(|m| m.paint_color).and_then(paint))
             .or_else(|| game.and_then(|m| crate::minigame_ui::color_rgb(m.color)))
             .unwrap_or([255; 3]);
-        // Only the actual in-world tag gets the stock-font speech brackets;
-        // the F2 list deliberately remains untouched.
-        let text = player_name_tag(name, speaking.contains(owner));
+        let base = style.color.map_or(color, |c| {
+            [0, 1, 2].map(|i| (c[i].clamped(0.0, 1.0) * 255.0).round() as u8)
+        });
+        let level = levels.get(owner).copied().unwrap_or(0.0);
+        let (color, bold) = if speaking.contains(owner) {
+            voice_tag(base, level)
+        } else {
+            (base, false)
+        };
         tags.push(bri_ui::api::NameTag {
             x,
             y,
-            text,
+            text: plain_chat(name),
             opacity,
-            color: style.color.map_or(color, |c| {
-                [0, 1, 2].map(|i| (c[i].clamped(0.0, 1.0) * 255.0).round() as u8)
-            }),
+            color,
             outline: style.outline,
+            bold,
         });
     }
     // An item with a `label` (v20's `setShapeName` on an item: an ammo
@@ -1018,6 +1038,7 @@ fn name_tags(
             opacity,
             color: [255; 3],
             outline: true,
+            bold: false,
         });
     }
     // Add-On world shapes' labels, over each shape's top centre in its
@@ -1038,6 +1059,7 @@ fn name_tags(
             opacity,
             color: [shape.color[0], shape.color[1], shape.color[2]],
             outline: true,
+            bold: false,
         });
     }
     // Any other shape's name sits above the middle of its box
@@ -1056,20 +1078,10 @@ fn name_tags(
             opacity,
             color: paint(name.color).unwrap_or([255; 3]),
             outline: true,
+            bold: false,
         });
     }
     tags
-}
-/// The in-world name-tag text for a player. Use ordinary brackets because
-/// the in-game tag editor does not reliably preserve extended ASCII characters.
-/// Keep this separate from the F2 player list.
-fn player_name_tag(name: &str, speaking: bool) -> String {
-    let name = plain_chat(name);
-    if speaking {
-        format!("[ {} ]", name)
-    } else {
-        name
-    }
 }
 
 /// How far Add-On code moved the orbit camera's target from where the game

@@ -19,15 +19,16 @@ use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
     session::{
-        ActionAim, AdminData, BuildGesture, Command, InspectMode, MAX_TRUST_LIST, MiniGameRequest,
-        Notice, Reply, Session, ToolAction, TrustEntry, TrustLevel, WrenchProperties,
+        ActionAim, AdminCapability, AdminData, BuildGesture, Command, InspectMode, MAX_TRUST_LIST,
+        MiniGameRequest, Notice, Reply, Session, ToolAction, TrustEntry, TrustLevel,
+        WrenchProperties,
     },
     simulation::Simulation,
 };
 use bri_world::{Brick, BrickId, EventRow, EventTarget, EventValue, OwnerId, World};
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------- fixtures
 
@@ -967,7 +968,8 @@ fn uploaded_trust_lists_are_bounded_and_one_sided_claims_grant_nothing() {
 // ------------------------------------------------------------- role checks
 
 /// Every administration action a non-administrator sends, in this order:
-/// Kick, Ban, Unban, RequestBanList, RequestBrickGroups, RequestMaps, Spy,
+/// Kick, VoiceMute, VoiceUnmute, Ban, Unban, RequestBanList,
+/// RequestBrickGroups, RequestMaps, Spy,
 /// Fetch, Find, ReturnToPreviousPosition, DropPlayerAtCamera,
 /// DropCameraAtPlayer, RealBrickCount, ResetVehicles, CancelAllEvents,
 /// DestructoWand, ChangeMap, ClearAllBricks, ClearBrickGroup,
@@ -994,6 +996,8 @@ fn every_administration_action_is_denied_to_a_player() {
     let host_body = g.body(host);
     let actions = vec![
         Action::Kick { target: host_conn },
+        Action::VoiceMute { target: host_conn },
+        Action::VoiceUnmute { target: host_conn },
         Action::Ban {
             target: host_conn,
             duration: BanDuration::Forever,
@@ -1552,6 +1556,120 @@ fn minigame_with_building_disabled_refuses_plants() {
         "planted with building disabled: {planted:?}"
     );
     assert_eq!(g.bricks(), before);
+}
+
+// ------------------------------------------------------------- voice chat
+
+/// A session running the voice chat Add-On, as a host with it turned on in
+/// Add-Ons before any player joins. The package is empty — the engine owns
+/// the relay; turning it off is what stops one.
+fn voice() -> Session {
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "bri-sim-voice-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let dir = root.join("voice_chat");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"schema_version":1,"id":"voice_chat","version":"1.0.0","api":1,
+            "name":"Voice Chat","license":"CC0-1.0","provides":[]}"#,
+    )
+    .unwrap();
+    let set = PackageSet {
+        schema_version: 1,
+        packages: vec![PackageEntry {
+            id: "voice_chat".into(),
+            version: "1.0.0".into(),
+            side: Side::Shared,
+            dir: "voice_chat".into(),
+            role: None,
+        }],
+    };
+    let catalog = bri_package_runtime::Catalog::load(&root, &set, true).unwrap();
+    let mut s = plain();
+    s.install_packages(std::sync::Arc::new(catalog), None)
+        .unwrap();
+    s
+}
+
+/// Requests (host): Admin(VoiceMute guest); Admin(VoiceUnmute guest).
+#[test]
+fn an_admin_mutes_a_players_voice_and_the_snapshot_says_so() {
+    let mut g = Game::new(voice());
+    let host = g.s.join("Host".into(), A_SPAWN, true).unwrap();
+    let guest = verified(&mut g.s, "Guest", B_SPAWN, 2);
+    g.steps(60);
+    let guest_conn = g.connection(guest, "Guest");
+    assert!(g.s.voice_chat());
+
+    // Before the mute: the capability is offered and nobody is muted.
+    let before = g.s.admin_state(host).unwrap();
+    assert!(before.supported.contains(&AdminCapability::VoiceMute));
+    assert!(before.voice_muted.is_empty());
+
+    let reply = g
+        .cmd(host, admin(Action::VoiceMute { target: guest_conn }))
+        .unwrap();
+    let Reply::Admin(reply) = reply else {
+        panic!("expected an administration reply")
+    };
+    assert!(
+        g.s.is_voice_muted(guest),
+        "the host muted the player's voice"
+    );
+    assert_eq!(reply.snapshot.voice_muted, BTreeSet::from([guest_conn.0]));
+
+    // The broadcast path (admin_state) agrees with the request reply.
+    let after = g.s.admin_state(host).unwrap();
+    assert_eq!(after.voice_muted, BTreeSet::from([guest_conn.0]));
+
+    let reply = g
+        .cmd(host, admin(Action::VoiceUnmute { target: guest_conn }))
+        .unwrap();
+    let Reply::Admin(reply) = reply else {
+        panic!("expected an administration reply")
+    };
+    assert!(!g.s.is_voice_muted(guest), "the mute is off again");
+    assert!(reply.snapshot.voice_muted.is_empty());
+}
+
+/// Requests (host, no Add-On): Admin(VoiceMute guest); (guest, with the
+/// Add-On on): Admin(VoiceMute host).
+#[test]
+fn voice_mute_needs_the_addon_and_an_admin() {
+    // Without the Add-On there is no relay to mute: not offered, refused.
+    let mut g = Game::new(plain());
+    let host = g.s.join("Host".into(), A_SPAWN, true).unwrap();
+    let guest = verified(&mut g.s, "Guest", B_SPAWN, 2);
+    g.steps(60);
+    let guest_conn = g.connection(guest, "Guest");
+    assert!(!g.s.voice_chat());
+    let snapshot = g.s.admin_state(host).unwrap();
+    assert!(
+        !snapshot.supported.contains(&AdminCapability::VoiceMute),
+        "no capability without the Add-On"
+    );
+    assert!(
+        g.cmd(host, admin(Action::VoiceMute { target: guest_conn }))
+            .is_err(),
+        "the host refuses a mute it cannot apply"
+    );
+
+    // With the Add-On on, a player still cannot use it.
+    let mut v = Game::new(voice());
+    let host2 = v.s.join("Host".into(), A_SPAWN, true).unwrap();
+    let guest2 = verified(&mut v.s, "Guest", B_SPAWN, 3);
+    v.steps(60);
+    let host_conn = v.connection(host2, "Host");
+    assert!(
+        v.cmd(guest2, admin(Action::VoiceMute { target: host_conn }))
+            .is_err(),
+        "a player cannot mute another player's voice"
+    );
 }
 
 // ----------------------------------------------- inventory and combat state

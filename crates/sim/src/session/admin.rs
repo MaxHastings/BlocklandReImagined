@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum AdminCapability {
     Login,
     Kick,
+    /// Mute a player's voice for everyone (the host relays none of it).
+    VoiceMute,
     Ban,
     Unban,
     ClearBricks,
@@ -89,6 +91,10 @@ pub struct AdminSnapshot {
     pub local_host: bool,
     pub legacy_lan: bool,
     pub supported: BTreeSet<AdminCapability>,
+    /// The connections whose voice an admin has muted (empty when the
+    /// host does not run voice chat).
+    #[serde(default)]
+    pub voice_muted: BTreeSet<u64>,
     pub players: Vec<AdminPlayer>,
     /// The server settings, for whoever may change them.
     pub options: Option<bri_admin::ServerSettings>,
@@ -327,9 +333,30 @@ impl AdminRuntime {
             local_host: host,
             legacy_lan: false,
             supported,
+            voice_muted: BTreeSet::new(),
             players,
             options: host.then(|| self.settings.clone()),
         })
+    }
+
+    /// The session's voice chat state on top of the snapshot: when the host
+    /// runs it (its Add-On on), the mute capability and the muted players'
+    /// connections show; off, neither does.
+    pub(super) fn with_voice(
+        &self,
+        mut snapshot: AdminSnapshot,
+        session: &Session,
+    ) -> AdminSnapshot {
+        if session.voice_chat() {
+            snapshot.supported.insert(AdminCapability::VoiceMute);
+            snapshot.voice_muted = session
+                .voice_muted
+                .iter()
+                .filter_map(|o| self.owner_to_connection.get(o))
+                .map(|c| c.0)
+                .collect();
+        }
+        snapshot
     }
 
     fn target_owner(&self, target: ConnectionId) -> Result<OwnerId> {
@@ -357,6 +384,8 @@ impl AdminRuntime {
             &request.action,
             Action::Login { .. }
                 | Action::Kick { .. }
+                | Action::VoiceMute { .. }
+                | Action::VoiceUnmute { .. }
                 | Action::Ban { .. }
                 | Action::Unban { .. }
                 | Action::RequestBanList
@@ -402,6 +431,15 @@ impl AdminRuntime {
         ) {
             self.authority.permission(origin, &request.action)?;
             anyhow::bail!("Join password is not connected to transport admission");
+        }
+        // Off on this host there is no relay to mute and the capability is
+        // not offered, so a stray request cannot leave state behind.
+        if matches!(
+            &request.action,
+            Action::VoiceMute { .. } | Action::VoiceUnmute { .. }
+        ) && !session.voice_chat()
+        {
+            anyhow::bail!("The host does not run voice chat");
         }
         // v20's `MsgAdminForce` lines need names and the ban terms before
         // the request is consumed.
@@ -670,6 +708,24 @@ impl AdminRuntime {
                         now_unix_seconds: now,
                     }
                 }
+                Effect::VoiceMuted { target, muted } => {
+                    let owner = *self
+                        .connection_to_owner
+                        .get(&target)
+                        .context("That player is no longer connected")?;
+                    if muted {
+                        session.mute_voice(owner);
+                        // `serverCmdKick`'s neighbour: say who was silenced.
+                        let name = session.peers.get(&owner).map(|p| p.name.clone());
+                        session.admin_announce(format!(
+                            "\u{E003}{actor_name}\u{E002} muted \u{E003}{}'s voice",
+                            name.unwrap_or_default()
+                        ));
+                    } else {
+                        session.unmute_voice(owner);
+                    }
+                    changed = true;
+                }
                 Effect::BansChanged | Effect::AutoRolesChanged => changed = true,
                 Effect::AutoRoleList(rows) => data = AdminData::AutoRoles(rows),
                 Effect::Configure(settings) => {
@@ -694,7 +750,7 @@ impl AdminRuntime {
         session
             .admin_disconnect_messages
             .extend(disconnect_messages);
-        let snapshot = self.snapshot(owner)?;
+        let snapshot = self.with_voice(self.snapshot(owner)?, session);
         Ok(AdminCall {
             reply: AdminReply { snapshot, data },
         })
@@ -834,7 +890,7 @@ impl Session {
     }
 
     pub fn admin_state(&self, owner: OwnerId) -> Result<AdminSnapshot> {
-        self.admin.snapshot(owner)
+        Ok(self.admin.with_voice(self.admin.snapshot(owner)?, self))
     }
 
     pub fn admin_revision(&self) -> u64 {

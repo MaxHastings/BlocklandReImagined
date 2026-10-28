@@ -109,6 +109,9 @@ pub struct VoiceClient {
     heard: Vec<Heard>,
     activity_in: Vec<VoiceActivity>,
     speaking: Vec<OwnerId>,
+    /// The players this player has muted locally (the F2 list): their voice
+    /// is not played back, and they show no speech state at all.
+    muted: BTreeSet<OwnerId>,
     remote_activity: BTreeMap<OwnerId, Instant>,
     sent_activity: Option<bool>,
     activity_sent_at: Option<Instant>,
@@ -131,6 +134,7 @@ impl VoiceClient {
             heard: Vec::new(),
             activity_in: Vec::new(),
             speaking: Vec::new(),
+            muted: BTreeSet::new(),
             remote_activity: BTreeMap::new(),
             sent_activity: None,
             activity_sent_at: None,
@@ -229,12 +233,52 @@ impl VoiceClient {
     }
     /// The local voice detector and explicitly relayed remote speech signals.
     /// Audio-frame arrival alone is not enough: a sender can transmit silence.
+    /// Locally muted players are left out: they are silent to this player,
+    /// so their names stay unbolded and their poses keep talking to no one.
     pub fn speaking_owners(&self, local_owner: OwnerId) -> BTreeSet<OwnerId> {
-        let mut owners: BTreeSet<_> = self.remote_activity.keys().copied().collect();
-        if self.local_speaking() {
+        let mut owners: BTreeSet<_> = self
+            .remote_activity
+            .keys()
+            .copied()
+            .filter(|owner| !self.muted.contains(owner))
+            .collect();
+        if self.local_speaking() && !self.muted.contains(&local_owner) {
             owners.insert(local_owner);
         }
         owners
+    }
+    /// How loudly each speaker is being heard right now, 0..=1: the name
+    /// tag's blue shade follows it. Locally muted players are absent.
+    pub fn speaking_levels(&self, local_owner: OwnerId) -> BTreeMap<OwnerId, f32> {
+        let mut levels = self
+            .chat
+            .as_ref()
+            .map_or_else(BTreeMap::new, |chat| chat.speaker_levels());
+        levels.retain(|owner, _| !self.muted.contains(owner));
+        if self.local_speaking() && !self.muted.contains(&local_owner) {
+            let level = self.chat.as_ref().map_or(0.0, VoiceChat::level);
+            if level > 0.0 {
+                levels.insert(local_owner, level.clamped(0.0, 1.0));
+            }
+        }
+        levels
+    }
+    /// Mute a player's voice for this player only (the F2 list); the host is
+    /// not told.
+    pub fn mute(&mut self, owner: OwnerId) {
+        self.muted.insert(owner);
+    }
+    /// Take that local mute off again.
+    pub fn unmute(&mut self, owner: OwnerId) {
+        self.muted.remove(&owner);
+    }
+    /// Whether a player's voice is muted locally right now.
+    pub fn is_muted(&self, owner: OwnerId) -> bool {
+        self.muted.contains(&owner)
+    }
+    /// The players this player has muted locally (the F2 list).
+    pub fn muted(&self) -> &BTreeSet<OwnerId> {
+        &self.muted
     }
     fn local_speaking(&self) -> bool {
         let Some(chat) = &self.chat else { return false };
@@ -354,6 +398,10 @@ impl VoiceClient {
             self.heard.clear();
             link.take_heard(&mut self.heard);
             for voice in self.heard.drain(..) {
+                // A locally muted player is not played back at all.
+                if self.muted.contains(&voice.speaker) {
+                    continue;
+                }
                 chat.hear(
                     voice.speaker,
                     voice.position,
@@ -476,6 +524,25 @@ mod tests {
         voice.speaking.push(99);
         assert!(voice.speaking_owners(7).is_empty());
         voice.remote_activity.insert(99, Instant::now());
+        assert_eq!(voice.speaking_owners(7), BTreeSet::from([99]));
+    }
+
+    #[test]
+    fn a_locally_muted_player_is_silent_and_unbolded_for_this_player() {
+        let mut voice = VoiceClient::new(&Settings::default());
+        voice.remote_activity.insert(99, Instant::now());
+        assert_eq!(voice.speaking_owners(7), BTreeSet::from([99]));
+        voice.mute(99);
+        assert!(voice.is_muted(99));
+        assert!(
+            voice.speaking_owners(7).is_empty(),
+            "a muted player shows no speech state"
+        );
+        assert!(
+            !voice.speaking_levels(7).contains_key(&99),
+            "their loudness is absent, so the name tag keeps its base colour"
+        );
+        voice.unmute(99);
         assert_eq!(voice.speaking_owners(7), BTreeSet::from([99]));
     }
 

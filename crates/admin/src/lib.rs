@@ -141,6 +141,14 @@ pub enum Action {
     Kick {
         target: ConnectionId,
     },
+    /// Mute a player's voice for everyone (the host relays none of it).
+    VoiceMute {
+        target: ConnectionId,
+    },
+    /// Take a voice mute off again.
+    VoiceUnmute {
+        target: ConnectionId,
+    },
     Ban {
         target: ConnectionId,
         duration: BanDuration,
@@ -453,6 +461,11 @@ pub enum Effect {
     RoleChanged {
         target: ConnectionId,
         role: Role,
+    },
+    /// Mute or unmute a player's voice; the host applies it to its relay.
+    VoiceMuted {
+        target: ConnectionId,
+        muted: bool,
     },
     LoginRejected {
         attempts: u8,
@@ -902,6 +915,20 @@ impl Administration {
                 return Ok(vec![Effect::Disconnect {
                     target,
                     reason: DisconnectReason::Kicked,
+                }]);
+            }
+            Action::VoiceMute { target } => {
+                self.protect_target(target, false)?;
+                return Ok(vec![Effect::VoiceMuted {
+                    target,
+                    muted: true,
+                }]);
+            }
+            Action::VoiceUnmute { target } => {
+                self.target(target)?;
+                return Ok(vec![Effect::VoiceMuted {
+                    target,
+                    muted: false,
                 }]);
             }
             Action::Ban {

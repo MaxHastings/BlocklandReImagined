@@ -399,6 +399,13 @@ pub struct Core {
     pub selector: SelectorModel,
     pub wrench: WrenchState,
     pub players: Vec<PlayerRow>,
+    /// The host runs voice chat (its Add-On on before players joined): the
+    /// F2 list's mute button shows, and name tags can turn blue while a
+    /// player talks.
+    pub voice_on_server: bool,
+    /// The players this player has muted locally, by owner id; local only,
+    /// never sent to the host.
+    pub voice_muted: BTreeSet<u64>,
     pub admin: crate::models::admin::AdminModel,
     /// The host's environment and the Environment window's draft.
     pub environment: crate::models::environment::EnvironmentModel,
@@ -614,6 +621,8 @@ impl Core {
         self.datablocks.clear();
         self.wrench = WrenchState::default();
         self.players.clear();
+        self.voice_on_server = false;
+        self.voice_muted.clear();
         self.minigames = MiniGameUiState::default();
         self.report = None;
         self.panel = None;
@@ -1665,6 +1674,8 @@ impl Ui {
             selector,
             wrench: WrenchState::default(),
             players: Vec::new(),
+            voice_on_server: false,
+            voice_muted: BTreeSet::new(),
             admin: Default::default(),
             environment: Default::default(),
             minigames: MiniGameUiState::default(),
@@ -2313,10 +2324,14 @@ impl Ui {
                 rows,
                 server_name,
                 max_players,
+                voice_chat,
+                voice_muted,
             } => {
                 c.players = rows;
                 c.server_name = server_name;
                 c.max_players = max_players;
+                c.voice_on_server = voice_chat;
+                c.voice_muted = voice_muted.into_iter().collect();
             }
             UiUpdate::MiniGames(state) => {
                 c.minigames = state;
@@ -3388,6 +3403,7 @@ mod sound_tests {
                     AdminFeature::Ranks,
                 ]
                 .into(),
+                voice_muted: Default::default(),
                 players: vec![],
                 options: None,
             })));

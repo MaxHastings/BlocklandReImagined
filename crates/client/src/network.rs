@@ -57,6 +57,9 @@ pub struct View {
     /// cursor advances as deltas arrive and must not be used to reset consumers.
     pub checkpoint_cue_cursor: u64,
     pub admin_snapshot: Option<bri_sim::session::AdminSnapshot>,
+    /// Whether the host runs voice chat (its Add-On on before players
+    /// joined): off, no voices are relayed and the mute controls hide.
+    pub voice_chat: bool,
     pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     /// Admin `/timeScale`: game time per real second.
@@ -432,6 +435,7 @@ fn publish(
         tick: client.replica.tick,
         checkpoint_cue_cursor,
         admin_snapshot: client.admin_snapshot.clone(),
+        voice_chat: client.replica.voice_chat,
         vitals: client.replica.vitals.clone(),
         minigames: client.replica.minigames.clone(),
         time_scale: client.replica.time_scale,

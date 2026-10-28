@@ -777,6 +777,7 @@ fn admin_state(u: &mut Ui, role: AdminRole) {
         ]
         .into_iter()
         .collect(),
+        voice_muted: Default::default(),
         players: vec![
             AdminPlayer {
                 connection: 1,
@@ -1050,6 +1051,9 @@ fn players(u: &mut Ui) {
         ],
         server_name: "Field flow".into(),
         max_players: 8,
+        // The host runs voice chat: the list's mute button shows.
+        voice_chat: true,
+        voice_muted: vec![9],
     });
     u.update(0);
 }

@@ -1486,6 +1486,10 @@ fn relay_voice(
     sequence: u16,
     payload: &[u8],
 ) {
+    // An admin muted this player's voice: nobody hears it.
+    if session.is_voice_muted(speaker) {
+        return;
+    }
     let Some(from) = session.viewpoint(speaker) else {
         return;
     };
@@ -1983,8 +1987,8 @@ async fn run(
                     }
                 }
             },
-            Event::Voice{owner,generation,sequence,payload}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&session,&peers,&traffic,owner,sequence,&payload);}},
-            Event::VoiceActivity{owner,generation,active}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&peers,&traffic,owner,active);}}},
+            Event::Voice{owner,generation,sequence,payload}=>{if session.voice_chat()&&peers.get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&session,&peers,&traffic,owner,sequence,&payload);}},
+            Event::VoiceActivity{owner,generation,active}=>{if session.voice_chat()&&!session.is_voice_muted(owner)&&peers.get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&peers,&traffic,owner,active);}}},
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=recorder.seat_report(&mut session,owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=recorder.movement(&mut session,owner,sequence,input);}if let Some(camera)=movement.camera{let _=recorder.camera_report(&mut session,owner,camera);}}},
         }},
         _=ticker.tick()=>{

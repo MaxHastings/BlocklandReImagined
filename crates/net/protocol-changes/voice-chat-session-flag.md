@@ -1,0 +1,1 @@
+`Checkpoint::voice_chat`: whether the host runs voice chat (its Add-On turned on before players joined); off, no voices are relayed and clients hide the mute controls. Fixed for the session; `Delta` carries none.

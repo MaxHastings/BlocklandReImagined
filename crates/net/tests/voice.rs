@@ -13,6 +13,43 @@ use std::time::{Duration, Instant};
 
 const _: () = assert!(voice::RANGE < 95.0, "the far player is out of range");
 
+/// A host running voice chat: its Add-On installed before players join,
+/// as the game's defaults do. The package is empty — the engine owns the
+/// relay; turning it off is what stops one.
+fn voice_session() -> bri_sim::session::Session {
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "bri-net-voice-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let dir = root.join("voice_chat");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"schema_version":1,"id":"voice_chat","version":"1.0.0","api":1,
+            "name":"Voice Chat","license":"CC0-1.0","provides":[]}"#,
+    )
+    .unwrap();
+    let set = PackageSet {
+        schema_version: 1,
+        packages: vec![PackageEntry {
+            id: "voice_chat".into(),
+            version: "1.0.0".into(),
+            side: Side::Shared,
+            dir: "voice_chat".into(),
+            role: None,
+        }],
+    };
+    let catalog = bri_package_runtime::Catalog::load(&root, &set, true).unwrap();
+    let mut session = common::session();
+    session
+        .install_packages(std::sync::Arc::new(catalog), None)
+        .unwrap();
+    session
+}
+
 /// Speaker at the origin, a listener 10 units away, another 95 away.
 fn options() -> ServerOptions {
     ServerOptions {
@@ -48,8 +85,26 @@ async fn hear(link: &VoiceLink, want: usize, wait: Duration) -> Vec<Heard> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn voice_reaches_only_the_players_within_range() -> Result<()> {
+async fn a_host_without_the_voice_addon_relays_nothing() -> Result<()> {
+    // The plain test session runs no Add-Ons: the host relays no voices.
     let server = server::start(common::session(), options())?;
+    let speaker = connect(&server, "Speaker").await?;
+    let near = connect(&server, "Near").await?;
+    let (talk, listen) = (speaker.voice_link(), near.voice_link());
+    talk.send(0, &[1; 163])?;
+    assert!(
+        hear(&listen, 1, Duration::from_millis(500))
+            .await
+            .is_empty(),
+        "no voice without the Add-On"
+    );
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_reaches_only_the_players_within_range() -> Result<()> {
+    let server = server::start(voice_session(), options())?;
     let speaker = connect(&server, "Speaker").await?;
     let near = connect(&server, "Near").await?;
     let far = connect(&server, "Far").await?;
@@ -90,7 +145,7 @@ async fn voice_reaches_only_the_players_within_range() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_voice_flood_is_cut_to_the_allowance_and_nonsense_is_ignored() -> Result<()> {
-    let server = server::start(common::session(), options())?;
+    let server = server::start(voice_session(), options())?;
     let speaker = connect(&server, "Speaker").await?;
     let near = connect(&server, "Near").await?;
     let (talk, listen) = (speaker.voice_link(), near.voice_link());

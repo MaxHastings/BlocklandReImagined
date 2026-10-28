@@ -1015,6 +1015,15 @@ pub enum UiAction {
     UnIgnore {
         target: u64,
     },
+    /// Mute a player's voice for this player only (the F2 list's button);
+    /// local, never sent to the host.
+    VoiceMute {
+        target: u64,
+    },
+    /// Take that local voice mute off again.
+    VoiceUnmute {
+        target: u64,
+    },
     /// Trust invitation dialog answer.
     AnswerTrustInvite {
         from: u64,
@@ -1548,6 +1557,10 @@ pub struct NameTag {
     /// turn it off.
     #[serde(default = "outlined")]
     pub outline: bool,
+    /// A player is talking in voice chat: drawn bold, in the blue shade the
+    /// client mixed for them.
+    #[serde(default)]
+    pub bold: bool,
 }
 fn outlined() -> bool {
     true
@@ -2041,6 +2054,11 @@ pub enum UiUpdate {
         rows: Vec<PlayerRow>,
         server_name: String,
         max_players: u32,
+        /// The host runs voice chat (its Add-On on): the F2 list's mute
+        /// button shows.
+        voice_chat: bool,
+        /// The players this player has muted locally, by owner id.
+        voice_muted: Vec<u64>,
     },
     MiniGames(MiniGameUiState),
     MiniGameInvite(MiniGameInvitation),
