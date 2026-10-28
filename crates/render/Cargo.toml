@@ -22,3 +22,25 @@ wgpu.workspace = true
 naga = { version = "=30.0.1", default-features = false, features = ["wgsl-in", "hlsl-out"] }
 bri-package = { path = "../package" }
 tempfile.workspace = true
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "brick_preview"
+path = "src/bin/brick_preview.rs"
+test = false
+
+[[bin]]
+name = "interior_preview"
+path = "src/bin/interior_preview.rs"
+test = false
+
+[[bin]]
+name = "model_preview"
+path = "src/bin/model_preview.rs"
+test = false
+
+[[bin]]
+name = "prepare_lighting"
+path = "src/bin/prepare_lighting.rs"
+test = false

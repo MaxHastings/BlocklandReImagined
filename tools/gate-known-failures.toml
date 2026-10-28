@@ -156,6 +156,41 @@ reason = "1.8 min on WARP"
 target = "bri-render/unified_lamp_geometry"
 reason = "1.7 min on WARP"
 
+# 2026-10-28 measured GPU matrices, not ordinary input/state regressions.
+# Real-GPU local gate elapsed times; software rendering on CI costs more.
+
+[[ci_nightly_target]]
+target = "bri-fx-runtime/metal_sprites"
+reason = "GPU matrix: 80.3 s in the measured local gate; retain fast CPU input/state targets in ordinary CI."
+
+[[ci_nightly_target]]
+target = "bri-fx-runtime/mirror_sprites"
+reason = "GPU matrix: 68.8 s in the measured local gate; retain fast CPU input/state targets in ordinary CI."
+
+[[ci_nightly_target]]
+target = "bri-fx-runtime/many_rooms_perf"
+reason = "GPU matrix: 36.7 s in the measured local gate; retain fast CPU input/state targets in ordinary CI."
+
+[[ci_nightly_target]]
+target = "bri-fx-runtime/gpu_contract"
+reason = "GPU matrix: 19.6 s in the measured local gate; retain fast CPU input/state targets in ordinary CI."
+
+[[ci_nightly_target]]
+target = "bri-ui/screen_sweep"
+reason = "GPU matrix: 76.3 s in the measured local gate; retain fast CPU input/state targets in ordinary CI."
+
+[[ci_nightly_target]]
+target = "bri-ui/minigame_screens"
+reason = "GPU matrix: 21.7 s in the measured local gate; retain fast CPU input/state targets in ordinary CI."
+
+[[ci_nightly_target]]
+target = "bri-ui/admin_screens"
+reason = "GPU matrix: 14.4 s in the measured local gate; retain fast CPU input/state targets in ordinary CI."
+
+[[ci_nightly_target]]
+target = "bri-ui/net_graph"
+reason = "GPU matrix: 12.6 s in the measured local gate; retain fast CPU input/state targets in ordinary CI."
+
 # 2026-10-19 test cost audit (docs/progress/2026-10-19-test-cost-cut.md).
 # Opt-in tools: they measure or generate and assert nothing a player feels.
 
@@ -270,7 +305,7 @@ target = "bri-client/night_qa"
 
 # The pull-request tier runs every test target except the slow packages': the
 # end-to-end, GPU and soak suites (PR 317: shards of 32-62 minutes). Those run
-# on main after each merge and nightly, and a failure there is reported, not
+# on the explicit main tier and nightly, and a failure there is reported, not
 # gating. `keep` names targets of a slow package that still run on pull
 # requests.
 [ci_quick]

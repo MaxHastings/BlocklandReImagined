@@ -11,3 +11,15 @@ bri-content = { path = "../content" }
 glam.workspace = true
 serde_json.workspace = true
 rapier3d.workspace = true
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "content_probe"
+path = "src/bin/content_probe.rs"
+test = false
+
+[[bin]]
+name = "map_collision_probe"
+path = "src/bin/map_collision_probe.rs"
+test = false

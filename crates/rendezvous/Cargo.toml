@@ -14,3 +14,10 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "rin
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
 getrandom = "0.4"
 sha2 = "0.10"
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "bri-rendezvous"
+path = "src/bin/bri-rendezvous.rs"
+test = false

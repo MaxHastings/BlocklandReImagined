@@ -15,6 +15,10 @@ Checks, cheapest first, on the exact commit being pushed:
   2. history sanity: no pushed commit deletes or undoes recent main work,
      and a protocol VERSION change only ever increases it (no protocol change
      file is removed)
+  3. changed crates/direct consumers via tools/check.py focused, plus tool
+     tests and documentation checks. Platform CI also builds shipping binaries.
+
+Explicit --full (required for release candidates) additionally runs:
   3. cargo build --workspace --all-targets --locked
   4. cargo clippy --workspace --all-targets --locked -- -D warnings
   5. bri-client --check against the main checkout's content; it also
@@ -151,6 +155,7 @@ SKIP_PERF = False
 # Real-content copies of the client probes (`synthetic_and_release_content!`)
 # are skipped by name unless the gate runs with --release-content.
 RELEASE_CONTENT = False
+FULL_GATE = False
 RELEASE_ONLY_TESTS = ["release_content"]
 
 
@@ -1148,11 +1153,41 @@ def full_gate(sha, root, changed=()):
 # ---------------------------------------------------------------- entry
 
 
+def scoped_gate(sha, root):
+    """Check the exact committed tree, without the extended GPU/corpus/soak pass.
+
+    Deliberately does not write a full-gate pass receipt. Native content checks
+    and relevant integration targets remain part of the change's validation;
+    platform CI builds all five shipping executables before merge.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    label = f"{git('rev-parse', '--show-toplevel').strip()} scoped {sha[:9]}"
+    with contextlib.nullcontext() if LOCK_HELD else Lock(root / "gate.lock", label):
+        worktree = prepare_worktree(root, sha)
+        (root / "logs").mkdir(exist_ok=True)
+        log = root / "logs" / f"{sha[:12]}-scoped.log"
+        log.write_text("", encoding="utf-8")
+        env = gate_env(os.environ, main_checkout() / "content")
+        steps = [
+            ("tool-tests", [sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"]),
+            ("docs", [sys.executable, "tools/check_docs.py"]),
+            ("focused", [sys.executable, "tools/check.py", "focused", "--base", "origin/main",
+                         "--target-dir", str(root / "target")]),
+        ]
+        for name, command in steps:
+            if not tree_intact(worktree, sha) or not run_step(name, command, worktree, log, env):
+                print(tail(log, f"===== {name} ====="))
+                say(f"scoped check failed; full log: {log}")
+                return False
+        say(f"SCOPED checks passed {sha[:9]}; extended gate was not run. Log: {log}")
+        return True
+
+
 def gate_commit(sha, diff_only):
     say("fetching origin/main")
     git("fetch", "-q", "origin", "main")
     base = git("rev-parse", "refs/remotes/origin/main").strip()
-    if sha == base:
+    if sha == base and not FULL_GATE:
         say("nothing new to push")
         return True
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, sha]).returncode != 0:
@@ -1184,10 +1219,12 @@ def gate_commit(sha, diff_only):
     # --no-renames lists both sides of a move: code renamed into a .md file
     # is a deleted source file, not documentation.
     changed = git("diff", "--name-only", "--no-renames", base, sha).split()
-    if changed and documentation_only(changed):
+    if changed and documentation_only(changed) and not FULL_GATE:
         say(f"only documentation changed ({len(changed)} files); skipping build and tests")
         return True
-    return full_gate(sha, gate_root(), changed)
+    if FULL_GATE:
+        return full_gate(sha, gate_root(), changed)
+    return scoped_gate(sha, gate_root())
 
 
 def push_main():
@@ -1220,12 +1257,13 @@ def push_main():
     return False
 
 
-def test_binaries(top, env=None, extra=()):
+def test_binaries(top, env=None, extra=(), packages=()):
     """Build every test target and list (label, executable, cwd, header).
 
     label is "<package>/<target>" ("lib" for unit tests); header mimics the
     "Running ..." line cargo test prints, which parse_failures reads."""
-    build = subprocess.run(["cargo", "test", "--workspace", "--locked", "--no-run", *extra,
+    scope = [arg for package in packages for arg in ("-p", package)] if packages else ["--workspace"]
+    build = subprocess.run(["cargo", "test", *scope, "--locked", "--no-run", *extra,
                             "--message-format=json-render-diagnostics"],
                            cwd=top, stdout=subprocess.PIPE, text=True, errors="replace", env=env)
     if build.returncode:
@@ -1462,12 +1500,14 @@ def ci_test(part=(0, 1), tier="full"):
     say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(labels) - len(skipped)} test targets")
     if not mine:
         return True
-    # Each shard compiles only its own targets (and whatever shares their
-    # names in other packages), not the whole workspace's ~390 test binaries:
-    # compiling and linking those took 17-27 of a shard's 28-47 minutes.
-    binaries = test_binaries(top, extra=target_filters(mine, labels))
-    if binaries is None:
-        return False
+    # --workspace --lib builds EVERY crate's unit harness, including those
+    # assigned to other shards. Scope each target selection to its packages.
+    binaries = []
+    for packages, filters in ci_build_groups(mine, labels):
+        built = test_binaries(top, extra=filters, packages=packages)
+        if built is None:
+            return False
+        binaries.extend(built)
     unbuilt = mine - {label for label, _, _, _ in binaries}
     if unbuilt:
         say(f"test targets this shard should run were not built: {', '.join(sorted(unbuilt))}")
@@ -1586,6 +1626,22 @@ def target_filters(labels, kinds):
     return args
 
 
+def ci_build_groups(labels, kinds):
+    """Exact package/target selections, grouping identical filters for reuse.
+
+    All selected libraries can share one invocation; other packages share one
+    only when their target filters match. No shard links another's unit harness.
+    """
+    by_package = {}
+    for label in sorted(labels):
+        by_package.setdefault(label.split("/", 1)[0], set()).add(label)
+    groups = {}
+    for package, selected in by_package.items():
+        filters = tuple(target_filters(selected, kinds))
+        groups.setdefault(filters, []).append(package)
+    return [(packages, list(filters)) for filters, packages in sorted(groups.items())]
+
+
 def ci_left_out(data, tier, labels=()):
     """Targets a CI run of `tier` does not run, from the known-failures
     table `data`: content targets always; on "main" and "pr" the nightly
@@ -1680,12 +1736,14 @@ def forget_hook_repository():
 
 
 def main():
-    global TEST_JOBS, BINARY_TIMEOUT, SKIP_PERF, RELEASE_CONTENT
+    global TEST_JOBS, BINARY_TIMEOUT, SKIP_PERF, RELEASE_CONTENT, FULL_GATE
     forget_hook_repository()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument("--install-hook", action="store_true")
     parser.add_argument("--diff-only", action="store_true")
+    parser.add_argument("--full", action="store_true",
+                        help="extended workspace, ignored-content and performance gate (releases/high-risk changes)")
     parser.add_argument("--ci-test", action="store_true",
                         help="run the tests that need no generated content (used by CI)")
     parser.add_argument("--shard", type=parse_shard, default=(0, 1), metavar="K/N",
@@ -1717,6 +1775,7 @@ def main():
     args = parser.parse_args()
     SKIP_PERF = args.skip_perf
     RELEASE_CONTENT = args.release_content
+    FULL_GATE = args.full or args.release_content
     if args.binary_timeout:
         BINARY_TIMEOUT = args.binary_timeout * 60
     if args.jobs:

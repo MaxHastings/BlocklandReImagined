@@ -21,3 +21,50 @@ serde_json.workspace = true
 sha2.workspace = true
 walkdir = "2.5"
 zip.workspace = true
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "avatar_bundle"
+path = "src/bin/avatar_bundle.rs"
+test = false
+
+[[bin]]
+name = "avatar_material_bundle"
+path = "src/bin/avatar_material_bundle.rs"
+test = false
+
+[[bin]]
+name = "bind_world_events"
+path = "src/bin/bind_world_events.rs"
+test = false
+
+[[bin]]
+name = "effect_bundle"
+path = "src/bin/effect_bundle.rs"
+test = false
+
+[[bin]]
+name = "import_saves"
+path = "src/bin/import_saves.rs"
+test = false
+
+[[bin]]
+name = "lighting_compare"
+path = "src/bin/lighting_compare.rs"
+test = false
+
+[[bin]]
+name = "map_bundle"
+path = "src/bin/map_bundle.rs"
+test = false
+
+[[bin]]
+name = "stock_catalog"
+path = "src/bin/stock_catalog.rs"
+test = false
+
+[[bin]]
+name = "tutorial_pack"
+path = "src/bin/tutorial_pack.rs"
+test = false

@@ -4,8 +4,7 @@
     python tools/check.py quick        formatting + unit tests of the changed crates
     python tools/check.py focused      quick + clippy and non-GPU tests of the changed
                                        crates and what depends on them
-    python tools/check.py full         the whole push gate (tools/gate.py), once per
-                                       integrated candidate
+    python tools/check.py full         explicit extended gate (tools/gate.py --full)
     python tools/check.py plan [TIER]  print what a tier would run, run nothing
 
 "Changed" is every crate with a file differing from the merge base with
@@ -18,20 +17,19 @@ Tiers (docs/testing-tiers.md):
            `cargo test --lib` (unit tests) for each changed crate.
   focused  a few minutes: `cargo clippy --all-targets -D warnings` and every
            integration test that needs no window or GPU, for each changed crate
-           and each crate that depends on one. Crates whose tests render
+           and direct consumers by default. Crates whose integration tests render
            (HEAVY_CRATES) run their unit tests only; name the render or app
            test you need with --tests bri-client:large_build_perf.
   full     tools/gate.py: build, clippy, bri-client --check and every test
-           with --include-ignored. Nothing is left out; a tier is a way to
-           skip work you have not changed, never a way to skip a test.
+           with --include-ignored. Use for releases or high-risk shared changes;
+           ordinary merges use focused checks and platform CI.
 
 Long soak and endurance cases (the `soak_`, `endurance_` and `stress_` test
 names, see SOAK_PREFIXES) are `#[ignore]`d where they run for minutes. The
 gate runs them (it passes --include-ignored); `check.py soak` runs just
 those, for the crates it names, when you want them without a full gate.
 
-Each cargo call names one crate so a long list of crates never exceeds the
-Windows command-line limit (tools/check_format.py does the same).
+Cargo calls group selected packages to reuse one dependency build graph.
 """
 import argparse
 import json
@@ -45,7 +43,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Crates whose integration tests open an offscreen renderer or a whole App:
 # slow, GPU-bound, and run in full by the gate. `focused` runs only their
 # unit tests unless --tests names one.
-HEAVY_CRATES = {"bri-client", "bri-render"}
+HEAVY_CRATES = {"bri-client", "bri-render", "bri-fx-runtime", "bri-ui", "bri-chaos"}
 # Files at the workspace level that change every crate.
 WORKSPACE_FILES = {
     "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "clippy.toml",
@@ -135,7 +133,7 @@ def parse_tests(texts):
     return out
 
 
-def plan(tier, crates, reverse, extra_tests=(), depth=None):
+def plan(tier, crates, reverse, extra_tests=(), depth=1):
     """The commands a tier runs, as (label, argv) in order."""
     steps = []
     ordered = sorted(crates)
@@ -178,11 +176,15 @@ def soak_plan(crates):
     return steps
 
 
-def execute(steps):
+def execute(steps, target_dir=None):
     """Run steps in order, stopping at the first failure. Returns an exit code."""
     started = time.monotonic()
     timings = []
     for label, argv in steps:
+        if target_dir and argv[0] == "cargo" and argv[1] != "fmt":
+            # Cargo options precede the libtest/clippy argument separator.
+            at = argv.index("--") if "--" in argv else len(argv)
+            argv = [*argv[:at], "--target-dir", str(target_dir), *argv[at:]]
         print(f"[check] {label}: {' '.join(argv)}", flush=True)
         t = time.monotonic()
         code = subprocess.run(argv, cwd=ROOT).returncode
@@ -210,13 +212,14 @@ def main(argv=None):
     parser.add_argument("--crates", help="comma-separated crates instead of the changed ones")
     parser.add_argument("--tests", action="append", default=[], metavar="CRATE:TARGET",
                         help="also run this integration test target (focused)")
-    parser.add_argument("--depth", type=int, metavar="N",
-                        help="focused: test dependents only N steps away (1 = direct), default all")
+    parser.add_argument("--depth", type=int, default=1, metavar="N",
+                        help="focused: test dependents N steps away (default 1 = direct; -1 = all)")
+    parser.add_argument("--target-dir", type=Path, help="reuse the gate's dedicated build output")
     parser.add_argument("--push", action="store_true", help="full: rebase, gate and push")
     args = parser.parse_args(argv)
     tier = args.what if args.tier == "plan" else args.tier
     if tier == "full" and args.tier != "plan":
-        gate = [sys.executable, str(ROOT / "tools" / "gate.py")]
+        gate = [sys.executable, str(ROOT / "tools" / "gate.py"), "--full"]
         return subprocess.run(gate + (["--push"] if args.push else []), cwd=ROOT).returncode
     packages = metadata()
     dirs = crate_dirs(packages)
@@ -228,21 +231,27 @@ def main(argv=None):
     else:
         files = changed_files(args.base)
         crates = changed_crates(files, dirs)
-        if not crates:
+        if not crates and not args.tests:
             print("[check] no crate changed; nothing to run")
             return 0
     print(f"[check] changed crates: {', '.join(sorted(crates))}", flush=True)
     if args.tier == "soak":
         steps = soak_plan(crates)
     elif tier == "full":
-        steps = [("gate", [sys.executable, "tools/gate.py"])]
+        steps = [("gate", [sys.executable, "tools/gate.py", "--full"])]
     else:
-        steps = plan(tier, crates, dependents(packages), parse_tests(args.tests), args.depth)
+        extra = parse_tests(args.tests)
+        crates |= {crate for crate, _ in extra}
+        unknown = crates - set(dirs)
+        if unknown:
+            raise SystemExit(f"unknown crate(s): {', '.join(sorted(unknown))}")
+        steps = plan(tier, crates, dependents(packages), extra,
+                     None if args.depth < 0 else args.depth)
     if args.tier == "plan":
         for label, command in steps:
             print(f"{label}: {' '.join(command)}")
         return 0
-    return execute(steps)
+    return execute(steps, args.target_dir)
 
 
 if __name__ == "__main__":

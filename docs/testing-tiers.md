@@ -1,51 +1,75 @@
 # Test tiers
 
-A full gate run takes about twenty minutes on Maxwell's PC (ten of them
-tests), and running it after every small edit is how forty-minute loops
-happened. Pick the cheapest tier that covers what changed, and run the
-full gate once per integrated candidate. A tier decides which work to
-skip because you did not touch it; it never removes a test from the gate.
+Maxwell replaced the mandatory exhaustive merge gate on 2026-10-28. Ordinary
+changes use checks for the affected behavior and passing platform CI. Keep the
+extended suites for nightly/manual runs, releases and changes that need them.
+A private playtest ships after relevant checks and packaged startup; it does
+not wait for merge checks, ZIP creation or release LTO.
 
-`python tools/check.py <tier>` works out the changed crates (files that
-differ from the merge base with `origin/main`, plus uncommitted and new
-files; `--base REV` or `--crates a,b` override), and prints the time of its
-slowest steps. `python tools/check.py plan <tier>` prints what it would run.
+| Scope | Command | What runs |
+|---|---|---|
+| Quick | `python tools/check.py quick` | Formatting and changed crates' unit tests. |
+| Focused | `python tools/check.py focused` | Formatting, changed crates' warning-free clippy, tests of changed crates and direct consumers. |
+| Commit gate | `python tools/gate.py` | History/protocol/large-blob checks, then tool tests, documentation checks and focused checks on the exact committed tree. |
+| Extended | `python tools/gate.py --full` or `python tools/check.py full` | Workspace build/clippy, native content startup, full test targets including ignored cases, affected save corpus and host performance budget. |
+| Soak | `python tools/check.py soak --crates bri-net` | Explicit stress/endurance/soak cases, including ignored tests. |
 
-| Tier | Command | Runs | When |
-|---|---|---|---|
-| 1 quick | `python tools/check.py quick` | `cargo fmt --check` and the unit tests (`--lib`) of each changed crate | after every edit; seconds to two minutes on a warm `target/` |
-| 2 focused | `python tools/check.py focused` | quick, then clippy `-D warnings` on each changed crate, and every integration test that needs no window or GPU for the changed crates and the crates that depend on them | before committing or opening a PR; a few minutes |
-| 3 full | `python tools/check.py full` (same as `python tools/gate.py`; `--push` pushes) | the push gate: build, clippy, `bri-client --check`, every test with `--include-ignored` | once per integrated candidate; the real authority. PRs also run Windows CI |
-| soak | `python tools/check.py soak --crates bri-net` | tests named `soak_*`, `endurance_*` or `stress_*` in the crates named, in release | when you want the long cases without the gate |
+`--push` keeps the guarded rebase/check/push path. The pre-push hook stays
+enabled. A scoped pass is never recorded as an extended pass. Release tooling
+explicitly requests `--full`; `--release-content` also implies it.
 
-Notes:
+## Select relevant work
 
-- `--depth 1` limits tier 2 to direct dependents when the changed crate is
-  deep in the graph (`bri-world` is under almost everything).
-- `bri-client` and `bri-render` integration tests open an offscreen
-  renderer or the whole app. Tier 2 runs only their unit tests; ask for the
-  render or app test you need with `--tests bri-client:large_build_perf`.
-  The gate still runs all of them.
-- Each cargo call names one crate, so the Windows command-line limit never
-  applies (same reason as `tools/check_format.py`).
-- The gate's `tools/gate-known-failures.toml` is unchanged. Nothing in a
-  tier retries, skips or hides a failing test, and a new test is not added
-  to that file to get green.
+Changes are measured from the merge base with `origin/main`, including working
+changes. Override with `--base REV` or `--crates a,b`. Use `check.py plan focused`
+to inspect the plan. Focused checks include direct consumers by default;
+`--depth 0` selects changed crates alone, `--depth -1` includes all consumers.
+Cargo groups selected packages to reuse their dependency graph.
 
-## Labelling long cases
+Client, renderer, effect renderer, UI and chaos integration suites contain
+expensive GPU/whole-app/fuzz cases. Focused runs their unit tests by default.
+Name the integration targets relevant to your change explicitly, for example
+`python tools/check.py focused --tests bri-client:weapon_debris_render`. Do this for
+both the changed behavior and important consumers; a unit-only pass does not
+establish integrated gameplay or visual fidelity.
 
-A test that runs for more than a few seconds says so in its name, so the
-tiers and a reader can find it:
+Content, packaging and schema changes still need their corresponding checks,
+including `bri-client --check` against the actual content where relevant. Wire,
+save, authority and shared physics changes justify the extended gate. Record
+commands and scope, failures and remaining acceptance in the progress entry.
 
-- `stress_` scales a load up (`stress_large_builds_...`, sizes set by
-  `BRI_STRESS_BRICKS`).
-- `endurance_` repeats an operation many times and checks nothing leaked or
-  was lost (`endurance_map_changes_...`).
-- `soak_` runs a live system for a long time.
+## CI and suite ownership
 
-They stay in the gate (it runs ignored tests too). A case too slow even for
-the gate, such as a million bricks, takes its size from an environment
-variable and defaults to a size the gate can afford; the larger run is
-scheduled with `python tools/check.py soak` and recorded in
-`docs/progress/`. `#[ignore = "reason"]` is for tests that need hardware or
-a person (a real router, a GPU series), with the reason in the attribute.
+Ordinary PR and main CI use the same bounded `pr` tier. Windows builds all five
+shipping executables, checks imports and clippy; PR tests also run on Linux.
+Nightly/manual CI runs the extended content-free suites. Generated/private
+content checks remain local or release checks because hosted runners lack it.
+`--ci-test --tier main` remains available for the intermediate legacy tier.
+
+`tools/gate-known-failures.toml` owns the CI selection and each deferred target's
+reason. Broad client/render/network/chaos end-to-end matrices and eight measured
+UI/effect GPU matrices run in extended validation. Core unit tests and fast
+UI/effect input/state integration tests remain in ordinary CI. Directly affected integration targets must still be
+checked for a change even if their general matrix is deferred.
+
+Each shard now scopes Cargo target filters to the selected packages. A shard
+requesting one library must not compile every workspace unit-test executable.
+Pure CLI probes without tests set `test = false` in their manifests: their real
+executables still build and lint, while empty libtest copies are not linked.
+Do not disable a harness containing tests or modules with tests.
+
+Retire duplicate or obsolete cases when their meaningful contract is already
+covered. Keep distinct failure boundaries. Do not weaken assertions, hide new
+failures or add arbitrary skips to turn a run green. Failed named cases may be
+retried once and reported as flaky; persistent failures, hangs and crashes fail.
+
+## Long cases and playtesting
+
+`stress_` scales load, `endurance_` repeats operations, and `soak_` runs a live
+system for a long time. Keep these explicitly selectable. Large settings and
+performance campaigns belong in dedicated runs with measured evidence.
+
+Use the warm worktree and `--profile playtest` for previews. Finish the requested
+build before starting expensive validation. Never run local GPU suites, full
+gates, soaks or benchmarks while Maxwell plays: contention invalidates his
+performance observations. Maxwell owns every interactive playtest.

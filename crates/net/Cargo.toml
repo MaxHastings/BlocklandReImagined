@@ -49,3 +49,25 @@ bri-minigames = { path = "../minigames" }
 [package.metadata.cargo-machete]
 # Used only through `#[serde(with = "serde_bytes")]`, which machete cannot see.
 ignored = ["serde_bytes"]
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "bri-replay"
+path = "src/bin/bri-replay.rs"
+test = false
+
+[[bin]]
+name = "bri-server"
+path = "src/bin/bri-server.rs"
+test = false
+
+[[bin]]
+name = "build_load_probe"
+path = "src/bin/build_load_probe.rs"
+test = false
+
+[[bin]]
+name = "network_probe"
+path = "src/bin/network_probe.rs"
+test = false

@@ -176,7 +176,7 @@ def main():
         if not args.skip_refresh:
             phase('content refresh', lambda: refresh_content(sha, checkout, args.upload))
         build = phase('start release builds', lambda: start_build(args.version, args.branch, sha, checkout))
-        passed = phase('gate', lambda: subprocess.run([sys.executable, checkout / 'tools' / 'gate.py', sha],
+        passed = phase('gate', lambda: subprocess.run([sys.executable, checkout / 'tools' / 'gate.py', '--full', sha],
                                                       cwd=checkout).returncode == 0)
         if not passed:
             raise ReleaseError(f'the gate failed on {sha[:9]}; the log path is printed above. Nothing was pushed.')

@@ -35,3 +35,20 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "bri-addon-run"
+path = "src/bin/bri-addon-run.rs"
+test = false
+
+[[bin]]
+name = "building_probe"
+path = "src/bin/building_probe.rs"
+test = false
+
+[[bin]]
+name = "player_probe"
+path = "src/bin/player_probe.rs"
+test = false

@@ -21,3 +21,4 @@ zip.workspace = true
 [[bin]]
 name = "bri-audio-evidence"
 path = "src/bin/audio_evidence.rs"
+test = false
