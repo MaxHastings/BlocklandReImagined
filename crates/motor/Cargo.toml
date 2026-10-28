@@ -9,8 +9,10 @@ publish.workspace = true
 bri-console = { path = "../console" }
 anyhow.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 bri-content = { path = "../content" }
 bri-physics = { path = "../physics" }
 glam = { workspace = true, features = ["serde"] }
 rapier3d.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

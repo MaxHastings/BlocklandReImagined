@@ -363,11 +363,26 @@ impl App {
                 }
                 settings::save(&self.state_dir.join("settings.json"), &value).and_then(|()| {
                     self.audio.apply_settings(&value);
+                    self.voice.apply_settings(&value);
                     self.graphics = crate::graphics::Graphics::from_settings(&value);
                     self.weather.apply_settings(&value)
                 })
             }
+            // Voice chat's own volume: not a channel of the game's sounds.
+            UiAction::SetVolume { channel, value } if channel == "voice" => {
+                anyhow::ensure!(
+                    value.is_finite() && (0.0..=1.).contains(&value),
+                    "Invalid audio volume"
+                );
+                self.voice.set_volume(value);
+                Ok(())
+            }
             UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
+            UiAction::RefreshVoiceDevices => {
+                self.ui
+                    .apply(UiUpdate::VoiceDevices(crate::voice::input_devices()));
+                Ok(())
+            }
             UiAction::OpenSavesFolder => show_drop_folder(self.files.old_saves.saves_folder()),
             UiAction::RefreshHostColorsets => {
                 self.ui
@@ -468,6 +483,10 @@ impl App {
                     self.ui.apply(UiUpdate::Connection(ConnectionState::Idle));
                 }
                 Ok(())
+            }
+            UiAction::Game(GameAction::Voice { down }) => {
+                self.voice.set_talking(down);
+                return Ok(());
             }
             UiAction::Game(GameAction::ToggleFullscreen) => {
                 platform.push(PlatformCommand::ToggleFullscreen);
@@ -929,6 +948,19 @@ impl App {
             }
             UiAction::UnIgnore { target } => {
                 self.command(id, Command::UnIgnore { target }, action.clone())
+            }
+            // Local voice mute: this player's ears only, never the host's.
+            // The list reads it from core, so both are kept in step; the
+            // next session presentation carries the same state.
+            UiAction::VoiceMute { target } | UiAction::VoiceUnmute { target } => {
+                if matches!(action, UiAction::VoiceMute { .. }) {
+                    self.voice.mute(target);
+                    self.ui.core.voice_muted.insert(target);
+                } else {
+                    self.voice.unmute(target);
+                    self.ui.core.voice_muted.remove(&target);
+                }
+                Ok(())
             }
             UiAction::AnswerTrustInvite { from, answer } => {
                 let command = match answer {

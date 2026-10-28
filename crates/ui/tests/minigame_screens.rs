@@ -1233,6 +1233,7 @@ fn server_addon_settings_open_from_the_admin_menu_for_the_host_and_go_with_host_
         local_host: true,
         legacy_lan: false,
         supported: [AdminFeature::HostOptions].into_iter().collect(),
+        voice_muted: Default::default(),
         players: Vec::new(),
         options: Some(options),
     })));
@@ -2620,6 +2621,7 @@ fn server_addon_apply_freezes_fields_and_favorites_until_its_correlated_failure(
         local_host: true,
         legacy_lan: false,
         supported: [AdminFeature::HostOptions].into_iter().collect(),
+        voice_muted: Default::default(),
         players: Vec::new(),
         options: Some(AdminOptions::default()),
     })));

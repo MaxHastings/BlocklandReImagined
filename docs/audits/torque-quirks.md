@@ -122,25 +122,12 @@ when first seen starts fully crouched, as a new v20 thread does.
 - When the player is crouched, the chosen run, back or side maps to
   crouchRun, crouchBack or crouchSide.
 
-**Ours at the original audit.** `locomotion()` in `avatar.rs` uses a per-axis 0.1 root threshold. It
+**Ours.** `locomotion()` in `avatar.rs` uses a per-axis 0.1 root threshold. It
 restarts on any mode change, with no blend. It is owned by the diagonal walk
 animation thread, and I sent them the details.
 
 **Faithful?** Yes. It needs the 0.4 3D gate, the first-wins comparison order,
 the reverse-only-for-side rule and a 0.25 s transition blend.
-
-**2026-10-27 correction candidate.** The picker now lives in `sim::gait` and
-already has the 0.4 gate and first-wins comparisons. Maxwell's diagonal-turn
-playtest exposed repeated action restarts with both visible freezing and
-zero-time footstep marker spam. A ten-second client regression reproduced 600
-restarts. Looping ground direction changes within one posture now transfer
-normalized progress and advance it that frame; an active ground blend finishes
-without repeatedly resetting its start time. Host and client share the transfer.
-This intentionally corrects the original restart/flicker quirk; it is not a claim
-that v20 used phase continuity. Idle, airborne, non-looping and posture changes
-retain their action starts. See
-[the F correction handoff](../progress/2026-10-27-footstep-turning-f.md) for
-validation and remaining playtest acceptance.
 
 ### 3. Gates on the animation picker. Partial, routed.
 

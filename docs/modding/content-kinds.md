@@ -436,14 +436,10 @@ Footfalls and landings are a body's own too:
 
 `footsteps` (up to 8) plays one sound each `stride` units the body covers
 on the ground (0.25 to 32; left out, 1.1 times its standing height), never
-the same one twice running. Each body shuffles its current sound pool, playing
-every distinct profile before reshuffling and avoiding a repeated sound at the seam;
-changing surface or posture replaces the bag when the pool changes. `land`
-plays where it lands after falling faster
+the same one twice running; `land` plays where it lands after falling faster
 than 4 units a second. Each client plays them for every body it draws, so
 they cost nothing on the network; riders and sitters make none. v20's
-Blockhead has neither; ReImagined's base Blockhead uses the authored contact
-policy in `assets/blockhead-footsteps/sounds.json`. `surfaces` gives other footfalls by the surface kind
+Blockhead has neither. `surfaces` gives other footfalls by the surface kind
 under the feet (a map material's `bri_surface`, see Making maps; bricks are
 `brick`, terrain `terrain`, the rest `default`), in place of `footsteps` on
 that kind: `"surfaces": {"metal": ["your-id:clang_1"]}` (up to 16 kinds,

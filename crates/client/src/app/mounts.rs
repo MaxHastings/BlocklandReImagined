@@ -214,6 +214,7 @@ impl App {
                 posture: Default::default(),
             };
             let input = crate::avatar::AvatarAnimationInput {
+                voice_talking: false,
                 dead: info.destroyed,
                 ..Default::default()
             };

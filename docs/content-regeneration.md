@@ -5,15 +5,6 @@ v20 folder and are never committed. Repository-authored Add-Ons are copied in
 separately. The game ships for Windows x86-64, Apple silicon
 macOS and Linux x86-64. From a fresh clone:
 
-First-party Blockhead Foley lives separately in `assets/blockhead-footsteps/`.
-The weapon/resource importer includes its four WAVs in the native sound catalog;
-bootstrap tracks that authored folder as an input. The original v20 sound bytes
-and definitions are not replaced. An existing generated weapons catalog can be
-refreshed without reimporting v20 using
-`bri-weapons-import --refresh-base-foley <weapons-pack-directory>`.
-This updates only that catalog; its dependent item-presentation fingerprint must
-also be regenerated. Bootstrap is the full game regeneration path.
-
 ```sh
 python tools/bootstrap.py --v20 "/path/to/Blockland v20"
 ```

@@ -813,6 +813,11 @@ pub struct Checkpoint {
     /// Enabled packages' state as this client sees it: keys visible to
     /// everyone, plus its own owner-visible keys in a welcome.
     pub package_state: bri_sim::session::PackageStateView,
+    /// Whether the host runs voice chat (its Add-On turned on before players
+    /// joined): off, no voices are relayed and clients hide the mute
+    /// controls. Fixed for the session.
+    #[serde(default)]
+    pub voice_chat: bool,
     /// How fast each falling projectile drops per tick, by definition, for
     /// coasting projectiles between updates.
     pub projectile_falls: BTreeMap<String, f32>,
@@ -870,6 +875,7 @@ impl Checkpoint {
             world_near_chunks: 0,
             entities: session.package_entities(),
             package_state: session.package_state(),
+            voice_chat: session.voice_chat(),
             projectile_falls: session.projectile_falls(),
             world_shapes: session
                 .world_shapes()

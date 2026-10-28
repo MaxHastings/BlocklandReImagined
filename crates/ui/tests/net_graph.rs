@@ -162,6 +162,7 @@ fn overlay_commands_follow_toggle_netgraph_in_the_remap_list() {
             "Toggle NetGraph",
             "Toggle Performance Overlay",
             "Save Performance Capture",
+            "Push To Talk",
             "Toggle Player Names / Crosshair",
         ]
     );

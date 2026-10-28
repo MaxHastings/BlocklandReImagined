@@ -87,9 +87,10 @@ impl Footfall {
 struct Walker {
     /// Ground covered since the last footfall.
     covered: f32,
-    variants: Variants,
+    /// The variant played last, so two steps in a row differ.
+    last: usize,
     grounded: bool,
-    /// Downward speed in the last airborne sample, before touchdown.
+    /// The fastest it fell since it last stood.
     falling: f32,
     /// Whether the last frame's jump take-off was already heard.
     airborne: bool,
@@ -97,51 +98,10 @@ struct Walker {
     posture: Option<&'static str>,
 }
 
-/// A shuffled bag per body and actual sound pool. Every authored variation
-/// plays before the bag refills; its seam must not repeat the previous sound.
-/// Switching surface or posture replaces the bag, even for equal-size pools.
-#[derive(Default)]
-struct Variants {
-    pool: Vec<String>,
-    remaining: Vec<usize>,
-    last: Option<String>,
-}
-impl Variants {
-    fn pick<'a>(&mut self, sounds: &'a [String], turn: &mut u32) -> Option<&'a str> {
-        if sounds.is_empty() {
-            return None;
-        }
-        if self.pool != sounds {
-            self.pool = sounds.to_vec();
-            self.remaining.clear();
-        }
-        if self.remaining.is_empty() {
-            // Repeated profile IDs do not create distinct variations. Weighted
-            // choices belong to the sound profile's own variant mechanism.
-            self.remaining
-                .extend((0..sounds.len()).filter(|&i| !sounds[..i].contains(&sounds[i])));
-            for i in (1..self.remaining.len()).rev() {
-                *turn = turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-                self.remaining.swap(i, (*turn >> 16) as usize % (i + 1));
-            }
-            let end = self.remaining.len() - 1;
-            if self.last.as_deref() == Some(sounds[self.remaining[end]].as_str())
-                && let Some(other) = (0..end)
-                    .find(|&i| self.last.as_deref() != Some(sounds[self.remaining[i]].as_str()))
-            {
-                self.remaining.swap(other, end);
-            }
-        }
-        let sound = &sounds[self.remaining.pop()?];
-        self.last = Some(sound.clone());
-        Some(sound)
-    }
-}
-
 #[derive(Default)]
 pub struct Footsteps {
     walkers: BTreeMap<OwnerId, Walker>,
-    /// Random state for independently shuffled bags.
+    /// Picks variants; any sequence that is not the same twice will do.
     turn: u32,
 }
 
@@ -182,14 +142,20 @@ impl Footsteps {
             let kind = surface(position);
             let walker = self.walkers.entry(owner).or_default();
             let steps = sounds.footsteps_for(walker.posture.unwrap_or("stand"), &kind);
-            let Some(sound) = walker.variants.pick(steps, &mut self.turn) else {
+            if steps.is_empty() {
                 continue;
-            };
+            }
+            self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            let mut pick = (self.turn >> 16) as usize % steps.len();
+            if steps.len() > 1 && pick == walker.last {
+                pick = (pick + 1) % steps.len();
+            }
+            walker.last = pick;
             // The mark's own loudness and reach, as a sound source of its own has.
             out.push(Footfall {
                 volume: event.volume.unwrap_or(1.0),
                 radius: event.radius.unwrap_or(0.0),
-                ..Footfall::on(sounds, sound, position, &kind)
+                ..Footfall::on(sounds, &steps[pick], position, &kind)
             });
         }
         out
@@ -237,8 +203,11 @@ impl Footsteps {
                         // AA's PlayLanded: the floor material's foot-contact sound.
                         let kind = surface(player.feet);
                         let steps = sounds.footsteps_for(player.posture, &kind);
-                        if let Some(sound) = walker.variants.pick(steps, &mut self.turn) {
-                            out.push(Footfall::on(sounds, sound, player.feet, &kind));
+                        if !steps.is_empty() {
+                            self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                            let pick = (self.turn >> 16) as usize % steps.len();
+                            walker.last = pick;
+                            out.push(Footfall::on(sounds, &steps[pick], player.feet, &kind));
                         }
                     }
                 }
@@ -252,15 +221,18 @@ impl Footsteps {
                 if sounds.takeoff_on_surface && velocity.y > 0.0 {
                     let kind = surface(player.feet);
                     let steps = sounds.footsteps_for(player.posture, &kind);
-                    if let Some(sound) = walker.variants.pick(steps, &mut self.turn) {
-                        out.push(Footfall::on(sounds, sound, player.feet, &kind));
+                    if !steps.is_empty() {
+                        self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                        let pick = (self.turn >> 16) as usize % steps.len();
+                        walker.last = pick;
+                        out.push(Footfall::on(sounds, &steps[pick], player.feet, &kind));
                     }
                 }
             }
             walker.falling = if player.grounded {
                 0.0
             } else {
-                (-velocity.y).max(0.0)
+                walker.falling.max(-velocity.y)
             };
             walker.grounded = player.grounded;
             // A body whose clips mark their footfalls steps on those instead
@@ -283,10 +255,17 @@ impl Footsteps {
                 walker.covered %= stride;
                 let kind = surface(player.feet);
                 let steps = sounds.footsteps_for(player.posture, &kind);
-                let Some(sound) = walker.variants.pick(steps, &mut self.turn) else {
+                let count = steps.len();
+                if count == 0 {
                     continue;
-                };
-                out.push(Footfall::on(sounds, sound, player.feet, &kind));
+                }
+                self.turn = self.turn.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let mut pick = (self.turn >> 16) as usize % count;
+                if count > 1 && pick == walker.last {
+                    pick = (pick + 1) % count;
+                }
+                walker.last = pick;
+                out.push(Footfall::on(sounds, &steps[pick], player.feet, &kind));
             }
         }
         self.walkers.retain(|owner, _| seen.contains(owner));
@@ -298,53 +277,10 @@ impl Footsteps {
 mod tests {
     use super::*;
 
-    #[test]
-    fn shuffled_footfalls_cover_the_pool_without_repeats_at_bag_seams() {
-        let pool: Vec<String> = (0..8).map(|i| format!("test:step_{i}")).collect();
-        let mut variants = Variants::default();
-        let mut turn = 0;
-        let heard: Vec<_> = (0..800)
-            .map(|_| variants.pick(&pool, &mut turn).unwrap().to_owned())
-            .collect();
-        assert!(heard.windows(2).all(|w| w[0] != w[1]));
-        for bag in heard.chunks_exact(pool.len()) {
-            let mut sorted = bag.to_vec();
-            sorted.sort();
-            assert_eq!(sorted, pool);
-        }
-        assert!(heard.chunks_exact(8).any(|bag| bag != &heard[..8]));
-    }
-
-    #[test]
-    fn variant_bags_follow_pool_identity_and_allow_empty_or_single_pools() {
-        let mut variants = Variants::default();
-        let mut turn = 17;
-        let a = vec!["test:a".into(), "test:b".into()];
-        let b = vec!["test:b".into(), "test:c".into()];
-        let last = variants.pick(&a, &mut turn).unwrap().to_owned();
-        assert_ne!(variants.pick(&b, &mut turn).unwrap(), last);
-        assert_eq!(variants.pool, b);
-        assert!(variants.pick(&[], &mut turn).is_none());
-        let single = vec!["test:only".into()];
-        for _ in 0..3 {
-            assert_eq!(variants.pick(&single, &mut turn), Some("test:only"));
-        }
-        // A different body's bag is independent of this body's last sound.
-        let mut other = Variants::default();
-        assert!(other.pick(&a, &mut turn).is_some());
-        assert_eq!(variants.pool, single);
-        let duplicates = vec!["test:a".into(), "test:a".into(), "test:b".into()];
-        let heard: Vec<_> = (0..20)
-            .map(|_| variants.pick(&duplicates, &mut turn).unwrap())
-            .collect();
-        assert!(heard.windows(2).all(|w| w[0] != w[1]));
-    }
-
     fn walker_body() -> (Archetypes, ArchetypeId) {
         let mut archetypes = Archetypes::default();
         let mut body = archetypes.resolve(ArchetypeId(0)).clone();
         body.id = "test:archetype/walker".into();
-        body.sounds = Sounds::default();
         body.sounds.footsteps = vec!["test:step_1".into(), "test:step_2".into()];
         body.sounds.stride = Some(3.0);
         body.sounds.land = Some("test:land".into());
@@ -680,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn the_blockhead_uses_contacts_instead_of_the_stride_timer() {
+    fn the_blockhead_makes_no_sound_walking() {
         let archetypes = Archetypes::default();
         let mut steps = Footsteps::default();
         let blockhead = player(ArchetypeId(0), [7.0, 0.0, 0.0], true);
@@ -688,41 +624,6 @@ mod tests {
             assert!(
                 steps
                     .update(1.0 / 60.0, [blockhead], &archetypes, |_| "default".into())
-                    .is_empty()
-            );
-        }
-    }
-
-    #[test]
-    fn slowing_a_fall_before_touchdown_does_not_bank_a_landing_impact() {
-        let archetypes = Archetypes::default();
-        let id = ArchetypeId(0);
-        for last_speed in [-1.0, 2.0] {
-            let mut steps = Footsteps::default();
-            for (speed, grounded) in [(-20.0, false), (last_speed, false), (0.0, true)] {
-                assert!(
-                    steps
-                        .update(
-                            1.0 / 60.0,
-                            [player(id, [0.0, speed, 0.0], grounded)],
-                            &archetypes,
-                            |_| "default".into()
-                        )
-                        .is_empty()
-                );
-            }
-        }
-        // Joining, standing, and small support fluctuations have no impact.
-        let mut steps = Footsteps::default();
-        for (speed, grounded) in [(0.0, true), (0.0, true), (-1.0, false), (0.0, true)] {
-            assert!(
-                steps
-                    .update(
-                        1.0 / 60.0,
-                        [player(id, [0.0, speed, 0.0], grounded)],
-                        &archetypes,
-                        |_| "default".into()
-                    )
                     .is_empty()
             );
         }

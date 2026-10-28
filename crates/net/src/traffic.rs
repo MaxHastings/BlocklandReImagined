@@ -24,9 +24,11 @@ pub enum Kind {
     Notice,
     /// Command replies.
     Reply,
+    /// Proximity voice datagrams.
+    Voice,
 }
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Pose,
         Kind::Vehicle,
         Kind::Orb,
@@ -36,6 +38,7 @@ impl Kind {
         Kind::Package,
         Kind::Notice,
         Kind::Reply,
+        Kind::Voice,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -48,6 +51,7 @@ impl Kind {
             Kind::Package => "package state",
             Kind::Notice => "notices",
             Kind::Reply => "replies",
+            Kind::Voice => "voice datagrams",
         }
     }
 }

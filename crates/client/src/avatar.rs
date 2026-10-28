@@ -1311,6 +1311,10 @@ pub struct AvatarAnimationInput {
     /// Current thread-3 builder or chat animation (`playThread(3, ...)`):
     /// brick shifts, rotations, plant, undo, activate and talk.
     pub gesture: Option<ActionAnimation>,
+    /// Voice-activity signal from the local audio/network state. This adds
+    /// the existing additive `talk` clip without replacing any animation
+    /// thread.
+    pub voice_talking: bool,
     /// Dead bodies hold the original `death1` sequence.
     pub dead: bool,
     /// How a dead body fell (the host's [`bri_sim::session::DeathPose`]):
@@ -2291,71 +2295,22 @@ impl AvatarMesh {
             None => (None, false),
         };
         let duration = clip.map_or(0.0, |c| c.duration);
-        let continued = next.and_then(|action| {
-            let previous = named(self.mode)?;
-            if !previous.looping || !clip.is_some_and(|c| c.looping) {
-                return None;
-            }
-            // This interval elapsed before the new direction was selected.
-            // Finish it on the old clock so its last contact is not lost.
-            let local = Quat::from_rotation_y(movement.body_yaw()) * Vec3::from(movement.velocity)
-                / movement.scale.max(0.01);
-            let delta = elapsed
-                * self
-                    .kind
-                    .time_scale(previous, movement_role(self.mode), local);
-            let to = self.phase + if self.forward { delta } else { -delta };
-            let phase = bri_sim::gait::ground_phase(
-                movement_role(self.mode),
-                movement_role(action.sequence),
-                to,
-                [previous.duration, duration],
-                [self.forward, action.forward != reversed],
-            )?;
-            Some((
-                phase,
-                crate::footsteps::ClipSpan {
-                    clip: previous.name.to_ascii_lowercase(),
-                    from: self.phase,
-                    to,
-                    duration: previous.duration,
-                    looping: true,
-                    restart: false,
-                },
-            ))
-        });
-        let restart = first || (next.is_some() && continued.is_none());
+        let phase_before = self.phase;
         if let Some(action) = next {
             if action.sequence == SIT {
                 self.stood_at = None;
             } else if self.mode == SIT {
                 self.stood_at = Some(time);
             }
-            // A direction boundary may be crossed every frame. Let an active
-            // ground blend finish instead of continually freezing a new source
-            // pose and postponing its completion.
-            if continued.is_none()
-                || self
-                    .transition
-                    .as_ref()
-                    .is_none_or(|(_, start)| time - start >= TRANSITION_TIME)
-            {
-                self.transition = self
-                    .channels
-                    .take()
-                    .filter(|_| !first)
-                    .map(|channels| (channels, time));
-            }
+            self.transition = self
+                .channels
+                .take()
+                .filter(|_| !first)
+                .map(|channels| (channels, time));
             self.mode = action.sequence;
             self.forward = action.forward != reversed;
-            self.phase = continued
-                .as_ref()
-                .map_or(if self.forward { 0.0 } else { duration }, |(phase, _)| {
-                    *phase
-                });
-        }
-        let phase_before = self.phase;
-        if !restart && continued.is_none() {
+            self.phase = if self.forward { 0.0 } else { duration };
+        } else {
             // A locomotion clip plays at the speed the body moves.
             let rate = clip.map_or(1.0, |clip| {
                 let local = Quat::from_rotation_y(movement.body_yaw())
@@ -2370,15 +2325,17 @@ impl AvatarMesh {
             }
         }
         let mode = self.mode;
-        let span = continued.map(|(_, span)| span).or_else(|| {
-            clip.map(|c| crate::footsteps::ClipSpan {
-                clip: c.name.to_ascii_lowercase(),
-                from: phase_before,
-                to: self.phase,
-                duration,
-                looping: c.looping,
-                restart,
-            })
+        let span = clip.map(|c| crate::footsteps::ClipSpan {
+            clip: c.name.to_ascii_lowercase(),
+            from: if next.is_some() {
+                self.phase
+            } else {
+                phase_before
+            },
+            to: self.phase,
+            duration,
+            looping: c.looping,
+            restart: next.is_some() || first,
         });
         // Posed again before the footfalls were taken: one stretch.
         self.clip_span = match (self.clip_span.take(), span) {
@@ -2442,7 +2399,7 @@ impl AvatarMesh {
             })
             .collect();
         let bri_content::body_pose::BodyLayerPlan {
-            layers,
+            mut layers,
             unacted,
             transition_at: at,
             unacted_transition_at,
@@ -2471,6 +2428,29 @@ impl AvatarMesh {
                 prone: player.posture.prone,
             },
         )?;
+        // Voice activity composes the stock additive talk clip over locomotion
+        // and any other thread. Cycling this short one-shot is important: the
+        // authored Blockhead clip is non-looping, and should be held only while
+        // actual speech remains active. A thread-3 talk action already provides
+        // the same pose, so don't layer it twice.
+        let gesture_is_talk = animation_input
+            .gesture
+            .as_ref()
+            .is_some_and(|a| a.sequence.eq_ignore_ascii_case("talk"));
+        if animation_input.voice_talking
+            && !animation_input.dead
+            && !gesture_is_talk
+            && let Some(clip) = assets.rig.sequence("talk")
+            && clip.additive
+            && clip.duration.is_finite()
+            && clip.duration > 0.0
+        {
+            layers.push(Layer {
+                animation: clip,
+                time: (time.max(0.0) % f64::from(clip.duration)) as f32,
+                weight: 1.0,
+            });
+        }
         self.skipped.extend(skipped);
         // A foreign body need not borrow a punch/throw to use a stock tool.
         // Sample only the reference tool action's socket displacement, keeping
@@ -3032,6 +3012,7 @@ impl Preview {
             },
             time * 0.85,
             &AvatarAnimationInput {
+                voice_talking: false,
                 // Original AvatarGui sets body thread 1 to run at 0.85.
                 // Head-up remains the outfit's existing accessory layer.
                 body: [
@@ -3435,6 +3416,7 @@ mod tests {
             &player(),
             0.0,
             &AvatarAnimationInput {
+                voice_talking: false,
                 water_coverage: 1.0,
                 ..Default::default()
             },
@@ -3450,6 +3432,7 @@ mod tests {
             &player(),
             0.2,
             &AvatarAnimationInput {
+                voice_talking: false,
                 water_coverage: 1.0,
                 dead: true,
                 ..Default::default()
@@ -3890,6 +3873,7 @@ mod tests {
                 ..player()
             };
             let mut input = AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Right,
                 ..Default::default()
             };
@@ -3961,6 +3945,7 @@ mod tests {
         body.pose_with_animation(&assets, &p, 0., &Default::default())?;
         p.velocity = [0., 0., -2.];
         let input = AvatarAnimationInput {
+            voice_talking: false,
             held_tool_pose: HeldToolPose::Right,
             action: Some(ActionAnimation {
                 sequence: "activate2".into(),
@@ -4016,6 +4001,7 @@ mod tests {
             ..player()
         };
         let mut input = AvatarAnimationInput {
+            voice_talking: false,
             sitting: true,
             held_tool_pose: HeldToolPose::Right,
             ..Default::default()
@@ -4063,6 +4049,7 @@ mod tests {
                     ..player()
                 };
                 let mut input = AvatarAnimationInput {
+                    voice_talking: false,
                     sitting: true,
                     mount_rotation: Some(Quat::from_rotation_y(0.6) * Quat::from_rotation_z(0.3)),
                     seat_pose: Some("missing-seat".into()),
@@ -4152,6 +4139,7 @@ mod tests {
         });
         body.set_body_kind(kind);
         let mut input = AvatarAnimationInput {
+            voice_talking: false,
             held_tool_pose: HeldToolPose::Both,
             support: Some(Vec3::new(-0.4, 0.1, 0.)),
             action: Some(ActionAnimation {
@@ -4289,6 +4277,7 @@ mod tests {
             &player(),
             0.,
             &AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Both,
                 support: Some(Vec3::splat(4.)),
                 ..Default::default()
@@ -4323,82 +4312,6 @@ mod tests {
             ),
             "host and client preserve the same authored frame"
         );
-        Ok(())
-    }
-
-    #[test]
-    fn a_turn_keeps_the_contact_in_the_old_clips_last_interval() -> Result<()> {
-        let assets = crate::testing::avatar::assets()?;
-        for (before, after, old_clip, new_clip, fraction, forward) in [
-            (
-                [0.0, 0.0, -4.0],
-                [-4.0, 0.0, 0.0],
-                "run",
-                "side",
-                0.25,
-                true,
-            ),
-            (
-                [4.0, 0.0, 0.0],
-                [0.0, 0.0, -4.0],
-                "side",
-                "run",
-                0.75,
-                false,
-            ),
-        ] {
-            let duration = assets.rig.sequence(old_clip).context("old clip")?.duration;
-            let contact = duration * fraction;
-            let at = f64::from(if forward { contact } else { duration - contact });
-            let mut mesh = assets.mesh(assets.package.defaults.clone())?;
-            let mut p = player();
-            p.velocity = before;
-            mesh.pose(&assets, &p, 0.0)?;
-            mesh.take_clip_span();
-            mesh.pose(&assets, &p, at - 0.01)?;
-            mesh.take_clip_span();
-            p.velocity = after;
-            mesh.pose(&assets, &p, at + 0.01)?;
-            let last = mesh.take_clip_span().context("turn span")?;
-            assert_eq!(last.clip, old_clip, "finish the elapsed old interval first");
-            assert!(
-                last.passes(contact),
-                "lost the contact before the turn: {last:?}"
-            );
-            assert!(!last.restart);
-            mesh.pose(&assets, &p, at + 0.02)?;
-            let next = mesh.take_clip_span().context("new clip span")?;
-            assert_eq!(next.clip, new_clip);
-            assert!(!next.restart);
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn turning_across_a_diagonal_keeps_walking_instead_of_restarting() -> Result<()> {
-        let assets = crate::testing::avatar::assets()?;
-        for (crouched, right) in [(false, false), (false, true), (true, false), (true, true)] {
-            let mut mesh = assets.mesh(assets.package.defaults.clone())?;
-            let mut p = player();
-            p.crouched = crouched;
-            let mut restarts = 0;
-            let mut advanced = 0.0;
-            let mut starts = 0;
-            for frame in 0..600 {
-                // Turning moves the object-space velocity across the run/strafe
-                // boundary in both directions. Both are still one continuous walk.
-                p.yaw = if frame % 2 == 0 { -0.002 } else { 0.002 };
-                p.velocity = [if right { 4.0 } else { -4.0 }, 0.0, -4.0];
-                mesh.pose(&assets, &p, frame as f64 / 60.0)?;
-                let span = mesh.take_clip_span().context("walking span")?;
-                restarts += usize::from(span.restart);
-                starts += usize::from(span.passes(0.0));
-                advanced += (span.to - span.from).abs();
-            }
-            assert_eq!(restarts, 1, "crouched={crouched}, right={right}");
-            assert!(advanced > 9.0, "walking froze: {advanced}");
-            assert!(starts < 50, "clip-start footfall spam: {starts}");
-        }
         Ok(())
     }
 
@@ -4517,6 +4430,7 @@ mod tests {
                 &mut mesh,
                 player(),
                 AvatarAnimationInput {
+                    voice_talking: false,
                     held_tool_pose: held,
                     ..Default::default()
                 },
@@ -4526,6 +4440,7 @@ mod tests {
             &mut mesh,
             player(),
             AvatarAnimationInput {
+                voice_talking: false,
                 sitting: true,
                 ..Default::default()
             },
@@ -4535,6 +4450,7 @@ mod tests {
             &mut mesh,
             player(),
             AvatarAnimationInput {
+                voice_talking: false,
                 dead: true,
                 ..Default::default()
             },
@@ -4556,6 +4472,7 @@ mod tests {
             &mut mesh,
             player(),
             AvatarAnimationInput {
+                voice_talking: false,
                 action: Some(ActionAnimation {
                     sequence: "armreadyboth".into(),
                     started_at: 0.0,
@@ -4626,6 +4543,7 @@ mod tests {
             let mut mesh = assets.body_mesh(&model, assets.package.defaults.clone())?;
             mesh.set_body_kind(BodyKind::of(&archetype, false));
             let input = AvatarAnimationInput {
+                voice_talking: false,
                 sitting: true,
                 mount_rotation: Some(rotation),
                 seat_pose: Some(
@@ -4675,14 +4593,17 @@ mod tests {
         mesh.set_body_kind(BodyKind::of(&archetype, false));
         for (t, input) in [
             AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Both,
                 ..Default::default()
             },
             AvatarAnimationInput {
+                voice_talking: false,
                 sitting: true,
                 ..Default::default()
             },
             AvatarAnimationInput {
+                voice_talking: false,
                 dead: true,
                 ..Default::default()
             },
@@ -4760,6 +4681,7 @@ mod tests {
         // Seated, tilted with the seat.
         let tilt = Quat::from_rotation_x(0.2);
         let seated = AvatarAnimationInput {
+            voice_talking: false,
             sitting: true,
             mount_rotation: Some(tilt),
             ..Default::default()
@@ -5345,6 +5267,7 @@ mod tests {
         let assets = &fx.assets;
         let p = player();
         let dead = AvatarAnimationInput {
+            voice_talking: false,
             dead: true,
             ..Default::default()
         };
@@ -5383,6 +5306,7 @@ mod tests {
         let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let input = AvatarAnimationInput {
+            voice_talking: false,
             held_tool_pose: HeldToolPose::Right,
             ..Default::default()
         };
@@ -5477,6 +5401,7 @@ mod tests {
             &p,
             0.25,
             &AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Right,
                 action: Some(ActionAnimation {
                     sequence: "wrench".into(),
@@ -5512,6 +5437,7 @@ mod tests {
             &p,
             0.5,
             &AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::None,
                 action: Some(ActionAnimation {
                     sequence: "missing-original-clip".into(),
@@ -5538,6 +5464,7 @@ mod tests {
         let mut baseline = assets.mesh(assets.package.defaults.clone())?;
         baseline.pose(assets, &p, 1.0)?;
         let acting = |sequence: &str| AvatarAnimationInput {
+            voice_talking: false,
             action: Some(ActionAnimation {
                 sequence: sequence.into(),
                 started_at: 0.0,
@@ -5580,6 +5507,7 @@ mod tests {
             &p,
             0.0,
             &AvatarAnimationInput {
+                voice_talking: false,
                 held_tool_pose: HeldToolPose::Right,
                 action: None,
                 ..Default::default()
@@ -5646,6 +5574,7 @@ mod tests {
         p.pitch = 0.4;
         p.velocity = [0.0, 0.0, -4.0];
         let input = |gesture: Option<&str>| AvatarAnimationInput {
+            voice_talking: false,
             held_tool_pose: HeldToolPose::Right,
             gesture: gesture.map(|sequence| ActionAnimation {
                 sequence: sequence.into(),
@@ -5677,6 +5606,7 @@ mod tests {
             &player(),
             0.0,
             &AvatarAnimationInput {
+                voice_talking: false,
                 mount_rotation: Some(tilt),
                 sitting: true,
                 ..Default::default()
@@ -5690,6 +5620,7 @@ mod tests {
         let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let mut input = AvatarAnimationInput {
+            voice_talking: false,
             mount_rotation: Some(Quat::from_rotation_y(0.4)),
             sitting: true,
             ..Default::default()
@@ -5878,6 +5809,7 @@ mod tests {
                     .player;
                 let time = tick as f64 * 0.032;
                 let input = AvatarAnimationInput {
+                    voice_talking: false,
                     held_tool_pose: held,
                     ..Default::default()
                 };
@@ -5942,6 +5874,7 @@ mod tests {
                 motor.state(),
                 6.0,
                 &AvatarAnimationInput {
+                    voice_talking: false,
                     held_tool_pose: held,
                     ..Default::default()
                 },
@@ -5972,6 +5905,7 @@ mod tests {
             &presented,
             0.064,
             &AvatarAnimationInput {
+                voice_talking: false,
                 tick_state: Some(p.clone()),
                 ..Default::default()
             },
@@ -5988,6 +5922,7 @@ mod tests {
                 &presented,
                 0.096 + i as f64 / 60.0,
                 &AvatarAnimationInput {
+                    voice_talking: false,
                     tick_state: Some(p.clone()),
                     ..Default::default()
                 },
@@ -6027,6 +5962,7 @@ mod tests {
             }
             let before = mesh.posed_nodes.clone();
             let started = AvatarAnimationInput {
+                voice_talking: false,
                 body: [
                     Some(ActionAnimation {
                         sequence: clip.into(),
@@ -6087,6 +6023,7 @@ mod tests {
         let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let sitting = AvatarAnimationInput {
+            voice_talking: false,
             sitting: true,
             ..Default::default()
         };

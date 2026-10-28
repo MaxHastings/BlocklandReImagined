@@ -1,14 +1,6 @@
 use anyhow::{Context, Result};
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() == 2 && args[0] == "--refresh-base-foley" {
-        let pack = bri_weapons_import::foley::refresh(std::path::Path::new(&args[1]))?;
-        println!(
-            "Base Foley refreshed; {} sounds in native catalog",
-            pack.sounds.len()
-        );
-        return Ok(());
-    }
     anyhow::ensure!(
         args.len() == 4,
         "Usage: bri-weapons-import REFERENCE_ROOT RECOVERED_CORE_SCRIPT RECOVERED_DAMAGE_TYPES FRESH_OUTPUT"
