@@ -131,7 +131,7 @@ fn npc_reactions_are_positional_and_an_iconic_clip_cannot_echo_across_bots() {
     p.cue(1);
     let first = p.call("mix", vec![]);
     assert!(matches!(&first[..], [Op::Sound(s)]
-        if s.at == SoundAt::Position([30.0, 3.0, 7.0]) && s.radius == 38.0));
+        if s.at == SoundAt::Position([30.0, 3.0, 7.0]) && s.radius == 60.0 && s.volume == 1.0));
     p.snapshot.tick = 1440;
     p.cue(2);
     assert!(
