@@ -1805,7 +1805,9 @@ mod tests {
     #[test]
     #[ignore = "requires ignored generated native content; no game window or OS input"]
     fn local_native_content_index_and_lazy_maps() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let root = std::env::var_os("BRI_CONTENT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
         let content = ClientContent::load(&root).unwrap();
         assert_eq!(
             (
@@ -1836,7 +1838,22 @@ mod tests {
         // Add-Ons, once a checkout's content has them installed).
         let items = &content.weapons.pack.items;
         assert_eq!(items.keys().filter(|id| !id.contains(':')).count(), 21);
-        assert_eq!(content.datablocks["ItemData"].len(), items.len());
+        // Script-only hidden items deliberately have no picker entry. Check
+        // identities, not a total that assumes every installed item is public.
+        let visible: std::collections::BTreeSet<_> = items
+            .values()
+            .filter(|item| !item.hidden)
+            .map(|item| item.id.as_str())
+            .collect();
+        let choices = &content.datablocks["ItemData"];
+        let offered: std::collections::BTreeSet<_> =
+            choices.iter().map(|choice| choice.id.as_str()).collect();
+        assert_eq!(offered, visible);
+        assert_eq!(
+            choices.len(),
+            offered.len(),
+            "duplicate item picker entries"
+        );
         assert!(
             content
                 .paths
