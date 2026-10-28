@@ -93,7 +93,10 @@ pub(super) struct Section {
     probe_generation: u64,
     pub landed: bool,
     shared_only: bool,
-    pending: VecDeque<(SectionProbe, f32)>,
+    pending: VecDeque<(SectionProbe, f32, Vec3, Vec3)>,
+    contact_point: Option<Vec3>,
+    snap_told: bool,
+    landing_told: bool,
     target: f32,
     contact: Option<f32>,
     witnesses: [Option<Vec3>; WITNESSES],
@@ -151,6 +154,9 @@ impl Section {
             landed: false,
             shared_only: false,
             pending: VecDeque::new(),
+            contact_point: None,
+            snap_told: false,
+            landing_told: false,
             target: 0.,
             contact: None,
             witnesses: [None; WITNESSES],
@@ -362,6 +368,7 @@ impl Section {
             *work -= WITNESSES as u32;
             self.target = self.age + 0.2;
             self.contact = None;
+            self.contact_point = None;
             let (old, ot) = self.pose(self.confirmed);
             let (next, nt) = self.pose(self.target);
             for point in self.witnesses.iter().flatten() {
@@ -371,17 +378,24 @@ impl Section {
                     continue;
                 }
                 let reach = from.distance(to);
-                self.pending
-                    .push_back((building.section_probe(from, to), reach));
+                self.pending.push_back((
+                    building.section_probe(from, to),
+                    reach,
+                    from,
+                    (to - from) / reach,
+                ));
             }
         }
-        while let Some((p, reach)) = self.pending.front_mut() {
+        while let Some((p, reach, from, direction)) = self.pending.front_mut() {
             let Some(hit) = building.step_section_probe(p, work, |id| dead.contains(&id))? else {
                 break;
             };
             if let Some(distance) = hit {
                 let f = ((distance - 0.02) / reach.max(0.001)).clamped(0., 1.);
-                self.contact = Some(self.contact.map_or(f, |old| old.min(f)));
+                if self.contact.is_none_or(|old| f < old) {
+                    self.contact = Some(f);
+                    self.contact_point = Some(*from + *direction * distance);
+                }
             }
             self.pending.pop_front();
         }
@@ -675,6 +689,39 @@ impl BrickDebris {
                 continue;
             }
             s.advance_motion(building, &mut contacts, &self.dead)?;
+            if s.shown > 0. && !s.snap_told && s.pieces.iter().any(|p| p.active) {
+                s.snap_told = true;
+                self.foley.report(super::foley::Hit {
+                    source: super::foley::Source::Section(key.0, key.1),
+                    kind: super::foley::Kind::Snap,
+                    point: s.origin + s.pivot,
+                    speed: self
+                        .foley
+                        .policy
+                        .as_ref()
+                        .map_or(0., |p| p.full_speed * 0.7),
+                });
+            }
+            if s.landed && !s.landing_told && s.pieces.iter().any(|p| p.active) {
+                s.landing_told = true;
+                if let Some(point) = s.contact_point {
+                    let (center, turn) = s.pose(s.shown);
+                    let (before, bt) = s.pose((s.shown - 0.02).max(0.));
+                    let local = turn.inverse() * (point - center);
+                    self.foley.report(super::foley::Hit {
+                        source: super::foley::Source::Section(key.0, key.1),
+                        kind: if self.foley.policy.as_ref().is_some_and(|p| {
+                            s.pieces.iter().filter(|m| m.active).count() >= p.landing_min_members
+                        }) {
+                            super::foley::Kind::Landing
+                        } else {
+                            super::foley::Kind::Impact
+                        },
+                        point,
+                        speed: (point - (before + bt * local)).length() / 0.02,
+                    });
+                }
+            }
             s.partition(self.limit, available, &mut planning);
             if s.finishing.is_some() {
                 continue;
@@ -756,6 +803,8 @@ impl BrickDebris {
                     ));
                 let (handle, _) = self.world.insert(body, collider);
                 c.handle = Some(handle);
+                super::foley::configure(&mut self.world, handle, self.foley.policy.as_deref());
+                self.foley.born(handle, 0.12);
                 available -= 1;
                 part_slots -= c.parts;
             }
@@ -1512,6 +1561,79 @@ mod overload_regressions {
         assert!(section.chunks.is_empty());
         assert_eq!(d.instances().count(), 100);
         assert_eq!(d.len(), 0);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod audio_regressions {
+    use super::*;
+    #[test]
+    fn staged_material_is_quiet_then_shared_motion_snaps_and_lands_once() -> Result<()> {
+        let pack = bri_weapons::Pack::from_json(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/brick-destruction-audio/assets/weapons.json"
+        )))?;
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        d.set_limit(0);
+        d.set_audio_policy(pack.effects.brick_debris_audio.as_ref());
+        d.set_audio_listener(Vec3::new(8., 1., 2.));
+        let mut cues: Vec<_> = (0..8)
+            .map(|i| {
+                super::tests::cue(
+                    i + 1,
+                    [4.5 + i as f32, 3.3, 0.],
+                    8,
+                    [4., 0.3, 0.5],
+                    [8., 3.3, 0.],
+                    [8., 3., 0.],
+                )
+            })
+            .collect();
+        d.cues(&cues, &b)?;
+        for _ in 0..10 {
+            d.advance(1. / 60., &b)?;
+            assert!(d.take_audio().is_empty());
+        }
+        cues.clear();
+        cues.push(Cue {
+            id: 9,
+            tick: 0,
+            position: [0.; 3],
+            kind: CueKind::BrickSectionReady {
+                group: 7,
+                started: 0,
+                members: 8,
+            },
+        });
+        d.cues(&cues, &b)?;
+        let mut snaps = 0;
+        let mut landings = 0;
+        for _ in 0..180 {
+            d.advance(1. / 60., &b)?;
+            for sound in d.take_audio() {
+                if sound.profile.ends_with(":snap") {
+                    snaps += 1;
+                }
+                if sound.profile.ends_with(":landing") {
+                    landings += 1;
+                    assert!(sound.point[1].abs() < 0.1, "{:?}", sound.point);
+                }
+            }
+        }
+        assert_eq!((snaps, landings), (1, 1));
+        assert_eq!(
+            d.world.bodies.len(),
+            0,
+            "shared motion needs no audio-only physics body"
+        );
+        d.clear();
+        assert!(d.take_audio().is_empty());
+        assert!(
+            d.foley.policy.is_some(),
+            "session clear retains loaded package policy"
+        );
         Ok(())
     }
 }

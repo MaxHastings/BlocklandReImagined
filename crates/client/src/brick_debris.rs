@@ -42,6 +42,7 @@ use glam::{Mat4, Quat, Vec3};
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::f32::consts::FRAC_PI_2;
+mod foley;
 mod sections;
 use sections::{Section, SectionPiece};
 
@@ -256,6 +257,7 @@ pub struct BrickDebris {
     section_turn: usize,
     body_turn: usize,
     surroundings: Surroundings,
+    foley: foley::Foley,
     /// Bricks this client saw die that have not come back yet.
     dead: BTreeSet<BrickId>,
     cursor: u64,
@@ -291,6 +293,7 @@ impl BrickDebris {
             section_turn: 0,
             body_turn: 0,
             surroundings: Surroundings::default(),
+            foley: Default::default(),
             dead: BTreeSet::new(),
             cursor: 0,
             explosion_cursor: 0,
@@ -315,8 +318,29 @@ impl BrickDebris {
     /// Forget everything (disconnect, new server). The limit stays.
     pub fn clear(&mut self) {
         let limit = self.limit;
+        let policy = self.foley.policy.clone();
         *self = Self::new();
         self.set_limit(limit);
+        self.set_audio_policy(policy.as_deref());
+    }
+    pub fn set_audio_policy(&mut self, policy: Option<&bri_weapons::brick_audio::Policy>) {
+        self.foley.set_policy(policy);
+        let handles: Vec<_> = self
+            .bodies
+            .values()
+            .map(|b| b.handle)
+            .chain(self.chunk_handles())
+            .collect();
+        for h in handles {
+            foley::configure(&mut self.world, h, policy);
+            self.foley.born(h, 0.12);
+        }
+    }
+    pub fn set_audio_listener(&mut self, position: Vec3) {
+        self.foley.ear = position;
+    }
+    pub fn take_audio(&mut self) -> Vec<foley::Playback> {
+        self.foley.take()
     }
     /// Keep at most `limit` bodies (clamped to [`MAX_LIMIT`]); extra bodies
     /// go now, oldest first.
@@ -774,6 +798,8 @@ impl BrickDebris {
             .restitution(PLASTIC_BOUNCE)
             .restitution_combine_rule(CoefficientCombineRule::Max);
         let (handle, _) = self.world.insert(body, collider);
+        foley::configure(&mut self.world, handle, self.foley.policy.as_deref());
+        self.foley.born(handle, 0.);
         self.world.bodies[handle].set_enabled(false);
         self.bodies.insert(
             (id, piece),
@@ -789,6 +815,7 @@ impl BrickDebris {
     /// Advance debris by `dt` seconds against the current surroundings.
     pub fn advance(&mut self, dt: f32, building: &Building) -> Result<()> {
         ensure!(dt.is_finite() && dt >= 0.0, "Invalid debris frame time");
+        self.foley.begin(dt);
         for falling in &mut self.falling {
             falling.age += dt;
         }
@@ -838,6 +865,7 @@ impl BrickDebris {
         if steps == 0 {
             return Ok(());
         }
+        let contacts = self.foley.collector();
         for step in 1..=steps {
             self.load_surroundings(building, STEP)?;
             self.pushers
@@ -852,8 +880,17 @@ impl BrickDebris {
                         .chain(self.chunk_handles()),
                 ),
             };
-            self.world.step();
+            if let Some(contacts) = &contacts {
+                self.world.step_with_events(&(), contacts);
+            } else {
+                self.world.step();
+            }
             crate::local_physics::carry_through_openings(&mut self.world, &self.passages, &before);
+        }
+        if let Some(contacts) = contacts {
+            for hit in contacts.take() {
+                self.foley.report(hit);
+            }
         }
         self.pushers.settle();
         Ok(())

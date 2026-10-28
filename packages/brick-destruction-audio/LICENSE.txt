@@ -1,0 +1,12 @@
+CC0 1.0 Universal (CC0-1.0)
+
+The recordings credited in SOURCES.json were released under CC0 by rioforce
+and C_Sander on Freesound. Edited exports and this package's original policy
+and documentation are dedicated to the public domain under CC0-1.0.
+
+License: https://creativecommons.org/publicdomain/zero/1.0/
+Legal code: https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+No rights in the LEGO trademark are claimed. Audio credits and source records
+are supplied even though CC0 does not require attribution. No original Blockland
+content is included in this package.

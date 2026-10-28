@@ -1725,6 +1725,7 @@ mod tests {
             resources: vec![],
             diagnostics: vec![],
             effects: bri_weapons::PackEffects {
+                brick_debris_audio: None,
                 particles: vec![bri_content::effects::Particle {
                     animation: None,
                     variation: None,

@@ -50,6 +50,29 @@ impl Pack {
         depends_on: &BTreeMap<String, BTreeSet<String>>,
     ) -> (Pack, Vec<Problem>) {
         let mut notes = Vec::new();
+        let mut parts = parts;
+        let providers: Vec<_> = self
+            .effects
+            .brick_debris_audio
+            .iter()
+            .map(|_| self.id.clone())
+            .chain(
+                parts
+                    .iter()
+                    .filter(|(_, p)| p.effects.brick_debris_audio.is_some())
+                    .map(|(_, p)| p.id.clone()),
+            )
+            .collect();
+        if providers.len() > 1 {
+            self.effects.brick_debris_audio = None;
+            for (dir, part) in &mut parts {
+                if part.effects.brick_debris_audio.take().is_some() {
+                    notes.push(Problem::new(package_folder(dir), Kind::Sound, "brick_debris_audio",
+                        format!("exclusive slot has multiple providers ({}); none is used; enable only one", providers.join(", "))));
+                }
+            }
+        }
+
         // Which package declared each damage type and explosion name.
         let mut owners: BTreeMap<(&'static str, String), String> = BTreeMap::new();
         for key in self.damage_types.keys() {
@@ -419,6 +442,9 @@ fn merge_effects(
                 into.push(item);
             }
         }
+    }
+    if part.brick_debris_audio.is_some() {
+        into.brick_debris_audio = part.brick_debris_audio;
     }
     add(&mut into.particles, part.particles, |p| &p.id, dir, notes);
     add(&mut into.emitters, part.emitters, |e| &e.id, dir, notes);
