@@ -15,6 +15,10 @@ Checks, cheapest first, on the exact commit being pushed:
   2. history sanity: no pushed commit deletes or undoes recent main work,
      and a protocol VERSION change only ever increases it (no protocol change
      file is removed)
+  3. changed crates/direct consumers via tools/check.py focused, plus tool
+     tests and documentation checks. Platform CI also builds shipping binaries.
+
+Explicit --full (required for release candidates) additionally runs:
   3. cargo build --workspace --all-targets --locked
   4. cargo clippy --workspace --all-targets --locked -- -D warnings
   5. bri-client --check against the main checkout's content; it also
@@ -151,6 +155,7 @@ SKIP_PERF = False
 # Real-content copies of the client probes (`synthetic_and_release_content!`)
 # are skipped by name unless the gate runs with --release-content.
 RELEASE_CONTENT = False
+FULL_GATE = False
 RELEASE_ONLY_TESTS = ["release_content"]
 
 
@@ -1148,11 +1153,59 @@ def full_gate(sha, root, changed=()):
 # ---------------------------------------------------------------- entry
 
 
-def gate_commit(sha, diff_only):
+def scoped_gate(sha, root):
+    """Check the exact committed tree, without the extended GPU/corpus/soak pass.
+
+    Deliberately does not write a full-gate pass receipt. Native content checks
+    and relevant integration targets remain part of the change's validation;
+    platform CI builds all five shipping executables before merge.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    label = f"{git('rev-parse', '--show-toplevel').strip()} scoped {sha[:9]}"
+    with contextlib.nullcontext() if LOCK_HELD else Lock(root / "gate.lock", label):
+        worktree = prepare_worktree(root, sha)
+        (root / "logs").mkdir(exist_ok=True)
+        log = root / "logs" / f"{sha[:12]}-scoped.log"
+        log.write_text("", encoding="utf-8")
+        env = gate_env(os.environ, main_checkout() / "content")
+        steps = [
+            ("tool-tests", [sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"]),
+            ("docs", [sys.executable, "tools/check_docs.py"]),
+            ("focused", [sys.executable, "tools/check.py", "focused", "--base", "origin/main",
+                         "--target-dir", str(root / "target")]),
+        ]
+        for name, command in steps:
+            if not tree_intact(worktree, sha) or not run_step(name, command, worktree, log, env):
+                print(tail(log, f"===== {name} ====="))
+                say(f"scoped check failed; full log: {log}")
+                return False
+        say(f"SCOPED checks passed {sha[:9]}; extended gate was not run. Log: {log}")
+        return True
+
+
+def parent_push_checked(sha, base):
+    """The hook can reuse its still-locked parent's completed validation.
+
+    The proof lives only in git push's environment, binds the exact commit and
+    main base, and must match the active gate lock. History checks still run.
+    Without it the child hook would wait on the lock its parent is holding.
+    """
+    try:
+        proof = json.loads(os.environ.get("BRI_GATE_PUSH_CHECK", "{}"))
+        lock = gate_root() / "gate.lock"
+        return (isinstance(proof, dict) and proof.get("sha") == sha and proof.get("base") == base
+                and (not FULL_GATE or proof.get("full") is True)
+                and proof.get("token") == lock.read_text(encoding="utf-8")
+                and time.time() - lock.stat().st_mtime < LOCK_STALE_SECONDS)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def gate_commit(sha, diff_only, reuse_push=False):
     say("fetching origin/main")
     git("fetch", "-q", "origin", "main")
     base = git("rev-parse", "refs/remotes/origin/main").strip()
-    if sha == base:
+    if sha == base and not FULL_GATE:
         say("nothing new to push")
         return True
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, sha]).returncode != 0:
@@ -1181,13 +1234,21 @@ def gate_commit(sha, diff_only):
         return False
     if diff_only:
         return True
+    if reuse_push and "BRI_GATE_PUSH_CHECK" in os.environ:
+        if parent_push_checked(sha, base):
+            say("pre-push hook: reusing the locked parent's validation of this exact commit/base")
+            return True
+        say("pre-push parent validation no longer matches; refusing so --push can retry")
+        return False
     # --no-renames lists both sides of a move: code renamed into a .md file
     # is a deleted source file, not documentation.
     changed = git("diff", "--name-only", "--no-renames", base, sha).split()
-    if changed and documentation_only(changed):
+    if changed and documentation_only(changed) and not FULL_GATE:
         say(f"only documentation changed ({len(changed)} files); skipping build and tests")
         return True
-    return full_gate(sha, gate_root(), changed)
+    if FULL_GATE:
+        return full_gate(sha, gate_root(), changed)
+    return scoped_gate(sha, gate_root())
 
 
 def push_main():
@@ -1197,7 +1258,7 @@ def push_main():
     root = gate_root()
     root.mkdir(parents=True, exist_ok=True)
     label = f"{git('rev-parse', '--show-toplevel').strip()} --push"
-    with Lock(root / "gate.lock", label):
+    with Lock(root / "gate.lock", label) as lock:
         LOCK_HELD = True
         for _attempt in range(3):
             git("fetch", "-q", "origin", "main")
@@ -1213,19 +1274,24 @@ def push_main():
             if not gate_commit(sha, diff_only=False):
                 return False
             # Push the commit that passed, not whatever HEAD became meanwhile.
-            if subprocess.run(["git", "push", "origin", f"{sha}:refs/heads/main"]).returncode == 0:
+            env = dict(os.environ, BRI_GATE_PUSH_CHECK=json.dumps({
+                "sha": sha, "base": git("rev-parse", "refs/remotes/origin/main").strip(),
+                "token": lock.token, "full": FULL_GATE,
+            }))
+            if subprocess.run(["git", "push", "origin", f"{sha}:refs/heads/main"], env=env).returncode == 0:
                 say(f"pushed {sha[:9]} to main")
                 return True
             say("main moved during the gate (an ungated push?); rebasing and retrying")
     return False
 
 
-def test_binaries(top, env=None, extra=()):
+def test_binaries(top, env=None, extra=(), packages=()):
     """Build every test target and list (label, executable, cwd, header).
 
     label is "<package>/<target>" ("lib" for unit tests); header mimics the
     "Running ..." line cargo test prints, which parse_failures reads."""
-    build = subprocess.run(["cargo", "test", "--workspace", "--locked", "--no-run", *extra,
+    scope = [arg for package in packages for arg in ("-p", package)] if packages else ["--workspace"]
+    build = subprocess.run(["cargo", "test", *scope, "--locked", "--no-run", *extra,
                             "--message-format=json-render-diagnostics"],
                            cwd=top, stdout=subprocess.PIPE, text=True, errors="replace", env=env)
     if build.returncode:
@@ -1451,7 +1517,7 @@ def ci_test(part=(0, 1), tier="full"):
     if tier != "full":
         say(f"{tier} tier: {len(nightly)} slow render targets are left to the nightly run")
     if tier == "pr":
-        say("pr tier: the slow packages' suites run after merge (ci_quick in gate-known-failures.toml)")
+        say("pr tier: extended suites run nightly/manual (ci_quick in gate-known-failures.toml)")
     skipped = ci_left_out(data, tier, labels)
     for label in sorted(labels):
         if label in skipped and label not in nightly:
@@ -1462,12 +1528,14 @@ def ci_test(part=(0, 1), tier="full"):
     say(f"shard {part[0]}/{part[1]}: {len(mine)} of {len(labels) - len(skipped)} test targets")
     if not mine:
         return True
-    # Each shard compiles only its own targets (and whatever shares their
-    # names in other packages), not the whole workspace's ~390 test binaries:
-    # compiling and linking those took 17-27 of a shard's 28-47 minutes.
-    binaries = test_binaries(top, extra=target_filters(mine, labels))
-    if binaries is None:
-        return False
+    # --workspace --lib builds EVERY crate's unit harness, including those
+    # assigned to other shards. Scope each target selection to its packages.
+    binaries = []
+    for packages, filters in ci_build_groups(mine, labels):
+        built = test_binaries(top, extra=filters, packages=packages)
+        if built is None:
+            return False
+        binaries.extend(built)
     unbuilt = mine - {label for label, _, _, _ in binaries}
     if unbuilt:
         say(f"test targets this shard should run were not built: {', '.join(sorted(unbuilt))}")
@@ -1573,17 +1641,37 @@ def labels_from_metadata(metadata):
     return labels
 
 
-def target_filters(labels, kinds):
-    """cargo test arguments that build at least the targets `labels` name
-    (`kinds` as labels_from_metadata gives them). The filters apply across the
-    whole workspace, so features stay unified as in a full build and a name
-    another package shares is built there too."""
-    selected = {(kinds[label], label.split("/", 1)[1]) for label in labels}
-    args = ["--lib"] if any(kind == "lib" for kind, _ in selected) else []
-    for kind, name in sorted(selected):
-        if kind != "lib":
-            args += [f"--{kind}", name]
-    return args
+def ci_build_groups(labels, kinds):
+    """Pack exact selections into a few shared Cargo dependency graphs.
+
+    Libraries share one invocation. Other target names can be combined unless
+    they would select a foreign target in one of the selected packages. This
+    avoids both linking other shards' tests and resolving features per package.
+    """
+    libraries = sorted(label.split("/", 1)[0] for label in labels if kinds[label] == "lib")
+    out = [(libraries, ["--lib"])] if libraries else []
+    by_package = {}
+    for label in sorted(labels):
+        if kinds[label] != "lib":
+            package, name = label.split("/", 1)
+            by_package.setdefault(package, set()).add((kinds[label], name))
+    groups = []
+    for package, selected in sorted(by_package.items(), key=lambda item: (-len(item[1]), item[0])):
+        forbidden = {(kind, label.split("/", 1)[1]) for label, kind in kinds.items()
+                     if label.startswith(package + "/") and label not in labels and kind != "lib"}
+        for packages, have, excluded in groups:
+            if selected & excluded or have & forbidden:
+                continue
+            packages.append(package)
+            have.update(selected)
+            excluded.update(forbidden)
+            break
+        else:
+            groups.append(([package], set(selected), forbidden))
+    for packages, selected, _ in groups:
+        filters = [arg for kind, name in sorted(selected) for arg in (f"--{kind}", name)]
+        out.append((sorted(packages), filters))
+    return out
 
 
 def ci_left_out(data, tier, labels=()):
@@ -1631,7 +1719,7 @@ def hook(stdin):
             say("refusing to delete main")
             ok = False
             continue
-        ok = gate_commit(local_sha, diff_only=False) and ok
+        ok = gate_commit(local_sha, diff_only=False, reuse_push=True) and ok
     return ok
 
 
@@ -1680,12 +1768,14 @@ def forget_hook_repository():
 
 
 def main():
-    global TEST_JOBS, BINARY_TIMEOUT, SKIP_PERF, RELEASE_CONTENT
+    global TEST_JOBS, BINARY_TIMEOUT, SKIP_PERF, RELEASE_CONTENT, FULL_GATE
     forget_hook_repository()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--hook", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument("--install-hook", action="store_true")
     parser.add_argument("--diff-only", action="store_true")
+    parser.add_argument("--full", action="store_true",
+                        help="extended workspace, ignored-content and performance gate (releases/high-risk changes)")
     parser.add_argument("--ci-test", action="store_true",
                         help="run the tests that need no generated content (used by CI)")
     parser.add_argument("--shard", type=parse_shard, default=(0, 1), metavar="K/N",
@@ -1717,6 +1807,7 @@ def main():
     args = parser.parse_args()
     SKIP_PERF = args.skip_perf
     RELEASE_CONTENT = args.release_content
+    FULL_GATE = args.full or args.release_content
     if args.binary_timeout:
         BINARY_TIMEOUT = args.binary_timeout * 60
     if args.jobs:

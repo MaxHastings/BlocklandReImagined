@@ -78,6 +78,28 @@ A bounded screenshot/render check is allowed when needed. Do not launch a
 visible game window merely for routine validation. Hand off a packaged build
 with concrete test instructions when the agreed alpha is ready.
 
+## Recreating source-game experiences
+Treat each game as an interconnected experience. Establish source-backed behavior
+and dependencies for the current playable slice: assets, animation, state changes,
+controls, rendering/effects/audio, physics, ballistics and gameplay. Trace defects
+through the complete relevant chain and assign the cause to Add-On policy,
+conversion, or a generic engine capability before fixing symptoms. Reuse existing
+mechanisms and seam owners; avoid guessed offsets, unrelated actions and duplicate
+systems. Keep original evidence separate from related-build evidence or inference.
+Never silently omit or approximate behavior, or claim fidelity without evidence.
+
+Maintain one concise, current dependency/acceptance handoff per experience, linking
+reusable evidence, exact inputs, unresolved questions and next supported correction.
+Automate repetitive extraction and checks; reuse prior findings across sessions and
+agents. Investigate only as far as needed to implement the next supported correction;
+carry unresolved dependencies explicitly and continue independent useful work.
+Validate ordinary integrated gameplay and important state combinations/transitions.
+Tests must challenge assumptions and retained mismatches; passing isolated tests or
+plausible captures do not establish source fidelity. Distinguish technical checks,
+visual inspection, original-reference comparison and Maxwell's playtest acceptance.
+Favor cohesive playable increments, minimal durable notes and meaningful progress
+over repeated inventories, low-value tests, fragmented probes or routine approvals.
+
 ## Engineering
 Earlier technical choices are working assumptions, not permanent commitments.
 Maxwell explicitly authorizes evidence-based pivots without repeated permission.
@@ -90,11 +112,6 @@ Use explicit versioned content/save schemas, stable authored IDs, and independen
 physics/render identities. World state owns the game; adapters derive views.
 Do not implement structural fracture/collapse or a general TorqueScript VM.
 
-### Recreating source-game experiences
-Follow [Source-Faithful, Consumer-Driven Vertical Slice Development](docs/source-faithful-development.md)
-for AA, Halo and other source-game recreations. It names the working approach;
-it does not expand an assignment or restart a paused workstream.
-
 Bots know affordances, not content. Games expose objectives, not bot scripts.
 Discover success through authoritative rules/provider semantics, compose only
 grounded capabilities, execute ordinary controls, and replan from observed
@@ -106,38 +123,54 @@ new file in `docs/progress/` (one file per entry; see its README).
 `docs/progress.md` holds the history before 2026-10-01. Check off acceptance items only with evidence. Keep the
 active goal incomplete until the full alpha contract and handoff are satisfied.
 
-## Test tiers
-Do not run the full gate after every edit. `python tools/check.py quick`
-(format and unit tests of the changed crates) after edits, `focused`
-(clippy and integration tests of the changed crates and their dependents)
-before a commit, and `python tools/gate.py` once per integrated candidate.
-A tier skips work you did not touch; it never skips a test. Details and the
-`stress_`/`endurance_`/`soak_` labels for long cases: `docs/testing-tiers.md`.
+## Fast iteration and playtest handoff
+Use the existing warm worktree and `--profile playtest` for private previews.
+Build and hand off the playable folder after changed-area checks and packaged
+startup verification. Do not hold a private playtest for merge-only checks,
+whole-workspace suites, ZIP creation, or release LTO. Finish the requested build
+before starting expensive validation. Do not run local GPU suites, full gates,
+soaks, or benchmarks while Maxwell is playtesting; they distort performance.
+
+On Maxwell's PC, target at most five seconds for the first map/server load in
+a fresh process and three seconds for repeated loads, measured from selection
+to playable control. Log phase timings and reuse verified unchanged content;
+retain correct invalidation and content identity checks. These are acceptance
+targets, not a claim that current loading already meets them.
+
+## Practical testing and merge policy
+Maxwell replaced the mandatory whole-workspace merge gate on 2026-10-28.
+Default to the smallest checks that challenge the changed behavior:
+- Format and warning-free clippy for changed crates, their unit tests, and the
+  relevant integration tests/direct consumers. Use `tools/check.py quick` or
+  `focused`, with explicit targets where needed. Keep warm build outputs.
+- Check affected content/packaging with `bri-client --check` and validate any
+  changed schemas, permissions, wire/save formats or resource boundaries.
+- Require passing platform CI and history/protocol checks before merging.
+  Record the actual commands and scope; do not call scoped checks a full pass.
+
+Reserve exhaustive map/render matrices, asset corpora, long fuzz/soak/endurance
+suites and performance campaigns for nightly/manual/release validation or work
+that directly needs them. Use the extended/full gate deliberately for releases
+and high-risk shared physics, wire/save or authority changes; explain its need.
+Do not start it for every commit or ordinary cosmetic/content tuning PR.
+
+Aggressively retire duplicate/obsolete cases and empty test harnesses. Add a
+test for an uncovered regression or a real contract, not to mirror implementation
+or inflate counts. Preserve meaningful coverage while consolidating overlapping
+suites. Never weaken assertions, hide a new failure, or add arbitrary skips just
+to get green. Keep slow validation available separately from the default path.
+See `docs/testing-tiers.md` for commands and suite ownership.
 
 ## Before you push
-A pre-push hook runs `tools/gate.py` on every push to main. It refuses the
-push unless the commit contains the latest origin/main, no pushed commit undoes
-recent main work (the stale-tree check), protocol VERSION does not go backwards (each wire
-change adds one file to `crates/net/protocol-changes/` instead of editing the
-number; see its README),
-and build, `clippy -D warnings`, `bri-client --check` on the main checkout's
-`content` and `cargo test --workspace -- --include-ignored` pass (about 10
-minutes). Push with `python tools/gate.py --push`: with your work committed,
-it rebases onto origin/main, gates and pushes while holding the gate lock, so
-main cannot move under you. A plain `git push origin HEAD:main` also runs the
-gate but fails if main moves meanwhile. `python tools/gate.py` checks without
-pushing; `--diff-only` runs only the fast history checks. Gate runs use one
-dedicated worktree and target dir in `../.bri-gate` (nothing else builds
-there) and queue on a lock, so a wait is normal; logs are in
-`../.bri-gate/logs`. Never push with `--no-verify`. If the
-gate flags an intentional undo, add `Gate-Allow-Undo: <path>` to that commit's
-message. A test already failing on main goes in
-`tools/gate-known-failures.toml` with the owning thread, which removes the
-entry when it fixes the test; a new failure that passes when retried alone is
-reported as flaky and does not block. Pull requests must pass the Windows
-GitHub Actions check (build, clippy, content-free tests, history check) before
-merging; it also reruns on every push to main. In a fresh clone, install the
-hook with `python tools/gate.py --install-hook`.
+Keep the pre-push hook enabled; never use `--no-verify`. Main updates must include
+current origin/main, preserve recent work and keep protocol VERSION monotonic
+(each wire change adds a file under `crates/net/protocol-changes/`). Retain the
+history/stale-tree checks and guarded push support in `tools/gate.py`.
+Ordinary merges use the scoped checks above and passing platform CI. The full
+workspace/ignored-content/performance gate is an explicit extended check, not a
+routine requirement for every main update. Report pre-existing failures and
+fix or assign them; a test that passes only on retry is reported as flaky.
+Keep original installations and other threads' dirty work untouched.
 
 ## Current collaboration boundary
 Maxwell requires GPT-6.1 Sol with High reasoning for all subagent work

@@ -53,6 +53,13 @@ class Dependents(unittest.TestCase):
 
 
 class Plans(unittest.TestCase):
+    def test_default_focused_stops_at_direct_consumers(self):
+        commands = check.plan("focused", {"bri-world"}, REVERSE)
+        tests = [argv for label, argv in commands if label.startswith("tests ")]
+        self.assertEqual(len(tests), 1)
+        self.assertIn("bri-sim", tests[0])
+        self.assertNotIn("bri-net", tests[0])
+
     def labels(self, tier, crates, **kw):
         return [label for label, _ in check.plan(tier, crates, REVERSE, **kw)]
 

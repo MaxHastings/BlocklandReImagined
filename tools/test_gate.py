@@ -6,8 +6,61 @@ from unittest.mock import patch
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import gate
+
+
+class GateScope(unittest.TestCase):
+    def test_parent_push_proof_requires_exact_commit_base_and_live_lock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            lock = root / "gate.lock"
+            lock.write_text("parent-token", encoding="utf-8")
+            proof = {"sha": "tip", "base": "base", "token": "parent-token", "full": False}
+            with patch.object(gate, "gate_root", return_value=root), \
+                 patch.object(gate, "FULL_GATE", False), \
+                 patch.dict(os.environ, BRI_GATE_PUSH_CHECK=json.dumps(proof)):
+                self.assertTrue(gate.parent_push_checked("tip", "base"))
+                self.assertFalse(gate.parent_push_checked("other", "base"))
+                self.assertFalse(gate.parent_push_checked("tip", "moved"))
+                with patch.object(gate, "FULL_GATE", True):
+                    self.assertFalse(gate.parent_push_checked("tip", "base"))
+                os.utime(lock, (1, 1))
+                self.assertFalse(gate.parent_push_checked("tip", "base"))
+                lock.unlink()
+                self.assertFalse(gate.parent_push_checked("tip", "base"))
+
+    def test_ordinary_commit_uses_scoped_checks_and_full_is_explicit(self):
+        def git(*args):
+            return {"rev-parse": "base", "rev-list": "tip", "diff": "tools/check.py"}.get(args[0], "")
+        with patch.object(gate, "git", side_effect=git), \
+             patch.object(gate.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
+             patch.object(gate, "history_check", return_value=[]), \
+             patch.object(gate, "oversized_blobs", return_value=[]), \
+             patch.object(gate, "gate_root", return_value=Path("unused")), \
+             patch.object(gate, "scoped_gate", return_value=True) as scoped, \
+             patch.object(gate, "full_gate", return_value=True) as full:
+            with patch.object(gate, "FULL_GATE", False):
+                self.assertTrue(gate.gate_commit("tip", False))
+                scoped.assert_called_once()
+                full.assert_not_called()
+            with patch.object(gate, "FULL_GATE", True):
+                self.assertTrue(gate.gate_commit("tip", False))
+                full.assert_called_once_with("tip", Path("unused"), ["tools/check.py"])
+            scoped.reset_mock()
+            full.reset_mock()
+            with patch.dict(os.environ, BRI_GATE_PUSH_CHECK="proof"), \
+                 patch.object(gate, "parent_push_checked", return_value=True), \
+                 patch.object(gate, "FULL_GATE", False):
+                self.assertTrue(gate.gate_commit("tip", False, reuse_push=True))
+                scoped.assert_not_called()
+                full.assert_not_called()
+            with patch.dict(os.environ, BRI_GATE_PUSH_CHECK="stale"), \
+                 patch.object(gate, "parent_push_checked", return_value=False):
+                self.assertFalse(gate.gate_commit("tip", False, reuse_push=True))
+                scoped.assert_not_called()
+                full.assert_not_called()
 
 
 class ProcessExit(unittest.TestCase):
@@ -71,6 +124,36 @@ class TestPlanning(unittest.TestCase):
 
 
 class CiShards(unittest.TestCase):
+    def test_compile_groups_select_exactly_the_shards_packages_and_targets(self):
+        # --workspace --lib used to compile all three libraries on every shard.
+        kinds = {"a/lib": "lib", "b/lib": "lib", "c/lib": "lib",
+                 "a/flow": "test", "b/flow": "test", "c/other": "test"}
+        mine = {"a/lib", "b/lib", "a/flow"}
+        groups = gate.ci_build_groups(mine, kinds)
+        built = []
+        for packages, filters in groups:
+            for label, kind in kinds.items():
+                package, name = label.split("/")
+                selected = "--lib" in filters if kind == "lib" else any(
+                    filters[i:i + 2] == [f"--{kind}", name] for i in range(len(filters) - 1))
+                if package in packages and selected:
+                    built.append(label)
+        self.assertCountEqual(built, mine)
+        self.assertFalse(any("c" in packages for packages, _ in groups))
+
+    def test_library_only_packages_share_one_build_graph(self):
+        kinds = {"a/lib": "lib", "b/lib": "lib", "c/lib": "lib"}
+        self.assertEqual(gate.ci_build_groups({"a/lib", "b/lib"}, kinds),
+                         [(["a", "b"], ["--lib"])])
+
+    def test_compatible_test_names_share_a_graph_but_foreign_names_do_not(self):
+        kinds = {"a/x": "test", "a/y": "test", "b/z": "test", "c/x": "test", "c/y": "test"}
+        groups = gate.ci_build_groups({"a/x", "b/z", "c/y"}, kinds)
+        # a/x and c/y cannot share a filter union: it would build a/y and c/x.
+        self.assertEqual(len(groups), 2)
+        self.assertTrue(any("b" in packages and len(packages) == 2 for packages, _ in groups))
+        self.assertFalse(any("a" in packages and "c" in packages for packages, _ in groups))
+
     def test_the_shards_run_each_target_exactly_once(self):
         labels = [f"crate{i}/t" for i in range(23)]
         parts = [gate.shard(labels, (k, 4)) for k in range(4)]
@@ -125,9 +208,9 @@ class CiShards(unittest.TestCase):
         labels = gate.labels_from_metadata(metadata)
         self.assertEqual(labels, {"bri-a/lib": "lib", "bri-a/bri-a": "bin", "bri-a/flow": "test",
                                   "bri-b/lib": "lib", "bri-b/flow": "test"})
-        self.assertEqual(gate.target_filters({"bri-a/flow", "bri-b/flow", "bri-a/bri-a"}, labels),
-                         ["--bin", "bri-a", "--test", "flow"])
-        self.assertEqual(gate.target_filters({"bri-b/lib"}, labels), ["--lib"])
+        self.assertEqual(gate.ci_build_groups({"bri-a/flow", "bri-b/flow", "bri-a/bri-a"}, labels),
+                         [(["bri-a", "bri-b"], ["--bin", "bri-a", "--test", "flow"])])
+        self.assertEqual(gate.ci_build_groups({"bri-b/lib"}, labels), [(["bri-b"], ["--lib"])])
 
     def test_weighted_shards_balance_the_heavy_targets(self):
         weights = {"a/slow1": 100.0, "a/slow2": 90.0, "a/slow3": 80.0, "a/slow4": 70.0}

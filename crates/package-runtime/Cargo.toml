@@ -18,3 +18,10 @@ rhai = { version = "1.26", default-features = false, features = ["std", "sync", 
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "bri-addon-check"
+path = "src/bin/bri-addon-check.rs"
+test = false
