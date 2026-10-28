@@ -191,7 +191,7 @@ pub(super) enum Decision {
 /// A conservative cycle estimate over authored trigger/timeout transitions.
 /// Counts the waits of states reached between ordinary onFire visits. Runtime
 /// state readiness remains authoritative; this estimate only ranks equipment.
-fn cadence(image: &Image) -> u32 {
+pub(super) fn cadence(image: &Image) -> u32 {
     let fire = image
         .states
         .iter()

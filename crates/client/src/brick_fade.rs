@@ -243,8 +243,8 @@ pub struct FadeDiagnostics {
     pub uploads: u64,
     /// Vertex rewrites of an uploaded mesh.
     pub vertex_updates: u64,
-    /// Of those, repaints that only rewrote the painted vertices' colour
-    /// (no rebuild of the brick's geometry).
+    /// Of those, paint/alpha changes that only rewrote the painted vertices'
+    /// colour (no rebuild of the brick's geometry).
     pub recolors: u64,
     /// Images those uploads carried. The shared brick palette holds every
     /// brick texture, so this stays 0: easing never uploads a texture.
@@ -253,7 +253,7 @@ pub struct FadeDiagnostics {
 
 /// CPU meshes of easing bricks, one per brick, built against the shared
 /// brick material palette like chunks and debris: geometry only, no images.
-/// A colour change rebuilds a brick's geometry in place.
+/// Verified paint/alpha changes rewrite only vertices within one blend class.
 #[derive(Default)]
 pub struct FadeMeshes {
     meshes: BTreeMap<u64, FadeMesh>,
@@ -367,7 +367,9 @@ impl FadeMeshes {
                 // A repaint at the same alpha changes only the painted
                 // vertices' colour: rewrite them, no rebuild.
                 Some(mesh)
-                    if mesh.paint.is_some() && mesh.drawn[3] == drawn[3] && mesh.brick == brick =>
+                    if mesh.paint.is_some()
+                        && (mesh.drawn[3] == drawn[3] || mesh.drawn[3] < 1.0 && drawn[3] < 1.0)
+                        && mesh.brick == brick =>
                 {
                     let paint = mesh.paint.as_ref().expect("checked above");
                     for (vertex, painted) in mesh.data.vertices.iter_mut().zip(paint) {
@@ -381,10 +383,11 @@ impl FadeMeshes {
                 }
                 Some(mesh) => {
                     let before = Layout::of(&mesh.data);
-                    // Only a repaint (the same alpha) is worth learning
-                    // which vertices take the paint: an alpha fade
-                    // rebuilds every frame anyway.
-                    let repaint = mesh.drawn[3] == drawn[3];
+                    // Learn again when crossing the opaque/blended boundary.
+                    // Inside one blend class, a verified mask can update alpha
+                    // as well as RGB without rebuilding the brick each frame.
+                    let learn =
+                        mesh.drawn[3] == drawn[3] || (mesh.drawn[3] < 1.0) != (drawn[3] < 1.0);
                     crate::world_chunks::rebuild_brick(
                         &mut mesh.data,
                         &brick,
@@ -394,7 +397,7 @@ impl FadeMeshes {
                         Some(materials),
                     )?;
                     mesh.drawn = drawn;
-                    mesh.paint = if repaint {
+                    mesh.paint = if learn {
                         probe_paint(&mesh.data, &brick, colors[0], meshes, palette, materials)
                     } else {
                         None
@@ -520,7 +523,11 @@ fn probe_paint(
         if color[0] < 0.5 { 0.75 } else { 0.25 },
         if color[1] < 0.5 { 0.625 } else { 0.375 },
         if color[2] < 0.5 { 0.875 } else { 0.125 },
-        color[3],
+        if color[3] < 1.0 {
+            color[3] * 0.5
+        } else {
+            color[3]
+        },
     ];
     let probe =
         crate::world_chunks::build_brick(brick, &[other], meshes, palette, Some(materials)).ok();
@@ -893,6 +900,52 @@ mod tests {
             d.recolors,
             PAINTED * (frames - 1),
             "every frame after the first only recolours: {d:?}"
+        );
+    }
+
+    #[test]
+    fn alpha_fades_reuse_geometry_and_match_a_fresh_build() {
+        let meshes = BTreeMap::from([("a".to_string(), crate::world_scene::tests::mesh())]);
+        let materials = crate::materials::BrickMaterials::in_memory();
+        let palette = crate::world_chunks::BrickPalette::new(&materials).unwrap();
+        let before = row(64, true);
+        let after = row(64, false);
+        let mut fades = BrickFades::default();
+        fades.observe(&before, &after, 1..=64);
+        let out = fades.left_out();
+        fades.chunks_applied(&out);
+        let vertices = |d: &SceneData| {
+            d.vertices
+                .iter()
+                .map(|v| (v.position, v.normal, v.uv, v.lightmap_uv, v.color, v.fx))
+                .collect::<Vec<_>>()
+        };
+        let mut cpu = FadeMeshes::default();
+        let began = std::time::Instant::now();
+        for _ in 0..20 {
+            fades.advance(1.0 / 60.0, &out);
+            cpu.update(&fades, &out, &after, &meshes, &palette, &materials)
+                .unwrap();
+            for (id, drawn) in fades.shown(&out) {
+                let fresh = brick_scene(&after, id, drawn, &meshes, &palette, &materials)
+                    .unwrap()
+                    .unwrap();
+                let kept = cpu.data(id).unwrap();
+                assert_eq!(vertices(kept), vertices(&fresh));
+                assert_eq!(kept.indices, fresh.indices);
+                assert_eq!(Layout::of(kept).batches, Layout::of(&fresh).batches);
+            }
+        }
+        eprintln!(
+            "64 alpha fades x20 frames: {:?}, {:?}",
+            cpu.diagnostics,
+            began.elapsed()
+        );
+        assert_eq!(cpu.diagnostics.uploads, 64);
+        assert_eq!(
+            cpu.diagnostics.recolors,
+            64 * 19,
+            "reuse geometry throughout a blended fade"
         );
     }
 
