@@ -217,6 +217,32 @@ impl FrameRecord {
                                 out.push_str(", ");
                             }
                             let _ = write!(out, "{} {:.1}", s.name, millis(s.time));
+                            if s.count > 1 {
+                                let _ = write!(out, " x{}", s.count);
+                            }
+                            // Keep one more bounded level: systems such as
+                            // debris run inside world presentation, itself
+                            // inside update. Their actual work must be visible.
+                            let mut details: Vec<_> = self
+                                .spans
+                                .iter()
+                                .filter(|d| d.parent == Some(s.name) && d.time >= SHOWN_INNER)
+                                .collect();
+                            details.sort_by(|a, b| b.time.cmp(&a.time));
+                            if !details.is_empty() {
+                                out.push_str(" {");
+                                for (k, detail) in details.iter().take(4).enumerate() {
+                                    if k > 0 {
+                                        out.push_str(", ");
+                                    }
+                                    let _ =
+                                        write!(out, "{} {:.1}", detail.name, millis(detail.time));
+                                    if detail.count > 1 {
+                                        let _ = write!(out, " x{}", detail.count);
+                                    }
+                                }
+                                out.push('}');
+                            }
                         }
                         out.push(']');
                     }
@@ -253,6 +279,35 @@ fn ms(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deep_gameplay_stall_names_the_work_and_fixed_step_count() {
+        let frame = FrameRecord {
+            total: Duration::from_millis(60),
+            spans: [
+                ("update", None, 55, 1),
+                ("world presentation", Some("update"), 50, 1),
+                ("brick debris", Some("world presentation"), 45, 1),
+                ("debris simulation", Some("brick debris"), 40, 4),
+                ("debris hit queries", Some("brick debris"), 3, 1),
+            ]
+            .into_iter()
+            .map(|(name, parent, milliseconds, count)| SpanTime {
+                name,
+                parent,
+                time: Duration::from_millis(milliseconds),
+                count,
+            })
+            .collect(),
+            ..Default::default()
+        };
+        let text = frame.describe();
+        assert!(
+            text.contains("brick debris 45.0 {debris simulation 40.0 x4, debris hit queries 3.0}"),
+            "{text}"
+        );
+        assert_eq!(frame.traced(), Duration::from_millis(55));
+    }
 
     fn wait(ms: u64) {
         let until = Instant::now() + Duration::from_millis(ms);
