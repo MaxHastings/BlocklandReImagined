@@ -18,6 +18,11 @@ const LAND_ID: &str = "bri:foley/blockhead/land_01";
 const LAND_FILE: &str = "sounds/blockhead/land_01.wav";
 const LAND_RESOURCE: &str = "bri/foley/blockhead/land_01.wav";
 const LAND_CLIP: &[u8] = include_bytes!("../../../assets/blockhead-footsteps/land_01.wav");
+const JET_ID: &str = "bri:foley/blockhead/jet";
+const JET_RESOURCE: &str = "bri/foley/blockhead/jet.wav";
+const JET_CLIP: &[u8] = include_bytes!("../../../assets/blockhead-jets/jet.wav");
+const JET_CREDIT_RESOURCE: &str = "bri/foley/blockhead/jet-attribution.txt";
+const JET_CREDITS: &[u8] = include_bytes!("../../../assets/blockhead-jets/ATTRIBUTION.txt");
 
 pub fn install(pack: &mut Pack, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out.join("sounds/blockhead"))?;
@@ -34,7 +39,33 @@ pub fn install(pack: &mut Pack, out: &Path) -> Result<()> {
             PROFILE_VOLUME,
         )?;
     }
-    install_sound(pack, out, LAND_ID, LAND_FILE, LAND_RESOURCE, LAND_CLIP, 1.0)
+    install_sound(pack, out, LAND_ID, LAND_FILE, LAND_RESOURCE, LAND_CLIP, 1.0)?;
+    install_sound(
+        pack,
+        out,
+        JET_ID,
+        "sounds/blockhead/jet.wav",
+        JET_RESOURCE,
+        JET_CLIP,
+        1.0,
+    )?;
+    let jet = pack.sounds.get_mut(JET_ID).unwrap();
+    jet.looping = true;
+    jet.sustain = Some(bri_weapons::SustainDef {
+        loop_start_seconds: 0.33,
+        attack_seconds: 0.05,
+        release_seconds: 0.15,
+    });
+    let credit_file = "jet-audio-attribution.txt";
+    std::fs::write(out.join(credit_file), JET_CREDITS)?;
+    pack.resources.push(Resource {
+        path: JET_CREDIT_RESOURCE.into(),
+        sha256: super::hash(JET_CREDITS),
+        native_file: Some(credit_file.into()),
+        diagnostics: Vec::new(),
+        package: None,
+    });
+    Ok(())
 }
 
 fn install_sound(
@@ -74,6 +105,11 @@ pub fn refresh(out: &Path) -> Result<Pack> {
         pack.resources.retain(|resource| resource.path != path);
     }
     pack.sounds.remove(LAND_ID);
+    pack.sounds.remove(JET_ID);
+    pack.resources
+        .retain(|resource| resource.path != JET_RESOURCE);
+    pack.resources
+        .retain(|resource| resource.path != JET_CREDIT_RESOURCE);
     pack.resources
         .retain(|resource| resource.path != LAND_RESOURCE);
     install(&mut pack, out)?;
@@ -103,6 +139,7 @@ mod tests {
             .unwrap()
             .iter()
             .chain(std::iter::once(&policy["land"]))
+            .chain(std::iter::once(&policy["jet"]))
         {
             let id = id.as_str().unwrap();
             let sound: &SoundDef = &pack.sounds[id];
@@ -116,6 +153,25 @@ mod tests {
             assert_eq!(bytes.get(..4), Some(b"RIFF".as_slice()));
             assert!(sound.package.is_none());
         }
+        let jet = &pack.sounds[policy["jet"].as_str().unwrap()];
+        let recipe: serde_json::Value =
+            serde_json::from_str(include_str!("../../../assets/blockhead-jets/recipe.json"))?;
+        let held = jet.sustain.unwrap();
+        assert!(jet.looping);
+        assert!(
+            (held.loop_start_seconds - recipe["loop_start_seconds"].as_f64().unwrap() as f32).abs()
+                < 1e-6
+        );
+        assert_eq!(held.attack_seconds, 0.05);
+        assert_eq!(held.release_seconds, 0.15);
+        let credits = pack
+            .resources
+            .iter()
+            .find(|r| r.path == JET_CREDIT_RESOURCE)
+            .unwrap();
+        let credit_bytes = std::fs::read(out.join(credits.native_file.as_ref().unwrap()))?;
+        assert_eq!(credits.sha256, super::super::hash(&credit_bytes));
+        assert_eq!(credit_bytes, JET_CREDITS);
         pack.validate()?;
         std::fs::write(out.join("weapons.json"), serde_json::to_vec(&pack)?)?;
         let refreshed = refresh(&out)?;

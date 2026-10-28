@@ -86,6 +86,11 @@ pub(crate) enum Command {
         gain_scale: f32,
         pitch_scale: f32,
     },
+    /// Release/resume a held PCM voice without restarting its intro or phase.
+    SetSustainGate {
+        handle: SoundHandle,
+        active: bool,
+    },
     /// How much of a placed voice's range reaches the listener.
     SetVoiceHearing {
         handle: SoundHandle,

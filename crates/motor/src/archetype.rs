@@ -169,6 +169,9 @@ pub struct Sounds {
     /// [`Sounds::LAND_SPEED`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<String>,
+    /// Held propulsion sound, driven by accepted jetting rather than input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jet: Option<String>,
     /// With no `land` sound, a landing sounds like a footfall on the surface
     /// underfoot (AA's `PlayLanded` plays the floor material's foot-contact
     /// sound).
@@ -321,7 +324,7 @@ impl Sounds {
         *self == Self::default()
     }
     fn valid(&self) -> bool {
-        [&self.jump, &self.pain, &self.death, &self.land]
+        [&self.jump, &self.pain, &self.death, &self.land, &self.jet]
             .into_iter()
             .flatten()
             .chain(&self.footsteps)
@@ -996,7 +999,19 @@ mod tests {
         let horse = table.resolve(PlayerType::Horse.archetype());
         assert_eq!(horse.sounds.jump.as_deref(), Some("HorseJumpSound"));
         let standard = table.resolve(PlayerType::Standard.archetype());
-        assert!(standard.sounds.is_standard());
+        assert!(standard.sounds.jump.is_none());
+        assert_eq!(standard.sounds.footsteps.len(), 4);
+        assert_eq!(
+            standard.sounds.land.as_deref(),
+            Some("bri:foley/blockhead/land_01")
+        );
+        assert!(horse.sounds.land.is_none());
+        assert_eq!(
+            standard.sounds.jet.as_deref(),
+            Some("bri:foley/blockhead/jet")
+        );
+        assert!(horse.sounds.jet.is_none());
+        assert!(horse.sounds.footsteps.is_empty());
         let mut loud = horse.clone();
         loud.sounds.pain = Some("x".repeat(Sounds::MAX_NAME + 1));
         assert!(loud.validate().is_err());

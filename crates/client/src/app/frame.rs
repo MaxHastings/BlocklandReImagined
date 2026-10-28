@@ -842,6 +842,21 @@ impl App {
                     }
                 }
                 self.audio.sync_engines(&engines);
+                let held = presented
+                    .iter()
+                    .filter_map(|(owner, player)| {
+                        let vitals = view.vitals.get(owner)?;
+                        let sound = view
+                            .archetypes
+                            .resolve(player.archetype)
+                            .sounds
+                            .jet
+                            .as_ref()?;
+                        (vitals.alive && vitals.mounted.is_none() && vitals.ride.is_none())
+                            .then(|| (*owner, (sound.clone(), player.feet, player.jetting)))
+                    })
+                    .collect();
+                self.audio.sync_held(&held);
                 if self
                     .music_world
                     .as_ref()

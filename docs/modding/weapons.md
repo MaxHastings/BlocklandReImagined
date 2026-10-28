@@ -889,3 +889,33 @@ remain in the world once; particle size/light radius do not inherit mesh scale.
 This rendering policy does not recover source pose, ADS state selection,
 lighting or interpolation laws. Those still need an ordinary integrated consumer
 and original-reference comparison.
+
+## Held sound intros and sustain
+
+A predecoded sound can play its intro once, then repeat only the held portion:
+
+```json
+"sounds": {
+  "your-id:thruster": {
+    "file": "sounds/thruster.wav",
+    "looping": true,
+    "sustain": {
+      "loop_start_seconds": 0.33,
+      "attack_seconds": 0.05,
+      "release_seconds": 0.15
+    }
+  }
+}
+```
+
+`loop_start_seconds` must be inside the decoded clip (0 to less than 30 seconds).
+Attack and release are 0 to 2 seconds, measured by the audio sample clock. The
+envelope ramps from its current level when the gate changes; pressing again
+during release keeps the same voice and source phase. A completed release ends
+the voice, so the next activation plays the intro again. Music streams and
+weighted sound variants cannot declare `sustain`.
+
+An archetype binds this profile with `"sounds": {"jet":"your-id:thruster"}`
+([content-kinds.md](content-kinds.md)). Accepted jetting state, alive/unmounted
+eligibility and ordinary positional playback drive it, rather than raw input or
+animation restarts. The base Blockhead profile uses this path; Horse opts out.

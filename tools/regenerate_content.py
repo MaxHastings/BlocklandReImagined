@@ -84,7 +84,7 @@ STEP_INPUTS = {
     'brick_materials': ([], CONVERT, ['docs/vanilla-inventory.json'], 1),
     'avatar': (['geometry', 'ui_pack'], CONVERT, [], 1),
     'effects': ([], CONVERT, ['docs/vanilla-inventory.json'], 1),
-    'weapons': ([], [('cargo', 'bri-weapons-import')], [], 1),
+    'weapons': ([], [('cargo', 'bri-weapons-import')], ['assets/blockhead-footsteps', 'assets/blockhead-jets'], 2),
     'weapon_debris': (['weapons'], [('manifest', WEAPON_DEBRIS)], [], 1),
     'effects_runtime': (['effects', 'weapons'],
                         [('cargo', 'bri-fx-import'), ('manifest', WEAPON_EFFECTS)], [], 1),
