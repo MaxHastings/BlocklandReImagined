@@ -50,7 +50,7 @@ is restricted to outside minigames. Roster sampling uses `bots()` because
 `players()` contains connected humans only. Health deltas are sampled after
 acceptance; the pre-filter `on_damage` hook cannot establish an injury.
 
-Mixing is positional (`sound_at`), with a 38-unit radius. There are at most two
+Mixing is positional (`sound_at`), with a 60-unit radius. There are at most two
 active reactions globally, with no overlapping reaction sources within 24 units,
 at least three seconds between starts, a 10–16 second bot cooldown, and a
 120-second global cooldown for iconic references (45 seconds for other clips).

@@ -1978,6 +1978,7 @@ impl App {
                 self.fx.brick_debris.set_limit(limit);
             }
             let debris_span = crate::frame_trace::span("brick debris");
+            let changes_span = crate::frame_trace::span("debris changes");
             let kills = std::mem::take(&mut self.fx.brick_kills);
             let thrown = self.fx.brick_debris.cues(&kills, building);
             // A kill announced after its brick started fading out stops the
@@ -2004,9 +2005,11 @@ impl App {
                 // Newly dead bricks are not hidden bricks to reveal.
                 self.gpu.hidden_uploaded = None;
             }
+            drop(changes_span);
             // Debris and Add-On bodies are local and cosmetic: everyone
             // drawn here shoves them, and nothing about them goes back to
             // the server.
+            let queries_span = crate::frame_trace::span("debris hit queries");
             let bodies = self.addons.client_code.has_bodies();
             let (pushers, shots) = if !self.fx.brick_debris.is_empty() || bodies {
                 let pushers = Self::pushers(
@@ -2031,10 +2034,13 @@ impl App {
                 self.fx.brick_debris.push(&pushers);
                 self.fx.brick_debris.shots(&shots);
             }
+            drop(queries_span);
             self.fx
                 .brick_debris
                 .set_audio_listener(Vec3::from(listener.position));
+            let models_span = crate::frame_trace::span("debris model readiness");
             self.fx.brick_debris.prepare_models(&self.fx.debris_models);
+            drop(models_span);
             let moved = self
                 .fx
                 .brick_debris

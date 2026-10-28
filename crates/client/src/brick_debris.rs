@@ -87,6 +87,11 @@ const PLASTIC_BOUNCE: f32 = 0.5;
 const PLASTIC_FRICTION: f32 = 0.5;
 /// Mass per cubic unit of debris: a 2x4 brick weighs 6.
 const DENSITY: f32 = 5.0;
+/// Debris is a visual response, not a gameplay stack or joint mechanism.
+/// Two constraint iterations retain contact/CCD at 120 Hz while reducing the
+/// cost of dense piles and four-step catch-up frames. Server physics keeps its
+/// own defaults; Physics Quality still controls body count, not visibility.
+const COSMETIC_SOLVER_ITERATIONS: usize = 2;
 /// Distinct brick looks kept on the GPU.
 const MAX_LOOKS: usize = 64;
 /// Most instances one look draws: bodies and ghosts within the limit, plus
@@ -284,8 +289,10 @@ impl Default for BrickDebris {
 
 impl BrickDebris {
     pub fn new() -> Self {
+        let mut world = crate::local_physics::new_world();
+        world.integration_parameters.num_solver_iterations = COSMETIC_SOLVER_ITERATIONS;
         Self {
-            world: crate::local_physics::new_world(),
+            world,
             bodies: BTreeMap::new(),
             sections: BTreeMap::new(),
             section_barriers: BTreeMap::new(),
@@ -831,6 +838,7 @@ impl BrickDebris {
     /// Advance debris by `dt` seconds against the current surroundings.
     pub fn advance(&mut self, dt: f32, building: &Building) -> Result<()> {
         ensure!(dt.is_finite() && dt >= 0.0, "Invalid debris frame time");
+        let started = std::time::Instant::now();
         self.foley.begin(dt);
         for falling in &mut self.falling {
             falling.age += dt;
@@ -845,9 +853,11 @@ impl BrickDebris {
         // Lifetimes run on frame time, not simulated steps: a slow frame
         // drops steps, and debris must not outlive its time because of it.
         self.age(dt);
+        let surroundings_span = crate::frame_trace::span("debris surroundings");
         if self.surroundings.sync(&mut self.world, building) {
             self.world.wake_up_all(true);
         }
+        drop(surroundings_span);
         if self.surroundings.full()
             && self
                 .bodies
@@ -862,7 +872,9 @@ impl BrickDebris {
             }
             self.reset_section_collision();
         }
+        let sections_span = crate::frame_trace::span("debris assemblies");
         self.advance_sections(dt, building)?;
+        drop(sections_span);
         if self.bodies.is_empty() && self.section_piece_count() == 0 {
             self.accumulator = 0.0;
             self.surroundings.clear(&mut self.world);
@@ -883,7 +895,9 @@ impl BrickDebris {
         }
         let contacts = self.foley.collector();
         for step in 1..=steps {
+            let collision_span = crate::frame_trace::span("debris collision preparation");
             self.load_surroundings(building, STEP)?;
+            drop(collision_span);
             self.pushers
                 .drive(&mut self.world, step as f32 / steps as f32);
             let before = match self.passages.list.is_empty() {
@@ -896,11 +910,13 @@ impl BrickDebris {
                         .chain(self.chunk_handles()),
                 ),
             };
+            let simulation_span = crate::frame_trace::span("debris simulation");
             if let Some(contacts) = &contacts {
                 self.world.step_with_events(&(), contacts);
             } else {
                 self.world.step();
             }
+            drop(simulation_span);
             crate::local_physics::carry_through_openings(&mut self.world, &self.passages, &before);
         }
         if let Some(contacts) = contacts {
@@ -909,6 +925,14 @@ impl BrickDebris {
             }
         }
         self.pushers.settle();
+        if started.elapsed() >= std::time::Duration::from_millis(8) {
+            crate::frame_trace::note(format!(
+                "debris: {} loose bodies, {} chunk bodies, {} section members, {steps} fixed steps",
+                self.bodies.len(),
+                self.chunk_handles().count(),
+                self.section_piece_count(),
+            ));
+        }
         Ok(())
     }
     /// Where players and vehicles are this frame. Call before `advance`.
@@ -2575,6 +2599,81 @@ pub(crate) mod tests {
             failures.is_empty(),
             "material frozen after100ms: {failures:?}"
         );
+    }
+
+    #[test]
+    fn stress_continuous_world_edits_with_best_quality_rubble() {
+        use std::time::{Duration, Instant};
+        for (iterations, dt) in [(4, 1. / 60.), (2, 1. / 60.), (4, 1. / 30.), (2, 1. / 30.)] {
+            let dt: f32 = dt;
+            let frames = (6. / dt).round() as usize;
+            let (mut building, mut world) = building(&[(100000, [4., 0.3, 4.])]);
+            let mut debris = BrickDebris::new();
+            debris.world.integration_parameters.num_solver_iterations = iterations;
+            debris.set_limit(2048);
+            debris.cues(&blast(2048, 1, 8.), &building).unwrap();
+            let mut totals = BTreeMap::<&str, Duration>::new();
+            let mut simulation_frames = Vec::with_capacity(frames);
+            let mut worst = Duration::ZERO;
+            let mut awake = 0;
+            for frame in 0..frames {
+                if frame % (0.1 / dt).round() as usize == 0 {
+                    world.bricks.get_mut(&100000).unwrap().color ^= 1;
+                    building
+                        .sync_world_changes(
+                            &world,
+                            Some(&crate::network::WorldChanges {
+                                bricks: [100000].into(),
+                                palette: false,
+                            }),
+                        )
+                        .unwrap();
+                }
+                let start = Instant::now();
+                debris.advance(dt, &building).unwrap();
+                let elapsed = start.elapsed();
+                worst = worst.max(elapsed);
+                let trace = crate::frame_trace::finish(elapsed, false);
+                for span in trace.spans {
+                    if span.name == "debris simulation" {
+                        simulation_frames.push(span.time);
+                    }
+                    *totals.entry(span.name).or_default() += span.time;
+                }
+                if frame >= frames * 2 / 3 {
+                    awake += debris.work().awake;
+                }
+                assert_eq!(
+                    debris.len(),
+                    2048,
+                    "no material may disappear to reduce cost"
+                );
+            }
+            eprintln!(
+                "continuous rubble: iterations={iterations}, dt={dt:.4}, worst={:.3}ms, average late awake={:.1}",
+                worst.as_secs_f64() * 1000.,
+                awake as f64 / (frames - frames * 2 / 3) as f64
+            );
+            for (phase, elapsed) in totals {
+                eprintln!(
+                    "{phase}: {:.3}ms/frame",
+                    elapsed.as_secs_f64() * 1000. / frames as f64
+                );
+            }
+            simulation_frames.sort_unstable();
+            eprintln!(
+                "simulation percentiles: p50={:.3}ms p95={:.3}ms p99={:.3}ms",
+                simulation_frames[simulation_frames.len() / 2].as_secs_f64() * 1000.,
+                simulation_frames[simulation_frames.len() * 95 / 100].as_secs_f64() * 1000.,
+                simulation_frames[simulation_frames.len() * 99 / 100].as_secs_f64() * 1000.,
+            );
+            for at in debris.positions() {
+                assert!(at.is_finite(), "unstable debris pose");
+                if at.x.abs() < 49. && at.z.abs() < 49. {
+                    assert!(at.y >= -0.05, "debris fell through the floor: {at}");
+                }
+            }
+        }
     }
 
     #[test]
