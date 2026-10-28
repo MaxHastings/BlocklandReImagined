@@ -95,6 +95,11 @@ pub struct Replica {
     pub brick_events: std::sync::Arc<bri_events::Extension>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
     pub package_state: bri_sim::session::PackageStateView,
+    /// Whether the host runs voice chat (fixed for the session).
+    pub voice_chat: bool,
+    /// The players an admin has muted, by owner id; empty when the host does
+    /// not run voice chat.
+    pub voice_muted: BTreeSet<OwnerId>,
     /// Per-tick drop of falling projectiles, by definition.
     projectile_falls: BTreeMap<String, f32>,
     /// Add-On world shapes by key; an unchanged set keeps its pointer.
@@ -392,6 +397,8 @@ impl Replica {
             brick_events: checkpoint.brick_events.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
+            voice_chat: checkpoint.voice_chat,
+            voice_muted: checkpoint.voice_muted.iter().copied().collect(),
             projectile_falls: checkpoint.projectile_falls,
             world_shapes: checkpoint
                 .world_shapes
@@ -573,6 +580,9 @@ impl Replica {
         }
         if let Some(scale) = delta.time_scale {
             self.time_scale = scale;
+        }
+        if let Some(muted) = delta.voice_muted {
+            self.voice_muted = muted;
         }
         if let Some(shapes) = delta.broken_shapes {
             self.broken_shapes = shapes;

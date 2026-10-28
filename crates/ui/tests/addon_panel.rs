@@ -504,6 +504,8 @@ fn a_button_with_an_action_is_done_by_the_client_and_sends_no_event() {
     assert!(actions(&mut ui).is_empty());
     ui.update(0);
     assert!(ui.is_open(ScreenId::Options));
+    // Opening Options asked for a microphone list; that is not an event.
+    assert_eq!(actions(&mut ui), [UiAction::RefreshVoiceDevices]);
     // A button without one still tells the rules.
     event(&mut ui, "Panel_Button_help", EventKind::Click);
     let sent = actions(&mut ui);

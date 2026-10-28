@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build a private, optional NPC reaction Add-On from an explicit source catalog.
+"""Build the bundled NPC reaction Add-On from an explicit source catalog.
 
 Recordings are never part of the repository. Install processing dependencies with
 `python -m pip install numpy scipy soundfile`; then use --download --output DIR.
 No downloads happen without --download. Existing cached downloads are hash checked.
 """
+import generated_addons
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -152,9 +153,9 @@ def build(catalog, cache, output, download=False):
     script += '[]\n}\n'
     (rules / 'catalog.rhai').write_text(script, encoding='utf-8')
     (rules / 'npc-reactions-generated.json').write_text(json.dumps({'schema_version': 1, 'recordings': output.name}))
-    (output / 'npc-reactions-generated.json').write_text(json.dumps({'schema_version': 1, 'clips': provenance}, indent=2))
+    (output / 'npc-reactions-generated.json').write_text(json.dumps({'schema_version': 1, 'recipe': 'npc-reactions', 'recipe_sha256': generated_addons.recipe_hash(HERE.parent.parent, 'npc-reactions'), 'clips': provenance}, indent=2))
     buttons = ''.join(f'<p>{html.escape(r["title"])} — {html.escape(", ".join(r["events"]))}<br><audio controls preload="none" src="assets/clips/{r["id"]}.wav"></audio></p>' for r in rows)
-    (output / 'audition.html').write_text('<!doctype html><meta charset="utf-8"><title>NPC reaction audition</title><h1>Local reaction recordings</h1><p>Unverified source rights; private audition pack.</p>' + buttons, encoding='utf-8')
+    (output / 'audition.html').write_text('<!doctype html><meta charset="utf-8"><title>NPC reaction audition</title><h1>NPC reaction recordings</h1><p>Original source attribution and notices are in npc-reactions-generated.json.</p>' + buttons, encoding='utf-8')
     return provenance
 
 

@@ -223,6 +223,9 @@ pub enum CueKind {
     /// `WeaponSound` at `volume` times the profile's own (an Add-On's
     /// `sound_at` with a volume): a shout carries, a whisper does not.
     SoundShaped {
+        /// Explicit actor attribution for authored dialogue, absent for SFX.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        speaker: Option<u64>,
         profile: String,
         volume: f32,
         pitch: f32,
@@ -543,6 +546,13 @@ impl Cue {
             );
         }
         if let CueKind::SoundShaped {
+            speaker: Some(actor),
+            ..
+        } = &self.kind
+        {
+            ensure!(*actor > 0, "Invalid speech actor");
+        }
+        if let CueKind::SoundShaped {
             volume,
             pitch,
             radius,
@@ -687,6 +697,7 @@ mod tests {
             tick: 1,
             position: [0.; 3],
             kind: CueKind::SoundShaped {
+                speaker: None,
                 profile: "radioBlip".into(),
                 volume,
                 pitch: 1.0,

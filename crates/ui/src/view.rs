@@ -764,6 +764,14 @@ impl View {
             // the authored extent are clipped away and cannot be reached.
             if self.nodes[k].ctrl.class == "GuiTextListCtrl" {
                 abs.h = abs.h.max(self.list_height(k));
+                // `fitParentWidth`: fill the parent, less the given gutter.
+                if let Some(gutter) = self.nodes[k]
+                    .ctrl
+                    .field("fitParentWidth")
+                    .and_then(|g| g.parse::<i32>().ok())
+                {
+                    abs.w = (parent_rect.w - gutter).max(0);
+                }
             }
             // GuiConsole sizes itself to its log: one row per line, at least
             // as wide as the scroll area it sits in.

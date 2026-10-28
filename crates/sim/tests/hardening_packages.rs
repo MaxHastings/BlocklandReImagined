@@ -1395,3 +1395,59 @@ fn a_guest_plants_on_generated_ground() {
     );
     assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
 }
+
+#[test]
+fn authored_speech_uses_the_actor_and_rejects_unknown_or_looping_sources() {
+    let mut spec = Spec::server(
+        "speech",
+        &["effects"],
+        json!({ "commands": [
+        {"name":"line"}, {"name":"looped"}, {"name":"unknown"}
+    ] }),
+        r#"
+        fn cmd_line(p) { let at = player(p); require(speak_at(p, "speechclips:sound/line", at.x, at.y, at.z, 1.0, 1.0, 60.0)); }
+        fn cmd_looped(p) { let at = player(p); require(speak_at(p, "speechclips:sound/loop", at.x, at.y, at.z, 1.0, 1.0, 60.0)); }
+        fn cmd_unknown(p) { let at = player(p); require(speak_at(999999, "speechclips:sound/line", at.x, at.y, at.z, 1.0, 1.0, 60.0)); }
+    "#,
+    );
+    spec.dependencies.push("speechclips");
+    let mut clips = Spec {
+        id: "speechclips",
+        side: Side::Shared,
+        capabilities: vec![],
+        provides: vec![],
+        dependencies: vec![],
+    };
+    clips.provides.push((
+        "weapons",
+        "speech".into(),
+        "weapons.json".into(),
+        serde_json::to_vec(&json!({
+            "schema_version":5, "id":"speechclips", "sounds": {
+                "speechclips:sound/line": {"file":"synthetic.wav", "stock":true},
+                "speechclips:sound/loop": {"file":"synthetic.wav", "stock":true, "looping":true}
+            }
+        }))
+        .unwrap(),
+    ));
+    let pack = serde_json::from_slice(&clips.provides[0].3).unwrap();
+    let mut s = session(vec![clips, spec]);
+    s.set_weapon_pack(pack).unwrap();
+    let owner = s.join("Speaker".into(), SPAWN, true).unwrap();
+    let mut client = Client::new(owner);
+    s.take_cues();
+    client.run(&mut s, "speech", "line").unwrap();
+    assert!(s.take_cues().iter().any(|cue| matches!(&cue.kind,
+        CueKind::SoundShaped { speaker: Some(actor), profile, .. } if *actor == owner && profile == "speechclips:sound/line")));
+    assert!(client.run(&mut s, "speech", "looped").is_err());
+    assert!(client.run(&mut s, "speech", "unknown").is_err());
+    s.mute_voice(owner).unwrap();
+    client.run(&mut s, "speech", "line").unwrap();
+    assert!(!s.take_cues().iter().any(|cue| matches!(
+        &cue.kind,
+        CueKind::SoundShaped {
+            speaker: Some(_),
+            ..
+        }
+    )));
+}

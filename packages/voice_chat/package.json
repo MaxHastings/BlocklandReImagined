@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "voice_chat",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Voice Chat",
+  "description": "Proximity voice chat: talk to nearby players over your microphone while the host relays voices. Turning this Add-On off stops the host from relaying any voice and hides the mute controls; the Options voice settings stay available as long as it is installed.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": []
+}

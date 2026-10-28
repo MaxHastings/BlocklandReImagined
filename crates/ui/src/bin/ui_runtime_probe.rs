@@ -8,6 +8,7 @@ use bri_ui::{
     geom::Rect,
     gpu::{Headless, UiRenderer},
     input::{InputEvent, Key, Modifiers, MouseButton},
+    models::hud::ScrollMode,
     pack::{Pack, TexKey},
     screens::ScreenId,
     ui::{Ui, UiConfig},
@@ -62,6 +63,7 @@ fn main() -> Result<()> {
             .map_or("artifacts/native-ui-runtime", String::as_str),
     );
     std::fs::create_dir_all(&out)?;
+    let voice_review = args.iter().any(|arg| arg == "--voice-review");
     let pack = Rc::new(Pack::load(&pack_path)?);
     let catalog: Catalog = serde_json::from_slice(&std::fs::read(
         "content/stock-catalog-004/stock-catalog.json",
@@ -138,6 +140,51 @@ fn main() -> Result<()> {
             && pixels[4 * 56..4 * 56 + 4] == [0, 0, 255, 255],
         "external texture must sample both halves"
     );
+    if voice_review {
+        // The same source artwork the client embeds, uploaded without a window.
+        for (key, name) in [
+            (VOICE_ICON_MICROPHONE, "icon_microphone.png"),
+            (VOICE_ICON_NO_ENTRY, "icon_no.png"),
+        ] {
+            let pixels = image::open(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../client/assets/voice")
+                    .join(name),
+            )?
+            .to_rgba8();
+            let (width, height) = pixels.dimensions();
+            let size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            };
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Voice review icon"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            gpu.queue.write_texture(
+                texture.as_image_copy(),
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * width),
+                    rows_per_image: Some(height),
+                },
+                size,
+            );
+            renderer.set_external(
+                key,
+                texture.create_view(&Default::default()),
+                (width, height),
+            );
+        }
+    }
     let mut report = Vec::new();
     for (size, scale) in [((1024, 768), 1.0), ((1920, 1080), 1.0), ((1920, 1080), 2.0)] {
         let settings = Settings {
@@ -172,6 +219,126 @@ fn main() -> Result<()> {
             report.push(serde_json::json!({"file":file,"draw_commands":dl.cmds.len(),"glyphs":dl.glyph_count()}));
             Ok(())
         };
+        if voice_review {
+            use bri_ui::models::admin::*;
+            ui.apply(UiUpdate::VoiceDevices(vec![
+                "USB headset microphone".into(),
+            ]));
+            ui.core.voice_preview = VoicePreview {
+                level: 0.4,
+                available: true,
+                enabled: true,
+            };
+            ui.core.push(ScreenId::Options);
+            ui.update(0);
+            click(&mut ui, ScreenId::Options, "optionsDlg.setPane(Audio);")?;
+            ui.update(0);
+            render(&ui, "voice-audio", &mut renderer, &mut report)?;
+            click(&mut ui, ScreenId::Options, "OptVoiceModeMenu")?;
+            render(&ui, "voice-mode-menu", &mut renderer, &mut report)?;
+            key(&mut ui, Key::Escape);
+            key(&mut ui, Key::Escape);
+            ui.apply(UiUpdate::Players {
+                rows: (1..=32)
+                    .map(|id| PlayerRow {
+                        id,
+                        name: format!("Blockhead {id:02}"),
+                        score: id as i32,
+                        admin: id == 1,
+                        super_admin: false,
+                        bl_id: Some(id),
+                        trust: "None".into(),
+                        ignoring: false,
+                        loading: false,
+                    })
+                    .collect(),
+                server_name: "32-player voice review".into(),
+                max_players: 32,
+                voice_chat: true,
+                voice_muted: vec![3],
+                server_voice_muted: vec![2],
+                voice_speaking: vec![4, 6],
+            });
+            ui.core.push(ScreenId::PlayerList);
+            ui.update(0);
+            render(&ui, "voice-player-list", &mut renderer, &mut report)?;
+            key(&mut ui, Key::Escape);
+            ui.apply(UiUpdate::Admin(AdminUpdate::State(AdminSnapshot {
+                revision: 1,
+                role: AdminRole::SuperAdmin,
+                local_host: true,
+                legacy_lan: false,
+                supported: [
+                    AdminFeature::Kick,
+                    AdminFeature::VoiceMute,
+                    AdminFeature::Ban,
+                    AdminFeature::Unban,
+                    AdminFeature::Wand,
+                    AdminFeature::Maps,
+                    AdminFeature::ClearBricks,
+                    AdminFeature::HostOptions,
+                    AdminFeature::Ranks,
+                    AdminFeature::Environment,
+                ]
+                .into_iter()
+                .collect(),
+                voice_muted: [2].into_iter().collect(),
+                players: (1..=32)
+                    .map(|connection| AdminPlayer {
+                        connection,
+                        name: format!("Blockhead {connection:02}"),
+                        identity_label: format!("Player {connection}"),
+                        role: if connection == 1 {
+                            AdminRole::SuperAdmin
+                        } else {
+                            AdminRole::Player
+                        },
+                        owner: connection == 1,
+                        local: connection == 1,
+                        bot: false,
+                        persistent_identity: true,
+                    })
+                    .collect(),
+                options: Some(AdminOptions::default()),
+            })));
+            ui.core.admin.selected_player = Some(2);
+            ui.core.push(ScreenId::Admin);
+            ui.update(0);
+            render(&ui, "voice-admin", &mut renderer, &mut report)?;
+            key(&mut ui, Key::Escape);
+            ui.apply(UiUpdate::Colorset(
+                pack.data
+                    .data
+                    .brick_colorset
+                    .iter()
+                    .map(|division| PaintDivision {
+                        name: division.name.clone(),
+                        colors: division.colors.clone(),
+                    })
+                    .collect(),
+            ));
+            ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+                server_name: "Voice HUD review".into(),
+                max_players: 32,
+                local: true,
+                single_player: false,
+                admin: true,
+            }));
+            ui.apply(UiUpdate::VoiceIndicator(Some(VoiceIndicator {
+                mode: VoiceMode::PushToTalk,
+                key_held: true,
+                active: true,
+                microphone: true,
+                server_muted: false,
+            })));
+            // The paint palette is normally hidden until selected; exercise
+            // the visible palette, where the lower-left microphone could clash.
+            ui.core.hud.mode = ScrollMode::Paint;
+            ui.core.hud.reset_layout();
+            ui.update(250);
+            render(&ui, "voice-building-hud", &mut renderer, &mut report)?;
+            continue;
+        }
         render(&ui, "main-menu", &mut renderer, &mut report)?;
         // `~` console over the main menu: echo, help, a warning and an error.
         ui.core.toggle_console();
@@ -410,6 +577,12 @@ fn main() -> Result<()> {
             }],
             server_name: "Native UI verification".into(),
             max_players: 8,
+            // The host runs voice chat: the list's mute button and Voice
+            // column show.
+            voice_chat: true,
+            voice_muted: vec![],
+            server_voice_muted: vec![],
+            voice_speaking: vec![],
         });
         ui.core.push(ScreenId::PlayerList);
         ui.update(0);

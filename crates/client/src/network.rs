@@ -57,6 +57,12 @@ pub struct View {
     /// cursor advances as deltas arrive and must not be used to reset consumers.
     pub checkpoint_cue_cursor: u64,
     pub admin_snapshot: Option<bri_sim::session::AdminSnapshot>,
+    /// Whether the host runs voice chat (its Add-On on before players
+    /// joined): off, no voices are relayed and the mute controls hide.
+    pub voice_chat: bool,
+    /// The players an admin has muted, by owner id; empty when the host does
+    /// not run voice chat.
+    pub voice_muted: std::collections::BTreeSet<OwnerId>,
     pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     /// Admin `/timeScale`: game time per real second.
@@ -202,6 +208,8 @@ pub struct Probes {
     /// Problems the in-process server's Add-On scripts ran into, for this
     /// game's Add-On health, when this game hosts.
     pub host_problems: Option<Arc<std::sync::Mutex<Vec<bri_package::diag::Diagnostic>>>>,
+    /// Proximity voice chat's connection to the host.
+    pub voice: bri_net::voice::VoiceLink,
 }
 /// How long loading may stand still while it waits on the server before it
 /// fails. A dead or unreachable server fails sooner, at QUIC's idle timeout.
@@ -271,7 +279,7 @@ impl Worker {
             };
             let result=match connected {
                 Ok(mut connection)=>{
-                    let _=probes_tx.set(Probes{link:connection.client.link_probe(),host:connection.host.as_ref().map(|h|h.perf.clone()),host_port:connection.host.as_ref().map(|h|h.address.port()),host_problems:connection.host.as_ref().map(|h|h.package_problems.clone())});
+                    let _=probes_tx.set(Probes{link:connection.client.link_probe(),host:connection.host.as_ref().map(|h|h.perf.clone()),host_port:connection.host.as_ref().map(|h|h.address.port()),host_problems:connection.host.as_ref().map(|h|h.package_problems.clone()),voice:connection.client.voice_link()});
                     let result=tokio::select! {
                         _=&mut stopped=>Ok(()),
                         result=run(&mut connection.client,connection.mods.clone(),rx,movement_rx,&view_tx,&events_tx)=>result,
@@ -430,6 +438,8 @@ fn publish(
         tick: client.replica.tick,
         checkpoint_cue_cursor,
         admin_snapshot: client.admin_snapshot.clone(),
+        voice_chat: client.replica.voice_chat,
+        voice_muted: client.replica.voice_muted.clone(),
         vitals: client.replica.vitals.clone(),
         minigames: client.replica.minigames.clone(),
         time_scale: client.replica.time_scale,

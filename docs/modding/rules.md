@@ -1411,6 +1411,24 @@ Scripts cannot read files, open sockets or run `eval`.
 
 ## Sound lengths
 
+`speak_at(actor, sound, x, y, z, volume, pitch, radius)` uses the same
+`effects` capability and sound budgets as `sound_at`, but explicitly attributes a
+one-shot profile to an existing actor (human or bot). Its name turns blue and its
+body uses its own additive `talk` clip while that audio handle plays. Completion,
+replacement, culling, local/server mute and session exit end the indication.
+Ordinary sound effects never imply speech. Looping/music profiles and unknown
+actors are rejected. The NPC reaction recipe uses this operation; its cooldowns,
+clip choices and authored audio remain package policy.
+
+`speak_at(actor, sound, x, y, z, volume, pitch, radius)` uses the same
+`effects` capability and sound budgets as `sound_at`, but explicitly attributes a
+one-shot profile to an existing actor (human or bot). Its name turns blue and its
+body uses its own additive `talk` clip while that audio handle plays. Completion,
+replacement, culling, local/server mute and session exit end the indication.
+Ordinary sound effects never imply speech. Looping/music profiles and unknown
+actors are rejected. The NPC reaction recipe uses this operation; its cooldowns,
+clip choices and authored audio remain package policy.
+
 `sound_seconds(sound)` reads how long a weapons-pack sound profile plays, in seconds, from the `seconds` its
 `weapons.json` entry declares (the Add-On check refuses a `seconds` that differs from the file), or `()` when the
 entry says none or there is no such profile. It is read-only and needs no capability: a speech rule uses it to

@@ -1,6 +1,6 @@
-# Local NPC reaction pack
+# Bundled NPC reaction pack
 
-This is the reproducible source recipe for an **optional local audition pack**:
+This is the reproducible source recipe for the default NPC reaction Add-On:
 118 actual online recordings, 25 observed gameplay contexts. Audio bytes are
 kept out of Git. The catalog pins every original recording's SHA-256 and source
 page/download URL; the generated provenance also hashes each processed WAV.
@@ -50,7 +50,7 @@ is restricted to outside minigames. Roster sampling uses `bots()` because
 `players()` contains connected humans only. Health deltas are sampled after
 acceptance; the pre-filter `on_damage` hook cannot establish an injury.
 
-Mixing is positional (`sound_at`), with a 60-unit radius. There are at most two
+Mixing is positional (`speak_at`, with explicit actor attribution), with a 60-unit radius. There are at most two
 active reactions globally, with no overlapping reaction sources within 24 units,
 at least three seconds between starts, a 10–16 second bot cooldown, and a
 120-second global cooldown for iconic references (45 seconds for other clips).
@@ -67,12 +67,17 @@ profiles, positions, pitches and ticks plus eligible/played totals per event,
 clip and tier. They make tuning measurable without changing bot decisions.
 
 Content-free Rust tests exercise the actual policy with synthetic clip metadata:
-positioned sound operations, cross-bot iconic suppression, queue bounds, quiet
+positioned actor-attributed speech operations, cross-bot iconic suppression, queue bounds, quiet
 stationary game bots, accepted bot-health sampling and human silence. The opt-in
 saved-match probe also refuses package errors, a missing requested companion or
 no reaction presentation during a run of two minutes or longer.
 
-The pack is intentionally optional and not auto-downloaded by bootstrap or CI.
+Maxwell authorized default enablement and release bundling on 2026-10-28.
+Bootstrap builds the pinned recordings; release CI fetches their verified native
+bundle. Both recording and rules packages ship and start enabled, and players
+may turn the Add-On off. CI rejects stale recipes, missing companions and changed
+recordings. Recording source notices and attribution remain in the generated
+receipt; this default does not assert that source rights have been verified.
 Network access, copyrighted assets and source-game installations are unnecessary
 for the ordinary test suite. Check native imported clips with `bri-addon-check`
 and use the ten-minute probe documented in the gameplay progress entry with

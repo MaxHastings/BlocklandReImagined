@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "NPC Pop-Culture Reaction Policy",
-  "description": "Server-only situational reaction mixing for the optional local recording pack.",
+  "description": "Server-only situational reaction mixing for the bundled recording pack.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": {"source": "original"},

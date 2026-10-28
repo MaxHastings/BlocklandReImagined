@@ -138,7 +138,7 @@ fn mix() {
                 else if persona == 2 { 1.14 } else { 1.0 };
     // Unity cue/profile gains: the importer sets the recording level once.
     // Use the ordinary 10/60 positional range rather than fading speech early.
-    sound_at(c.profile,x,y,z,1.0,pitch,60.0);
+    speak_at(q.bot,c.profile,x,y,z,1.0,pitch,60.0);
     active.push(#{bot:q.bot,expires:tick()+(c.seconds/pitch*120.0).ceil().to_int()+18,x:x,y:y,z:z});
     set("active",active);
     recent[c.id] = tick() + if c.iconic { 14400 } else { 5400 };

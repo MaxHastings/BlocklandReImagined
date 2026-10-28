@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "addons": [
     {
       "id": "tool_duplicator",
@@ -32,6 +32,8 @@
     },
     { "id": "brick_mirror", "path": "brick_mirror" },
     { "id": "brick-destruction-audio", "path": "brick-destruction-audio" },
+    { "id": "voice_chat", "path": "voice_chat" },
+    { "id": "npc_popculture", "generated": "npc-reactions" },
     { "id": "rule-workshop-toys", "path": "rule-workshop-toys" },
     { "id": "ragdoll", "path": "showcase/ragdoll", "enabled": false },
     { "id": "brick_portal", "path": "brick_portal", "enabled": false },

@@ -1,0 +1,1 @@
+`Checkpoint::voice_muted`: the players an admin has muted, by owner id; empty when the host does not run voice chat. `Delta::voice_muted` carries the set whole whenever it changes, so every client's player list can show "Server Muted".
