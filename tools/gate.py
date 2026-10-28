@@ -1183,7 +1183,25 @@ def scoped_gate(sha, root):
         return True
 
 
-def gate_commit(sha, diff_only):
+def parent_push_checked(sha, base):
+    """The hook can reuse its still-locked parent's completed validation.
+
+    The proof lives only in git push's environment, binds the exact commit and
+    main base, and must match the active gate lock. History checks still run.
+    Without it the child hook would wait on the lock its parent is holding.
+    """
+    try:
+        proof = json.loads(os.environ.get("BRI_GATE_PUSH_CHECK", "{}"))
+        lock = gate_root() / "gate.lock"
+        return (isinstance(proof, dict) and proof.get("sha") == sha and proof.get("base") == base
+                and (not FULL_GATE or proof.get("full") is True)
+                and proof.get("token") == lock.read_text(encoding="utf-8")
+                and time.time() - lock.stat().st_mtime < LOCK_STALE_SECONDS)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def gate_commit(sha, diff_only, reuse_push=False):
     say("fetching origin/main")
     git("fetch", "-q", "origin", "main")
     base = git("rev-parse", "refs/remotes/origin/main").strip()
@@ -1216,6 +1234,12 @@ def gate_commit(sha, diff_only):
         return False
     if diff_only:
         return True
+    if reuse_push and "BRI_GATE_PUSH_CHECK" in os.environ:
+        if parent_push_checked(sha, base):
+            say("pre-push hook: reusing the locked parent's validation of this exact commit/base")
+            return True
+        say("pre-push parent validation no longer matches; refusing so --push can retry")
+        return False
     # --no-renames lists both sides of a move: code renamed into a .md file
     # is a deleted source file, not documentation.
     changed = git("diff", "--name-only", "--no-renames", base, sha).split()
@@ -1234,7 +1258,7 @@ def push_main():
     root = gate_root()
     root.mkdir(parents=True, exist_ok=True)
     label = f"{git('rev-parse', '--show-toplevel').strip()} --push"
-    with Lock(root / "gate.lock", label):
+    with Lock(root / "gate.lock", label) as lock:
         LOCK_HELD = True
         for _attempt in range(3):
             git("fetch", "-q", "origin", "main")
@@ -1250,7 +1274,11 @@ def push_main():
             if not gate_commit(sha, diff_only=False):
                 return False
             # Push the commit that passed, not whatever HEAD became meanwhile.
-            if subprocess.run(["git", "push", "origin", f"{sha}:refs/heads/main"]).returncode == 0:
+            env = dict(os.environ, BRI_GATE_PUSH_CHECK=json.dumps({
+                "sha": sha, "base": git("rev-parse", "refs/remotes/origin/main").strip(),
+                "token": lock.token, "full": FULL_GATE,
+            }))
+            if subprocess.run(["git", "push", "origin", f"{sha}:refs/heads/main"], env=env).returncode == 0:
                 say(f"pushed {sha[:9]} to main")
                 return True
             say("main moved during the gate (an ungated push?); rebasing and retrying")
@@ -1691,7 +1719,7 @@ def hook(stdin):
             say("refusing to delete main")
             ok = False
             continue
-        ok = gate_commit(local_sha, diff_only=False) and ok
+        ok = gate_commit(local_sha, diff_only=False, reuse_push=True) and ok
     return ok
 
 

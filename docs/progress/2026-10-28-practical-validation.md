@@ -10,6 +10,9 @@ Changes:
 - gate.py defaults to exact-commit tool/docs/focused checks. `--full` retains
   the workspace, ignored-content, corpus and performance path. Release tooling
   requests it explicitly. Scoped checks never create extended-pass receipts.
+- Guarded push keeps the hook enabled and reuses only its still-locked parent's
+  successful check for the exact commit/base. Stale proof fails for retry instead
+  of a child hook waiting on its parent's lock. No scoped pass becomes a full one.
 - Focused checks default to direct consumers, with deeper selection available.
   UI/effect/chaos matrices require explicit integration targets locally.
 - CI builds each shard's exact package/target selection. Previously a single
@@ -24,7 +27,7 @@ Changes:
   screens, admin screens and net graph. Retain fast UI/effect input/state cases.
 - Normal main CI uses the bounded PR tier; nightly/manual retains full CI.
 
-Evidence: 123 Python tool tests passed in 6 seconds, documentation checks passed,
+Evidence: 124 Python tool tests passed in 6 seconds, documentation checks passed,
 locked Cargo metadata parsed. Metadata target count drops 562 -> 523. Ordinary
 CI targets drop 312 -> 280 (empty harnesses plus eight GPU matrices). Checked
 all four planned shards against actual metadata: exactly the assigned targets,
