@@ -250,9 +250,6 @@ pub struct BrickDebris {
     shots: Shots,
     /// The player's limit (Physics Quality or `$pref::Physics::MaxBricks`).
     limit: usize,
-    /// Whether a struck plain brick cracks into shards (Options' Cracked
-    /// bricks, on by default); off, every brick flies whole.
-    pub shards: bool,
     ghosts: Vec<Ghost>,
     falling: Vec<Falling>,
     /// The openings of linked bricks (portals) bodies fly through.
@@ -280,7 +277,6 @@ impl BrickDebris {
             pushers: Pushers::default(),
             shots: Shots::default(),
             limit: DEFAULT_LIMIT,
-            shards: true,
             ghosts: Vec::new(),
             falling: Vec::new(),
             passages: Default::default(),
@@ -296,10 +292,9 @@ impl BrickDebris {
     }
     /// Forget everything (disconnect, new server). The limit stays.
     pub fn clear(&mut self) {
-        let (limit, shards) = (self.limit, self.shards);
+        let limit = self.limit;
         *self = Self::new();
         self.set_limit(limit);
-        self.shards = shards;
     }
     /// Keep at most `limit` bodies (clamped to [`MAX_LIMIT`]); extra bodies
     /// go now, oldest first.
@@ -490,7 +485,7 @@ impl BrickDebris {
             let center = Vec3::from(cue.position);
             let turn = Quat::from_rotation_y(-f32::from(*quarter_turns) * FRAC_PI_2);
             let cracked = match building.definition(definition) {
-                Some(d) if self.shards && *death == BrickDeath::Hit && d.is_plain_box() => {
+                Some(d) if *death == BrickDeath::Hit && d.is_plain_box() => {
                     let mut rng = Seeded::new(!cue.id);
                     let impact = turn.inverse() * (Vec3::from(*origin) - center);
                     let cracks = cracks(&d.mesh, impact, || rng.signed());
@@ -1946,13 +1941,6 @@ pub(crate) mod tests {
             .cues(&[hit(1, 1, [0.0, 0.3, 0.0], [0.2, 0.6, 0.1])], &building)
             .unwrap();
         assert_eq!(whole.len(), 1, "a blast beside it throws it whole");
-        // Cracked bricks off: struck, it still flies whole.
-        let mut plain = BrickDebris::new();
-        plain.shards = false;
-        plain
-            .cues(&[hit(1, 1, [0.0, 0.3, 0.0], [0.2, 0.6, 0.1])], &building)
-            .unwrap();
-        assert_eq!(plain.len(), 1);
         // A 2x2 brick cracks once each way.
         assert_eq!(cracked.len(), 4);
         assert!((mass(&cracked) - mass(&whole)).abs() < mass(&whole) * 0.01);

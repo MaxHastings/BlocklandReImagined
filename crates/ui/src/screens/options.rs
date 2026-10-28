@@ -88,9 +88,6 @@ const PHYSICS_RADIO: &str = "OPT_PhysicsQuality";
 /// v20's `$pref::Physics::MaxBricks`: the debris limit itself. A radio sets
 /// it to that quality's limit; the console sets any other number.
 pub const MAX_BRICKS: &str = "$pref::Physics::MaxBricks";
-/// Not a v20 setting: a brick a blow lands on squarely cracks into shards
-/// of itself instead of flying off whole. On by default.
-pub const BRICK_SHARDS: &str = "$pref::Physics::BrickShards";
 /// Debris bodies alive at once for each Physics Quality, Best first. Off
 /// leaves no debris: dead bricks just vanish.
 pub const PHYSICS_LIMITS: [i64; 5] = [2048, 512, 256, 128, 0];
@@ -341,7 +338,6 @@ pub const NATIVE_DEFAULTS: &[(&str, &str)] =
     &[(USE_STRAFE_STEERING, "0"), (USE_AUTO_RETURN_STEERING, "0")];
 /// Checkboxes whose v20 default is on.
 const DEFAULT_ON: &[&str] = &[
-    BRICK_SHARDS,
     "$pref::OpenGL::textureTrilinear",
     VEHICLE_MOUSE_INVERT,
     ANTI_ALIASING,
@@ -391,7 +387,6 @@ const CHECKBOX_PREFS: &[&str] = &[
     MUTE_IN_BACKGROUND,
     TOGGLE_CROUCH,
     CAPTIONS,
-    BRICK_SHARDS,
     "$Pref::Chat::CurseFilter",
     "$pref::Chat::ChatRepeat",
     "$pref::Input::AutoLight",
@@ -1037,51 +1032,6 @@ fn content_bottom(v: &View, section: NodeId) -> i32 {
         .map(|&k| v.node(k).ctrl.position[1] + v.node(k).ctrl.extent[1])
         .max()
         .unwrap_or(0)
-}
-
-/// Physics Quality addition: a Cracked Bricks checkbox under its radios
-/// (in the section that holds them),
-/// styled like the pane's own checkboxes.
-fn physics_rows(v: &mut View) {
-    let Some(section) = v
-        .id(&format!("{PHYSICS_RADIO}0"))
-        .and_then(|radio| v.node(radio).parent)
-    else {
-        return;
-    };
-    let Some(style) = v
-        .walk()
-        .find(|&n| {
-            let c = &v.node(n).ctrl;
-            c.class == "GuiCheckBoxCtrl"
-                && c.variable
-                    .as_deref()
-                    .is_some_and(|var| CHECKBOX_PREFS.iter().any(|p| p.eq_ignore_ascii_case(var)))
-        })
-        .map(|n| v.node(n).ctrl.clone())
-    else {
-        return;
-    };
-    let radio = v
-        .node(section)
-        .children
-        .iter()
-        .map(|&k| &v.node(k).ctrl)
-        .filter(|c| {
-            c.name
-                .as_deref()
-                .is_some_and(|n| n.starts_with(PHYSICS_RADIO))
-        })
-        .map(|c| c.position[0])
-        .min()
-        .unwrap_or(style.position[0]);
-    let mut shards = style;
-    shards.position = [radio, content_bottom(v, section) + 2];
-    shards.name = Some("OptPhysicsBrickShards".into());
-    shards.variable = Some(BRICK_SHARDS.into());
-    shards.command = None;
-    shards.text = Some("Cracked bricks".into());
-    v.add(section, shards);
 }
 
 /// Graphics: Display Settings grows to hold the added rows, and Shadow
@@ -2009,7 +1959,6 @@ impl Options {
             }
             v.nodes[page].ctrl.extent[1] = y;
         }
-        physics_rows(v);
         graphics_pane(v);
         audio_pane(v);
         // Tabs close ranks without Network.
@@ -4009,18 +3958,6 @@ mod tests {
         change(&mut s, &mut ui, n);
         click(&mut s, "done", &mut ui);
         assert!(saved_prefs(&mut ui).bool_or(TOGGLE_CROUCH, false));
-    }
-
-    #[test]
-    fn cracked_bricks_are_a_physics_checkbox_on_by_default_and_saved_on_done() {
-        let mut ui = fixture();
-        let mut s = Options::new(&ui.core);
-        let n = s.view.id("OptPhysicsBrickShards").unwrap();
-        assert!(s.view.bool_value(n));
-        s.view.set_bool(n, false);
-        change(&mut s, &mut ui, n);
-        click(&mut s, "done", &mut ui);
-        assert!(!saved_prefs(&mut ui).bool_or(BRICK_SHARDS, true));
     }
 
     #[test]

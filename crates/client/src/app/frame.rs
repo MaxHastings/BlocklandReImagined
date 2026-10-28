@@ -1977,11 +1977,6 @@ impl App {
             if limit != self.fx.brick_debris.limit() {
                 self.fx.brick_debris.set_limit(limit);
             }
-            self.fx.brick_debris.shards = self
-                .ui
-                .core
-                .prefs
-                .bool_or(bri_ui::screens::options::BRICK_SHARDS, true);
             let debris_span = crate::frame_trace::span("brick debris");
             let kills = std::mem::take(&mut self.fx.brick_kills);
             let thrown = self.fx.brick_debris.cues(&kills, building);
