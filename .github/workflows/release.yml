@@ -71,6 +71,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Bundle freshness walks Cargo's converter dependency graph. Its metadata
+      # query needs rustc and the configured RUSTC_WRAPPER before fetching.
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
       # Fails here, before any build, when Max has not uploaded the content.
       - name: Fetch the generated v20 content
         run: python tools/ci_content.py fetch
@@ -84,12 +96,6 @@ jobs:
         run: python tools/addon_bundle.py fetch
         env:
           GITHUB_TOKEN: ${{ github.token }}
-
-      - uses: dtolnay/rust-toolchain@1.93
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release
-      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Build the game, Add-On importer, dedicated server and modder tools
         run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
