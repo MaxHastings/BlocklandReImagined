@@ -71,6 +71,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       # Bundle freshness walks Cargo's converter dependency graph. Its metadata
       # query needs rustc and the configured RUSTC_WRAPPER before fetching.
       - uses: dtolnay/rust-toolchain@1.93

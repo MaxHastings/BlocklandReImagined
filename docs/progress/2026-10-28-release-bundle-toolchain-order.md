@@ -23,6 +23,16 @@ the native bundle with the unchanged existing importer and pinned inputs to
 produce genuinely regenerated outputs and portable receipts; do not restamp
 old files or bypass generation validation.
 
+The regenerated bundle's 10,048 payload files match the approved candidate
+byte-for-byte excluding only generation receipts. All 164 shipping packages
+validate. A remote round trip passed and macOS release run 40789661566 passed
+the actual bundle fetch/portable recipe check. Linux reached inventory hashing
+but Ubuntu 22.04's default Python lacks hashlib.file_digest (Python 3.11+).
+Pin Python 3.12 before fetch on every release platform; the regression now
+checks Python's minimum version as well as Cargo/wrapper setup order. Cancel
+the superseded run and rebuild once from the corrected workflow commit. These
+workflow-only changes do not alter the portable recipe or require reimporting.
+
 Focused Python release/tool checks, current-main history validation and platform
 CI must pass before merging. Re-dispatch build-only release from the resulting
 main, verify the run source and let the other working thread retain sole

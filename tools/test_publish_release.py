@@ -2,6 +2,7 @@
 """Release publishing checks, without GitHub: run choice and cross-platform content."""
 import json
 import pathlib
+import re
 import tempfile
 import unittest
 import zipfile
@@ -95,6 +96,10 @@ class BundleInputTests(unittest.TestCase):
             with self.subTest(workflow=name):
                 text = (workflows / name).read_text(encoding='utf-8')
                 fetch = text.index('- name: Fetch the Add-On bundle')
+                self.assertLess(text.index('- uses: actions/setup-python@'), fetch)
+                version = re.search(r"python-version:\s*['\"]?(\d+)\.(\d+)", text[:fetch])
+                self.assertIsNotNone(version)
+                self.assertGreaterEqual(tuple(map(int, version.groups())), (3, 11))
                 self.assertLess(text.index('- uses: dtolnay/rust-toolchain@'), fetch)
                 self.assertLess(text.index('- uses: mozilla-actions/sccache-action@'), fetch)
 
