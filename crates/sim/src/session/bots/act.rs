@@ -31,6 +31,8 @@ pub(super) enum Mover {
     /// Its stance where it fights or works: a weave, melee footwork, a
     /// ranged strafe round the place it fights from (`spots`).
     Stance,
+    /// A nearby blocked route opened with a hand weapon. Safety still wins.
+    Breach,
     /// A jet leg of its route, flying itself.
     Jet,
     /// A leap of its route: to the takeoff, still, jump, steer onto it.
@@ -59,6 +61,7 @@ impl Mover {
             Mover::Route => "route",
             Mover::Push => "push",
             Mover::Stance => "stance",
+            Mover::Breach => "breach",
             Mover::Jet => "jet",
             Mover::Leap => "leap",
             Mover::Climb => "climb",
@@ -88,6 +91,7 @@ pub(super) enum Looker {
     Target,
     /// What its objective works.
     Objective,
+    Breach,
     /// The way it carries something, and the swing that flings it.
     Carry,
     /// Down at its feet (a goof).
@@ -104,6 +108,7 @@ impl Looker {
             Looker::Glance => "glance",
             Looker::Target => "target",
             Looker::Objective => "objective",
+            Looker::Breach => "breach",
             Looker::Carry => "carry",
             Looker::Down => "down",
             Looker::Gesture => "gesture",
@@ -132,6 +137,7 @@ pub(super) fn look(looks: &[Look]) -> Look {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Trigger {
     Fight,
+    Breach,
     Objective,
     Goof,
 }
@@ -139,6 +145,7 @@ impl Trigger {
     fn name(self) -> &'static str {
         match self {
             Trigger::Fight => "fight",
+            Trigger::Breach => "breach",
             Trigger::Objective => "objective",
             Trigger::Goof => "goof",
         }
@@ -609,5 +616,76 @@ mod tests {
         // The route's own walk over the same edge is a drop it planned.
         let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z));
         assert!(!held && walked == Vec3::Z, "its own drop: {walked}");
+    }
+}
+
+#[cfg(test)]
+mod route_clearance_tests {
+    use super::*;
+    use bri_package_runtime::ops::BotIntent;
+    use rapier3d::prelude::*;
+
+    #[test]
+    fn a_patrol_crouches_before_a_long_crawlspace_and_emerges() {
+        let tuning = crate::player::PlayerTuning::default();
+        let roof = (tuning.stand_height + tuning.crouch_height) * 0.5;
+        let sim = crate::simulation::Simulation::new(
+            bri_world::World::new("Crawl".into(), "fixture".into(), vec![[1.0; 4]]),
+            crate::testing::definitions(),
+            vec![
+                ColliderBuilder::cuboid(2.0, 0.5, 25.0).translation(Vec3::new(0.0, -0.5, 10.0)),
+                ColliderBuilder::cuboid(10.0, 10.0, 5.0).translation(Vec3::new(
+                    0.0,
+                    roof + 10.0,
+                    8.0,
+                )),
+                ColliderBuilder::cuboid(1.0, 5.0, 25.0).translation(Vec3::new(-3.0, 5.0, 10.0)),
+                ColliderBuilder::cuboid(1.0, 5.0, 25.0).translation(Vec3::new(3.0, 5.0, 10.0)),
+            ],
+        )
+        .unwrap();
+        let mut s = Session::new(sim);
+        let bot = s.join("Crawler".into(), Vec3::Y * 0.05, false).unwrap();
+        let mut kind = BotKind {
+            sight: 0.0,
+            weapons: false,
+            wander_radius: 0.0,
+            ..Default::default()
+        };
+        kind.surprise.strength = 0.0;
+        kind.behaviours.insert("fly".into(), 0.0);
+        kind.behaviours.insert("respawn".into(), 0.0);
+        kind.behaviours.insert("return".into(), 0.0);
+        let mut brain = Brain::new(None, kind, Vec3::ZERO, bot, 0);
+        brain.intent = Some(intents::Held {
+            intent: BotIntent::Patrol {
+                points: vec![[0.0, 0.0, 17.0]],
+                radius: 30.0,
+            },
+            next: 0,
+            until: u64::MAX,
+        });
+        s.bots.brains.insert(bot, brain);
+        let mut crawled = false;
+        for _ in 0..120 * 20 {
+            s.step().unwrap();
+            let state = s.peers[&bot].player.state();
+            crawled |= state.crouched && state.feet[2] > 4.0;
+            if state.feet[2] > 14.0 {
+                break;
+            }
+        }
+        eprintln!(
+            "crawl feet {:?}, why {:?}",
+            s.peers[&bot].player.state().feet,
+            s.bot_why()
+        );
+        assert!(crawled, "never entered the crawlspace: {:?}", s.bot_why());
+        assert!(
+            s.peers[&bot].player.state().feet[2] > 14.0,
+            "did not emerge: {:?}",
+            s.bot_why()
+        );
+        assert_eq!(s.bot_step_failures().0, 0);
     }
 }

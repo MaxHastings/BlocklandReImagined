@@ -92,8 +92,8 @@ pub(super) struct State {
     /// Until when it crouches under ranged fire.
     crouch_until: u64,
     /// The dodge under way: its way (`surprise::DODGES`), the side a strafe
-    /// steps to, and since when.
-    dodge: Option<(u32, Vec3, u64)>,
+    /// steps to, since when, and admitted jet duration in ticks.
+    dodge: Option<(u32, Vec3, u64, u64)>,
     next_dodge: u64,
     /// The last threat judged.
     judged: Option<Threat>,
@@ -513,20 +513,21 @@ impl Session {
         // of an ally's harm, or a chassis's way, only a step aside goes: a
         // hop comes down in it.
         let velocity = Vec3::from(state.velocity);
-        // What its jets can do now, by its kind's `fly` weight and fuel.
-        let jets = crate::route::Jets::of(&tuning, state.energy, brain.kind.weight("fly"));
+        // A short hop needs a burst, not enough fuel to complete a flight leg.
+        let jet_seconds = if brain.kind.weight("fly") > 0.0 {
+            crate::route::Jets::fuel_seconds(&tuning, state.energy)
+        } else {
+            0.0
+        };
+        let jet_ticks = (jet_seconds * 120.0).floor().min(HOP_TICKS as f32) as u64;
         let ways = incoming.map(|(threat, _, side, from)| {
             use super::surprise::{DODGE_HOP, DODGE_JET, DODGE_STRAFE};
             // A hop fires its jets too while it has them (a jet dodge
             // after a crouch): judged over that jetted flight.
-            let jetted = if jets.is_some() {
-                HOP_TICKS as f32 / 120.0
-            } else {
-                0.0
-            };
+            let jetted = jet_ticks as f32 / 120.0;
             let up = matches!(threat, Threat::Shot(_))
                 && super::hop_lands(&self.simulation, feet, velocity, &tuning, jetted);
-            let fuel = jets.as_ref().is_some_and(|j| j.seconds >= JET_SECONDS);
+            let fuel = jet_seconds >= JET_SECONDS;
             let to = feet + side * tuning.forward * STRAFE_TICKS as f32 / 120.0;
             let aside =
                 super::hop_lands(&self.simulation, feet, side * tuning.forward, &tuning, 0.0)
@@ -582,14 +583,14 @@ impl Session {
                 ) == MOVE_DODGE
                 {
                     let way = choose(Domain::Dodge, &ways);
-                    brain.extras.dodge = Some((way, side, tick));
+                    brain.extras.dodge = Some((way, side, tick, jet_ticks));
                     brain.extras.next_dodge = tick + DODGE_REST;
                 }
             }
         }
         extra.crouch = tick < brain.extras.crouch_until && crouch_open;
         let st = &mut self.bots.brains.get_mut(&bot).unwrap().extras;
-        if let Some((way, side, since)) = st.dodge {
+        if let Some((way, side, since, jet_ticks)) = st.dodge {
             use super::surprise::{DODGE_JET, DODGE_STRAFE};
             let t = tick.saturating_sub(since);
             match way {
@@ -601,14 +602,14 @@ impl Session {
                 }
                 DODGE_JET if t < CHARGE_TICKS + HOP_TICKS => {
                     extra.jump = state.grounded;
-                    extra.jet = true;
+                    extra.jet = t - CHARGE_TICKS < jet_ticks;
                     extra.crouch = false;
                     extra.stand = true;
                 }
                 DODGE_STRAFE | DODGE_JET => st.dodge = None,
                 _ if t < HOP_TICKS => {
                     extra.jump = state.grounded;
-                    extra.jet = jets.is_some();
+                    extra.jet = t < jet_ticks;
                     extra.crouch = false;
                     // Straight up: a hop that also carried it on could take
                     // it off a ledge it was holding back from.
@@ -915,6 +916,96 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limited_jets_drive_hop_controls_and_real_motor_motion_without_extending_the_burst() {
+        use crate::player_types::PlayerType;
+        for kind in [
+            PlayerType::FuelJet,
+            PlayerType::LeapJet,
+            PlayerType::JumpJet,
+            PlayerType::NoJet,
+        ] {
+            let sim = crate::simulation::Simulation::new(
+                bri_world::World::new("Jet hop".into(), "fixture".into(), vec![[1.0; 4]]),
+                crate::testing::definitions(),
+                vec![
+                    rapier3d::prelude::ColliderBuilder::cuboid(20.0, 0.5, 20.0)
+                        .translation(Vec3::new(0.0, -0.5, 0.0)),
+                ],
+            )
+            .unwrap();
+            let mut s = Session::new(sim);
+            let bot = s.join("Hopper".into(), Vec3::Y * 0.05, false).unwrap();
+            let tuning = kind.tuning();
+            let p = &mut s.peers.get_mut(&bot).unwrap().player;
+            p.set_archetype(
+                &mut s.simulation.physics,
+                p.state().archetype,
+                tuning.clone(),
+                1.0,
+            )
+            .unwrap();
+            for _ in 0..20 {
+                p.step(&mut s.simulation.physics, MoveInput::default())
+                    .unwrap();
+                s.simulation.physics.step();
+            }
+            assert!(p.state().grounded);
+            let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
+            let fuel = crate::route::Jets::fuel_seconds(&tuning, tuning.max_energy);
+            let ticks = (fuel * 120.0).floor().min(HOP_TICKS as f32) as u64;
+            brain.extras.dodge = Some((super::super::surprise::DODGE_HOP, Vec3::ZERO, 0, ticks));
+            s.bots.brains.insert(bot, brain);
+            let mut jet_presses = 0;
+            let mut actual_jet = 0;
+            let mut peak = 0.0_f32;
+            let mut lowest_energy = tuning.max_energy;
+            for tick in 0..HOP_TICKS + 3 {
+                let feet = Vec3::from(s.peers[&bot].player.state().feet);
+                let extra = s
+                    .bot_extras(
+                        bot,
+                        Scene {
+                            behaviour: Behaviour::Fight,
+                            enemy_seen: false,
+                            hurt_by: None,
+                            holding: true,
+                            natural: false,
+                            calm: false,
+                            carrying: false,
+                            feet,
+                        },
+                        tick,
+                    )
+                    .unwrap();
+                jet_presses += u64::from(extra.jet);
+                let p = &mut s.peers.get_mut(&bot).unwrap().player;
+                p.step(
+                    &mut s.simulation.physics,
+                    MoveInput {
+                        jump: extra.jump,
+                        jet: extra.jet,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                s.simulation.physics.step();
+                actual_jet += u64::from(p.state().jetting);
+                peak = peak.max(p.state().feet[1]);
+                lowest_energy = lowest_energy.min(p.state().energy);
+            }
+            eprintln!(
+                "{kind:?}: buttons {jet_presses}, motor {actual_jet}, peak {peak}, energy {lowest_energy}"
+            );
+            assert_eq!(jet_presses, ticks);
+            if kind == PlayerType::NoJet {
+                assert_eq!(actual_jet, 0);
+            } else {
+                assert!(actual_jet > 0 && peak > 0.5 && lowest_energy < tuning.max_energy);
+            }
+        }
+    }
 
     #[test]
     fn a_path_through_the_body_is_a_predicted_hit_and_one_wide_of_it_is_not() {

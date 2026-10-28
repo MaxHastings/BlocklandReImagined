@@ -126,6 +126,17 @@ pub struct Jets {
     pub weight: f32,
 }
 impl Jets {
+    /// Available thrust time, independently of whether a complete flight leg
+    /// is possible. Short-fuel jets can still assist a hop or dodge.
+    pub fn fuel_seconds(tuning: &PlayerTuning, energy: f32) -> f32 {
+        if !tuning.can_jet || tuning.jet_acceleration <= 0.0 || energy < tuning.min_jet_energy {
+            0.0
+        } else if tuning.jet_drain > 0.0 {
+            (energy - tuning.min_jet_energy).max(0.0) / tuning.jet_drain
+        } else {
+            f32::INFINITY
+        }
+    }
     /// The jets of a body with `tuning` holding `energy`, for a kind with
     /// `weight` on flying; `None` when they do not lift it, it will not
     /// fly, or its energy does not hold even the shortest jet leg.
@@ -135,13 +146,7 @@ impl Jets {
         }
         let reach = Reach::of(tuning);
         let shortest = reach.jets.as_ref()?.shortest();
-        let seconds = if tuning.jet_drain > 0.0 {
-            (energy - tuning.min_jet_energy).max(0.0) / tuning.jet_drain
-        } else if energy >= tuning.min_jet_energy {
-            f32::INFINITY
-        } else {
-            0.0
-        };
+        let seconds = Self::fuel_seconds(tuning, energy);
         (seconds >= shortest.jetting).then_some(Self {
             reach,
             seconds,
@@ -769,6 +774,32 @@ mod tests {
 
     /// The standard player.
     static G: std::sync::LazyLock<PlayerTuning> = std::sync::LazyLock::new(PlayerTuning::default);
+
+    #[test]
+    fn short_fuel_jets_have_useful_bursts_without_a_complete_flight_leg() {
+        use crate::player_types::PlayerType;
+        let mut short_only = false;
+        for kind in [
+            PlayerType::FuelJet,
+            PlayerType::LeapJet,
+            PlayerType::JumpJet,
+        ] {
+            let tuning = kind.tuning();
+            let seconds = Jets::fuel_seconds(&tuning, tuning.max_energy);
+            assert!(seconds > 0.25 && seconds.is_finite(), "{kind:?}: {seconds}");
+            short_only |= Jets::of(&tuning, tuning.max_energy, 1.0).is_none();
+            assert_eq!(
+                Jets::fuel_seconds(&tuning, tuning.min_jet_energy - 0.1),
+                0.0
+            );
+        }
+        assert!(
+            short_only,
+            "a burst must not require a complete route flight"
+        );
+        let no_jet = PlayerType::NoJet.tuning();
+        assert_eq!(Jets::fuel_seconds(&no_jet, no_jet.max_energy), 0.0);
+    }
 
     #[test]
     fn a_body_wobbling_between_two_spots_is_stalled_within_a_window() {

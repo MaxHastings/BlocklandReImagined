@@ -57,6 +57,8 @@ const REGION: &str = "gamemode_slayer:brick/brickslyrregionboundarydata";
 const PATH_NODE: &str = "gamemode_slayer:brick/brickslyrbotpathnodedata";
 /// A plain plate, the bulk of a big build.
 const PLAIN: &str = "test:brick/plain";
+const HOLE: &str = "test:brick/hole";
+const HOLE_BOT: &str = "test:bot/hole";
 const CP_POINTS: i64 = 7;
 /// Plain plates for a soccer pitch: a ball spawn and goals.
 const BALL_SPAWN: &str = "test:brick/ballspawn";
@@ -138,6 +140,7 @@ fn content(root: &Path, long_names: bool, many: bool) -> (Arc<Catalog>, bri_weap
              "commands": [ { "name": "goto", "args": ["float", "float", "float"] },
                            { "name": "colour", "while_dead": true },
                            { "name": "kit", "while_dead": true },
+                           { "name": "kit_of", "args": ["int"] },
                            { "name": "poke", "args": ["int"] },
                            { "name": "unstock", "args": ["int"] },
                            { "name": "strip", "args": ["int"] },
@@ -162,6 +165,7 @@ fn content(root: &Path, long_names: bool, many: bool) -> (Arc<Catalog>, bri_weap
              set(\"colours\", colours);\n\
          }\n\
          fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n\
+         fn cmd_kit_of(p, who) { let kits = get(\"kits\"); kits[`${who}`] = player(who).tools; set(\"kits\", kits); }\n\
          fn cmd_unstock(p, brick) { set_brick_item(brick, ()); }\n\
          fn cmd_strip(p, slot) { mount_image(p, (), slot); }\n\
          fn cmd_kill(p, t) { damage(t, 1000.0, p); }\n\
@@ -260,7 +264,7 @@ fn definitions() -> Definitions {
             reflection: None,
             link: None,
             glass: [0.0; 4],
-            bot: None,
+            bot: (id == HOLE).then(|| HOLE_BOT.to_owned()),
         };
         (id.to_owned(), definition)
     };
@@ -272,6 +276,7 @@ fn definitions() -> Definitions {
             plate(REGION, Special::None),
             plate(PATH_NODE, Special::None),
             plate(PLAIN, Special::None),
+            plate(HOLE, Special::None),
             plate(BALL_SPAWN, Special::None),
             plate(GOAL, Special::None),
         ]
@@ -2566,6 +2571,112 @@ fn bot_of(g: &Game, color: u8) -> OwnerId {
         .find(|(o, v)| g.s.is_bot(*o) && v.team == Some(team))
         .unwrap()
         .0
+}
+
+#[test]
+fn yellow_hole_bots_join_the_yellow_team_unarmed_and_keep_it_on_respawn() {
+    let mut g = Game::new("yellow-hole-team");
+    let mut kinds = bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+        "../../../packages/blockhead_bot/assets/bots.json"
+    ))
+    .unwrap()
+    .bots;
+    kinds.truncate(1);
+    kinds[0].id = HOLE_BOT.into();
+    kinds[0].weapons = false;
+    kinds[0].sight = 0.0;
+    kinds[0].wander_radius = 0.0;
+    g.s.set_vehicle_pack(bri_vehicles::testing::pack(), kinds)
+        .unwrap();
+    let (red, _) = two_teams_as(&mut g, true);
+    let owner = g.s.minigame_views()[0].owner;
+    g.teams(owner, "add 3 Yellow");
+    g.set_team(
+        owner,
+        3,
+        &[
+            (&key(SLAYER, "team_sync_loadout"), Value::Bool(false)),
+            (&key(SLAYER, "team_equip_0"), Value::Text(String::new())),
+            (&key(SLAYER, "team_equip_1"), Value::Text(String::new())),
+            (&key(SLAYER, "team_equip_2"), Value::Text(String::new())),
+            (&key(SLAYER, "team_equip_3"), Value::Text(String::new())),
+            (&key(SLAYER, "team_equip_4"), Value::Text(String::new())),
+        ],
+    );
+    g.set_team(
+        owner,
+        RED,
+        &[
+            (&key(SLAYER, "team_sync_loadout"), Value::Bool(false)),
+            (
+                &key(SLAYER, "team_equip_0"),
+                Value::Text("v20.weapon.hammeritem".into()),
+            ),
+        ],
+    );
+    for i in 0..9 {
+        g.plant(owner, HOLE, -20.0 + i as f32 * 2.0, 0.0, 3);
+    }
+    g.steps(30);
+    let yellow = g.s.minigame_views()[0]
+        .teams
+        .iter()
+        .find(|t| t.color == 3)
+        .unwrap()
+        .id
+        .0;
+    let bots: Vec<_> =
+        g.s.vitals()
+            .into_iter()
+            .filter(|(o, _)| g.s.is_bot(*o))
+            .map(|(o, v)| {
+                assert_eq!(
+                    v.team,
+                    Some(yellow),
+                    "hole bot {o} must use its painted team"
+                );
+                o
+            })
+            .collect();
+    assert_eq!(bots.len(), 9);
+    let tools = |g: &mut Game, bot: OwnerId| -> Vec<String> {
+        g.run(owner, "probe", "kit_of", vec![PackageArg::Int(bot as i64)]);
+        g.steps(13);
+        serde_json::from_value(
+            g.s.package_state().packages["probe"].global["kits"][bot.to_string()].clone(),
+        )
+        .unwrap()
+    };
+    for &bot in &bots {
+        assert!(tools(&mut g, bot).iter().all(String::is_empty));
+    }
+    g.run(
+        owner,
+        "probe",
+        "kill",
+        vec![PackageArg::Int(bots[0] as i64)],
+    );
+    g.steps(120 * 8);
+    assert!(
+        g.s.vitals()[&bots[0]].alive,
+        "hole bot must actually respawn"
+    );
+    assert_eq!(
+        g.s.vitals()
+            .into_iter()
+            .find(|(o, _)| *o == bots[0])
+            .unwrap()
+            .1
+            .team,
+        Some(yellow)
+    );
+    assert!(tools(&mut g, bots[0]).iter().all(String::is_empty));
+    assert!(
+        g.s.vitals()
+            .into_iter()
+            .any(|(o, v)| o == red && v.team != Some(yellow))
+    );
+    g.quiet();
 }
 
 #[test]

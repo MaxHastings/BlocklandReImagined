@@ -1326,6 +1326,7 @@ impl Session {
     }
     /// What scripts read of a player or bot.
     fn player_view(&self, owner: OwnerId, p: &Peer) -> PlayerView {
+        let bot_spawn = self.bot_spawn_properties(owner);
         let actor = self.weapons.actor(bri_weapons::ActorId(owner));
         let item = actor
             .and_then(|a| a.inventory.get(a.selected?)?.clone())
@@ -1413,6 +1414,8 @@ impl Session {
             ),
             bot: self.bots.is_bot(owner),
             bot_owner: self.bot_brick_owner(owner),
+            bot_brick: bot_spawn.map(|(id, _)| id),
+            bot_spawn_team: bot_spawn.and_then(|(_, team)| team).map(u64::from),
             spawner: self.bots.rules_package(owner).map(str::to_owned),
             riding: self.riding_seat(owner),
             magazine: self.weapons.ammo(bri_weapons::ActorId(owner)).map(|m| {
