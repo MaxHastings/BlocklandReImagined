@@ -89,12 +89,15 @@ class NotesTests(unittest.TestCase):
 
 
 class BundleInputTests(unittest.TestCase):
-    def test_only_list_importer_and_port_changes_rebuild_the_bundle(self):
+    def test_release_refreshes_conversion_dependencies_and_ignores_documentation(self):
         self.assertTrue(release.bundle_inputs_changed(['crates/addon-import/ports/x/entry.json']))
         self.assertTrue(release.bundle_inputs_changed(['packages/default-addons.json']))
         self.assertTrue(release.bundle_inputs_changed(['tools/npc_reactions/reactions.rhai']))
         self.assertTrue(release.bundle_inputs_changed(['tools/build_npc_reactions.py']))
-        self.assertFalse(release.bundle_inputs_changed(['crates/client/src/main.rs', 'docs/x.md']))
+        self.assertTrue(release.bundle_inputs_changed(['crates/content/src/bot.rs']))
+        self.assertTrue(release.bundle_inputs_changed(['Cargo.lock']))
+        self.assertTrue(release.bundle_inputs_changed(['tools/imported_addons.py']))
+        self.assertFalse(release.bundle_inputs_changed(['docs/x.md']))
 
 
 if __name__ == '__main__':

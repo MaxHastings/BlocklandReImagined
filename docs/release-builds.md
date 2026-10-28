@@ -260,3 +260,5 @@ retains original attribution, URLs, hashes and notices in the shipped content.
 Private preview folders can use `package_playtest.ps1 -SkipArchive`; manifest,
 content/default-Add-On and startup verification still apply. Public releases keep
 archive generation. Do not publish a new release merely to prepare a playtest.
+
+Bundle schema 4 requires imported-generation receipts: importer sources and normal/build path dependencies, embedded ports, workspace manifest/lockfile and bundling code are tied to every generated file and companion. Packaging rejects unstamped, stale or modified imports. A pinned original ZIP and a new engine commit do not establish fresh generated behavior. Rebuild with the current importer rather than relabeling an old bundle. Release refresh conservatively includes Rust dependency changes.

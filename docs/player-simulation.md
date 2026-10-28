@@ -56,6 +56,9 @@ now queries map geometry and replicated authored brick collision shapes, includi
 shapes extending beyond the placement footprint. Visibility and raycast toggles
 do not override collision. Dynamic
 actor/vehicle camera obstruction have not yet been integrated.
+Input pitch is limited to +/-90 degrees; the composed chase view retains its
+additional tilt past vertical. Its final effects stage must not clamp that
+orientation again, which would point away from the boom's anchor at full down.
 
 ## Collision: v20 `updatePos`, not a physics solver
 
