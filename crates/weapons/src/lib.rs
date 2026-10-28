@@ -3,6 +3,7 @@ use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+pub mod brick_audio;
 pub mod debris;
 mod merge;
 pub mod muzzle;
@@ -3966,6 +3967,10 @@ pub struct CameraShake {
 /// its id, as the base game's are.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PackEffects {
+    /// Exclusive native presentation slot. Packages supply the sound policy;
+    /// the client supplies bounded cosmetic contact reporting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brick_debris_audio: Option<brick_audio::Policy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub particles: Vec<bri_content::effects::Particle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -4091,12 +4096,16 @@ impl PackEffects {
             && self.lights.is_empty()
             && self.explosions.is_empty()
             && self.shells.is_empty()
+            && self.brick_debris_audio.is_none()
     }
     /// Checks the definitions as the effects library would, textures aside:
     /// the client finds those among the base game's, or else among the
     /// Add-On's item presentation textures (a relative path key). An
     /// explosion may use the base game's emitters (`v20/emitter/...`).
     pub fn validate(&self) -> Result<()> {
+        if let Some(policy) = &self.brick_debris_audio {
+            policy.validate()?;
+        }
         for (id, texture) in self.textures() {
             ensure!(
                 !texture.is_empty()
@@ -4931,6 +4940,17 @@ impl Pack {
             }
         }
         self.effects.validate()?;
+        if let Some(policy) = &self.effects.brick_debris_audio {
+            for response in policy.responses() {
+                if let Some(sound) = self.sounds.get(&response.profile) {
+                    ensure!(
+                        !sound.local && !sound.looping && !sound.music && sound.sustain.is_none(),
+                        "Brick debris audio {} must use positional one-shots",
+                        response.profile
+                    );
+                }
+            }
+        }
         ensure!(
             self.sounds.len() <= MAX_SOUNDS,
             "Definition budget exceeded"

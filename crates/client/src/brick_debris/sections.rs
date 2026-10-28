@@ -93,7 +93,10 @@ pub(super) struct Section {
     probe_generation: u64,
     pub landed: bool,
     shared_only: bool,
-    pending: VecDeque<(SectionProbe, f32)>,
+    pending: VecDeque<(SectionProbe, f32, Vec3, Vec3)>,
+    contact_point: Option<Vec3>,
+    snap_told: bool,
+    landing_told: bool,
     target: f32,
     contact: Option<f32>,
     witnesses: [Option<Vec3>; WITNESSES],
@@ -151,6 +154,9 @@ impl Section {
             landed: false,
             shared_only: false,
             pending: VecDeque::new(),
+            contact_point: None,
+            snap_told: false,
+            landing_told: false,
             target: 0.,
             contact: None,
             witnesses: [None; WITNESSES],
@@ -194,6 +200,7 @@ impl Section {
             return;
         }
         p.offset -= self.origin;
+        self.record_member(&p);
         self.pieces.push(p);
         self.assignment.push(None);
     }
@@ -206,33 +213,37 @@ impl Section {
                 .expect("unsealed section index")
                 .insert(i as u64, partition::bounds(&p));
             self.remaining.insert(i);
-            // Original corners plus distributed real material samples. Outer
-            // sail corners can miss a narrow deck while its middle clips through.
-            for x in [-1., 1.] {
-                for y in [-1., 1.] {
-                    for z in [-1., 1.] {
-                        self.record_point(p.offset + p.turn * (p.half * Vec3::new(x, y, z)));
-                    }
-                }
-            }
-            self.record_point(p.offset + p.turn * (Vec3::NEG_Y * p.half.y));
-            let axes = self.sample_axes();
-            let h = (p.turn * Vec3::X).abs() * p.half.x
-                + (p.turn * Vec3::Y).abs() * p.half.y
-                + (p.turn * Vec3::Z).abs() * p.half.z;
-            if h[axes[0]] > self.half[axes[0]] / 8. || h[axes[1]] > self.half[axes[1]] / 4. {
-                for x in 0..8 {
-                    for y in 0..4 {
-                        for z in 0..2 {
-                            let target = self.grid_point([x, y, z]) * self.half;
-                            let mut point = target.clamp(p.offset - h, p.offset + h);
-                            point.y = p.offset.y - h.y;
-                            self.record_point(point);
-                        }
-                    }
-                }
-            }
             self.prepared += 1;
+        }
+    }
+    // Admission is already spread over delivered members. Prepare the small
+    // contact witness set there; the landing index can catch up during flight.
+    fn record_member(&mut self, p: &SectionPiece) {
+        // Original corners plus distributed real material samples. Outer
+        // sail corners can miss a narrow deck while its middle clips through.
+        for x in [-1., 1.] {
+            for y in [-1., 1.] {
+                for z in [-1., 1.] {
+                    self.record_point(p.offset + p.turn * (p.half * Vec3::new(x, y, z)));
+                }
+            }
+        }
+        self.record_point(p.offset + p.turn * (Vec3::NEG_Y * p.half.y));
+        let axes = self.sample_axes();
+        let h = (p.turn * Vec3::X).abs() * p.half.x
+            + (p.turn * Vec3::Y).abs() * p.half.y
+            + (p.turn * Vec3::Z).abs() * p.half.z;
+        if h[axes[0]] > self.half[axes[0]] / 8. || h[axes[1]] > self.half[axes[1]] / 4. {
+            for x in 0..8 {
+                for y in 0..4 {
+                    for z in 0..2 {
+                        let target = self.grid_point([x, y, z]) * self.half;
+                        let mut point = target.clamp(p.offset - h, p.offset + h);
+                        point.y = p.offset.y - h.y;
+                        self.record_point(point);
+                    }
+                }
+            }
         }
     }
     fn record_point(&mut self, point: Vec3) {
@@ -338,12 +349,7 @@ impl Section {
         work: &mut u32,
         dead: &BTreeSet<BrickId>,
     ) -> Result<()> {
-        if !self.sealed
-            || !self.gpu_ready
-            || self.prepared != self.pieces.len()
-            || self.landed
-            || self.pieces.is_empty()
-        {
+        if !self.sealed || !self.gpu_ready || self.landed || self.pieces.is_empty() {
             return Ok(());
         }
         let (at, _) = self.pose(self.shown);
@@ -362,6 +368,7 @@ impl Section {
             *work -= WITNESSES as u32;
             self.target = self.age + 0.2;
             self.contact = None;
+            self.contact_point = None;
             let (old, ot) = self.pose(self.confirmed);
             let (next, nt) = self.pose(self.target);
             for point in self.witnesses.iter().flatten() {
@@ -371,17 +378,24 @@ impl Section {
                     continue;
                 }
                 let reach = from.distance(to);
-                self.pending
-                    .push_back((building.section_probe(from, to), reach));
+                self.pending.push_back((
+                    building.section_probe(from, to),
+                    reach,
+                    from,
+                    (to - from) / reach,
+                ));
             }
         }
-        while let Some((p, reach)) = self.pending.front_mut() {
+        while let Some((p, reach, from, direction)) = self.pending.front_mut() {
             let Some(hit) = building.step_section_probe(p, work, |id| dead.contains(&id))? else {
                 break;
             };
             if let Some(distance) = hit {
                 let f = ((distance - 0.02) / reach.max(0.001)).clamped(0., 1.);
-                self.contact = Some(self.contact.map_or(f, |old| old.min(f)));
+                if self.contact.is_none_or(|old| f < old) {
+                    self.contact = Some(f);
+                    self.contact_point = Some(*from + *direction * distance);
+                }
             }
             self.pending.pop_front();
         }
@@ -605,7 +619,7 @@ impl BrickDebris {
     pub(super) fn advance_sections(&mut self, dt: f32, building: &Building) -> Result<()> {
         let mut contacts = 4096;
         let mut planning = 4096;
-        let mut collision = 512;
+        let mut collision = 512 * crate::local_physics::COLLISION_QUERY_COST;
         let mut material = 256;
         let mut recovery = 256;
         let mut available = self
@@ -675,6 +689,39 @@ impl BrickDebris {
                 continue;
             }
             s.advance_motion(building, &mut contacts, &self.dead)?;
+            if s.shown > 0. && !s.snap_told && s.pieces.iter().any(|p| p.active) {
+                s.snap_told = true;
+                self.foley.report(super::foley::Hit {
+                    source: super::foley::Source::Section(key.0, key.1),
+                    kind: super::foley::Kind::Snap,
+                    point: s.origin + s.pivot,
+                    speed: self
+                        .foley
+                        .policy
+                        .as_ref()
+                        .map_or(0., |p| p.full_speed * 0.7),
+                });
+            }
+            if s.landed && !s.landing_told && s.pieces.iter().any(|p| p.active) {
+                s.landing_told = true;
+                if let Some(point) = s.contact_point {
+                    let (center, turn) = s.pose(s.shown);
+                    let (before, bt) = s.pose((s.shown - 0.02).max(0.));
+                    let local = turn.inverse() * (point - center);
+                    self.foley.report(super::foley::Hit {
+                        source: super::foley::Source::Section(key.0, key.1),
+                        kind: if self.foley.policy.as_ref().is_some_and(|p| {
+                            s.pieces.iter().filter(|m| m.active).count() >= p.landing_min_members
+                        }) {
+                            super::foley::Kind::Landing
+                        } else {
+                            super::foley::Kind::Impact
+                        },
+                        point,
+                        speed: (point - (before + bt * local)).length() / 0.02,
+                    });
+                }
+            }
             s.partition(self.limit, available, &mut planning);
             if s.finishing.is_some() {
                 continue;
@@ -756,6 +803,8 @@ impl BrickDebris {
                     ));
                 let (handle, _) = self.world.insert(body, collider);
                 c.handle = Some(handle);
+                super::foley::configure(&mut self.world, handle, self.foley.policy.as_deref());
+                self.foley.born(handle, 0.12);
                 available -= 1;
                 part_slots -= c.parts;
             }
@@ -951,6 +1000,70 @@ mod tests {
             }
             assert_eq!(reached.len(), ids.len());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn large_collapses_begin_moving_before_landing_partition_work_finishes() -> Result<()> {
+        let (building, _) = super::super::tests::building(&[]);
+        let mut late = Vec::new();
+        for (count, width) in [(40, 1), (1500, 20), (12000, 40)] {
+            let height = count / width;
+            let origin = [(width - 1) as f32 * 0.5, height as f32 * 0.3, 0.];
+            let cues: Vec<_> = (0..count)
+                .map(|i| {
+                    cue(
+                        i + 1,
+                        [(i % width) as f32, 0.3 + (i / width) as f32 * 0.6, 0.],
+                        count as u32,
+                        [width as f32 * 0.5, height as f32 * 0.3, 0.5],
+                        origin,
+                        [origin[0], 0., 0.],
+                    )
+                })
+                .collect();
+            let initial_tip = Vec3::from(cues.last().unwrap().position);
+            let mut d = BrickDebris::new();
+            d.set_limit(8);
+            d.cues(&cues, &building)?;
+            d.cues(
+                &[Cue {
+                    id: count + 1,
+                    tick: 1,
+                    position: origin,
+                    kind: CueKind::BrickSectionReady {
+                        group: 7,
+                        started: 0,
+                        members: count as u32,
+                    },
+                }],
+                &building,
+            )?;
+            let mut first = None;
+            let mut tip_at_100ms = 0.;
+            for frame in 1..=60 {
+                d.advance(1. / 60., &building)?;
+                assert_eq!(d.instances().count(), count as usize);
+                let tip = d.instances().last().unwrap().1.transform.w_axis.truncate();
+                let moved = tip.distance(initial_tip);
+                if first.is_none() && moved > 0.01 {
+                    first = Some(frame * 1000 / 60);
+                }
+                if frame == 6 {
+                    tip_at_100ms = moved;
+                }
+            }
+            eprintln!(
+                "collapse {count} members: first tip motion {first:?}ms; tip at100ms {tip_at_100ms:.3} units"
+            );
+            if first.is_none_or(|ms| ms > 100) {
+                late.push((count, first));
+            }
+        }
+        assert!(
+            late.is_empty(),
+            "sealed visible assemblies waited for partition preparation: {late:?}"
+        );
         Ok(())
     }
     #[test]
@@ -1512,6 +1625,79 @@ mod overload_regressions {
         assert!(section.chunks.is_empty());
         assert_eq!(d.instances().count(), 100);
         assert_eq!(d.len(), 0);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod audio_regressions {
+    use super::*;
+    #[test]
+    fn staged_material_is_quiet_then_shared_motion_snaps_and_lands_once() -> Result<()> {
+        let pack = bri_weapons::Pack::from_json(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/brick-destruction-audio/assets/weapons.json"
+        )))?;
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        d.set_limit(0);
+        d.set_audio_policy(pack.effects.brick_debris_audio.as_ref());
+        d.set_audio_listener(Vec3::new(8., 1., 2.));
+        let mut cues: Vec<_> = (0..8)
+            .map(|i| {
+                super::tests::cue(
+                    i + 1,
+                    [4.5 + i as f32, 3.3, 0.],
+                    8,
+                    [4., 0.3, 0.5],
+                    [8., 3.3, 0.],
+                    [8., 3., 0.],
+                )
+            })
+            .collect();
+        d.cues(&cues, &b)?;
+        for _ in 0..10 {
+            d.advance(1. / 60., &b)?;
+            assert!(d.take_audio().is_empty());
+        }
+        cues.clear();
+        cues.push(Cue {
+            id: 9,
+            tick: 0,
+            position: [0.; 3],
+            kind: CueKind::BrickSectionReady {
+                group: 7,
+                started: 0,
+                members: 8,
+            },
+        });
+        d.cues(&cues, &b)?;
+        let mut snaps = 0;
+        let mut landings = 0;
+        for _ in 0..180 {
+            d.advance(1. / 60., &b)?;
+            for sound in d.take_audio() {
+                if sound.profile.ends_with(":snap") {
+                    snaps += 1;
+                }
+                if sound.profile.ends_with(":landing") {
+                    landings += 1;
+                    assert!(sound.point[1].abs() < 0.1, "{:?}", sound.point);
+                }
+            }
+        }
+        assert_eq!((snaps, landings), (1, 1));
+        assert_eq!(
+            d.world.bodies.len(),
+            0,
+            "shared motion needs no audio-only physics body"
+        );
+        d.clear();
+        assert!(d.take_audio().is_empty());
+        assert!(
+            d.foley.policy.is_some(),
+            "session clear retains loaded package policy"
+        );
         Ok(())
     }
 }

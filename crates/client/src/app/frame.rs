@@ -2031,12 +2031,19 @@ impl App {
                 self.fx.brick_debris.push(&pushers);
                 self.fx.brick_debris.shots(&shots);
             }
+            self.fx
+                .brick_debris
+                .set_audio_listener(Vec3::from(listener.position));
             self.fx.brick_debris.prepare_models(&self.fx.debris_models);
             let moved = self
                 .fx
                 .brick_debris
                 .advance(game_elapsed.as_secs_f32().min(0.25), building);
             self.cosmetic_faults.absorb("brick debris", moved);
+            for sound in self.fx.brick_debris.take_audio() {
+                self.audio
+                    .contact_shaped(&sound.profile, sound.point, sound.seed, sound.voice);
+            }
             drop(debris_span);
             if !self.fx.ragdolls.is_empty() {
                 let _span = crate::frame_trace::span("ragdolls");

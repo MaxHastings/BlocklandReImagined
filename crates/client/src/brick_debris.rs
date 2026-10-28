@@ -42,6 +42,7 @@ use glam::{Mat4, Quat, Vec3};
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::f32::consts::FRAC_PI_2;
+mod foley;
 mod sections;
 use sections::{Section, SectionPiece};
 
@@ -256,11 +257,13 @@ pub struct BrickDebris {
     section_turn: usize,
     body_turn: usize,
     surroundings: Surroundings,
+    foley: foley::Foley,
     /// Bricks this client saw die that have not come back yet.
     dead: BTreeSet<BrickId>,
     cursor: u64,
     explosion_cursor: u64,
     pending_blasts: Vec<CosmeticBlast>,
+    recent_blasts: std::collections::VecDeque<CosmeticBlast>,
     accumulator: f32,
     pushers: Pushers,
     shots: Shots,
@@ -291,10 +294,12 @@ impl BrickDebris {
             section_turn: 0,
             body_turn: 0,
             surroundings: Surroundings::default(),
+            foley: Default::default(),
             dead: BTreeSet::new(),
             cursor: 0,
             explosion_cursor: 0,
             pending_blasts: Vec::new(),
+            recent_blasts: std::collections::VecDeque::new(),
             accumulator: 0.0,
             pushers: Pushers::default(),
             shots: Shots::default(),
@@ -315,8 +320,29 @@ impl BrickDebris {
     /// Forget everything (disconnect, new server). The limit stays.
     pub fn clear(&mut self) {
         let limit = self.limit;
+        let policy = self.foley.policy.clone();
         *self = Self::new();
         self.set_limit(limit);
+        self.set_audio_policy(policy.as_deref());
+    }
+    pub fn set_audio_policy(&mut self, policy: Option<&bri_weapons::brick_audio::Policy>) {
+        self.foley.set_policy(policy);
+        let handles: Vec<_> = self
+            .bodies
+            .values()
+            .map(|b| b.handle)
+            .chain(self.chunk_handles())
+            .collect();
+        for h in handles {
+            foley::configure(&mut self.world, h, policy);
+            self.foley.born(h, 0.12);
+        }
+    }
+    pub fn set_audio_listener(&mut self, position: Vec3) {
+        self.foley.ear = position;
+    }
+    pub fn take_audio(&mut self) -> Vec<foley::Playback> {
+        self.foley.take()
     }
     /// Keep at most `limit` bodies (clamped to [`MAX_LIMIT`]); extra bodies
     /// go now, oldest first.
@@ -443,6 +469,12 @@ impl BrickDebris {
         let explosions = std::mem::take(&mut self.pending_blasts);
         for blast in &explosions {
             self.blast(blast.origin, blast.force, blast.radius, blast.normal);
+        }
+        // Removal work can complete in a later packet/tick than its explosion.
+        // Keep that bounded presentation context without replaying its impulse.
+        self.recent_blasts.extend(explosions.iter().copied());
+        while self.recent_blasts.len() > MAX_BLASTS {
+            self.recent_blasts.pop_front();
         }
         // One blast kills many bricks, one cue each: it shoves the debris
         // already flying once, not once per brick it killed.
@@ -575,9 +607,17 @@ impl BrickDebris {
             }
             // A big blast also shoves the debris already flying around it.
             let blast = (*origin, *force, *radius);
-            let explosion = explosions
+            let explosion = self
+                .recent_blasts
                 .iter()
-                .find(|b| b.tick == cue.tick && b.origin == Vec3::from(*origin));
+                .rev()
+                .find(|b| {
+                    b.tick <= cue.tick
+                        && cue.tick - b.tick
+                            <= (SOLID_SECONDS * bri_world::TICKS_PER_SECOND as f32) as u64
+                        && b.origin == Vec3::from(*origin)
+                })
+                .copied();
             if *radius > 0.5 && last_blast != Some(blast) && explosion.is_none() {
                 self.blast(Vec3::from(*origin), *force, *radius, None);
             }
@@ -774,6 +814,8 @@ impl BrickDebris {
             .restitution(PLASTIC_BOUNCE)
             .restitution_combine_rule(CoefficientCombineRule::Max);
         let (handle, _) = self.world.insert(body, collider);
+        foley::configure(&mut self.world, handle, self.foley.policy.as_deref());
+        self.foley.born(handle, 0.);
         self.world.bodies[handle].set_enabled(false);
         self.bodies.insert(
             (id, piece),
@@ -789,6 +831,7 @@ impl BrickDebris {
     /// Advance debris by `dt` seconds against the current surroundings.
     pub fn advance(&mut self, dt: f32, building: &Building) -> Result<()> {
         ensure!(dt.is_finite() && dt >= 0.0, "Invalid debris frame time");
+        self.foley.begin(dt);
         for falling in &mut self.falling {
             falling.age += dt;
         }
@@ -838,6 +881,7 @@ impl BrickDebris {
         if steps == 0 {
             return Ok(());
         }
+        let contacts = self.foley.collector();
         for step in 1..=steps {
             self.load_surroundings(building, STEP)?;
             self.pushers
@@ -852,8 +896,17 @@ impl BrickDebris {
                         .chain(self.chunk_handles()),
                 ),
             };
-            self.world.step();
+            if let Some(contacts) = &contacts {
+                self.world.step_with_events(&(), contacts);
+            } else {
+                self.world.step();
+            }
             crate::local_physics::carry_through_openings(&mut self.world, &self.passages, &before);
+        }
+        if let Some(contacts) = contacts {
+            for hit in contacts.take() {
+                self.foley.report(hit);
+            }
         }
         self.pushers.settle();
         Ok(())
@@ -976,7 +1029,7 @@ impl BrickDebris {
     /// Make bricks and terrain around every awake body solid for the next
     /// `seconds` of motion.
     fn load_surroundings(&mut self, building: &Building, _seconds: f32) -> Result<()> {
-        let mut work = 128;
+        let mut work = 128 * crate::local_physics::COLLISION_QUERY_COST;
         let dead = &self.dead;
         let mut keys: Vec<_> = self.bodies.keys().copied().collect();
         if !keys.is_empty() {
@@ -1737,6 +1790,103 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn delayed_blast_members_keep_the_observed_wall_exit_direction() {
+        let (building, _) = building(&[(1, [0., 0.9, 0.]), (11, [0., 0.9, 1.])]);
+        let origin = Vec3::new(0., 0.9, -0.5);
+        let pack = cosmetic_blast_pack();
+        for scale in [0.5, 1., 2.] {
+            let mut debris = BrickDebris::new();
+            let mut effect = cosmetic_blast(1, origin, Some(Vec3::NEG_Z));
+            if let CueKind::WeaponEffect { scale: s, .. } = &mut effect.kind {
+                *s = scale;
+            }
+            debris.explosion_cue(&effect, &pack);
+            debris.cues(&[], &building).unwrap();
+            run(&mut debris, &building, 0.1);
+            let mut killed = kill(2, 1, [0., 0.9, 0.], origin.to_array(), 30., 3.);
+            killed.tick = 13;
+            debris.cues(&[killed], &building).unwrap();
+            let body = debris.bodies[&(2, 0)].handle;
+            let velocity = debris.world.bodies[body].linvel();
+            assert!(
+                velocity.z < -4.,
+                "late member sent into surviving wall: {velocity:?}"
+            );
+            run(&mut debris, &building, 0.5);
+            assert!(debris.positions()[0].z < -0.75);
+        }
+    }
+
+    #[test]
+    fn delayed_blast_context_expires_and_does_not_survive_session_reset() {
+        let (building, _) = building(&[]);
+        let pack = cosmetic_blast_pack();
+        let origin = Vec3::new(0., 0.9, -0.5);
+        for reset in [false, true] {
+            let mut d = BrickDebris::new();
+            d.explosion_cue(&cosmetic_blast(1, origin, Some(Vec3::NEG_Z)), &pack);
+            d.cues(&[], &building).unwrap();
+            assert_eq!(d.recent_blasts.len(), 1);
+            if reset {
+                d.clear();
+            }
+            let mut killed = kill(2, 1, [0., 0.9, 0.], origin.to_array(), 30., 3.);
+            killed.tick = if reset {
+                13
+            } else {
+                2 + (SOLID_SECONDS * bri_world::TICKS_PER_SECOND as f32) as u64
+            };
+            d.cues(&[killed], &building).unwrap();
+            let body = d.bodies[&(2, 0)].handle;
+            assert!(
+                d.world.bodies[body].linvel().z > 0.,
+                "stale surface direction reused"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_collision_tiles_notice_new_solids_outside_the_current_body_box() {
+        let (mut building, mut public) = building(&[]);
+        let mut surroundings = Surroundings::default();
+        let mut physics = crate::local_physics::new_world();
+        let mut window = crate::local_physics::CollisionWindow::default();
+        let mut prepare = |building: &Building| {
+            surroundings.sync(&mut physics, building);
+            let mut work = 8192;
+            assert!(
+                window
+                    .prepare(
+                        &mut surroundings,
+                        &mut physics,
+                        building,
+                        crate::local_physics::CollisionMotion {
+                            center: Vec3::new(0., 0.3, 0.),
+                            half: Vec3::new(0.5, 0.3, 0.5),
+                            velocity: Vec3::ZERO,
+                            angular: 0.
+                        },
+                        &mut work,
+                        |_| false
+                    )
+                    .unwrap()
+            );
+            surroundings.len()
+        };
+        assert_eq!(prepare(&building), 0);
+        // Inside the prepared tile but outside this body's short lookahead.
+        public.bricks.insert(
+            99,
+            bri_world::Brick::new(ContentRef::Resolved("brick".into()), [5., 0.3, 0.], 1),
+        );
+        building.sync_world(&public).unwrap();
+        assert_eq!(prepare(&building), 1);
+        public.bricks.remove(&99);
+        building.sync_world(&public).unwrap();
+        assert_eq!(prepare(&building), 0);
+    }
+
+    #[test]
     fn explosion_queue_is_bounded_and_does_not_double_kick_or_change_authored_throws() {
         let (building, _) = building(&[]);
         let pack = cosmetic_blast_pack();
@@ -2308,6 +2458,123 @@ pub(crate) mod tests {
         assert_eq!(debris.diagnostics.evicted, 452);
         // The newest blast's bricks are all there; the oldest made way.
         assert!(debris.bodies.contains_key(&(5999, 0)) && !debris.bodies.contains_key(&(1, 0)));
+    }
+
+    #[test]
+    fn an_ordinary_blast_starts_moving_its_material_promptly() {
+        let (building, _) = building(&[]);
+        let mut debris = BrickDebris::new();
+        debris.set_limit(2048);
+        debris.cues(&blast(64, 1, 8.0), &building).unwrap();
+        let initial: BTreeMap<_, _> = debris
+            .bodies
+            .iter()
+            .map(|(key, body)| (*key, debris.world.bodies[body.handle].translation()))
+            .collect();
+        for _ in 0..6 {
+            debris.advance(1. / 60., &building).unwrap();
+        }
+        let moved = debris
+            .bodies
+            .iter()
+            .filter(|(key, body)| {
+                (debris.world.bodies[body.handle].translation() - initial[key]).length() > 0.05
+            })
+            .count();
+        eprintln!(
+            "blast members moving after 100ms: {moved}/{}",
+            initial.len()
+        );
+        assert!(
+            moved >= 56,
+            "blast material stayed frozen: {moved}/{} moved after 100ms",
+            initial.len()
+        );
+    }
+
+    #[test]
+    fn blast_response_scales_with_shared_surroundings_instead_of_freezing_material() {
+        let mut failures = Vec::new();
+        for (count, dense) in [(64, true), (512, false), (2048, false)] {
+            let mut nearby = Vec::new();
+            if dense {
+                for x in 0..8 {
+                    for y in 0..10 {
+                        for z in 2..8 {
+                            nearby.push((
+                                10000 + nearby.len() as u64,
+                                [x as f32, 0.3 + y as f32 * 0.6, z as f32],
+                            ));
+                        }
+                    }
+                }
+            }
+            let (building, _) = building(&nearby);
+            let mut debris = BrickDebris::new();
+            debris.set_limit(2048);
+            debris.cues(&blast(count, 1, 8.), &building).unwrap();
+            let initial: Vec<_> = debris
+                .bodies
+                .values()
+                .map(|body| (body.handle, debris.world.bodies[body.handle].translation()))
+                .collect();
+            let mut early = 0;
+            let mut response_ms = None;
+            let mut previous: Vec<_> = initial.iter().map(|(_, p)| *p).collect();
+            let mut path = 0.;
+            let mut max_paused = 0;
+            for frame in 1..=30 {
+                debris.advance(1. / 60., &building).unwrap();
+                for (i, (h, _)) in initial.iter().enumerate() {
+                    let at = debris.world.bodies[*h].translation();
+                    path += at.distance(previous[i]);
+                    previous[i] = at;
+                }
+                let paused = initial
+                    .iter()
+                    .filter(|(h, _)| !debris.world.bodies[*h].is_enabled())
+                    .count();
+                if frame >= 6 {
+                    max_paused = max_paused.max(paused);
+                }
+                let moving = initial
+                    .iter()
+                    .filter(|(h, p)| (debris.world.bodies[*h].translation() - *p).length() > 0.05)
+                    .count();
+                if response_ms.is_none() && moving * 10 >= initial.len() * 9 {
+                    response_ms = Some(frame * 1000 / 60);
+                }
+                if frame == 6 {
+                    early = moving;
+                }
+                if [6, 15, 30].contains(&frame) {
+                    eprintln!(
+                        "blast {count}, dense={dense}, {}ms: {moving} displaced, {paused} waiting for collision",
+                        frame * 1000 / 60
+                    );
+                }
+            }
+            eprintln!("blast {count}: 90% response {response_ms:?}ms");
+            eprintln!(
+                "blast {count}: mean path over500ms {:.3} units, peak paused after100ms {max_paused}",
+                path / count as f32
+            );
+            assert!(
+                path / count as f32 > 0.5,
+                "only a weak roll, not a blast throw"
+            );
+            assert!(
+                max_paused * 10 <= count as usize,
+                "physics kept stalling after starting"
+            );
+            if early * 10 < initial.len() * 9 {
+                failures.push((count, early));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "material frozen after100ms: {failures:?}"
+        );
     }
 
     #[test]

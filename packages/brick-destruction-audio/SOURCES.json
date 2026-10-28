@@ -1,0 +1,176 @@
+{
+  "format": "Public Freesound HQ MP3 previews, not original WAV masters",
+  "processor": "ffmpeg version 7.1-essentials_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+  "sources": [
+    {
+      "id": 233654,
+      "author": "rioforce",
+      "page": "https://freesound.org/people/rioforce/sounds/233654/",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "preview": "https://cdn.freesound.org/previews/233/233654_4067126-hq.mp3",
+      "sha256": "ce0b834ae76fc968b2ae8b799bc9eb42bf8d5e18d723b0ebc72171203a133f03"
+    },
+    {
+      "id": 233653,
+      "author": "rioforce",
+      "page": "https://freesound.org/people/rioforce/sounds/233653/",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "preview": "https://cdn.freesound.org/previews/233/233653_4067126-hq.mp3",
+      "sha256": "6b2e537f3330ae9e076f834fe5a2e463c99252cc6105e915ab83596826b46a04"
+    },
+    {
+      "id": 233661,
+      "author": "rioforce",
+      "page": "https://freesound.org/people/rioforce/sounds/233661/",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "preview": "https://cdn.freesound.org/previews/233/233661_4067126-hq.mp3",
+      "sha256": "e2d5d8ec42f318149109433bbfc318f380460910bc086c1e1968f0cb534dc664"
+    },
+    {
+      "id": 721040,
+      "author": "C_Sander",
+      "page": "https://freesound.org/people/C_Sander/sounds/721040/",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "preview": "https://cdn.freesound.org/previews/721/721040_2853872-hq.mp3",
+      "sha256": "83001b9e3026e71d01e917054f074be8ff7feeafd9d830b660ab619666555bfe"
+    }
+  ],
+  "outputs": [
+    {
+      "file": "assets/sounds/snap1.wav",
+      "source": 233654,
+      "trim": [
+        0.0,
+        0.0299
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -6.0,
+      "rms_dbfs": -24.03,
+      "sha256": "dedfe1ed66d9225ab2561d902c18ae26c203c8f1c17516376f6ce37d8ad2455c"
+    },
+    {
+      "file": "assets/sounds/snap2.wav",
+      "source": 233653,
+      "trim": [
+        0.0,
+        0.0606
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -6.0,
+      "rms_dbfs": -28.46,
+      "sha256": "40721c3a9bb3a3f3b96caed5ba94ac5c28163e5c695e9a638f6bc565e949655b"
+    },
+    {
+      "file": "assets/sounds/click1.wav",
+      "source": 721040,
+      "trim": [
+        0.42,
+        0.64
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -6.0,
+      "rms_dbfs": -36.12,
+      "sha256": "79a8daf22e9cb271eee0c4127c2bceda716938c4e627fd500e78b2b802c5b9fb"
+    },
+    {
+      "file": "assets/sounds/click2.wav",
+      "source": 721040,
+      "trim": [
+        2.2,
+        2.42
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -6.0,
+      "rms_dbfs": -32.83,
+      "sha256": "a0e44b6b6820d37f30c337d63cebc0e88a9e4a25818a1488ec03bfb56819615c"
+    },
+    {
+      "file": "assets/sounds/click3.wav",
+      "source": 721040,
+      "trim": [
+        6.5,
+        6.71
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -12.05,
+      "rms_dbfs": -25.03,
+      "sha256": "08925e8ab9a63df7f031cd6154aa4087ce8b8899a06a66d565523d7edc962b48"
+    },
+    {
+      "file": "assets/sounds/click4.wav",
+      "source": 721040,
+      "trim": [
+        9.7,
+        9.91
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -6.85,
+      "rms_dbfs": -28.96,
+      "sha256": "7a7992d5d5837ec41e2a8e6323ac5a7960028d5cf4b0f9f04b2057530f0e3c3d"
+    },
+    {
+      "file": "assets/sounds/click5.wav",
+      "source": 721040,
+      "trim": [
+        13.6,
+        13.81
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -12.19,
+      "rms_dbfs": -28.69,
+      "sha256": "adc6cfe53ccfc1c269815165d56ce0dddb1a7c905f6ffe53dfc8ed5e66583465"
+    },
+    {
+      "file": "assets/sounds/click6.wav",
+      "source": 721040,
+      "trim": [
+        17.47,
+        17.69
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -12.41,
+      "rms_dbfs": -26.98,
+      "sha256": "9f6541f27febf58342de04ba6d134a83e4edb0d040c3303136740c95dacef534"
+    },
+    {
+      "file": "assets/sounds/landing1.wav",
+      "source": 233661,
+      "trim": [
+        0.0,
+        0.85
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -13.66,
+      "rms_dbfs": -29.66,
+      "sha256": "59fc6dda1401d4ff3f2589b2d8b8a5cbb00b1e23af0c2649da20da1da4371aa0"
+    },
+    {
+      "file": "assets/sounds/landing2.wav",
+      "source": 233661,
+      "trim": [
+        0.1,
+        1.1
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -13.89,
+      "rms_dbfs": -30.0,
+      "sha256": "8c66fd38cc5f59ace0f98d5dc5dcd95a21dc900823f19f9c5e2ca49134e2b62e"
+    },
+    {
+      "file": "assets/sounds/landing3.wav",
+      "source": 233661,
+      "trim": [
+        0.02,
+        0.92
+      ],
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
+      "peak_dbfs": -13.62,
+      "rms_dbfs": -29.37,
+      "sha256": "e2e39a6f01e74ffe2a2f39bd8bc96a8077fa284280f57d44a7edaf8d1ee22948"
+    }
+  ]
+}

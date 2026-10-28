@@ -293,6 +293,9 @@ impl App {
         self.content_problems = problems;
         self.ui.core.pack = content.ui_pack.clone();
         self.audio.install_pack_sounds(sounds);
+        self.fx
+            .brick_debris
+            .set_audio_policy(content.weapons.pack.effects.brick_debris_audio.as_ref());
         self.content = content;
         self.files.saves = crate::saves::Store::new(
             &self.state_dir,

@@ -4,6 +4,13 @@ This separate build enables the full destruction experience. Use the existing
 Physics Quality setting; there is no extra destruction/shard switch. The server
 and clients must use this same preview version.
 
+For preview.6, first retry the same **TDM Afghan and ACM City walls** that
+looked solid for seconds in previews4/5. Use the stock Rocket Launcher with
+brick damage enabled. Look for prompt outward piece motion and a readable hole.
+Then remove a building support: follow the complete assembly into its fall and
+landing, rather than judging only how many pieces exist. Note any remaining
+stationary pauses, weak rolls or late breakup, with scene and Physics Quality.
+
 First retry the **pirate ship mast**: shoot its base support and watch the
 mast, sails and flag stay recognizable together as they tip. On landing they
 should separate into connected assemblies, keeping their original little

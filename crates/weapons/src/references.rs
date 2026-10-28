@@ -32,6 +32,17 @@ impl Pack {
     /// by `Pack::merge`, which drops what names a missing one.
     pub fn add_on_references(&self) -> Vec<Reference<'_>> {
         let mut out = Vec::new();
+        if let Some(policy) = &self.effects.brick_debris_audio {
+            for response in policy.responses() {
+                out.push(Reference {
+                    add_on: add_on_of(&policy.id).unwrap_or(&policy.id),
+                    kind: Kind::Sound,
+                    name: &response.profile,
+                    used_by: format!("brick debris audio {}", policy.id),
+                });
+            }
+        }
+
         for (id, sound) in &self.sounds {
             let Some(add_on) = add_on_of(id) else {
                 continue;

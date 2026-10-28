@@ -207,6 +207,135 @@ fn settle(s: &mut Session) {
 }
 
 #[test]
+fn response_timing_includes_support_proof_and_complete_section_delivery() {
+    for radius_rocket in [false, true] {
+        for layers in [1, 24, 188] {
+            let (mut s, owner) = session();
+            let support = place(&mut s, owner, "1x1x3", [0.25, 0.3, 0.25], false);
+            place(&mut s, owner, "16x16x1", [0., 0.7, 0.], true);
+            let bricks = (0..layers)
+                .flat_map(|y| {
+                    (0..8).flat_map(move |x| {
+                        (0..8).map(move |z| {
+                            bri_world::Brick::new(
+                                ContentRef::Resolved("2x2x3".into()),
+                                [-3.5 + x as f32, 1.1 + y as f32 * 0.6, -3.5 + z as f32],
+                                owner,
+                            )
+                        })
+                    })
+                })
+                .collect();
+            s.simulation.insert_pieces(bricks).unwrap();
+            s.step_damage_support().unwrap();
+            s.take_cues();
+            let parameters = if radius_rocket {
+                bri_weapons::BrickImpact {
+                    direct: false,
+                    radius: 3.,
+                    max_volume: 30.,
+                    max_floating_volume: 60.,
+                    force: 30.,
+                }
+            } else {
+                impact(0.)
+            };
+            s.blow_up_bricks(
+                owner,
+                (!radius_rocket).then_some(support),
+                Vec3::new(0.25, 0.3, 0.25),
+                &parameters,
+            )
+            .unwrap();
+            let mut direct = None;
+            let mut first_section = None;
+            let mut ready = None;
+            let mut micros = Vec::new();
+            for tick in 1..=1200 {
+                s.simulation.set_tick(tick);
+                let before = s.destruction_work().query_work;
+                let clock = std::time::Instant::now();
+                s.step_damage_support().unwrap();
+                micros.push(clock.elapsed().as_micros());
+                assert!(s.destruction_work().query_work - before <= u64::from(WORK_PER_TICK));
+                for cue in s.take_cues() {
+                    match cue.kind {
+                        CueKind::BrickKill { brick, death, .. }
+                            if brick == support
+                                && matches!(death, BrickDeath::Hit | BrickDeath::Blast) =>
+                        {
+                            direct.get_or_insert(tick);
+                        }
+                        CueKind::BrickKill {
+                            death: BrickDeath::Section { .. },
+                            ..
+                        } => {
+                            first_section.get_or_insert(tick);
+                        }
+                        CueKind::BrickSectionReady { .. } => {
+                            ready = Some(tick);
+                        }
+                        _ => {}
+                    }
+                }
+                if ready.is_some()
+                    && s.destruction.pending.is_empty()
+                    && s.destruction.searches.is_empty()
+                    && s.destruction.detach.is_empty()
+                {
+                    break;
+                }
+            }
+            eprintln!(
+                "server collapse {} source members, radius-rocket={radius_rocket}: direct={direct:?}, first-section={first_section:?}, ready={ready:?} ticks; work={:?}",
+                layers * 64 + 1,
+                s.destruction_work()
+            );
+            assert!(
+                direct.is_some_and(|tick| tick <= 2),
+                "the struck support must break promptly"
+            );
+            assert!(ready.is_some(), "complete section never delivered");
+            eprintln!(
+                "server destruction step: mean {}us, max {}us",
+                micros.iter().sum::<u128>() / micros.len() as u128,
+                micros.iter().max().unwrap()
+            );
+            let limit = if layers == 1 {
+                6
+            } else if layers == 24 {
+                24
+            } else {
+                120
+            };
+            assert!(
+                ready.unwrap() <= limit,
+                "large collapse delivery stalled: {ready:?} ticks > {limit}"
+            );
+        }
+    }
+}
+
+#[test]
+fn support_cursor_keeps_connections_inside_interlocking_mesh_bounds() {
+    let (mut s, owner) = session();
+    for (id, rows) in [("recess-a", ["-", "u", "-"]), ("recess-b", ["d", "-", "-"])] {
+        let mut d = definition(id, [1, 1], 3, Special::None, false);
+        d.mesh.attachment_rows = rows.into_iter().map(str::to_string).collect();
+        s.simulation.definitions.entries.insert(id.into(), d);
+    }
+    let a = place(&mut s, owner, "recess-a", [0.25, 0.3, 0.25], false);
+    let b = place(&mut s, owner, "recess-b", [0.25, 0.3, 0.25], false);
+    let mut probe = SupportProbe::new(&s.simulation, a);
+    let mut work = WORK_PER_TICK;
+    assert!(probe.step(&s.simulation, &mut work, |_| true).unwrap());
+    assert!(
+        probe.neighbors.contains(&b),
+        "recessed authored stud connection was lost"
+    );
+}
+
+#[test]
 fn a_hole_in_a_supported_slab_does_not_invent_material_seams() {
     let (mut s, owner) = session();
     place(&mut s, owner, "1x1x3", [-1.75, 0.3, -1.75], false);
@@ -411,7 +540,8 @@ fn section_barrier_seals_only_committed_material_and_defers_respawn_until_delive
     let (mut s, owner) = session();
     let mut scope = s.damage_scope(owner, Vec3::ZERO).unwrap();
     Arc::get_mut(&mut scope).unwrap().delay = 1;
-    let ids: BTreeSet<_> = (0..160)
+    let count = COMMIT_PER_TICK + 32;
+    let ids: BTreeSet<_> = (0..count)
         .map(|i| {
             place(
                 &mut s,
@@ -429,10 +559,10 @@ fn section_barrier_seals_only_committed_material_and_defers_respawn_until_delive
         next: None,
         group: 1,
         started: 0,
-        origin: Vec3::new(0., 53., 0.),
-        half: Vec3::new(0.25, 48., 0.25),
+        origin: Vec3::new(0., 5. + count as f32 * 0.3, 0.),
+        half: Vec3::new(0.25, count as f32 * 0.3, 0.25),
         pivot: Vec3::new(0., 5., 0.),
-        members: 160,
+        members: count as u32,
         area: None,
     });
     let _ = s.simulation.take_support_edits();
@@ -452,7 +582,7 @@ fn section_barrier_seals_only_committed_material_and_defers_respawn_until_delive
     assert!(
         s.take_cues()
             .iter()
-            .any(|c| matches!(c.kind, CueKind::BrickSectionReady { members: 128, .. }))
+            .any(|c| matches!(c.kind, CueKind::BrickSectionReady { members, .. } if members as usize == COMMIT_PER_TICK))
     );
     s.respawn_bricks(&[first]).unwrap();
     assert_eq!(s.simulation.section_due(first), None);

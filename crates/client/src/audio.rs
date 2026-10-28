@@ -15,6 +15,7 @@ use std::{
 /// Decoded pack sounds can be prepared without the audio device.
 pub(crate) struct PreparedSounds {
     bank: Arc<SoundBank>,
+    section_audio: bool,
     sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
     variants: BTreeMap<String, Vec<SoundChoice>>,
     /// Why each pack sound that did not load failed, by lowercase profile.
@@ -57,7 +58,7 @@ fn choose_sound(choices: &[SoundChoice], unit: f32) -> &SoundChoice {
 }
 
 /// Local cosmetic randomness; no world-state or network dependency.
-fn sound_choice_unit(counter: u64) -> f32 {
+pub(crate) fn sound_choice_unit(counter: u64) -> f32 {
     let mut z = counter.wrapping_add(0x9e3779b97f4a7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
@@ -95,6 +96,7 @@ impl PreparedSounds {
     pub(crate) fn load(bank: Arc<SoundBank>, pack: &bri_weapons::Pack, root: &Path) -> Self {
         let mut prepared = Self {
             bank: bank.clone(),
+            section_audio: pack.effects.brick_debris_audio.is_some(),
             sounds: BTreeMap::new(),
             variants: BTreeMap::new(),
             failed: BTreeMap::new(),
@@ -382,7 +384,8 @@ impl MusicBricks {
 pub struct ClientAudio {
     runtime: AudioRuntime,
     pending: VecDeque<(String, Placement, Voice)>,
-    contact_pending: VecDeque<(String, [f32; 3], u64)>,
+    contact_pending: VecDeque<(String, [f32; 3], u64, Voice)>,
+    section_audio: bool,
     pub warnings: BTreeSet<String>,
     pub dropped: u64,
     pub server_dropped: u64,
@@ -542,6 +545,7 @@ impl ClientAudio {
             runtime,
             pending: VecDeque::new(),
             contact_pending: VecDeque::new(),
+            section_audio: false,
             warnings,
             dropped: 0,
             server_dropped: 0,
@@ -683,7 +687,17 @@ impl ClientAudio {
     /// Bounded local cosmetic starts. No backlog survives a tick or session reset.
     /// Unknown profiles are silent; this path never guesses a bank fallback.
     pub fn contact_profile(&mut self, profile: &str, point: [f32; 3], seed: u64) {
+        self.contact_shaped(profile, point, seed, Voice::AS_AUTHORED);
+    }
+    /// Same shared local-start budget, with bounded presentation variation.
+    pub fn contact_shaped(&mut self, profile: &str, point: [f32; 3], seed: u64, voice: Voice) {
         if self.contact_pending.len() >= 16
+            || !voice.volume.is_finite()
+            || !(0.0..=1.0).contains(&voice.volume)
+            || !voice.pitch.is_finite()
+            || !(0.8..=1.25).contains(&voice.pitch)
+            || !voice.radius.is_finite()
+            || !(0.0..=100.0).contains(&voice.radius)
             || profile.is_empty()
             || profile.len() > 256
             || !point.iter().all(|v| v.is_finite())
@@ -692,7 +706,7 @@ impl ClientAudio {
             return;
         }
         self.contact_pending
-            .push_back((profile.to_owned(), point, seed));
+            .push_back((profile.to_owned(), point, seed, voice));
     }
     fn enqueue(&mut self, id: String, placement: Placement, label: &str, voice: Voice) {
         if self.pending.len() == bri_sim::presentation::MAX_CUES {
@@ -748,7 +762,18 @@ impl ClientAudio {
             CueKind::Plant => "brick.plant",
             // One break sound per `BREAK_SOUND_GAP_MS`, at the brick
             // (the event plays at the ghost brick's own transform).
-            CueKind::BrickKill { .. } => {
+            CueKind::BrickKill { death, .. } => {
+                // Replaced material makes no break sound. A section's coherent
+                // local start owns its snap, not each streamed delivery batch.
+                if self.section_audio
+                    && matches!(
+                        death,
+                        bri_sim::presentation::BrickDeath::Section { .. }
+                            | bri_sim::presentation::BrickDeath::Partition
+                    )
+                {
+                    return;
+                }
                 let gap = BREAK_SOUND_GAP_MS * u64::from(bri_weapons::TICK_HZ);
                 if self
                     .last_break
@@ -1055,6 +1080,8 @@ impl ClientAudio {
         self.runtime.bank().clone()
     }
     pub(crate) fn install_pack_sounds(&mut self, prepared: PreparedSounds) {
+        self.contact_pending.clear();
+        self.section_audio = prepared.section_audio;
         self.pack_sounds = prepared.sounds;
         self.pack_sound_variants = prepared.variants;
         self.pack_sound_failures = prepared.failed;
@@ -1371,7 +1398,7 @@ impl ClientAudio {
             let result = self.start(&id, placement, voice).map(|_| ());
             self.record(result);
         }
-        while let Some((id, point, seed)) = self.contact_pending.pop_front() {
+        while let Some((id, point, seed, voice)) = self.contact_pending.pop_front() {
             let asset = self
                 .seeded_pack_asset(&id, seed)
                 .or_else(|| {
@@ -1383,9 +1410,14 @@ impl ClientAudio {
                 })
                 .filter(|(asset, _)| !asset.playback.looping);
             if let Some((asset, volume)) = asset {
+                let asset = if voice.pitch != 1.0 || voice.radius != 0.0 {
+                    Arc::new(asset.shaped(voice.pitch, voice.radius))
+                } else {
+                    asset
+                };
                 match self
                     .runtime
-                    .play_asset(asset, Placement::World(point), volume)
+                    .play_asset(asset, Placement::World(point), volume * voice.volume)
                 {
                     Ok(handle) => self.fresh_world.push((handle, point)),
                     Err(error) => self.record(Err(error)),
@@ -2374,5 +2406,68 @@ mod tests {
         assert_eq!(mine.len(), 1, "{mine:?}");
         assert_eq!(mine[0].kind, "sound");
         assert_eq!(mine[0].count, 2);
+    }
+}
+
+#[cfg(test)]
+mod recorded_brick_tests {
+    use super::*;
+    #[test]
+    fn recorded_profiles_decode_share_data_and_play_through_the_offline_spatial_mixer() -> Result<()>
+    {
+        let scratch = crate::testing::ScratchDir::new("recorded-brick-audio")?;
+        crate::testing::audio::write_pack(scratch.path())?;
+        let pack = bri_weapons::Pack::from_json(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/brick-destruction-audio/assets/weapons.json"
+        )))?;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/brick-destruction-audio/assets");
+        let mut audio = ClientAudio::load(
+            scratch.path(),
+            &mut Settings::default(),
+            OutputKind::Offline,
+        )?;
+        audio.set_pack_sounds(&pack, &root);
+        assert!(
+            audio.pack_sound_failures.is_empty(),
+            "{:?}",
+            audio.pack_sound_failures
+        );
+        let profile = "brick-destruction-audio:impact";
+        let (first, _) = audio.seeded_pack_asset(profile, 12).unwrap();
+        let shaped = first.shaped(1.03, 18.);
+        match (&first.data, &shaped.data) {
+            (ClipData::Pcm(a), ClipData::Pcm(b)) => assert!(Arc::ptr_eq(a, b)),
+            _ => panic!("short brick recordings must preload shared PCM"),
+        }
+        audio.contact_shaped(
+            profile,
+            [0., 0., -1.],
+            12,
+            Voice {
+                volume: 0.8,
+                pitch: 1.03,
+                radius: 18.,
+            },
+        );
+        audio.tick(0.3, Listener::default());
+        let pcm = audio.take_capture();
+        assert!(pcm.iter().any(|s| s.abs() > 1e-5));
+        assert!(pcm.iter().all(|s| s.is_finite() && s.abs() < 1.));
+        audio.clear();
+        audio.contact_shaped(
+            profile,
+            [1000., 0., 0.],
+            12,
+            Voice {
+                volume: 0.8,
+                pitch: 1.03,
+                radius: 18.,
+            },
+        );
+        audio.tick(0.3, Listener::default());
+        assert!(audio.take_capture().iter().all(|s| s.abs() < 1e-5));
+        Ok(())
     }
 }

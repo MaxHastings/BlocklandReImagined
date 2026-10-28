@@ -31,6 +31,7 @@
       }
     },
     { "id": "brick_mirror", "path": "brick_mirror" },
+    { "id": "brick-destruction-audio", "path": "brick-destruction-audio" },
     { "id": "rule-workshop-toys", "path": "rule-workshop-toys" },
     { "id": "ragdoll", "path": "showcase/ragdoll", "enabled": false },
     { "id": "brick_portal", "path": "brick_portal", "enabled": false },

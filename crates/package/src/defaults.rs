@@ -598,6 +598,7 @@ mod tests {
                 "tool_duplicator",
                 "tool_duplicator-rules",
                 "brick_mirror",
+                "brick-destruction-audio",
                 "rule-workshop-toys"
             ]
         );
@@ -621,7 +622,11 @@ mod tests {
         let listed = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
         assert_eq!(
             ids(&listed.packages),
-            ["brick_mirror", "rule-workshop-toys"]
+            [
+                "brick_mirror",
+                "brick-destruction-audio",
+                "rule-workshop-toys"
+            ]
         );
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -635,7 +640,7 @@ mod tests {
         );
         assert!(ours().contains(&"brick_mirror"));
         // On by default: the Duplicator, the Stunt Plane and the Mirror,
-        // the Workshop vocabulary proof (which adds no tools), the brick packs
+        // recorded brick audio and the Workshop vocabulary proof (no tools), the brick packs
         // (the_bundled_brick_packs_are_the_chosen_ones_in_v20_order),
         // the Modular Terrain prints their ModTer bricks wear and the
         // community maps the game comes with.
@@ -650,6 +655,7 @@ mod tests {
                 "tool_duplicator",
                 "vehicle_stunt_plane",
                 "brick_mirror",
+                "brick-destruction-audio",
                 "rule-workshop-toys",
                 "print_modter_default",
                 "map_arcticchallenge3",
@@ -920,14 +926,23 @@ mod tests {
         // The originals come from the bundle, not the checkout.
         assert_eq!(
             ids(&defaults(&root)),
-            ["brick_mirror", "rule-workshop-toys"]
+            [
+                "brick_mirror",
+                "brick-destruction-audio",
+                "rule-workshop-toys"
+            ]
         );
         // Installed from the bundle, an original is on in its place.
         install_original(&root, "vehicle_stunt_plane", "1.0.0");
         let on = defaults(&root);
         assert_eq!(
             ids(&on),
-            ["vehicle_stunt_plane", "brick_mirror", "rule-workshop-toys"]
+            [
+                "vehicle_stunt_plane",
+                "brick_mirror",
+                "brick-destruction-audio",
+                "rule-workshop-toys"
+            ]
         );
         assert!(on.iter().all(|p| p.dir == format!("addons/{}", p.id)));
         assert_eq!(on[0].side, crate::packages::Side::Shared);
@@ -1021,10 +1036,22 @@ mod tests {
         let done = install(&root, &repo_packages()).unwrap();
         assert_eq!(
             done.listed,
-            ["vehicle_stunt_plane", "brick_mirror", "rule-workshop-toys"]
+            [
+                "vehicle_stunt_plane",
+                "brick_mirror",
+                "brick-destruction-audio",
+                "rule-workshop-toys"
+            ]
         );
         let on = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
-        assert_eq!(ids(&on.packages), ["brick_mirror", "rule-workshop-toys"]);
+        assert_eq!(
+            ids(&on.packages),
+            [
+                "brick_mirror",
+                "brick-destruction-audio",
+                "rule-workshop-toys"
+            ]
+        );
         let off = PackageSet::load(&root.join(DISABLED_FILE)).unwrap();
         assert_eq!(ids(&off.packages), ["vehicle_stunt_plane"]);
         assert_eq!(off.packages[0].version, "1.0.0");

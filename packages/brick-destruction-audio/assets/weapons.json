@@ -1,0 +1,126 @@
+{
+  "schema_version": 5,
+  "id": "brick-destruction-audio",
+  "sounds": {
+    "brick-destruction-audio:snap1": {
+      "file": "sounds/snap1.wav"
+    },
+    "brick-destruction-audio:snap2": {
+      "file": "sounds/snap2.wav"
+    },
+    "brick-destruction-audio:click1": {
+      "file": "sounds/click1.wav"
+    },
+    "brick-destruction-audio:click2": {
+      "file": "sounds/click2.wav"
+    },
+    "brick-destruction-audio:click3": {
+      "file": "sounds/click3.wav"
+    },
+    "brick-destruction-audio:click4": {
+      "file": "sounds/click4.wav"
+    },
+    "brick-destruction-audio:click5": {
+      "file": "sounds/click5.wav"
+    },
+    "brick-destruction-audio:click6": {
+      "file": "sounds/click6.wav"
+    },
+    "brick-destruction-audio:landing1": {
+      "file": "sounds/landing1.wav"
+    },
+    "brick-destruction-audio:landing2": {
+      "file": "sounds/landing2.wav"
+    },
+    "brick-destruction-audio:landing3": {
+      "file": "sounds/landing3.wav"
+    },
+    "brick-destruction-audio:snap": {
+      "file": "sounds/snap1.wav",
+      "volume": 0.55,
+      "variants": [
+        {
+          "profile": "brick-destruction-audio:snap1",
+          "weight": 1
+        },
+        {
+          "profile": "brick-destruction-audio:snap2",
+          "weight": 1
+        }
+      ]
+    },
+    "brick-destruction-audio:impact": {
+      "file": "sounds/click1.wav",
+      "volume": 0.65,
+      "variants": [
+        {
+          "profile": "brick-destruction-audio:click1",
+          "weight": 1
+        },
+        {
+          "profile": "brick-destruction-audio:click2",
+          "weight": 1
+        },
+        {
+          "profile": "brick-destruction-audio:click3",
+          "weight": 1
+        },
+        {
+          "profile": "brick-destruction-audio:click4",
+          "weight": 1
+        },
+        {
+          "profile": "brick-destruction-audio:click5",
+          "weight": 1
+        },
+        {
+          "profile": "brick-destruction-audio:click6",
+          "weight": 1
+        }
+      ]
+    },
+    "brick-destruction-audio:landing": {
+      "file": "sounds/landing1.wav",
+      "volume": 0.75,
+      "variants": [
+        {
+          "profile": "brick-destruction-audio:landing1",
+          "weight": 1
+        },
+        {
+          "profile": "brick-destruction-audio:landing2",
+          "weight": 1
+        },
+        {
+          "profile": "brick-destruction-audio:landing3",
+          "weight": 1
+        }
+      ]
+    }
+  },
+  "effects": {
+    "brick_debris_audio": {
+      "id": "brick-destruction-audio:audio/foley",
+      "snap": {
+        "profile": "brick-destruction-audio:snap",
+        "radius": 24
+      },
+      "impact": {
+        "profile": "brick-destruction-audio:impact",
+        "radius": 18
+      },
+      "landing": {
+        "profile": "brick-destruction-audio:landing",
+        "radius": 40
+      },
+      "min_speed": 1.2,
+      "full_speed": 8,
+      "cooldown": 0.14,
+      "landing_min_members": 8,
+      "pitch": [
+        0.94,
+        1.06
+      ]
+    }
+  }
+}
