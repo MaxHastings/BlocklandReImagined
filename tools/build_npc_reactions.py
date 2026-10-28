@@ -21,6 +21,8 @@ from urllib.request import Request, urlopen
 
 HERE = Path(__file__).resolve().parent / 'npc_reactions'
 RATE = 22050
+TARGET_RMS = 0.16
+PEAK_LIMIT = 0.88
 
 
 def sha(data):
@@ -49,7 +51,10 @@ def prepare(raw, start=0.0, end=None):
     divisor = math.gcd(rate, RATE)
     pcm = resample_poly(pcm, RATE // divisor, rate // divisor)
     rms = float(np.sqrt(np.mean(pcm * pcm)))
-    pcm *= min(0.10 / max(rms, 1e-6), 0.88 / max(float(np.max(np.abs(pcm))), 1e-6), 8.0)
+    # Nearby speech should survive ordinary combat, rather than being attenuated
+    # once here and again by both its profile and its positional reaction cue.
+    # Retain each recording's dynamics and reserve peak headroom.
+    pcm *= min(TARGET_RMS / max(rms, 1e-6), PEAK_LIMIT / max(float(np.max(np.abs(pcm))), 1e-6), 8.0)
     fade = min(int(RATE * 0.006), len(pcm) // 2)
     pcm[:fade] *= np.linspace(0, 1, fade)
     pcm[-fade:] *= np.linspace(1, 0, fade)
@@ -118,7 +123,7 @@ def build(catalog, cache, output, download=False):
         slug = row['id']
         (output / 'assets' / 'clips' / (slug + '.wav')).write_bytes(wav)
         profile = 'npc_popculture:sound/' + slug
-        sounds[profile] = {'file': 'clips/' + slug + '.wav', 'seconds': stats['seconds'], 'volume': 0.8}
+        sounds[profile] = {'file': 'clips/' + slug + '.wav', 'seconds': stats['seconds'], 'volume': 1.0}
         provenance.append(dict(row, sha256=sha(raw), processed_sha256=sha(wav), **stats))
         choices.append(dict(id=slug, profile=profile, events=row['events'], tier=row['tier'],
                             iconic=row['iconic'], seconds=stats['seconds']))
