@@ -144,7 +144,7 @@ impl CopyExtras {
             sound: brick.sound.clone(),
             vehicle: brick.vehicle.as_deref().cloned(),
             events: brick.events.clone(),
-            rule_region: brick.rule_region,
+            rule_region: brick.rule_region(),
         })
     }
 
@@ -162,7 +162,7 @@ impl CopyExtras {
         brick.sound.clone_from(&self.sound);
         brick.vehicle = self.vehicle.clone().map(Box::new);
         brick.events.clone_from(&self.events);
-        brick.rule_region = self.rule_region;
+        brick.rule_region = self.rule_region.map(Box::new);
     }
 
     /// These as the copy is placed, turned `turns` and upside down and

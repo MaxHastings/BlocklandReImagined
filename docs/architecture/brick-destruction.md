@@ -55,7 +55,7 @@ proved disconnected using only a fixed-radius local query. Unrelated builds
 are not flooded. A changed support topology invalidates pending conclusions.
 At the partition/brick budget, retain the oversized original unchanged; a
 capacity limit must never turn a small rocket into removal of an entire wall.
-Physics Quality can cull cosmetic debris as it already does.
+Physics Quality controls independent motion. Ordinary blast debris retains its existing cosmetic budget; section admission reserves visible material before hiding it.
 
 Initial implementation supports catalog-representable plain boxes. Curved,
 sloped, special and assigned-print bricks retain their existing whole-brick
@@ -88,72 +88,112 @@ stud attachment rules still govern connections to other bricks. A live roof
 which had supports never becomes a deliberate floating foundation just because
 its final support was removed. Category comes from catalog metadata.
 
-Server work resumes across ticks: footprint rays, spatial candidates and stud
-attachment cells share 8192 work units; blast and support phases share the budget.
-At most 128 candidate changes/section removals occur per tick. Split allocation
-has 2048 cells per admitted blast and across the tick, and 16384 active surviving parts per world.
-There are at most 256 pending blasts; overflow is diagnosed and rejected.
-Respawns drain 128 originals per tick, with collisions refreshed in a batch.
-Nearby topology changes invalidate pending proofs; unrelated far builds do not.
-Permissions/round attribution are captured on admission; reset cancels stale work.
+## Shared section lifecycle
 
-Client presentation separates visible material, assembly motion, and physics.
-Every admitted original member keeps its mesh, print, color and shape. A section
-shares one transform before landing. Its complete membership count, bounds and
-lowest footprint nearest the hit are fixed one-shot cue metadata, not a pose
-stream. Tall sections lean around that footprint before falling free; wide
-slabs drop and tilt; long narrow spans rotate. Cached original corners plus a fixed 64-cell distribution of actual member
-surface points sweep to the next pose under a shared 4096-candidate budget.
-Large member faces contribute interior samples too. Spatial cells prefer their
-lowest material point, so a broad sail does not miss a narrow raised deck.
-Any solid-surface impact can end the shared fall, including the side of a hull;
-this remains cosmetic contact,
-not a structural solver or exact irregular-body collision.
+Simulation owns both original damage families and a section journal. A proved
+component has stable planned membership shared with its incremental producer.
+Only that producer can hide its members without interrupting the operation.
+Common edits, restores, deletes and other blasts invalidate pending membership.
+The producer seals the actual committed prefix, then reproves the untouched
+remainder against the current world. It never promises an unreachable old total.
+Originals shared by several fragment sections wait for the latest section's
+restoration deadline. No original restores while one of its sections collects.
 
-Late batches join the current falling or landed pose. Breakup waits for the
-reported total, so a landed first batch cannot discard later members. If a
-section is interrupted by world edits or cue delivery is incomplete, the
-received members retain their shared pose and fade normally rather than
-inventing missing art or restarting. Expired groups retain metadata for 30s.
-The normal 13-second visual lifetime includes the fall.
+This is explicitly a streamed authoritative operation: at most 128 candidates
+are changed per tick, and uncommitted members still exist for gameplay. It is
+not an instantaneous atomic removal of an entire skyscraper. Brick state is
+truth for collision, queries and building tools; the common mutation boundary
+protects family ownership and pending section proofs. Server gameplay does not
+wait for client rendering.
 
-After complete delivery, connected face-neighbor region growth plans compact
-assemblies with a shared 4096-candidate budget per frame, starting during the
-fall. Physics Quality controls target granularity (roughly sqrt(member count)
-at Best, scaled down at lower settings). All members stay visible, each with
-one assembly transform; original per-look mesh/texture instancing is reused.
-At most 64 assembly bodies share the existing global rigid-body budget with
-ordinary blast debris. Assembly colliders merge original member boxes only when their full rectangular
-faces match. Their compound union preserves gaps between sails, beams and masts;
-it never fills a whole assembly's empty bounding space. There are at most 64
-primitive boxes per assembly and 2048 allocated primitive proxies across debris
-admission. Groups whose collision union exceeds the budget retain visible shared
-landing geometry. Assembly groups can collide with one another, the map,
-surviving bricks and ordinary local pushers/debris. Non-box member geometry
-retains the existing whole-brick bounding-proxy approximation.
+Each operation publishes a Ready barrier with its actual committed count, then
+Retired when its remaining source references disappear. Source bricks carry a
+transient section tag, including packed replication. Clients stage received
+material at its original pose until Ready, missing-source reconciliation,
+incremental preparation and GPU model readiness all complete. Tagged world
+state recovers missing cues without inventing geometry. Restoration suppresses
+stale members immediately; retirement prevents late resurrection. The normal
+13-second visual lifetime starts after preparation, not during delivery.
 
-Assembly collision streaming uses its swept oriented bounds, not a tower-sized
-sphere, and shares 512 work units per frame (16 per terrain tile). Motion waits
-while nearby collision is prepared. Sleeping assemblies keep their bodies and hit targets; Rapier already makes
-sleeping simulation cheap. Budget-evicted assemblies retain their last pose and
-all visible members through the normal fade. Shots wake allocated sleeping
-assemblies with a restrained minimum 1.5-unit/s local jolt, so a grouped mass
-does not swallow the visible reaction. Rockets still continue authoritatively:
-Maxwell explicitly retained cosmetic rubble after the preview.2 recording. Physics
-Off keeps the cheap intact fall/landing visual without independent bodies.
-There is a separate 65536-member render reservation and 1024-group metadata
-ceiling; excessive new groups are diagnosed and omitted as whole groups rather
-than arbitrarily truncating their members. This is not unlimited skyscraper
-rendering. Intact falling sections cannot crush, carry or block gameplay;
-post-landing assemblies remain entirely local, with no motion replication.
+## Pipeline admission and budgets
 
-Up to eight proved-loose server groups drain removals round-robin within the
-same existing 128-change tick budget. Proof discovery is still incremental;
-this removes delivery serialization, not the cost of proving connectivity.
-Nearby direct damage and authored edits both invalidate queued proofs.
+Server traversal, footprint rays and stud attachment cells share 8192 counted
+work units/tick. At most 128 damage/removal candidates and 2048 split cells are
+admitted per tick; splits also have a 2048-cell per-blast limit. There are at
+most 16384 active surviving parts and 2048 descendants per original. Mutation
+payload estimates share 4 MiB/tick. These are work/allocation bounds, not an
+absolute wall-time or encoded-network-byte guarantee.
 
-Compatible split sizes come from the same content namespace, cached only when
-an oversized plain brick needs them. Unsupported shapes/prints/catalog sizes
-retain the original weapon size rules. This does not invent mod geometry.
-Non-box whole debris retains the existing approximate collision proxy; improving
-that pre-existing cosmetic approximation is outside this playtest increment.
+Pending blasts/support jobs are capped at 256, proof/seed retention at 131072,
+one component at 65536, and simultaneous removal producers at eight. Searches
+share work round-robin; edits invalidate a coalesced conservative watched box.
+Support queries that exhaust their neighbor envelope never conclude unsupported
+from a truncated proof. Restoration scans 512 timers/tick and admits at most
+128 originals, 2049 descendant-weighted mutations and 4 MiB of original payload
+estimates per tick. Repeated restore calls in a tick share that credit.
+
+Before hiding a component, the server reserves its presentation envelope for
+30 seconds after sealing (or until source retirement): 65536 source members,
+256 appearances, 65536 unique mesh quads, 524288 instanced quads, 262144 spatial
+buckets and 64 operation leases. A member may occupy at most 256 buckets, one
+appearance at most 4096 quads, and one source at most 4 MiB stored payload.
+Temporarily occupied capacity keeps a proof waiting. A component intrinsically
+outside this envelope stays standing until further damage/build changes cause
+another proof. It is not removed and then silently omitted by the renderer.
+This conservative overload policy can leave an extreme unsupported structure
+standing; arbitrary million-brick collapse rendering is not promised.
+
+Member/control cues take priority over ordinary effects in the bounded 4096-cue
+queue. Local presentation backlog drops redundant material cues while retaining
+a seed/control per section; tagged authoritative state supplies missing art.
+It does not disconnect an otherwise valid client merely for cosmetic backlog.
+Brick deltas still cost bandwidth proportional to affected material.
+
+## Client motion, breakup and hits
+
+Visible material, shared transforms and independently simulated bodies are
+separate resources. Every admitted member keeps its original mesh, color,
+print and shape. Preparation admits 256 members and four new model uploads per
+frame. All received material remains visible while that work completes. Tall
+sections lean around a lowest footprint near the severed support; wide slabs
+drop and tilt; long spans rotate. Corners and 64 distributed material witnesses
+probe a 0.2-second contact horizon under a 4096-unit budget. The displayed clock
+advances through checked time rather than accumulating a delayed jump.
+Contact remains a cosmetic approximation, not a structural collision solver.
+
+Face-neighbor planning shares 4096 work units/frame and incrementally finalizes
+landing groups of at most 2048 members. Available body slots and Physics Quality
+choose coarser groups. At most 64 bodies share the ordinary debris body budget.
+Compound proxies merge only exact rectangular face neighbors, preserving gaps;
+they allow 64 boxes/body and 2048 boxes globally. Non-box shapes keep the existing
+bounding-proxy approximation. If disconnected groups or proxy/body needs exceed
+the envelope before allocation, the section keeps one visible shared assembly.
+Already moving bodies are never reassembled; budget eviction freezes their
+current poses without losing members. Physics Off retains the shared visual.
+
+Ordinary debris and section chunks use one collision-window mechanism: prepare
+swept oriented surroundings ahead while retaining the previous safe window.
+Nearby edit history invalidates affected windows; distant edits do not pause
+unrelated rubble. Static cache capacity is bounded. Ordinary preparation is
+budgeted per fixed step; section preparation receives 512 units/frame. Genuine
+nearby resource pressure can still delay cosmetic motion.
+
+Shots use the displayed projectile path. Allocated bodies receive a mass-scaled
+local impulse and wake; preparing, frozen and shared assemblies also have bounded
+source-box hit queries and restrained recoil. Gaps remain queryable gaps rather
+than one giant sail bounding box. This is a local visual response: authoritative
+projectiles continue through rubble and trigger no extra gameplay explosion.
+First observed segments cover one fixed step; terminal-only unseen trajectories
+are not guaranteed. No sound assets or synthetic effects were added.
+
+Existing source permission policy is shared by direct and follow-on damage,
+including the pre-existing LAN exception. WAN ownership/minigame restrictions
+remain authoritative. No additional host or shard toggle was introduced.
+
+The extra transient section pointer is offset by boxing the cold rule-region
+array. Serialized rule properties and commands keep their existing array shape;
+the per-Brick 256-byte memory ceiling is unchanged. World state owns semantics,
+while network, tools and presentation derive views of it.
+
+Technical validation and remaining limits are recorded in the current progress
+entry and playtest handoff. Maxwell alone performs interactive acceptance.

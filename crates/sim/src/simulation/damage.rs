@@ -52,6 +52,9 @@ impl Simulation {
     pub(crate) fn damage_part_count(&self) -> usize {
         self.damage.parents.len()
     }
+    pub(crate) fn damage_family_part_count(&self, root: BrickId) -> usize {
+        self.damage.families.get(&root).map_or(0, |f| f.parts.len())
+    }
     pub(crate) fn damage_ended(&self, id: BrickId) -> bool {
         self.damage.ended.contains(&id)
     }
@@ -85,6 +88,7 @@ impl Simulation {
         let Some(family) = self.damage.families.remove(&root) else {
             return Ok(());
         };
+        self.section_forget(root);
         let parts: Vec<_> = family
             .parts
             .into_iter()
@@ -109,6 +113,7 @@ impl Simulation {
                     b.raycast = raycast;
                     b.colliding = colliding;
                     b.damage_hidden = false;
+                    b.damage_section = None;
                 })?;
                 self.note_link(root);
                 self.sync_flags(root);
@@ -153,6 +158,7 @@ impl Simulation {
             }
         }
         for id in &all {
+            self.section_forget(*id);
             if let Some(root) = self.damage.parents.remove(id)
                 && let Some(family) = self.damage.families.get_mut(&root)
             {
@@ -166,6 +172,9 @@ impl Simulation {
             .collect())
     }
     pub(super) fn damage_after_mutation(&mut self, id: BrickId, before: &Brick) -> Result<()> {
+        if self.state().bricks.get(&id) != Some(before) {
+            self.section_changed(id);
+        }
         if self.damage.depth != 0 {
             return Ok(());
         }
@@ -181,6 +190,7 @@ impl Simulation {
             if revive {
                 let mut next = next.clone();
                 next.damage_hidden = false;
+                next.damage_section = None;
                 self.finish_damage_family(id, true)?;
                 self.authority.mutate(id, |b| *b = next)?;
                 self.sync_flags(id);

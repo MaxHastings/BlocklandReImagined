@@ -3,6 +3,13 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 pub const MAX_CUES: usize = 4096;
+pub const MAX_SECTION_MEMBERS: usize = 65_536;
+pub const MAX_SECTION_LOOKS: usize = 256;
+pub const MAX_SECTION_QUADS: usize = 65_536;
+pub const MAX_SECTION_DRAW_QUADS: usize = 524_288;
+pub const MAX_SECTION_LOOK_QUADS: usize = 4096;
+pub const MAX_SECTION_BUCKETS: usize = 262_144;
+pub const MAX_SECTION_MEMBER_BUCKETS: usize = 256;
 /// Upper bound on a brick blast's force and falloff radius.
 pub const MAX_BRICK_FORCE: f32 = 1000.;
 /// How clients draw a brick's death. v20 draws the two differently
@@ -36,6 +43,18 @@ pub enum BrickDeath {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CueKind {
+    /// Every source owned by this generation was restored or removed.
+    BrickSectionRetired {
+        group: u64,
+        started: u64,
+    },
+    /// Delivery of this exact section generation ended. A cancelled/revalidated
+    /// producer seals its committed prefix too; uncommitted bricks stay real.
+    BrickSectionReady {
+        group: u64,
+        started: u64,
+        members: u32,
+    },
     /// A player jumped. `sound` is its archetype's own (`Sounds::jump`):
     /// None plays the standard jump, an empty name nothing.
     Jump {
@@ -220,6 +239,28 @@ pub struct Cue {
     pub kind: CueKind,
     pub position: [f32; 3],
 }
+impl CueKind {
+    pub fn section_generation(&self) -> Option<(u64, u64)> {
+        match self {
+            Self::BrickSectionReady { started, group, .. }
+            | Self::BrickSectionRetired { started, group }
+            | Self::BrickKill {
+                death: BrickDeath::Section { started, group, .. },
+                ..
+            } => Some((*started, *group)),
+            _ => None,
+        }
+    }
+    pub fn is_section_member(&self) -> bool {
+        matches!(
+            self,
+            Self::BrickKill {
+                death: BrickDeath::Section { .. },
+                ..
+            }
+        )
+    }
+}
 impl Cue {
     pub fn validate(&self) -> Result<()> {
         let text = |s: &str| s.len() <= 128 && !s.chars().any(char::is_control);
@@ -239,7 +280,7 @@ impl Cue {
                 *group > 0
                     && *started <= self.tick
                     && *members > 0
-                    && (*members as usize) <= bri_world::MAX_BRICKS
+                    && (*members as usize) <= MAX_SECTION_MEMBERS
                     && half
                         .iter()
                         .all(|v| v.is_finite() && *v > 0. && *v <= 1_000_000.)
@@ -248,6 +289,21 @@ impl Cue {
             );
         }
         match &self.kind {
+            CueKind::BrickSectionRetired { group, started } => ensure!(
+                *group > 0 && *started <= self.tick,
+                "Invalid section retirement"
+            ),
+            CueKind::BrickSectionReady {
+                group,
+                started,
+                members,
+            } => ensure!(
+                *group > 0
+                    && *started <= self.tick
+                    && *members > 0
+                    && (*members as usize) <= MAX_SECTION_MEMBERS,
+                "Invalid section barrier"
+            ),
             CueKind::WeaponEffect {
                 definition,
                 node,
@@ -513,9 +569,13 @@ impl Cue {
 pub struct Cues {
     cursor: u64,
     pending: VecDeque<Cue>,
+    sections: VecDeque<Cue>,
     dropped: u64,
 }
 impl Cues {
+    pub fn remaining(&self) -> usize {
+        MAX_CUES - self.pending.len() - self.sections.len()
+    }
     pub fn cursor(&self) -> u64 {
         self.cursor
     }
@@ -538,14 +598,40 @@ impl Cues {
         // Clients drop the connection over a cue they reject, so the host
         // must only ever emit cues that pass the client's check.
         debug_assert!(cue.validate().is_ok(), "{:?}: {cue:?}", cue.validate());
-        if self.pending.len() == MAX_CUES {
-            self.pending.pop_front();
+        let important = cue.kind.section_generation().is_some();
+        if self.remaining() == 0 {
+            if self.pending.pop_front().is_none() {
+                if important {
+                    // Legal section producers reserve credit before mutation.
+                    self.sections.pop_front();
+                } else {
+                    self.dropped = self.dropped.saturating_add(1);
+                    return;
+                }
+            }
             self.dropped = self.dropped.saturating_add(1);
         }
-        self.pending.push_back(cue);
+        if important {
+            self.sections.push_back(cue);
+        } else {
+            self.pending.push_back(cue);
+        }
     }
     pub fn take(&mut self) -> Vec<Cue> {
-        self.pending.drain(..).collect()
+        let mut out = Vec::with_capacity(self.pending.len() + self.sections.len());
+        while !self.pending.is_empty() || !self.sections.is_empty() {
+            let section_first = match (self.pending.front(), self.sections.front()) {
+                (None, _) => true,
+                (_, None) => false,
+                (Some(a), Some(b)) => b.id < a.id,
+            };
+            out.push(if section_first {
+                self.sections.pop_front().unwrap()
+            } else {
+                self.pending.pop_front().unwrap()
+            });
+        }
+        out
     }
 }
 /// The image a stock emote wears in the emote slot (`serverCmdLove`,

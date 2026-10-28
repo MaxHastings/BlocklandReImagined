@@ -189,6 +189,7 @@ fn ground_category_protects_only_foundations_and_permissions_still_apply() {
         &impact(0.0),
     )
     .unwrap();
+    settle(&mut s);
     assert!(s.live_damage_brick(foreign));
 }
 
@@ -341,7 +342,8 @@ fn independent_sections_share_commit_budget_and_report_complete_shape() {
             .collect();
         s.destruction.detach.push_back(Detached {
             scope: scope.clone(),
-            ids,
+            ids: Arc::new(ids),
+            next: None,
             group,
             started: 0,
             origin: Vec3::new(group as f32 * 10., 53., 0.),
@@ -381,12 +383,239 @@ fn independent_sections_share_commit_budget_and_report_complete_shape() {
         "a second proven group starts before the first drains"
     );
     assert_eq!(groups.values().sum::<usize>(), COMMIT_PER_TICK);
-    let mut total = first.len();
+    let mut total = first
+        .iter()
+        .filter(|c| matches!(c.kind, CueKind::BrickKill { .. }))
+        .count();
+    let mut barriers = 0;
     while !s.destruction.detach.is_empty() {
         let before = s.destruction.work.detached_bricks;
         s.run_damage_support().unwrap();
         assert!(s.destruction.work.detached_bricks - before <= COMMIT_PER_TICK as u64);
-        total += s.take_cues().len();
+        let cues = s.take_cues();
+        total += cues
+            .iter()
+            .filter(|c| matches!(c.kind, CueKind::BrickKill { .. }))
+            .count();
+        barriers += cues
+            .iter()
+            .filter(|c| matches!(c.kind, CueKind::BrickSectionReady { members: 160, .. }))
+            .count();
     }
     assert_eq!(total, 320);
+    assert_eq!(barriers, 2);
+}
+
+#[test]
+fn section_barrier_seals_only_committed_material_and_defers_respawn_until_delivery_ends() {
+    let (mut s, owner) = session();
+    let mut scope = s.damage_scope(owner, Vec3::ZERO).unwrap();
+    Arc::get_mut(&mut scope).unwrap().delay = 1;
+    let ids: BTreeSet<_> = (0..160)
+        .map(|i| {
+            place(
+                &mut s,
+                owner,
+                "1x1x3",
+                [0.25, 5.3 + i as f32 * 0.6, 0.25],
+                false,
+            )
+        })
+        .collect();
+    let first = *ids.first().unwrap();
+    s.destruction.detach.push_back(Detached {
+        scope,
+        ids: Arc::new(ids),
+        next: None,
+        group: 1,
+        started: 0,
+        origin: Vec3::new(0., 53., 0.),
+        half: Vec3::new(0.25, 48., 0.25),
+        pivot: Vec3::new(0., 5., 0.),
+        members: 160,
+        area: None,
+    });
+    let _ = s.simulation.take_support_edits();
+    s.run_damage_support().unwrap();
+    assert_eq!(s.simulation.section_due(first), Some(u64::MAX));
+    assert!(
+        !s.take_cues()
+            .iter()
+            .any(|c| matches!(c.kind, CueKind::BrickSectionReady { .. }))
+    );
+    let interrupted = s.destruction.detach.pop_front().unwrap();
+    assert_eq!(interrupted.remaining().count(), 32);
+    assert!(interrupted.remaining().all(|&id| s.live_damage_brick(id)));
+    s.finish_section(&interrupted);
+    s.run_damage_support().unwrap();
+    assert_eq!(s.simulation.section_due(first), Some(1));
+    assert!(
+        s.take_cues()
+            .iter()
+            .any(|c| matches!(c.kind, CueKind::BrickSectionReady { members: 128, .. }))
+    );
+    s.respawn_bricks(&[first]).unwrap();
+    assert_eq!(s.simulation.section_due(first), None);
+}
+
+#[test]
+fn exhausted_presentation_admission_holds_source_until_capacity_is_available() {
+    let (mut s, owner) = session();
+    let scope = s.damage_scope(owner, Vec3::ZERO).unwrap();
+    let id = place(&mut s, owner, "1x1x3", [0.25, 5.3, 0.25], false);
+    let mut search = Search::new(scope, Vec::new());
+    search.push(id, &s.simulation);
+    search.frontier.clear(); // This fixture starts after support proof.
+    s.destruction.searches.push_back(search);
+    s.destruction.reservations.insert(
+        (0, 999),
+        Reservation {
+            members: MAX_SECTION_MEMBERS,
+            looks: 0,
+            quads: 0,
+            draw_quads: 0,
+            buckets: 0,
+            until: u64::MAX,
+        },
+    );
+    let _ = s.simulation.take_support_edits();
+    s.run_damage_support().unwrap();
+    assert!(s.live_damage_brick(id));
+    assert!(s.destruction.work.capacity_holds > 0);
+    assert!(s.take_cues().is_empty());
+    s.destruction.reservations.clear();
+    s.run_damage_support().unwrap();
+    assert!(!s.live_damage_brick(id));
+    assert!(
+        s.take_cues()
+            .iter()
+            .any(|c| matches!(c.kind, CueKind::BrickSectionReady { members: 1, .. }))
+    );
+    s.respawn_bricks(&[id]).unwrap();
+    assert!(
+        s.take_cues()
+            .iter()
+            .any(|c| matches!(c.kind, CueKind::BrickSectionRetired { group: 1, .. }))
+    );
+    assert!(s.destruction.reservations.is_empty());
+}
+
+#[test]
+fn respawn_budget_charges_family_descendants_instead_of_only_originals() {
+    let (mut s, owner) = session();
+    let scope = s.damage_scope(owner, Vec3::ZERO).unwrap();
+    let mut roots = Vec::new();
+    for lane in 0..2 {
+        let root = place(&mut s, owner, "8x8x3", [lane as f32 * 20., 0.3, 0.], false);
+        s.simulation.begin_damage_family(root);
+        let bricks = (0..1500)
+            .map(|i| {
+                bri_world::Brick::new(
+                    ContentRef::Resolved("1x1x3".into()),
+                    [
+                        lane as f32 * 20. + 0.25 + (i % 20) as f32 * 0.5,
+                        2.3 + (i / 20) as f32 * 0.6,
+                        0.25,
+                    ],
+                    owner,
+                )
+            })
+            .collect();
+        let parts = s.simulation.insert_pieces(bricks).unwrap();
+        s.simulation.register_damage_parts(root, &parts);
+        s.hide_damage_bricks(&scope, &[root]).unwrap();
+        s.events.respawns.insert(root, 0);
+        roots.push(root);
+    }
+    s.step_events(&BTreeSet::new()).unwrap();
+    assert!(s.live_damage_brick(roots[0]));
+    assert!(!s.live_damage_brick(roots[1]));
+    assert_eq!(s.simulation.damage_family_part_count(roots[1]), 1500);
+    s.simulation.step().unwrap();
+    s.step_events(&BTreeSet::new()).unwrap();
+    assert!(s.live_damage_brick(roots[1]));
+}
+
+#[test]
+fn shared_original_waits_for_every_section_and_sealing_does_not_restart_deadlines() {
+    let (mut s, owner) = session();
+    let root = place(&mut s, owner, "8x8x3", [0., 0.3, 0.], false);
+    let a = place(&mut s, owner, "1x1x3", [0.25, 2.3, 0.25], false);
+    let b = place(&mut s, owner, "1x1x3", [1.25, 2.3, 0.25], false);
+    s.simulation.begin_damage_family(root);
+    s.simulation.register_damage_parts(root, &[a, b]);
+    for (group, id) in [(1, a), (2, b)] {
+        s.simulation.begin_section(
+            (0, group),
+            Arc::new(BTreeSet::from([id])),
+            Arc::new(BTreeSet::from([root])),
+        );
+        s.simulation.section_member((0, group), id);
+    }
+    s.simulation.seal_section((0, 1), 10);
+    assert_eq!(s.simulation.section_due(root), Some(u64::MAX));
+    s.simulation.seal_section((0, 2), 20);
+    assert_eq!(s.simulation.section_due(root), Some(20));
+    s.simulation.seal_section((0, 1), 30);
+    assert_eq!(s.simulation.section_due(root), Some(20));
+}
+
+#[test]
+fn common_edit_boundary_interrupts_pending_section_even_for_appearance_only_edits() {
+    let (mut s, owner) = session();
+    let id = place(&mut s, owner, "1x1x3", [0.25, 2.3, 0.25], false);
+    let key = (0, 1);
+    s.simulation.begin_section(
+        key,
+        Arc::new(BTreeSet::from([id])),
+        Arc::new(BTreeSet::new()),
+    );
+    s.simulation.mutate(id, |b| b.color = 1).unwrap();
+    assert!(s.simulation.section_interrupted(key));
+    assert!(s.live_damage_brick(id));
+    s.simulation.seal_section(key, 1);
+    assert!(
+        s.simulation
+            .take_section_barriers(1)
+            .iter()
+            .any(|&(k, n, retired)| k == key && n == 0 && retired)
+    );
+}
+
+#[test]
+fn render_admission_counts_instanced_geometry_not_only_unique_meshes() {
+    let (mut s, owner) = session();
+    let template = crate::testing::portal("render-template", None).mesh.quads[0].clone();
+    s.simulation
+        .definitions
+        .entries
+        .get_mut("1x1x3")
+        .unwrap()
+        .mesh
+        .quads = vec![template; crate::presentation::MAX_SECTION_LOOK_QUADS];
+    let scope = s.damage_scope(owner, Vec3::ZERO).unwrap();
+    let mut search = Search::new(scope, Vec::new());
+    let ids: Vec<_> = (0..200)
+        .map(|i| {
+            place(
+                &mut s,
+                owner,
+                "1x1x3",
+                [0.25, 5.3 + i as f32 * 0.6, 0.25],
+                false,
+            )
+        })
+        .collect();
+    for &id in &ids {
+        search.push(id, &s.simulation);
+    }
+    search.frontier.clear();
+    assert_eq!(search.looks.len(), 1);
+    assert!(search.draw_quads > crate::presentation::MAX_SECTION_DRAW_QUADS);
+    s.destruction.searches.push_back(search);
+    let _ = s.simulation.take_support_edits();
+    s.run_damage_support().unwrap();
+    assert!(ids.iter().all(|&id| s.live_damage_brick(id)));
+    assert!(s.take_cues().is_empty());
+    assert!(s.destruction.work.capacity_holds > 0);
 }

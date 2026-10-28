@@ -160,6 +160,7 @@ struct Body {
     brick: BrickId,
     look: Look,
     age: f32,
+    collision: crate::local_physics::CollisionWindow,
 }
 impl Body {
     /// How opaque the body is at its age.
@@ -249,6 +250,11 @@ pub struct BrickDebris {
     /// runs oldest first.
     bodies: BTreeMap<(u64, u8), Body>,
     sections: BTreeMap<(u64, u64), Section>,
+    section_barriers: BTreeMap<(u64, u64), (usize, u64)>,
+    retired_sections: BTreeSet<(u64, u64)>,
+    section_shots: sections::shots::Queries,
+    section_turn: usize,
+    body_turn: usize,
     surroundings: Surroundings,
     /// Bricks this client saw die that have not come back yet.
     dead: BTreeSet<BrickId>,
@@ -279,6 +285,11 @@ impl BrickDebris {
             world: crate::local_physics::new_world(),
             bodies: BTreeMap::new(),
             sections: BTreeMap::new(),
+            section_barriers: BTreeMap::new(),
+            retired_sections: BTreeSet::new(),
+            section_shots: Default::default(),
+            section_turn: 0,
+            body_turn: 0,
             surroundings: Surroundings::default(),
             dead: BTreeSet::new(),
             cursor: 0,
@@ -315,6 +326,19 @@ impl BrickDebris {
     }
     pub fn limit(&self) -> usize {
         self.limit
+    }
+    /// CPU-only tests have no renderer. The live adapter gates a newly sealed
+    /// section until its bounded render uploads have caught up.
+    pub fn prepare_models(&mut self, models: &DebrisModels) {
+        for section in self.sections.values_mut() {
+            if section.age > 0. {
+                continue;
+            }
+            section.gpu_ready = section
+                .pieces
+                .iter()
+                .all(|p| models.models.contains_key(&p.look));
+        }
     }
     /// Remove the oldest bodies until at most `keep` remain; returns how
     /// many went. Bodies already seen fade out as ghosts; ones killed and
@@ -424,6 +448,37 @@ impl BrickDebris {
         // already flying once, not once per brick it killed.
         let mut last_blast = None;
         for cue in cues {
+            if let CueKind::BrickSectionRetired { started, group } = cue.kind {
+                cue.validate()?;
+                let key = (started, group);
+                self.retired_sections.insert(key);
+                while self.retired_sections.len() > 1024 {
+                    self.retired_sections.pop_first();
+                }
+                self.retire_section(key);
+                self.section_barriers.remove(&key);
+                continue;
+            }
+            if let CueKind::BrickSectionReady {
+                started,
+                group,
+                members,
+            } = cue.kind
+            {
+                cue.validate()?;
+                let key = (started, group);
+                if self.retired_sections.contains(&key) {
+                    continue;
+                }
+                self.section_barriers
+                    .insert(key, (members as usize, cue.tick));
+                if let Some(section) = self.sections.get_mut(&key) {
+                    section.expected = members as usize;
+                    section.barrier_tick = Some(cue.tick);
+                    section.sealed = section.pieces.len() == members as usize;
+                }
+                continue;
+            }
             let CueKind::BrickKill {
                 brick,
                 death,
@@ -488,7 +543,8 @@ impl BrickDebris {
                         turn: Quat::from_rotation_y(-f32::from(*quarter_turns) * FRAC_PI_2),
                         half,
                         origin: Vec3::from(*origin),
-                        delay: cue.tick.saturating_sub(*started) as f32 / 120.0,
+                        tick: cue.tick,
+                        active: !building.restored_after(*brick, cue.tick),
                         members: *members as usize,
                         section_half: Vec3::from(*section_half),
                         pivot: Vec3::from(*pivot),
@@ -714,6 +770,7 @@ impl BrickDebris {
             .restitution(PLASTIC_BOUNCE)
             .restitution_combine_rule(CoefficientCombineRule::Max);
         let (handle, _) = self.world.insert(body, collider);
+        self.world.bodies[handle].set_enabled(false);
         self.bodies.insert(
             (id, piece),
             Body {
@@ -721,6 +778,7 @@ impl BrickDebris {
                 brick,
                 look,
                 age: 0.0,
+                collision: Default::default(),
             },
         );
     }
@@ -743,6 +801,20 @@ impl BrickDebris {
         if self.surroundings.sync(&mut self.world, building) {
             self.world.wake_up_all(true);
         }
+        if self.surroundings.full()
+            && self
+                .bodies
+                .values()
+                .map(|b| b.handle)
+                .chain(self.chunk_handles())
+                .all(|h| !self.world.bodies[h].is_enabled())
+        {
+            self.surroundings.clear(&mut self.world);
+            for b in self.bodies.values_mut() {
+                b.collision.reset();
+            }
+            self.reset_section_collision();
+        }
         self.advance_sections(dt, building)?;
         if self.bodies.is_empty() && self.section_piece_count() == 0 {
             self.accumulator = 0.0;
@@ -762,8 +834,8 @@ impl BrickDebris {
         if steps == 0 {
             return Ok(());
         }
-        self.load_surroundings(building, steps as f32 * STEP)?;
         for step in 1..=steps {
+            self.load_surroundings(building, STEP)?;
             self.pushers
                 .drive(&mut self.world, step as f32 / steps as f32);
             let before = match self.passages.list.is_empty() {
@@ -819,7 +891,7 @@ impl BrickDebris {
             // A restrained minimum jolt is cosmetic; the server shot continues.
             let impulse_size =
                 (PROJECTILE_MASS * strike.speed).max(if chunks.contains(&strike.handle) {
-                    rb.mass() * 1.5
+                    rb.mass() * 3.
                 } else {
                     0.
                 });
@@ -830,9 +902,22 @@ impl BrickDebris {
                 true,
             );
             let v = Vec3::from_array(rb.linvel().to_array()).clamp_length_max(MAX_SPEED);
+            if !rb.is_enabled() {
+                rb.set_translation(
+                    rb.translation() + Vector::from_array((strike.direction * 0.15).to_array()),
+                    true,
+                );
+            }
             rb.set_linvel(Vector::from_array(v.to_array()), true);
             self.diagnostics.projectile_hits += 1;
         }
+        self.section_shots
+            .enqueue(&self.sections, &self.world, &self.shots);
+        self.section_shots.step(
+            &mut self.sections,
+            &self.world,
+            &mut self.diagnostics.projectile_hits,
+        );
     }
     /// Shove every body within `radius` of `origin` away from it.
     fn blast(&mut self, origin: Vec3, force: f32, radius: f32, normal: Option<Vec3>) {
@@ -886,24 +971,39 @@ impl BrickDebris {
     }
     /// Make bricks and terrain around every awake body solid for the next
     /// `seconds` of motion.
-    fn load_surroundings(&mut self, building: &Building, seconds: f32) -> Result<()> {
-        let boxes: Vec<_> = self
-            .bodies
-            .values()
-            .map(|body| &self.world.bodies[body.handle])
-            .filter(|rb| !rb.is_sleeping())
-            .map(|rb| {
-                Surroundings::reach(
-                    Vec3::from_array(rb.translation().to_array()),
-                    Vec3::from_array(rb.linvel().to_array()),
-                    0.0,
-                    seconds,
-                )
-            })
-            .collect();
+    fn load_surroundings(&mut self, building: &Building, _seconds: f32) -> Result<()> {
+        let mut work = 128;
         let dead = &self.dead;
-        self.surroundings
-            .load(&mut self.world, building, &boxes, |id| dead.contains(&id))?;
+        let mut keys: Vec<_> = self.bodies.keys().copied().collect();
+        if !keys.is_empty() {
+            let offset = self.body_turn % keys.len();
+            keys.rotate_left(offset);
+            self.body_turn = self.body_turn.wrapping_add(1);
+        }
+        for key in keys {
+            let body = self.bodies.get_mut(&key).unwrap();
+            let rb = &self.world.bodies[body.handle];
+            if rb.is_sleeping() && body.collision.unchanged(building) {
+                continue;
+            }
+            let collider = &self.world.colliders[rb.colliders()[0]];
+            let aabb = collider.compute_aabb();
+            let motion = crate::local_physics::CollisionMotion {
+                center: Vec3::from_array(rb.translation().to_array()),
+                half: Vec3::from_array(aabb.half_extents().to_array()),
+                velocity: Vec3::from_array(rb.linvel().to_array()),
+                angular: rb.angvel().length(),
+            };
+            let ready = body.collision.prepare(
+                &mut self.surroundings,
+                &mut self.world,
+                building,
+                motion,
+                &mut work,
+                |id| dead.contains(&id),
+            )?;
+            self.world.bodies[body.handle].set_enabled(ready);
+        }
         Ok(())
     }
     /// Forget deaths the world has since undone (respawned bricks) or made
@@ -1026,7 +1126,7 @@ impl DebrisModels {
         colors: &[[f32; 4]],
     ) -> Result<()> {
         let (mut built, mut images) = (0, 0);
-        let framed = self.frame_models(debris.instances(), colors.len(), |look| {
+        let framed = self.frame_models(debris.instances(), colors.len(), 4, |look| {
             let data = look_scene(look, meshes, palette, materials, colors)
                 .with_context(|| format!("Debris model for {}", look.definition))?;
             data.map(|data| {
@@ -1070,6 +1170,7 @@ impl DebrisModels {
         &mut self,
         instances: impl Iterator<Item = (&'a Look, SceneTransform)>,
         colors: usize,
+        mut builds: usize,
         mut build: impl FnMut(&Look) -> Result<Option<GpuScene>>,
     ) -> Result<()> {
         self.frame += 1;
@@ -1092,6 +1193,10 @@ impl DebrisModels {
         }
         for (look, transform) in missing {
             if !self.models.contains_key(look) {
+                if builds == 0 {
+                    continue;
+                }
+                builds -= 1;
                 if self.models.len() >= MAX_LOOKS {
                     self.evict();
                 }
@@ -1106,11 +1211,9 @@ impl DebrisModels {
                     },
                 );
             }
-            self.models
-                .get_mut(look)
-                .expect("model built above")
-                .transforms
-                .push(transform);
+            if let Some(model) = self.models.get_mut(look) {
+                model.transforms.push(transform);
+            }
         }
         Ok(())
     }
@@ -1213,7 +1316,7 @@ pub(crate) mod tests {
         let mut models = DebrisModels::default();
         let builds = std::cell::Cell::new(0);
         let frame = |models: &mut DebrisModels, looks: &[Look]| {
-            models.frame_models(looks.iter().map(|l| (l, body)), 4, |_| {
+            models.frame_models(looks.iter().map(|l| (l, body)), 4, usize::MAX, |_| {
                 builds.set(builds.get() + 1);
                 Ok(None)
             })

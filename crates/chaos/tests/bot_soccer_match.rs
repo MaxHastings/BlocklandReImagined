@@ -207,7 +207,7 @@ fn field(setup: &Setup) -> Vec<Brick> {
         } else {
             BLUE_PAINT
         };
-        goal.rule_region = Some([MOUTH * 2.0, 4.0, POCKET + 1.0]);
+        goal.rule_region = Some(Box::new([MOUTH * 2.0, 4.0, POCKET + 1.0]));
         goal.events = recipe_rows(scoring);
         bricks.push(goal);
     }
@@ -1373,7 +1373,7 @@ fn identity(b: &Brick) -> String {
         b.name,
         b.vehicle.as_ref().map(|v| (&v.vehicle, v.team)),
         b.events.len(),
-        b.rule_region,
+        b.rule_region(),
         b.colliding
     )
 }

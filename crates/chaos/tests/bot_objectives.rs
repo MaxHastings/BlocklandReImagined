@@ -557,7 +557,7 @@ fn ordered_regions_observe_delayed_partial_progress_before_continuing() {
             &format!("sensor_{}", 9 - i),
             rows,
         );
-        b.rule_region = Some([3.0, 4.0, 3.0]);
+        b.rule_region = Some(Box::new([3.0, 4.0, 3.0]));
         b.visible = false;
         b.colliding = false;
         b.raycast = false;
@@ -601,7 +601,7 @@ fn repeated_region_counter_rearms_by_physically_leaving_and_entering() {
         ),
     ];
     let mut sensor = brick([0.25, 0.1, 28.25], "counted_window", rows);
-    sensor.rule_region = Some([3.0, 4.0, 3.0]);
+    sensor.rule_region = Some(Box::new([3.0, 4.0, 3.0]));
     sensor.visible = false;
     sensor.colliding = false;
     sensor.raycast = false;
@@ -870,7 +870,7 @@ fn inaccessible_cheaper_region_cools_down_and_the_reachable_alternative_wins() {
         "ceiling checkpoint",
         winning("onRegionEnter"),
     );
-    unreachable.rule_region = Some([2.0, 1.0, 2.0]);
+    unreachable.rule_region = Some(Box::new([2.0, 1.0, 2.0]));
     unreachable.colliding = false;
     unreachable.visible = false;
     unreachable.raycast = false;

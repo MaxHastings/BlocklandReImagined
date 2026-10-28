@@ -2,14 +2,15 @@
 //! A chunk is a transform plus a cheap collision proxy, never replacement art.
 use super::*;
 use crate::building::SectionProbe;
-use crate::local_physics::{GRAVITY, LocalRegion};
+use crate::local_physics::{CollisionMotion, CollisionWindow, GRAVITY};
 use bri_sim::grid::Index;
 use std::collections::VecDeque;
 mod partition;
 mod proxy;
+pub(super) mod shots;
 use partition::Partition;
 
-pub(super) const MAX_VISIBLE: usize = 65_536;
+pub(super) const MAX_VISIBLE: usize = bri_sim::presentation::MAX_SECTION_MEMBERS;
 const MAX_CHUNKS: usize = 64;
 const WITNESSES: usize = 72;
 const MAX_PROXY_PARTS: usize = 2048;
@@ -22,7 +23,8 @@ pub(super) struct SectionPiece {
     pub turn: Quat,
     pub half: Vec3,
     pub origin: Vec3,
-    pub delay: f32,
+    pub tick: u64,
+    pub active: bool,
     pub members: usize,
     pub section_half: Vec3,
     pub pivot: Vec3,
@@ -43,20 +45,20 @@ struct Chunk {
     velocity: Vec3,
     spin: Vec3,
     handle: Option<RigidBodyHandle>,
-    region: Option<LocalRegion>,
-    generation: u64,
-    ready: bool,
+    collision: CollisionWindow,
+    recoil: Vec3,
     released: bool,
 }
 impl Chunk {
     fn pose(&self, world: &PhysicsWorld) -> (Vec3, Quat) {
-        self.handle.map_or((self.center, self.turn), |h| {
+        let (center, turn) = self.handle.map_or((self.center, self.turn), |h| {
             let rb = &world.bodies[h];
             (
                 Vec3::from_array(rb.translation().to_array()),
                 Quat::from_array(rb.rotation().to_array()),
             )
-        })
+        });
+        (center + self.recoil, turn)
     }
     fn freeze(&mut self, world: &mut PhysicsWorld) {
         (self.center, self.turn) = self.pose(world);
@@ -64,29 +66,43 @@ impl Chunk {
             world.remove_body_with_colliders(h, true);
         }
         self.released = true;
-        self.region = None;
+        self.recoil = Vec3::ZERO;
+        self.collision.reset();
     }
 }
 pub(super) struct Section {
     pub pieces: Vec<SectionPiece>,
     pub age: f32,
-    expected: usize,
+    pub(super) sealed: bool,
+    pub(super) barrier_tick: Option<u64>,
+    recovery_after: Option<BrickId>,
+    pub(super) gpu_ready: bool,
+    staging_age: f32,
+    prepared: usize,
+    source_generation: u64,
+    recoil: Vec3,
+    pub(super) expected: usize,
     origin: Vec3,
     half: Vec3,
     pivot: Vec3,
     motion: Motion,
     axis: Vec3,
     shown: f32,
+    confirmed: f32,
+    impact_at: Option<f32>,
+    probe_generation: u64,
     pub landed: bool,
+    shared_only: bool,
     pending: VecDeque<(SectionProbe, f32)>,
     target: f32,
     contact: Option<f32>,
     witnesses: [Option<Vec3>; WITNESSES],
     scores: [f32; WITNESSES],
     ids: BTreeSet<BrickId>,
-    index: Index,
+    index: std::sync::Arc<Index>,
     remaining: BTreeSet<usize>,
     plan: Option<Partition>,
+    finishing: Option<VecDeque<Vec<usize>>>,
     chunks: Vec<Chunk>,
     assignment: Vec<Option<usize>>,
 }
@@ -113,17 +129,29 @@ impl Section {
         };
         Self {
             pieces: Vec::new(),
-            age: p.delay,
+            age: 0.,
+            sealed: false,
+            barrier_tick: None,
+            recovery_after: None,
+            gpu_ready: true,
+            staging_age: 0.,
+            prepared: 0,
+            source_generation: u64::MAX,
+            recoil: Vec3::ZERO,
             expected: p.members,
             origin: p.origin,
             half: p.section_half,
             pivot: p.pivot - p.origin,
             motion,
             axis: Vec3::Y.cross(lean).normalize_or(Vec3::X),
-            shown: p.delay,
+            shown: 0.,
+            confirmed: 0.,
+            impact_at: None,
+            probe_generation: 0,
             landed: false,
+            shared_only: false,
             pending: VecDeque::new(),
-            target: p.delay,
+            target: 0.,
             contact: None,
             witnesses: [None; WITNESSES],
             scores: [f32::NEG_INFINITY; WITNESSES],
@@ -131,6 +159,7 @@ impl Section {
             index: Default::default(),
             remaining: Default::default(),
             plan: None,
+            finishing: None,
             chunks: Vec::new(),
             assignment: Vec::new(),
         }
@@ -158,41 +187,53 @@ impl Section {
         )
     }
     fn admit(&mut self, mut p: SectionPiece) {
+        if self.sealed {
+            return;
+        }
         if !self.ids.insert(p.brick) {
             return;
         }
         p.offset -= self.origin;
-        let i = self.pieces.len();
-        self.index.insert(i as u64, partition::bounds(&p));
-        self.remaining.insert(i);
-        // Original corners plus distributed real material samples. Outer
-        // sail corners can miss a narrow deck while its middle clips through.
-        for x in [-1., 1.] {
-            for y in [-1., 1.] {
-                for z in [-1., 1.] {
-                    self.record_point(p.offset + p.turn * (p.half * Vec3::new(x, y, z)));
-                }
-            }
-        }
-        self.record_point(p.offset + p.turn * (Vec3::NEG_Y * p.half.y));
-        let axes = self.sample_axes();
-        let h = (p.turn * Vec3::X).abs() * p.half.x
-            + (p.turn * Vec3::Y).abs() * p.half.y
-            + (p.turn * Vec3::Z).abs() * p.half.z;
-        if h[axes[0]] > self.half[axes[0]] / 8. || h[axes[1]] > self.half[axes[1]] / 4. {
-            for x in 0..8 {
-                for y in 0..4 {
-                    for z in 0..2 {
-                        let target = self.grid_point([x, y, z]) * self.half;
-                        let mut point = target.clamp(p.offset - h, p.offset + h);
-                        point.y = p.offset.y - h.y;
-                        self.record_point(point);
+        self.pieces.push(p);
+        self.assignment.push(None);
+    }
+    fn prepare_members(&mut self, work: &mut usize) {
+        while self.prepared < self.pieces.len() && *work > 0 {
+            *work -= 1;
+            let i = self.prepared;
+            let p = self.pieces[i].clone();
+            std::sync::Arc::get_mut(&mut self.index)
+                .expect("unsealed section index")
+                .insert(i as u64, partition::bounds(&p));
+            self.remaining.insert(i);
+            // Original corners plus distributed real material samples. Outer
+            // sail corners can miss a narrow deck while its middle clips through.
+            for x in [-1., 1.] {
+                for y in [-1., 1.] {
+                    for z in [-1., 1.] {
+                        self.record_point(p.offset + p.turn * (p.half * Vec3::new(x, y, z)));
                     }
                 }
             }
+            self.record_point(p.offset + p.turn * (Vec3::NEG_Y * p.half.y));
+            let axes = self.sample_axes();
+            let h = (p.turn * Vec3::X).abs() * p.half.x
+                + (p.turn * Vec3::Y).abs() * p.half.y
+                + (p.turn * Vec3::Z).abs() * p.half.z;
+            if h[axes[0]] > self.half[axes[0]] / 8. || h[axes[1]] > self.half[axes[1]] / 4. {
+                for x in 0..8 {
+                    for y in 0..4 {
+                        for z in 0..2 {
+                            let target = self.grid_point([x, y, z]) * self.half;
+                            let mut point = target.clamp(p.offset - h, p.offset + h);
+                            point.y = p.offset.y - h.y;
+                            self.record_point(point);
+                        }
+                    }
+                }
+            }
+            self.prepared += 1;
         }
-        self.pieces.push(p);
-        self.assignment.push(None);
     }
     fn record_point(&mut self, point: Vec3) {
         if self.motion == Motion::Topple && point.y - self.pivot.y < self.half.y * 0.25 {
@@ -224,6 +265,55 @@ impl Section {
             self.witnesses[slot] = Some(point);
         }
     }
+    fn recover(&mut self, key: (u64, u64), building: &Building, work: &mut usize) {
+        if self.sealed {
+            return;
+        }
+        let Some(tick) = self.barrier_tick.filter(|tick| building.world_at(*tick)) else {
+            return;
+        };
+        for (brick, b) in building.section_bricks([key.0, key.1], self.recovery_after, *work) {
+            *work -= 1;
+            self.recovery_after = Some(brick);
+            if self.ids.contains(&brick) {
+                continue;
+            }
+            let ContentRef::Resolved(definition) = &b.definition else {
+                continue;
+            };
+            let Some(half) = building.definition_half_extents(definition) else {
+                continue;
+            };
+            self.admit(SectionPiece {
+                brick,
+                look: Look {
+                    definition: definition.clone(),
+                    color: b.color,
+                    color_effect: b.color_effect,
+                    shape_effect: b.shape_effect,
+                    print: b.print.clone(),
+                    shard: None,
+                },
+                offset: Vec3::from(b.position),
+                turn: Quat::from_rotation_y(-f32::from(b.quarter_turns) * FRAC_PI_2),
+                half,
+                origin: self.origin,
+                tick,
+                active: true,
+                members: self.expected,
+                section_half: self.half,
+                pivot: self.origin + self.pivot,
+            });
+        }
+        if building
+            .section_bricks([key.0, key.1], self.recovery_after, 1)
+            .is_empty()
+        {
+            // Newer world state can already have restored some missing sources.
+            self.expected = self.pieces.len();
+            self.sealed = true;
+        }
+    }
     fn sample_axes(&self) -> [usize; 3] {
         if self.motion == Motion::Drop {
             [0, 2, 1]
@@ -248,17 +338,31 @@ impl Section {
         work: &mut u32,
         dead: &BTreeSet<BrickId>,
     ) -> Result<()> {
-        if self.landed || self.pieces.is_empty() {
+        if !self.sealed
+            || !self.gpu_ready
+            || self.prepared != self.pieces.len()
+            || self.landed
+            || self.pieces.is_empty()
+        {
             return Ok(());
         }
-        if self.pending.is_empty() {
+        let (at, _) = self.pose(self.shown);
+        let extent = Vec3::splat(self.half.length());
+        if building.query_changed_since(self.probe_generation, at - extent, at + extent) {
+            self.pending.clear();
+            self.confirmed = self.shown;
+            self.age = self.shown;
+            self.impact_at = None;
+        }
+        self.probe_generation = building.query_generation();
+        if self.pending.is_empty() && self.impact_at.is_none() && self.confirmed < self.age + 0.1 {
             if *work < WITNESSES as u32 {
                 return Ok(());
             }
             *work -= WITNESSES as u32;
-            self.target = self.age;
+            self.target = self.age + 0.2;
             self.contact = None;
-            let (old, ot) = self.pose(self.shown);
+            let (old, ot) = self.pose(self.confirmed);
             let (next, nt) = self.pose(self.target);
             for point in self.witnesses.iter().flatten() {
                 let from = old + ot * *point + Vec3::Y * 0.02;
@@ -281,40 +385,79 @@ impl Section {
             }
             self.pending.pop_front();
         }
-        if self.pending.is_empty() {
-            self.shown = self.shown + (self.target - self.shown) * self.contact.unwrap_or(1.);
-            if self.contact.is_some() {
-                self.landed = true;
+        if self.pending.is_empty() && self.target > self.confirmed {
+            if let Some(f) = self.contact {
+                self.impact_at = Some(self.confirmed + (self.target - self.confirmed) * f);
             }
+            self.confirmed = self.target;
         }
+        self.shown = self.age.min(self.impact_at.unwrap_or(self.confirmed));
+        self.landed = self.impact_at.is_some_and(|at| self.age >= at);
         Ok(())
     }
-    fn partition(&mut self, quality: usize, work: &mut u32) {
-        if self.pieces.len() < self.expected || !self.chunks.is_empty() {
+    fn keep_shared(&mut self) {
+        debug_assert!(self.chunks.iter().all(|c| c.handle.is_none()));
+        self.shared_only = true;
+        self.plan = None;
+        self.finishing = None;
+        self.chunks.clear();
+        self.assignment.fill(None);
+    }
+    fn partition(&mut self, quality: usize, slots: usize, work: &mut u32) {
+        if !self.sealed
+            || self.shared_only
+            || self.prepared != self.pieces.len()
+            || self.pieces.len() < self.expected
+            || (self.finishing.is_none() && !self.chunks.is_empty())
+        {
             return;
         }
-        if quality == 0 {
-            return;
-        }
-        if self.plan.is_none() {
+        if self.plan.is_none() && self.finishing.is_none() {
+            if quality == 0 || slots == 0 {
+                self.keep_shared();
+                return;
+            }
             let desired = ((self.pieces.len() as f32).sqrt() * (quality as f32 / 2048.).sqrt())
                 .ceil() as usize;
-            let target = self.pieces.len().div_ceil(desired.clamp(1, MAX_CHUNKS));
+            let target = self
+                .pieces
+                .len()
+                .div_ceil(desired.clamp(1, MAX_CHUNKS).min(slots))
+                .min(2048);
             self.plan = Some(Partition::new(
-                std::mem::take(&mut self.index),
+                self.index.clone(),
                 std::mem::take(&mut self.remaining),
                 target,
             ));
         }
-        if !self.plan.as_mut().unwrap().step(work) || !self.landed {
-            return;
+        if let Some(plan) = &mut self.plan {
+            if !plan.step(work) {
+                return;
+            }
+            if plan.over_limit {
+                self.keep_shared();
+                return;
+            }
+            if !self.landed {
+                return;
+            }
+            self.finishing = Some(self.plan.take().unwrap().groups.into());
         }
-        let plan = self.plan.take().unwrap();
         let (center, turn) = self.pose(self.shown);
         let (before, bt) = self.pose((self.shown - 0.01).max(0.));
         let velocity = ((center - before) / 0.01).clamp_length_max(12.);
         let spin = (turn * bt.inverse()).to_scaled_axis() / 0.01;
-        for members in plan.groups {
+        while self
+            .finishing
+            .as_ref()
+            .is_some_and(|groups| !groups.is_empty())
+        {
+            let groups = self.finishing.as_mut().unwrap();
+            if groups.front().unwrap().len() > *work as usize {
+                break;
+            }
+            let members = groups.pop_front().unwrap();
+            *work -= members.len() as u32;
             let mut low = Vec3::splat(f32::INFINITY);
             let mut high = Vec3::splat(f32::NEG_INFINITY);
             for &i in &members {
@@ -328,6 +471,10 @@ impl Section {
             }
             let local = (low + high) * 0.5;
             let (proxy, parts) = proxy::shape(&self.pieces, &members, self.origin + local);
+            if proxy.is_none() {
+                self.keep_shared();
+                return;
+            }
             self.chunks.push(Chunk {
                 local,
                 half: (high - low) * 0.5,
@@ -338,15 +485,35 @@ impl Section {
                 velocity: (velocity + spin.cross(turn * local)).clamp_length_max(12.),
                 spin: spin.clamp_length_max(3.),
                 handle: None,
-                region: None,
-                generation: 0,
-                ready: false,
+                collision: Default::default(),
+                recoil: Vec3::ZERO,
                 released: false,
             });
+        }
+        if self
+            .finishing
+            .as_ref()
+            .is_some_and(|groups| groups.is_empty())
+        {
+            self.finishing = None;
         }
     }
 }
 impl BrickDebris {
+    pub(super) fn retire_section(&mut self, key: (u64, u64)) {
+        if let Some(mut section) = self.sections.remove(&key) {
+            for chunk in &mut section.chunks {
+                chunk.freeze(&mut self.world);
+            }
+        }
+    }
+    pub(super) fn reset_section_collision(&mut self) {
+        for section in self.sections.values_mut() {
+            for chunk in &mut section.chunks {
+                chunk.collision.reset();
+            }
+        }
+    }
     pub(super) fn section_piece_count(&self) -> usize {
         self.sections.values().map(|s| s.pieces.len()).sum()
     }
@@ -381,6 +548,9 @@ impl BrickDebris {
         if pieces.is_empty() {
             return Ok(());
         }
+        if self.retired_sections.contains(&key) {
+            return Ok(());
+        }
         // Independent render safety ceiling. Never charge member bricks to
         // the rigid-body limit. Normal quality changes preserve every member.
         if !self.sections.contains_key(&key)
@@ -394,8 +564,26 @@ impl BrickDebris {
                     + pieces[0].members
                     > MAX_VISIBLE)
         {
-            self.diagnostics.skipped += pieces.len() as u64;
-            return Ok(());
+            // Server admission normally prevents this. A delayed client retires
+            // old presentation before discarding newly removed material.
+            while self.sections.values().map(|s| s.expected).sum::<usize>() + pieces[0].members
+                > MAX_VISIBLE
+                || self.sections.len() >= 1024
+            {
+                let Some(oldest) = self
+                    .sections
+                    .iter()
+                    .max_by(|a, b| a.1.staging_age.total_cmp(&b.1.staging_age))
+                    .map(|(k, _)| *k)
+                else {
+                    break;
+                };
+                if let Some(mut old) = self.sections.remove(&oldest) {
+                    for c in &mut old.chunks {
+                        c.freeze(&mut self.world);
+                    }
+                }
+            }
         }
         let s = self
             .sections
@@ -407,12 +595,19 @@ impl BrickDebris {
         for p in pieces {
             s.admit(p);
         }
+        if let Some(&(members, tick)) = self.section_barriers.get(&key) {
+            s.expected = members;
+            s.barrier_tick = Some(tick);
+            s.sealed = s.pieces.len() == members;
+        }
         Ok(())
     }
     pub(super) fn advance_sections(&mut self, dt: f32, building: &Building) -> Result<()> {
         let mut contacts = 4096;
         let mut planning = 4096;
         let mut collision = 512;
+        let mut material = 256;
+        let mut recovery = 256;
         let mut available = self
             .limit
             .saturating_sub(self.bodies.len() + self.chunk_handles().count());
@@ -426,8 +621,35 @@ impl BrickDebris {
                 .map(|c| c.parts)
                 .sum::<usize>();
         let mut part_slots = MAX_PROXY_PARTS.saturating_sub(used_parts);
-        for s in self.sections.values_mut() {
-            s.age += dt;
+        let mut keys: Vec<_> = self.sections.keys().copied().collect();
+        if !keys.is_empty() {
+            let offset = self.section_turn % keys.len();
+            keys.rotate_left(offset);
+            self.section_turn = self.section_turn.wrapping_add(1);
+        }
+        for key in keys {
+            let s = self.sections.get_mut(&key).unwrap();
+            s.recover(key, building, &mut recovery);
+            s.prepare_members(&mut material);
+            s.recoil *= (-6. * dt).exp();
+            for c in &mut s.chunks {
+                c.recoil *= (-6. * dt).exp();
+            }
+            if s.source_generation != building.damage_generation() {
+                for (i, piece) in s.pieces.iter_mut().enumerate() {
+                    if piece.active && building.restored_after(piece.brick, piece.tick) {
+                        piece.active = false;
+                        if let Some(chunk) = s.assignment[i] {
+                            s.chunks[chunk].freeze(&mut self.world);
+                        }
+                    }
+                }
+                s.source_generation = building.damage_generation();
+            }
+            s.staging_age += dt;
+            if s.sealed && s.gpu_ready && (s.landed || s.confirmed >= s.age + dt) {
+                s.age += dt;
+            }
             if s.age >= SOLID_SECONDS + FADE_SECONDS {
                 for c in &mut s.chunks {
                     if c.handle.is_some() {
@@ -435,17 +657,29 @@ impl BrickDebris {
                     }
                 }
                 s.pieces.clear();
+                s.prepared = 0;
                 s.chunks.clear();
                 s.assignment.clear();
                 s.ids.clear();
-                s.index = Index::default();
+                s.index = Default::default();
                 s.remaining.clear();
                 s.plan = None;
+                s.finishing = None;
                 s.landed = true;
                 continue;
             }
             s.advance_motion(building, &mut contacts, &self.dead)?;
-            s.partition(self.limit, &mut planning);
+            s.partition(self.limit, available, &mut planning);
+            if s.finishing.is_some() {
+                continue;
+            }
+            if !s.chunks.is_empty()
+                && s.chunks.iter().all(|c| c.handle.is_none())
+                && (s.chunks.len() > available
+                    || s.chunks.iter().map(|c| c.parts).sum::<usize>() > part_slots)
+            {
+                s.keep_shared();
+            }
             for c in &mut s.chunks {
                 if c.released {
                     continue;
@@ -458,7 +692,7 @@ impl BrickDebris {
                 // Rapier already makes sleeping bodies cheap. Keep their hit
                 // targets so projectiles can wake the visible wreckage.
                 if c.handle.is_some_and(|h| self.world.bodies[h].is_sleeping())
-                    && c.generation == building.query_generation()
+                    && c.collision.unchanged(building)
                 {
                     continue;
                 }
@@ -472,31 +706,24 @@ impl BrickDebris {
                 let h = (turn * Vec3::X).abs() * c.half.x
                     + (turn * Vec3::Y).abs() * c.half.y
                     + (turn * Vec3::Z).abs() * c.half.z;
-                let margin = Vec3::splat(0.1 + c.half.length() * angular * STEP * MAX_STEPS as f32)
-                    + velocity.abs() * STEP * MAX_STEPS as f32;
-                let low = center - h - margin;
-                let high = center + h + margin;
-                if c.generation != building.query_generation()
-                    || c.region.as_ref().is_none_or(|r| !r.contains(low, high))
-                {
-                    c.region = Some(LocalRegion::new(low - Vec3::ONE, high + Vec3::ONE));
-                    c.ready = false;
-                    c.generation = building.query_generation();
-                }
-                if !c.ready {
-                    c.ready = self.surroundings.load_region(
-                        &mut self.world,
-                        building,
-                        c.region.as_mut().unwrap(),
-                        &mut collision,
-                        |id| self.dead.contains(&id),
-                    )?;
-                }
+                let ready = c.collision.prepare(
+                    &mut self.surroundings,
+                    &mut self.world,
+                    building,
+                    CollisionMotion {
+                        center,
+                        half: h,
+                        velocity,
+                        angular,
+                    },
+                    &mut collision,
+                    |id| self.dead.contains(&id),
+                )?;
                 if let Some(handle) = c.handle {
-                    self.world.bodies[handle].set_enabled(c.ready);
+                    self.world.bodies[handle].set_enabled(ready);
                     continue;
                 }
-                if !c.ready {
+                if !ready {
                     continue;
                 }
                 let body = RigidBodyBuilder::dynamic()
@@ -527,7 +754,10 @@ impl BrickDebris {
                 part_slots -= c.parts;
             }
         }
-        self.sections.retain(|_, s| s.age < 30.);
+        self.sections
+            .retain(|_, s| s.age < 30. && (s.sealed || s.staging_age < 30.));
+        self.section_barriers
+            .retain(|key, _| self.sections.contains_key(key));
         Ok(())
     }
     pub(super) fn section_instances(&self) -> impl Iterator<Item = (&Look, SceneTransform)> {
@@ -537,28 +767,34 @@ impl BrickDebris {
             .flat_map(move |s| {
                 let (center, turn) = s.pose(s.shown);
                 let fade = 1. - ((s.age - SOLID_SECONDS) / FADE_SECONDS).clamped(0., 1.);
-                s.pieces.iter().enumerate().map(move |(i, p)| {
-                    let (at, rotation) =
-                        s.assignment[i].map_or((center + turn * p.offset, turn * p.turn), |a| {
-                            let c = &s.chunks[a];
-                            let (cc, ct) = c.pose(&self.world);
-                            (cc + ct * (p.offset - c.local), ct * p.turn)
-                        });
-                    (
-                        &p.look,
-                        SceneTransform {
-                            transform: Mat4::from_rotation_translation(rotation, at),
-                            tint: [1., 1., 1., fade],
-                        },
-                    )
-                })
+                s.pieces
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.active)
+                    .map(move |(i, p)| {
+                        let (at, rotation) = s.assignment[i].map_or(
+                            (center + turn * p.offset + s.recoil, turn * p.turn),
+                            |a| {
+                                let c = &s.chunks[a];
+                                let (cc, ct) = c.pose(&self.world);
+                                (cc + ct * (p.offset - c.local), ct * p.turn)
+                            },
+                        );
+                        (
+                            &p.look,
+                            SceneTransform {
+                                transform: Mat4::from_rotation_translation(rotation, at),
+                                tint: [1., 1., 1., fade],
+                            },
+                        )
+                    })
             })
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn cue(
+    pub(super) fn cue(
         id: u64,
         at: [f32; 3],
         count: u32,
@@ -579,12 +815,17 @@ mod tests {
         c
     }
     fn run(d: &mut BrickDebris, b: &Building, frames: usize) {
+        for section in d.sections.values_mut() {
+            if section.pieces.len() == section.expected {
+                section.sealed = true;
+            }
+        }
         for _ in 0..frames {
             d.advance(1. / 60., b).unwrap();
         }
     }
     #[test]
-    fn late_members_join_landed_pose_without_restart_or_loss() -> Result<()> {
+    fn incomplete_delivery_stays_staged_until_the_complete_assembly_can_fall() -> Result<()> {
         let (b, _) = super::super::tests::building(&[]);
         let mut d = BrickDebris::new();
         d.set_limit(2);
@@ -601,7 +842,7 @@ mod tests {
         )?;
         run(&mut d, &b, 60);
         let before = d.instances().next().unwrap().1.transform;
-        assert!(d.sections[&(0, 7)].landed);
+        assert!(!d.sections[&(0, 7)].landed);
         assert!(
             d.chunk_handles().next().is_none(),
             "wait for the complete assembly before breakup"
@@ -662,6 +903,7 @@ mod tests {
             .collect();
         d.cues(&cues, &b)?;
         let mut maximum = 0;
+        d.sections.get_mut(&(0, 7)).unwrap().sealed = true;
         for _ in 0..300 {
             d.advance(1. / 60., &b)?;
             assert_eq!(d.instances().count(), 1500);
@@ -738,7 +980,8 @@ mod tests {
             turn: Quat::IDENTITY,
             half: Vec3::ONE,
             origin: Vec3::new(0., 10., 0.),
-            delay: 0.,
+            tick: 0,
+            active: true,
             members: 1,
             section_half: Vec3::new(10., 0.3, 10.),
             pivot: Vec3::new(0., 9.7, 0.),
@@ -755,7 +998,7 @@ mod tests {
 #[cfg(test)]
 mod landing_regressions {
     use super::*;
-    fn piece(id: u64, at: Vec3) -> SectionPiece {
+    pub(super) fn piece(id: u64, at: Vec3) -> SectionPiece {
         SectionPiece {
             brick: id,
             look: Look {
@@ -770,7 +1013,8 @@ mod landing_regressions {
             turn: Quat::IDENTITY,
             half: Vec3::new(0.5, 0.3, 0.5),
             origin: Vec3::ZERO,
-            delay: 0.,
+            tick: 0,
+            active: true,
             members: 1,
             section_half: Vec3::ONE,
             pivot: Vec3::ZERO,
@@ -811,6 +1055,7 @@ mod landing_regressions {
         let mut d = BrickDebris::new();
         let p = piece(1, Vec3::new(0., 2., 0.));
         d.add_section((0, 1), vec![p], &b)?;
+        d.sections.get_mut(&(0, 1)).unwrap().sealed = true;
         for _ in 0..180 {
             d.advance(1. / 60., &b)?;
         }
@@ -872,10 +1117,15 @@ mod landing_regressions {
         for p in pieces.iter().cloned() {
             old.admit(p);
         }
+        let mut prepare_work = usize::MAX;
+        old.prepare_members(&mut prepare_work);
+        old.sealed = true;
         old.witnesses[8..].fill(None);
         for p in pieces {
             s.admit(p);
         }
+        s.prepare_members(&mut prepare_work);
+        s.sealed = true;
         for i in 0..180 {
             old.age = (i + 1) as f32 / 60.;
             old.advance_motion(&b, &mut 4096, &BTreeSet::new())?;
@@ -923,6 +1173,284 @@ mod landing_regressions {
             lowest(&s),
             s.shown
         );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_regressions {
+    use super::*;
+    fn ready(members: u32) -> Cue {
+        Cue {
+            id: 10001,
+            tick: 10,
+            position: [0.; 3],
+            kind: CueKind::BrickSectionReady {
+                started: 0,
+                group: 7,
+                members,
+            },
+        }
+    }
+    #[test]
+    fn explicit_barrier_starts_motion_and_retirement_prevents_late_resurrection() -> Result<()> {
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        let first = super::tests::cue(
+            1,
+            [0., 3., 0.],
+            2,
+            [0.5, 1., 0.5],
+            [0., 3., 0.],
+            [0., 2., 0.],
+        );
+        d.cues(&[first], &b)?;
+        for _ in 0..90 {
+            d.advance(1. / 60., &b)?;
+        }
+        assert_eq!(
+            d.sections[&(0, 7)].shown,
+            0.,
+            "membership count alone is not completion"
+        );
+        d.cues(&[ready(1)], &b)?; // Producer sealed its committed prefix.
+        for _ in 0..60 {
+            d.advance(1. / 60., &b)?;
+        }
+        assert!(d.sections[&(0, 7)].shown > 0.);
+        d.cues(
+            &[Cue {
+                id: 10002,
+                tick: 10,
+                position: [0.; 3],
+                kind: CueKind::BrickSectionRetired {
+                    started: 0,
+                    group: 7,
+                },
+            }],
+            &b,
+        )?;
+        assert_eq!(d.instances().count(), 0);
+        let late = super::tests::cue(
+            2,
+            [1., 3., 0.],
+            2,
+            [0.5, 1., 0.5],
+            [0., 3., 0.],
+            [0., 2., 0.],
+        );
+        d.cues(&[late, ready(2)], &b)?;
+        assert_eq!(d.instances().count(), 0);
+        assert_eq!(d.world.bodies.len(), 0);
+        Ok(())
+    }
+    #[test]
+    fn material_preparation_is_bounded_without_culling_received_members() -> Result<()> {
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        d.set_limit(0);
+        let mut cues: Vec<_> = (0..1000)
+            .map(|i| {
+                super::tests::cue(
+                    i + 1,
+                    [0., 0.3 + i as f32 * 0.6, 0.],
+                    1000,
+                    [0.5, 300., 0.5],
+                    [0., 300., 0.],
+                    [0.; 3],
+                )
+            })
+            .collect();
+        cues.push(ready(1000));
+        d.cues(&cues, &b)?;
+        assert_eq!(d.instances().count(), 1000);
+        d.advance(1. / 60., &b)?;
+        assert_eq!(d.sections[&(0, 7)].prepared, 256);
+        assert_eq!(d.sections[&(0, 7)].shown, 0.);
+        assert_eq!(d.instances().count(), 1000);
+        Ok(())
+    }
+    #[test]
+    fn visible_assembly_without_physics_body_still_reacts_to_projectile() -> Result<()> {
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        d.set_limit(0);
+        d.add_section(
+            (0, 1),
+            vec![super::landing_regressions::piece(1, Vec3::new(0., 2., 0.))],
+            &b,
+        )?;
+        d.sections.get_mut(&(0, 1)).unwrap().sealed = true;
+        for _ in 0..100 {
+            d.advance(1. / 60., &b)?;
+        }
+        assert_eq!(d.len(), 0);
+        let before = d.instances().next().unwrap().1.transform.w_axis.truncate();
+        for z in [-2., 2.] {
+            d.shots(&[Shot {
+                id: 99,
+                position: before + Vec3::Z * z,
+                velocity: Vec3::Z * 40.,
+            }]);
+        }
+        assert_eq!(d.diagnostics.projectile_hits, 1);
+        let after = d.instances().next().unwrap().1.transform.w_axis.truncate();
+        assert!(after.distance(before) > 0.2);
+        assert_eq!(
+            d.len(),
+            0,
+            "a hit reaction must not buy an extra physics body"
+        );
+        Ok(())
+    }
+    #[test]
+    fn distant_geometry_change_does_not_pause_an_active_chunk() -> Result<()> {
+        let (mut b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        d.add_section(
+            (0, 1),
+            vec![super::landing_regressions::piece(1, Vec3::new(0., 2., 0.))],
+            &b,
+        )?;
+        d.sections.get_mut(&(0, 1)).unwrap().sealed = true;
+        for _ in 0..180 {
+            d.advance(1. / 60., &b)?;
+        }
+        let h = d.sections[&(0, 1)].chunks[0].handle.unwrap();
+        d.world.bodies[h].set_linvel(Vector::new(1., 0., 0.), true);
+        let before = d.world.bodies[h].translation().x;
+        let generation = b.query_generation();
+        let mut world = bri_net::protocol::PublicWorld {
+            name: "test".into(),
+            map_id: "test".into(),
+            palette: vec![[1.; 4]; 2],
+            bricks: Default::default(),
+        };
+        world.bricks.insert(
+            999,
+            bri_world::Brick::new(ContentRef::Resolved("brick".into()), [1000., 0.3, 1000.], 0),
+        );
+        b.sync_world(&world)?;
+        assert!(!b.query_changed_since(generation, Vec3::splat(-5.), Vec3::splat(5.)));
+        d.advance(1. / 60., &b)?;
+        assert!(d.world.bodies[h].is_enabled());
+        assert!(d.world.bodies[h].translation().x > before);
+        Ok(())
+    }
+    #[test]
+    fn render_model_construction_has_a_separate_per_frame_budget() -> Result<()> {
+        let mut models = DebrisModels::default();
+        let looks: Vec<_> = (0..10)
+            .map(|i| Look {
+                definition: format!("brick{i}"),
+                color: 0,
+                color_effect: 0,
+                shape_effect: 0,
+                print: None,
+                shard: None,
+            })
+            .collect();
+        let transform = SceneTransform {
+            transform: Mat4::IDENTITY,
+            tint: [1.; 4],
+        };
+        for expected in [4, 8, 10] {
+            models.frame_models(looks.iter().map(|look| (look, transform)), 1, 4, |_| {
+                Ok(None)
+            })?;
+            assert_eq!(models.models.len(), expected);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod recovery_regressions {
+    use super::*;
+    #[test]
+    fn authoritative_section_tags_recover_missing_cues_without_inventing_material() -> Result<()> {
+        let (mut b, _) = super::super::tests::building(&[]);
+        let mut world = bri_net::protocol::PublicWorld {
+            name: "test".into(),
+            map_id: "test".into(),
+            palette: vec![[1.; 4]; 2],
+            bricks: Default::default(),
+        };
+        for (id, x) in [(1, 0.), (2, 1.)] {
+            let mut brick =
+                bri_world::Brick::new(ContentRef::Resolved("brick".into()), [x, 3.3, 0.], 0);
+            brick.visible = false;
+            brick.raycast = false;
+            brick.colliding = false;
+            brick.damage_hidden = true;
+            brick.damage_section = Some(Box::new([0, 7]));
+            world.bricks.insert(id, brick);
+        }
+        b.sync_world(&world)?;
+        b.set_world_tick(10);
+        let mut d = BrickDebris::new();
+        let first = super::tests::cue(
+            1,
+            [0., 3.3, 0.],
+            2,
+            [1., 0.3, 0.5],
+            [0.5, 3.3, 0.],
+            [0.5, 3., 0.],
+        );
+        let end = Cue {
+            id: 3,
+            tick: 10,
+            position: [0.; 3],
+            kind: CueKind::BrickSectionReady {
+                started: 0,
+                group: 7,
+                members: 2,
+            },
+        };
+        d.cues(&[first, end], &b)?;
+        assert_eq!(d.instances().count(), 1);
+        d.advance(1. / 60., &b)?;
+        assert_eq!(d.instances().count(), 2);
+        assert_eq!(d.sections[&(0, 7)].ids, BTreeSet::from([1, 2]));
+        assert!(d.sections[&(0, 7)].sealed);
+        assert_eq!(
+            d.sections[&(0, 7)]
+                .pieces
+                .iter()
+                .map(|p| p.half.x * p.half.y * p.half.z * 8.)
+                .sum::<f32>(),
+            1.2
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod overload_regressions {
+    use super::*;
+    #[test]
+    fn too_many_disconnected_landing_groups_keep_one_visible_shared_assembly() -> Result<()> {
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        let mut pieces: Vec<_> = (0..100)
+            .map(|i| super::landing_regressions::piece(i + 1, Vec3::new(i as f32 * 3., 3.3, 0.)))
+            .collect();
+        for p in &mut pieces {
+            p.members = 100;
+            p.origin = Vec3::new(148.5, 3.3, 0.);
+            p.section_half = Vec3::new(150., 0.3, 0.5);
+            p.pivot = Vec3::new(148.5, 3., 0.);
+        }
+        d.add_section((0, 1), pieces, &b)?;
+        d.sections.get_mut(&(0, 1)).unwrap().sealed = true;
+        for _ in 0..30 {
+            d.advance(1. / 60., &b)?;
+        }
+        let section = &d.sections[&(0, 1)];
+        assert!(section.shared_only);
+        assert!(section.chunks.is_empty());
+        assert_eq!(d.instances().count(), 100);
+        assert_eq!(d.len(), 0);
         Ok(())
     }
 }

@@ -7,7 +7,7 @@ use std::{
 };
 
 pub(super) struct Partition {
-    index: Index,
+    index: std::sync::Arc<Index>,
     remaining: BTreeSet<usize>,
     frontier: BinaryHeap<Reverse<(u64, usize)>>,
     queued: BTreeSet<usize>,
@@ -16,6 +16,7 @@ pub(super) struct Partition {
     seed: [i32; 3],
     target: usize,
     pub groups: Vec<Vec<usize>>,
+    pub over_limit: bool,
 }
 pub(super) fn bounds(p: &SectionPiece) -> Bounds {
     let half = (p.turn * Vec3::X).abs() * p.half.x
@@ -31,7 +32,7 @@ pub(super) fn bounds(p: &SectionPiece) -> Bounds {
     }
 }
 impl Partition {
-    pub fn new(index: Index, remaining: BTreeSet<usize>, target: usize) -> Self {
+    pub fn new(index: std::sync::Arc<Index>, remaining: BTreeSet<usize>, target: usize) -> Self {
         Self {
             index,
             remaining,
@@ -42,11 +43,18 @@ impl Partition {
             seed: [0; 3],
             target: target.max(1),
             groups: Vec::new(),
+            over_limit: false,
         }
     }
     pub fn step(&mut self, work: &mut u32) -> bool {
         while *work > 0 {
             *work -= 1;
+            if self.groups.len() >= MAX_CHUNKS
+                && (!self.remaining.is_empty() || !self.current.is_empty())
+            {
+                self.over_limit = true;
+                return true;
+            }
             if let Some((own, scan)) = &mut self.scan {
                 match scan.step(&self.index) {
                     None => self.scan = None,

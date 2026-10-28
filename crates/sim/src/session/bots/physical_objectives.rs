@@ -181,7 +181,7 @@ fn stamp(session: &Session, v: &VehicleSnapshot, d: &Definition) -> Option<Objec
 
 fn region(session: &Session, source: BrickId) -> Option<(OwnerId, (Vec3, Vec3))> {
     let b = session.simulation.state().bricks.get(&source)?;
-    let bounds = bri_world::regions::bounds(b.rule_region, session.simulation.brick_box(source)?);
+    let bounds = bri_world::regions::bounds(b.rule_region(), session.simulation.brick_box(source)?);
     (bounds.0.is_finite() && bounds.1.is_finite()).then_some((b.owner, bounds))
 }
 

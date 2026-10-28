@@ -73,6 +73,9 @@ pub(super) struct Events {
     projectile_activations: BTreeMap<u64, ProjectileActivation>,
     /// Bricks killed with `fakeKillBrick` and the tick they come back.
     pub(super) respawns: BTreeMap<BrickId, u64>,
+    pub(super) restore_pending: BTreeSet<BrickId>,
+    respawn_cursor: Option<BrickId>,
+    restore_budget: Option<(u64, usize, u64)>,
     /// Projectiles events spawned, by the owner of the brick whose quota
     /// they count against (`QuotaObject`), newest last.
     pub(super) spawned: BTreeMap<OwnerId, VecDeque<u64>>,
@@ -832,14 +835,42 @@ impl Session {
     pub(super) fn step_events(&mut self, changed: &BTreeSet<BrickId>) -> Result<()> {
         let installed = self.sync_event_programs(changed);
         let tick = self.simulation.state().tick;
-        let due: Vec<BrickId> = self
+        // Bound scanning as well as mutation; future or held deadlines must
+        // not turn each tick into a scan of every knocked-out brick.
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+        let after = self.events.respawn_cursor;
+        let candidates: Vec<_> = self
             .events
             .respawns
-            .iter()
-            .filter(|(_, at)| **at <= tick)
-            .map(|(id, _)| *id)
-            .take(128)
+            .range((after.map_or(Unbounded, Excluded), Unbounded))
+            .chain(
+                self.events
+                    .respawns
+                    .range((Unbounded, after.map_or(Excluded(0), Included))),
+            )
+            .take(512)
+            .map(|(&id, &at)| (id, at))
             .collect();
+        if let Some((id, _)) = candidates.last() {
+            self.events.respawn_cursor = Some(*id);
+        }
+        let mut due: Vec<_> = self
+            .events
+            .restore_pending
+            .iter()
+            .take(128)
+            .copied()
+            .collect();
+        for (id, at) in candidates {
+            if due.len() >= 128 {
+                break;
+            }
+            if !self.events.restore_pending.contains(&id)
+                && self.simulation.section_due(id).unwrap_or(at) <= tick
+            {
+                due.push(id);
+            }
+        }
         for brick in &due {
             self.events.respawns.remove(brick);
         }
@@ -945,6 +976,36 @@ impl Session {
         if bricks.is_empty() {
             return Ok(());
         }
+        let tick = self.simulation.state().tick;
+        let budget = self.events.restore_budget.get_or_insert((
+            tick,
+            2049,
+            super::destruction::MUTATION_BYTES_PER_TICK,
+        ));
+        if budget.0 != tick {
+            *budget = (tick, 2049, super::destruction::MUTATION_BYTES_PER_TICK);
+        }
+        let mut ready = Vec::new();
+        for &id in bricks {
+            let Some(brick) = self.simulation.state().bricks.get(&id) else {
+                self.events.restore_pending.remove(&id);
+                continue;
+            };
+            let cost = 1 + self.simulation.damage_family_part_count(id);
+            let bytes = brick
+                .stored_bound()
+                .min(super::destruction::MUTATION_BYTES_PER_TICK);
+            if cost <= budget.1 && bytes <= budget.2 {
+                budget.1 -= cost;
+                budget.2 -= bytes;
+                ready.push(id);
+                self.events.restore_pending.remove(&id);
+            } else {
+                self.events.restore_pending.insert(id);
+                self.events.respawns.entry(id).or_insert(tick);
+            }
+        }
+        let bricks = ready.as_slice();
         let families: BTreeSet<_> = bricks
             .iter()
             .copied()
@@ -971,6 +1032,7 @@ impl Session {
                         b.raycast = true;
                         b.colliding = true;
                         b.damage_hidden = false;
+                        b.damage_section = None;
                     }
                 },
             )
@@ -1054,19 +1116,9 @@ impl Session {
         max_floating_volume: Option<f32>,
     ) -> Vec<(BrickId, f32)> {
         let mut out = Vec::new();
-        let Some(player) = self.peers.get(&source).map(|p| p.combat.player) else {
+        let Some(scope) = self.damage_scope(source, Vec3::ZERO) else {
             return out;
         };
-        let Ok(damage_source) = self.minigames.projectile_source(player) else {
-            return out;
-        };
-        // `onCollision` and `onExplode` both return early for 3 s after the
-        // shooter's F8 drop inside a minigame, so a rocket already in flight
-        // breaks nothing either.
-        if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
-            return out;
-        }
-        let game = self.game_of(source);
         for &brick in bricks {
             let Some(b) = self.simulation.state().bricks.get(&brick) else {
                 continue;
@@ -1085,29 +1137,7 @@ impl Session {
             {
                 continue;
             }
-            // v20 `ProjectileData::onExplode`: single-player and LAN hosts
-            // ($Server::LAN) only ask the shooter's minigame for brick damage;
-            // internet servers use miniGameCanDamage, or ownership outside
-            // minigames.
-            let allowed = match game {
-                Some(g) if self.lan_host => self
-                    .minigames
-                    .game(g)
-                    .is_ok_and(|g| g.settings.brick_damage),
-                Some(g) => {
-                    let owner = self.brick_group_owner_for(b.owner, Some(g));
-                    let target = mg::Target::Object {
-                        kind: mg::ObjectKind::Brick,
-                        owner: Some(mg::AccountId(owner)),
-                        // Outside the game's region it is not the game's.
-                        membership: mg::Membership::OwnerAt(b.position),
-                        spawn_brick: false,
-                    };
-                    self.minigames.can_radius_damage(damage_source, target) == mg::Decision::Allow
-                }
-                None => b.owner == source || self.brick_group_player(b.owner) == Some(source),
-            };
-            if allowed {
+            if scope.allows(b) {
                 out.push((brick, volume));
             }
         }

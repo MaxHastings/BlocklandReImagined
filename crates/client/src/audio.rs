@@ -707,7 +707,9 @@ impl ClientAudio {
     }
     pub fn cue(&mut self, cue: &Cue) {
         let key = match &cue.kind {
-            CueKind::WeaponEffect { .. }
+            CueKind::BrickSectionRetired { .. }
+            | CueKind::BrickSectionReady { .. }
+            | CueKind::WeaponEffect { .. }
             | CueKind::WeaponAnimation { .. }
             | CueKind::WeaponShell { .. }
             | CueKind::ScreenFlash { .. }

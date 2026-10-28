@@ -12,6 +12,7 @@ pub(crate) struct SupportProbe {
     cells: Option<(BrickId, ConnectionCells)>,
     pub neighbors: Vec<BrickId>,
     pub below: bool,
+    pub exhausted: bool,
 }
 impl SupportProbe {
     pub(crate) fn new(sim: &Simulation, id: BrickId) -> Self {
@@ -25,6 +26,7 @@ impl SupportProbe {
             cells: None,
             neighbors: Vec::new(),
             below: false,
+            exhausted: false,
         }
     }
     pub(crate) fn step(
@@ -40,6 +42,10 @@ impl SupportProbe {
         let mesh = &sim.definitions.get(own)?.mesh;
         let total = i64::from(bounds.size[0]) * i64::from(bounds.size[2]);
         while *left > 0 {
+            if self.neighbors.len() > crate::presentation::MAX_SECTION_MEMBERS {
+                self.exhausted = true;
+                return Ok(true);
+            }
             if !self.grounded && self.ground_cell < total {
                 if *left < 2 {
                     return Ok(false);
@@ -104,6 +110,21 @@ impl Simulation {
             && let Ok(bounds) = Bounds::new(b, &d.mesh)
         {
             self.support_edits.push(bounds);
+            // Conservative bounded invalidation summary. Precise individual
+            // edits are useful until a bulk operation exceeds this envelope.
+            if self.support_edits.len() > 32 {
+                let mut area = self.support_edits[0];
+                for b in &self.support_edits[1..] {
+                    let min = std::array::from_fn(|i| area.min[i].min(b.min[i]));
+                    let max: [i32; 3] = std::array::from_fn(|i| area.max()[i].max(b.max()[i]));
+                    area = Bounds {
+                        min,
+                        size: std::array::from_fn(|i| max[i] - min[i]),
+                    };
+                }
+                self.support_edits.clear();
+                self.support_edits.push(area);
+            }
         }
     }
     pub(crate) fn take_support_edits(&mut self) -> (Vec<Bounds>, bool) {

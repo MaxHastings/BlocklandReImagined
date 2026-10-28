@@ -855,7 +855,7 @@ impl BrickAction {
         let peer = session.peers.get(&bot)?;
         let feet = Vec3::from(peer.player.state().feet);
         let bounds = bri_world::regions::bounds(
-            session.simulation.state().bricks[&brick].rule_region,
+            session.simulation.state().bricks[&brick].rule_region(),
             (min, max),
         );
         let point = match method {
@@ -904,7 +904,7 @@ impl BrickAction {
                 destination,
                 rearming: touching,
                 bounds: (min, max),
-                region: session.simulation.state().bricks[&brick].rule_region,
+                region: session.simulation.state().bricks[&brick].rule_region(),
             },
             cost,
         ))
@@ -961,7 +961,7 @@ impl Executor {
                 .state()
                 .bricks
                 .get(&brick)
-                .is_some_and(|b| b.rule_region == action.region)
+                .is_some_and(|b| b.rule_region() == action.region)
     }
     fn provider(&self) -> &'static str {
         match self {
@@ -1005,7 +1005,7 @@ impl Executor {
         let outside = match action.method {
             BrickMethod::Region => {
                 let (lo, hi) = bri_world::regions::bounds(
-                    session.simulation.state().bricks[&brick].rule_region,
+                    session.simulation.state().bricks[&brick].rule_region(),
                     (lo, hi),
                 );
                 let p = Vec3::from(peer.player.state().feet) + Vec3::Y;

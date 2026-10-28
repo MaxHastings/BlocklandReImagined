@@ -159,7 +159,7 @@ fn detection_regions_render_with_building_tools_and_hide_when_put_away(
         .bricks
         .iter()
         .find(|(_, b)| bri_world::regions::has_region_input(b))
-        .map(|(&id, b)| (id, b.rule_region))
+        .map(|(&id, b)| (id, b.rule_region()))
         .unwrap();
     app.ui.core.wrench.open(
         region,
@@ -191,7 +191,7 @@ fn detection_regions_render_with_building_tools_and_hide_when_put_away(
         "8 x 5 x 8 draft did not move visible edges"
     );
     ensure!(
-        app.network_view().unwrap().world.bricks[&region].rule_region == authored_size,
+        app.network_view().unwrap().world.bricks[&region].rule_region() == authored_size,
         "unsent preview changed authoritative dimensions"
     );
     save(&artifact.join("preview-8x5x8.png"), &preview)?;

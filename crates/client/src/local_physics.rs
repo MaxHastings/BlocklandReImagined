@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub const STEP: f32 = bri_physics::FIXED_DT;
 /// Steps per frame before time is dropped instead of catching up.
 pub const MAX_STEPS: u32 = 4;
+pub(crate) const MAX_STATIC_COLLIDERS: usize = 16_384;
 /// Torque's world gravity (units/s^2), as the player and items use.
 pub const GRAVITY: f32 = 20.0;
 /// Distance around each moving body where surroundings are made solid.
@@ -75,6 +76,7 @@ pub struct Surroundings {
     /// `None` marks terrain chunks with no ground.
     statics: HashMap<Static, Option<ColliderHandle>>,
     generation: u64,
+    cache_area: Option<(Vec3, Vec3)>,
 }
 
 /// Pausable collision streaming for a cosmetic assembly's actual swept box.
@@ -88,6 +90,7 @@ pub(crate) struct LocalRegion {
     first_z: i32,
     last_x: i32,
     last_z: i32,
+    blocked: Option<(BrickId, SharedShape, Pose)>,
 }
 impl LocalRegion {
     pub fn new(low: Vec3, high: Vec3) -> Self {
@@ -107,6 +110,7 @@ impl LocalRegion {
             first_z,
             last_x: (high.x / TERRAIN_CHUNK).floor() as i32,
             last_z: (high.z / TERRAIN_CHUNK).floor() as i32,
+            blocked: None,
         }
     }
     pub fn contains(&self, low: Vec3, high: Vec3) -> bool {
@@ -114,6 +118,15 @@ impl LocalRegion {
     }
 }
 impl Surroundings {
+    fn touch(&mut self, low: Vec3, high: Vec3) {
+        self.cache_area = Some(
+            self.cache_area
+                .map_or((low, high), |(lo, hi)| (lo.min(low), hi.max(high))),
+        );
+    }
+    pub(crate) fn full(&self) -> bool {
+        self.statics.len() >= MAX_STATIC_COLLIDERS
+    }
     /// Put the map in (again whenever its solid shapes changed: another
     /// map, or a shape smashed), and forget the nearby bricks the build no
     /// longer has where they were made solid (waking every body, which may
@@ -135,6 +148,13 @@ impl Surroundings {
             self.clear(world);
         }
         if self.generation == building.query_generation() {
+            return false;
+        }
+        if self
+            .cache_area
+            .is_none_or(|(lo, hi)| !building.query_changed_since(self.generation, lo, hi))
+        {
+            self.generation = building.query_generation();
             return false;
         }
         self.generation = building.query_generation();
@@ -174,6 +194,7 @@ impl Surroundings {
     ) -> Result<usize> {
         let mut added = 0;
         for &(low, high) in boxes {
+            self.touch(low, high);
             for (id, shape, pose) in building.colliding_bricks(low, high)? {
                 if skip(id) || self.statics.contains_key(&Static::Brick(id)) {
                     continue;
@@ -200,6 +221,17 @@ impl Surroundings {
         work: &mut u32,
         skip: impl Fn(BrickId) -> bool,
     ) -> Result<bool> {
+        self.touch(region.low, region.high);
+        if region.blocked.is_some() && self.full() {
+            return Ok(false);
+        }
+        if let Some((id, shape, pose)) = region.blocked.take()
+            && !skip(id)
+            && !self.statics.contains_key(&Static::Brick(id))
+        {
+            let h = world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
+            self.statics.insert(Static::Brick(id), Some(h));
+        }
         while *work > 0 && !region.bricks_done {
             *work -= 1;
             match building.section_solid_step(&mut region.cursor) {
@@ -207,6 +239,10 @@ impl Surroundings {
                 Some(Some((id, shape, pose)))
                     if !skip(id) && !self.statics.contains_key(&Static::Brick(id)) =>
                 {
+                    if self.full() {
+                        region.blocked = Some((id, shape, pose));
+                        return Ok(false);
+                    }
                     let h = world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
                     self.statics.insert(Static::Brick(id), Some(h));
                 }
@@ -214,6 +250,9 @@ impl Surroundings {
             }
         }
         while *work >= 16 && region.bricks_done {
+            if self.full() {
+                return Ok(false);
+            }
             let Some((cx, cz)) = region.tile else {
                 return Ok(true);
             };
@@ -269,6 +308,7 @@ impl Surroundings {
     /// Drop every nearby brick and terrain patch (the map stays), and wake
     /// the bodies that rested on them.
     pub fn clear(&mut self, world: &mut PhysicsWorld) {
+        self.cache_area = None;
         for handle in self.statics.drain().filter_map(|(_, h)| h) {
             world.remove_collider(handle);
         }
@@ -280,6 +320,78 @@ impl Surroundings {
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// One collision-streaming mechanism for ordinary debris and connected chunks.
+/// Keep the last prepared window usable while preparing a swept look-ahead.
+#[derive(Default)]
+pub(crate) struct CollisionWindow {
+    region: Option<LocalRegion>,
+    safe: Option<(Vec3, Vec3)>,
+    generation: u64,
+    ready: bool,
+}
+pub(crate) struct CollisionMotion {
+    pub center: Vec3,
+    pub half: Vec3,
+    pub velocity: Vec3,
+    pub angular: f32,
+}
+impl CollisionWindow {
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+    pub fn unchanged(&self, building: &Building) -> bool {
+        self.generation == building.query_generation()
+    }
+    #[allow(clippy::too_many_arguments)] // Shared query context plus motion and budget.
+    pub fn prepare(
+        &mut self,
+        surroundings: &mut Surroundings,
+        world: &mut PhysicsWorld,
+        building: &Building,
+        motion: CollisionMotion,
+        work: &mut u32,
+        skip: impl Fn(BrickId) -> bool,
+    ) -> Result<bool> {
+        let CollisionMotion {
+            center,
+            half,
+            velocity,
+            angular,
+        } = motion;
+        let margin = Vec3::splat(0.1 + half.length() * angular * 0.5) + velocity.abs() * 0.5;
+        let low = center - half - margin;
+        let high = center + half + margin;
+        let changed = building.query_changed_since(self.generation, low, high);
+        if changed || self.region.as_ref().is_none_or(|r| !r.contains(low, high)) {
+            self.region = Some(LocalRegion::new(low - Vec3::ONE, high + Vec3::ONE));
+            self.ready = false;
+            if changed {
+                self.safe = None;
+            }
+        }
+        self.generation = building.query_generation();
+        if !self.ready {
+            self.ready = surroundings.load_region(
+                world,
+                building,
+                self.region.as_mut().unwrap(),
+                work,
+                skip,
+            )?;
+            if self.ready {
+                let region = self.region.as_ref().unwrap();
+                self.safe = Some((region.low, region.high));
+            }
+        }
+        let step = velocity.abs() * STEP * MAX_STEPS as f32
+            + Vec3::splat(half.length() * angular * STEP * MAX_STEPS as f32);
+        Ok(self.ready
+            || self.safe.is_some_and(|(lo, hi)| {
+                (center - half - step).cmpge(lo).all() && (center + half + step).cmple(hi).all()
+            }))
     }
 }
 
@@ -449,6 +561,7 @@ pub struct Shots {
     last: BTreeMap<u64, Vec3>,
     /// (projectile, body) pairs already struck.
     struck: BTreeSet<(u64, u64)>,
+    segments: Vec<(u64, Vec3, Vec3, Vec3)>,
 }
 
 /// One projectile passing through one body this frame.
@@ -462,6 +575,12 @@ pub struct Strike {
 }
 
 impl Shots {
+    pub fn segments(&self) -> &[(u64, Vec3, Vec3, Vec3)] {
+        &self.segments
+    }
+    pub fn struck(&self, projectile: u64, body: u64) -> bool {
+        self.struck.contains(&(projectile, body))
+    }
     /// Where projectiles are this frame; returns each body a projectile
     /// passed through since last frame, once per projectile and body.
     /// `owners` names the dynamic bodies that count.
@@ -475,19 +594,24 @@ impl Shots {
         self.last.retain(|id, _| live.contains(id));
         self.struck.retain(|(p, _)| live.contains(p));
         let mut out = Vec::new();
-        if owners.is_empty() {
-            return out;
-        }
+        self.segments.clear();
+        let mut paused_queries = 512;
         for shot in shots {
             if !shot.position.is_finite() || !shot.velocity.is_finite() {
                 continue;
             }
-            let Some(from) = self.last.insert(shot.id, shot.position) else {
-                continue;
-            };
+            let from = self
+                .last
+                .insert(shot.id, shot.position)
+                .unwrap_or(shot.position - shot.velocity * STEP);
             let delta = shot.position - from;
             let length = delta.length();
             if !(1e-5..=100.0).contains(&length) {
+                continue;
+            }
+            self.segments
+                .push((shot.id, from, shot.position, shot.velocity));
+            if owners.is_empty() {
                 continue;
             }
             let direction = delta / length;
@@ -503,6 +627,26 @@ impl Shots {
                     Some((id, handle, from + direction * hit.time_of_impact))
                 })
                 .collect();
+            let mut hits = hits;
+            for (&handle, &body) in owners {
+                let Some(rb) = world.bodies.get(handle) else {
+                    continue;
+                };
+                if rb.is_enabled() || self.struck.contains(&(shot.id, body)) {
+                    continue;
+                }
+                if paused_queries == 0 {
+                    break;
+                }
+                paused_queries -= 1;
+                for collider in rb.colliders() {
+                    let c = &world.colliders[*collider];
+                    if let Some(hit) = c.shape().cast_ray(c.position(), &ray, length, true) {
+                        hits.push((body, handle, from + direction * hit));
+                        break;
+                    }
+                }
+            }
             for (body, handle, point) in hits {
                 if self.struck.insert((shot.id, body)) {
                     out.push(Strike {

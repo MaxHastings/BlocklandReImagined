@@ -12,6 +12,7 @@ use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 mod damage;
 mod scan;
+mod sections;
 mod support_probe;
 pub use scan::{BoxScan, StackScan, center_copy, spend, work};
 pub(crate) use support_probe::SupportProbe;
@@ -242,6 +243,7 @@ pub struct Simulation {
     /// Build-support topology, independent of moving bodies and paint/name edits.
     support_epoch: u64,
     damage: damage::DamageFamilies,
+    sections: sections::DamageSections,
     support_edits: Vec<Bounds>,
     support_map_edit: bool,
     /// Colliders of the bricks that keep one of their own (sensors: not
@@ -583,6 +585,7 @@ impl Simulation {
             index,
             support_epoch: 0,
             damage: Default::default(),
+            sections: Default::default(),
             support_edits: Vec::new(),
             support_map_edit: false,
             handles,

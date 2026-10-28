@@ -86,7 +86,7 @@ impl Outlines {
             let size = if selected {
                 preview.unwrap().1
             } else {
-                brick.rule_region
+                brick.rule_region()
             };
             if (!listens && size.is_none()) || (drawn >= 512 && !selected) {
                 continue;
@@ -188,7 +188,7 @@ mod tests {
             ),
             Vec3::new(4.0, 4.0, 1.0)
         );
-        bricks.get_mut(&1).unwrap().rule_region = Some([8.0, 5.0, 8.0]);
+        bricks.get_mut(&1).unwrap().rule_region = Some(Box::new([8.0, 5.0, 8.0]));
         assert_eq!(
             extent(
                 &outlines
@@ -207,7 +207,7 @@ mod tests {
             Vec3::new(3.0, 6.0, 7.0)
         );
         assert_eq!(
-            bricks[&1].rule_region,
+            bricks[&1].rule_region(),
             Some([8.0, 5.0, 8.0]),
             "draft must not mutate replica"
         );

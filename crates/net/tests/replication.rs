@@ -1330,3 +1330,105 @@ fn loading_and_active_roster_share_one_budget_in_checkpoints_and_deltas() {
     assert_eq!(replica.cursor, 0);
     assert_eq!(replica.loading.len(), 127);
 }
+
+#[test]
+fn cosmetic_backlog_keeps_section_recovery_seed_and_control_without_disconnect() {
+    use bri_sim::presentation::{BrickDeath, Cue, CueKind, MAX_CUES};
+    let mut replica = Replica::new(checkpoint()).unwrap();
+    let mut delta = Delta {
+        vitals: Default::default(),
+        minigames: None,
+        vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        targets: None,
+        map_lights: None,
+        map_movers: None,
+        environment: None,
+        weapon_settings: None,
+        archetypes: None,
+        entities: None,
+        world_shapes: Default::default(),
+        weapons: None,
+        tools: Default::default(),
+        base: 0,
+        cursor: 1,
+        tick: 11,
+        bricks: Default::default(),
+        names: None,
+        loading: None,
+        avatars: Default::default(),
+        palette: None,
+        chat: vec![],
+        cues: vec![],
+        dropped_cues: 0,
+    };
+    let mut source = Brick::new(ContentRef::Resolved("brick".into()), [0., 3., 0.], 1);
+    source.visible = false;
+    source.colliding = false;
+    source.raycast = false;
+    source.damage_hidden = true;
+    source.damage_section = Some(Box::new([10, 1]));
+    delta.bricks.insert(999, Some(source.clone()));
+    for batch in 0..2 {
+        delta.base = batch;
+        delta.cursor = batch + 1;
+        delta.cues = (0..MAX_CUES)
+            .map(|i| {
+                let id = batch * MAX_CUES as u64 + i as u64 + 1;
+                Cue {
+                    id,
+                    tick: 11,
+                    position: [0., 3., 0.],
+                    kind: CueKind::BrickKill {
+                        brick: id,
+                        definition: ContentRef::Resolved("brick".into()),
+                        quarter_turns: 0,
+                        color: 0,
+                        color_effect: 0,
+                        shape_effect: 0,
+                        print: None,
+                        origin: [0., 3., 0.],
+                        force: 0.,
+                        radius: 0.,
+                        death: BrickDeath::Section {
+                            group: 1,
+                            started: 10,
+                            members: (MAX_CUES * 2) as u32,
+                            half: [1.; 3],
+                            pivot: [0.; 3],
+                        },
+                    },
+                }
+            })
+            .collect();
+        replica.update(delta.clone()).unwrap();
+    }
+    delta.base = 2;
+    delta.cursor = 3;
+    delta.bricks.clear();
+    delta.cues = vec![Cue {
+        id: MAX_CUES as u64 * 2 + 1,
+        tick: 11,
+        position: [0.; 3],
+        kind: CueKind::BrickSectionReady {
+            started: 10,
+            group: 1,
+            members: (MAX_CUES * 2) as u32,
+        },
+    }];
+    replica.update(delta).unwrap();
+    assert_eq!(replica.world.bricks[&999], source);
+    assert_eq!(
+        replica.dropped_cues, 0,
+        "local presentation throttling is separate from wire gaps"
+    );
+    assert!(replica.local_dropped_cues > 0);
+    let cues = replica.take_cues();
+    assert!(cues.len() <= MAX_CUES);
+    assert!(cues.iter().any(|c| c.kind.is_section_member()));
+    assert!(
+        cues.iter()
+            .any(|c| matches!(c.kind, CueKind::BrickSectionReady { .. }))
+    );
+}

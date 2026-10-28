@@ -283,6 +283,14 @@ fn keys(bounds: Bounds) -> impl Iterator<Item = (i32, i32, i32)> {
 }
 /// Bucket edge in grid cells (eight native units on every axis).
 pub(crate) const BUCKET: [i32; 3] = [16, 40, 16];
+/// Allocation/work bound for inserting a logical brick into this index.
+pub fn bucket_count(bounds: Bounds) -> usize {
+    (0..3).fold(1usize, |count, axis| {
+        let low = bounds.min[axis].div_euclid(BUCKET[axis]);
+        let high = (bounds.max()[axis] - 1).div_euclid(BUCKET[axis]);
+        count.saturating_mul((high - low + 1).max(0) as usize)
+    })
+}
 pub(crate) fn bucket_span(bounds: Bounds) -> ([i32; 3], [i32; 3]) {
     let min: [i32; 3] = std::array::from_fn(|a| bounds.min[a].div_euclid(BUCKET[a]));
     let max: [i32; 3] = std::array::from_fn(|a| (bounds.max()[a] - 1).div_euclid(BUCKET[a]));

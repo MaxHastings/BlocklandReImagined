@@ -345,9 +345,11 @@ impl Session {
             "Trace subscription budget is full"
         );
         let region = self.simulation.brick_box(brick).map(|(min, max)| {
-            source
-                .rule_region
-                .unwrap_or([(max.x - min.x).max(1.0), 4.0, (max.z - min.z).max(1.0)])
+            source.rule_region().unwrap_or([
+                (max.x - min.x).max(1.0),
+                4.0,
+                (max.z - min.z).max(1.0),
+            ])
         });
         let count = self
             .events
@@ -520,8 +522,9 @@ impl Session {
                 }
             }
             RuleOp::RegionSize(size) => {
-                self.simulation
-                    .mutate(d.target.id.index, |b| b.rule_region = Some(size.to_array()))?;
+                self.simulation.mutate(d.target.id.index, |b| {
+                    b.rule_region = Some(Box::new(size.to_array()))
+                })?;
                 self.dirty.insert(d.target.id.index);
             }
             RuleOp::Explain => {
@@ -874,7 +877,7 @@ impl Session {
             let Some((min, max)) = self.simulation.brick_box(brick) else {
                 continue;
             };
-            let (lo, hi) = bri_world::regions::bounds(source.rule_region, (min, max));
+            let (lo, hi) = bri_world::regions::bounds(source.rule_region(), (min, max));
             for (kind, id, position, by, relocations) in &objects {
                 // Players share the builder's game, including None in free build.
                 if *kind == 0 && self.game_of(*id) != builder_game {
@@ -2189,7 +2192,7 @@ mod tests {
         s.simulation
             .mutate(ids[0], |b| {
                 b.position = center.to_array();
-                b.rule_region = Some([10.; 3]);
+                b.rule_region = Some(Box::new([10.; 3]));
             })
             .unwrap();
         s.dirty.extend([ids[0], ids[1]]);
@@ -2260,7 +2263,7 @@ mod tests {
             s.simulation
                 .mutate(ids[0], |b| {
                     b.position = goal.to_array();
-                    b.rule_region = Some([2.0, 12.0, 8.0]);
+                    b.rule_region = Some(Box::new([2.0, 12.0, 8.0]));
                     b.colliding = false;
                     b.events = vec![win];
                 })
@@ -2366,7 +2369,7 @@ mod tests {
         s.simulation
             .mutate(ids[0], |b| {
                 b.position = center.to_array();
-                b.rule_region = Some([10.0; 3]);
+                b.rule_region = Some(Box::new([10.0; 3]));
                 b.events = vec![row];
             })
             .unwrap();
@@ -2554,7 +2557,7 @@ mod tests {
         let ids = s.create_rule_lab(p, "race").unwrap();
         let brick = ids[0];
         s.simulation
-            .mutate(brick, |b| b.rule_region = Some([5.0, 6.0, 7.0]))
+            .mutate(brick, |b| b.rule_region = Some(Box::new([5.0, 6.0, 7.0])))
             .unwrap();
         let authored = &s.simulation.state().bricks[&brick];
         let packed = bri_world::packed::Packed::pack(std::iter::once((brick, Some(authored))));
@@ -2699,7 +2702,7 @@ mod tests {
         s.simulation
             .mutate(ids[0], |b| {
                 b.position = center.to_array();
-                b.rule_region = Some([10.; 3]);
+                b.rule_region = Some(Box::new([10.; 3]));
             })
             .unwrap();
         s.step_rule_observations().unwrap();
@@ -2862,7 +2865,7 @@ mod tests {
         s.simulation
             .mutate(ids[1], |b| {
                 b.position = center.to_array();
-                b.rule_region = Some([10.0; 3]);
+                b.rule_region = Some(Box::new([10.0; 3]));
                 b.events = vec![
                     goal_row(
                         ev::Target::Slot(Slot::Instigator),
@@ -3065,7 +3068,7 @@ mod tests {
         s.simulation
             .mutate(ids[0], |b| {
                 b.position = goal.to_array();
-                b.rule_region = Some([4.0, 12.0, 4.0]);
+                b.rule_region = Some(Box::new([4.0, 12.0, 4.0]));
                 b.colliding = false;
                 edit(&mut b.events);
             })

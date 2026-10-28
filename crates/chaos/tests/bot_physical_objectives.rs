@@ -296,13 +296,13 @@ impl Game {
         goal.name = Some(format!("{namespace}_destination"));
         goal.colliding = false;
         goal.raycast = false;
-        goal.rule_region = Some(if wide_rearm {
+        goal.rule_region = Some(Box::new(if wide_rearm {
             [20.0, 8.0, 20.0]
         } else if drive {
             [6.0, 8.0, 5.0]
         } else {
             [3.0, 4.0, 3.0]
-        });
+        }));
         goal.events = vec![Row {
             enabled: true,
             input: "onObjectEnter".into(),
@@ -1185,7 +1185,7 @@ fn repeated_object_entry_requires_real_exit_and_reentry_for_each_physical_method
                     .unwrap()
                     .0;
             let bounds = bri_world::regions::bounds(
-                g.s.simulation().state().bricks[&source].rule_region,
+                g.s.simulation().state().bricks[&source].rule_region(),
                 g.s.simulation().brick_box(source).unwrap(),
             );
             let inside = |point: Vec3| point.cmpge(bounds.0).all() && point.cmple(bounds.1).all();

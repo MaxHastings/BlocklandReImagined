@@ -291,7 +291,7 @@ impl Authority {
             Edit::Properties(p)
                 if p.raycast == old.raycast
                     && p.colliding == old.colliding
-                    && p.rule_region == old.rule_region
+                    && p.rule_region == old.rule_region()
                     && p.visible == old.visible =>
             {
                 trust::BUILD
@@ -312,7 +312,7 @@ impl Authority {
             Edit::Events(e) => next.events = e,
             Edit::ShapeEffect(effect) => next.shape_effect = effect,
             Edit::Properties(properties) => {
-                next.rule_region = properties.rule_region;
+                next.rule_region = properties.rule_region.map(Box::new);
                 next.name = properties.name;
                 next.light = properties.light.map(|id| {
                     Box::new(Light {
@@ -665,10 +665,10 @@ mod tests {
         server
             .edit(&actor(trust::FULL), 1, Edit::Properties(p.clone()))
             .unwrap();
-        assert_eq!(server.state().bricks[&1].rule_region, p.rule_region);
+        assert_eq!(server.state().bricks[&1].rule_region(), p.rule_region);
         let saved = crate::build::SavedBuild::capture(server.state(), true, true).unwrap();
         let restored = crate::build::decode(&crate::build::encode(&saved).unwrap()).unwrap();
-        assert_eq!(restored.world.bricks[&1].rule_region, p.rule_region);
+        assert_eq!(restored.world.bricks[&1].rule_region(), p.rule_region);
         p.rule_region = None;
         server
             .edit(&actor(trust::FULL), 1, Edit::Properties(p))

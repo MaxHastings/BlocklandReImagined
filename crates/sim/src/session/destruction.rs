@@ -14,6 +14,11 @@ const PIECES_PER_BLAST: usize = 2048;
 const WORK_PER_TICK: u32 = 8192;
 const COMMIT_PER_TICK: usize = 128;
 const MAX_JOBS: usize = 256;
+pub(super) const MUTATION_BYTES_PER_TICK: u64 = 4 * 1024 * 1024;
+/// Reserve presentation capacity before hiding any section member. An
+/// over-envelope proof leaves its material standing, never invisible.
+const MAX_SECTION_MEMBERS: usize = crate::presentation::MAX_SECTION_MEMBERS;
+const PRESENTATION_LEASE: u64 = 3600;
 
 #[derive(Default)]
 pub(super) struct Destruction {
@@ -24,8 +29,18 @@ pub(super) struct Destruction {
     palettes: BTreeMap<String, Pieces>,
     palette_revision: usize,
     tick_pieces_left: usize,
+    mutation_bytes_left: u64,
     next_group: u64,
     work: DestructionWork,
+    reservations: BTreeMap<(u64, u64), Reservation>,
+}
+struct Reservation {
+    members: usize,
+    looks: usize,
+    quads: usize,
+    draw_quads: usize,
+    buckets: usize,
+    until: u64,
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DestructionWork {
@@ -38,7 +53,7 @@ pub struct DestructionWork {
     pub detached_bricks: u64,
     pub rejected_jobs: u64,
 }
-struct Scope {
+pub(super) struct Scope {
     source: OwnerId,
     impact: Vec3,
     game: Option<(mg::GameId, u64)>,
@@ -55,7 +70,7 @@ impl Scope {
         self.game
             .is_none_or(|(id, round)| s.minigames.game(id).is_ok_and(|g| g.round == round))
     }
-    fn allows(&self, b: &bri_world::Brick) -> bool {
+    pub(super) fn allows(&self, b: &bri_world::Brick) -> bool {
         match self.game {
             None if self.lan => true,
             None => self.own.contains(&b.owner),
@@ -95,33 +110,110 @@ struct BlastJob {
 }
 struct Search {
     scope: Arc<Scope>,
-    seeds: Vec<BrickId>,
+    seeds: Arc<Vec<BrickId>>,
+    tail: Option<SectionSeed>,
+    tail_next: Option<BrickId>,
+    tail_done: bool,
+    parents: BTreeSet<BrickId>,
     next: usize,
     frontier: BinaryHeap<Reverse<(i32, BrickId)>>,
     component: BTreeSet<BrickId>,
     supported: BTreeSet<BrickId>,
     probe: Option<(BrickId, SupportProbe)>,
-    watched: Vec<Bounds>,
     area: Option<Bounds>,
     shape: SectionShape,
+    looks: std::collections::HashSet<(ContentRef, u8, u8, u8, Option<ContentRef>)>,
+    quads: usize,
+    draw_quads: usize,
+    expensive_look: bool,
+    buckets: usize,
 }
 impl Search {
     fn new(scope: Arc<Scope>, seeds: Vec<BrickId>) -> Self {
         Self {
             scope,
-            seeds,
+            seeds: Arc::new(seeds),
+            tail: None,
+            tail_next: None,
+            tail_done: false,
+            parents: Default::default(),
             next: 0,
             frontier: Default::default(),
             component: Default::default(),
             supported: Default::default(),
             probe: None,
-            watched: Vec::new(),
             area: None,
             shape: SectionShape::default(),
+            looks: Default::default(),
+            quads: 0,
+            draw_quads: 0,
+            expensive_look: false,
+            buckets: 0,
         }
+    }
+    fn from_section(
+        scope: Arc<Scope>,
+        ids: Arc<BTreeSet<BrickId>>,
+        after: Option<BrickId>,
+    ) -> Self {
+        let mut search = Self::new(scope, Vec::new());
+        search.tail = Some(SectionSeed { ids, after });
+        search.tail_next = after;
+        search
+    }
+    fn restart(&mut self) {
+        let mut fresh = Self::new(self.scope.clone(), Vec::new());
+        fresh.seeds = self.seeds.clone();
+        fresh.tail = self.tail.clone();
+        fresh.tail_next = fresh.tail.as_ref().and_then(|tail| tail.after);
+        *self = fresh;
+    }
+    fn next_seed(&mut self) -> Option<BrickId> {
+        if let Some(&id) = self.seeds.get(self.next) {
+            self.next += 1;
+            return Some(id);
+        }
+        if self.tail_done {
+            return None;
+        }
+        let tail = self.tail.as_ref()?;
+        use std::ops::Bound::{Excluded, Unbounded};
+        let id = tail
+            .ids
+            .range((self.tail_next.map_or(Unbounded, Excluded), Unbounded))
+            .next()
+            .copied();
+        if id.is_none() {
+            self.tail_done = true;
+        }
+        self.tail_next = id;
+        id
     }
     fn push(&mut self, id: BrickId, sim: &Simulation) {
         if self.component.insert(id) {
+            if let Some(root) = sim.damage_parent(id) {
+                self.parents.insert(root);
+            }
+            let buckets = crate::grid::bucket_count(sim.index_bounds(id));
+            self.buckets = self.buckets.saturating_add(buckets);
+            self.expensive_look |= buckets > crate::presentation::MAX_SECTION_MEMBER_BUCKETS;
+            let brick = &sim.state().bricks[&id];
+            self.expensive_look |= brick.stored_bound() > MUTATION_BYTES_PER_TICK;
+            self.draw_quads = self
+                .draw_quads
+                .saturating_add(sim.definitions.get(brick).map_or(0, |d| d.mesh.quads.len()));
+            if self.looks.insert((
+                brick.definition.clone(),
+                brick.color,
+                brick.color_effect,
+                brick.shape_effect,
+                brick.print.clone(),
+            )) && let Ok(definition) = sim.definitions.get(brick)
+            {
+                let quads = definition.mesh.quads.len();
+                self.quads = self.quads.saturating_add(quads);
+                self.expensive_look |= quads > crate::presentation::MAX_SECTION_LOOK_QUADS;
+            }
             if let Some((low, high)) = sim.brick_box(id) {
                 self.shape.include(low, high, self.scope.impact);
             }
@@ -130,10 +222,9 @@ impl Search {
         }
     }
     fn watches(&self, changes: &[Bounds]) -> bool {
-        changes.iter().any(|b| {
-            self.area.is_some_and(|a| a.intersection(*b).is_some())
-                && self.watched.iter().any(|a| a.intersection(*b).is_some())
-        })
+        changes
+            .iter()
+            .any(|b| self.area.is_some_and(|a| a.intersection(*b).is_some()))
     }
     fn watch(&mut self, area: Bounds) {
         self.area = Some(self.area.map_or(area, |a| {
@@ -144,7 +235,6 @@ impl Search {
                 size: std::array::from_fn(|i| max[i] - min[i]),
             }
         }));
-        self.watched.push(area);
     }
 }
 #[derive(Clone)]
@@ -179,9 +269,15 @@ impl SectionShape {
         self.high = self.high.max(high);
     }
 }
+#[derive(Clone)]
+struct SectionSeed {
+    ids: Arc<BTreeSet<BrickId>>,
+    after: Option<BrickId>,
+}
 struct Detached {
     scope: Arc<Scope>,
-    ids: BTreeSet<BrickId>,
+    ids: Arc<BTreeSet<BrickId>>,
+    next: Option<BrickId>,
     group: u64,
     started: u64,
     origin: Vec3,
@@ -191,6 +287,28 @@ struct Detached {
     area: Option<Bounds>,
 }
 
+impl Detached {
+    fn remaining(&self) -> impl Iterator<Item = &BrickId> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        self.ids
+            .range((self.next.map_or(Unbounded, Excluded), Unbounded))
+    }
+    fn candidates(&mut self, count: usize, sim: &Simulation, bytes_left: &mut u64) -> Vec<BrickId> {
+        let mut ids = Vec::new();
+        for &id in self.remaining().take(count) {
+            let cost = sim.state().bricks.get(&id).map_or(0, |b| b.stored_bound());
+            if cost > *bytes_left {
+                break;
+            }
+            *bytes_left -= cost;
+            ids.push(id);
+        }
+        if let Some(&last) = ids.last() {
+            self.next = Some(last);
+        }
+        ids
+    }
+}
 impl Session {
     pub fn destruction_work(&self) -> DestructionWork {
         self.destruction.work
@@ -210,12 +328,32 @@ impl Session {
         self.dirty.extend(changed.iter().copied());
         for id in ended {
             self.events.respawns.remove(&id);
+            self.events.restore_pending.remove(&id);
         }
         for id in changed {
             if !self.simulation.state().bricks.contains_key(&id) {
                 self.events.respawns.remove(&id);
+                self.events.restore_pending.remove(&id);
                 self.destruction.roots.remove(&id);
             }
+        }
+        self.flush_section_journal();
+    }
+    fn flush_section_journal(&mut self) {
+        for ((started, group), members, retired) in
+            self.simulation.take_section_barriers(self.cues.remaining())
+        {
+            let kind = if retired {
+                self.destruction.reservations.remove(&(started, group));
+                CueKind::BrickSectionRetired { started, group }
+            } else {
+                CueKind::BrickSectionReady {
+                    started,
+                    group,
+                    members,
+                }
+            };
+            self.cues.emit(self.simulation.state().tick, kind, [0.; 3]);
         }
     }
     pub(super) fn protected_foundation(&self, id: BrickId) -> bool {
@@ -264,7 +402,7 @@ impl Session {
         }
         (rooted, protected)
     }
-    fn damage_scope(&self, source: OwnerId, impact: Vec3) -> Option<Arc<Scope>> {
+    pub(super) fn damage_scope(&self, source: OwnerId, impact: Vec3) -> Option<Arc<Scope>> {
         let player = self.peers.get(&source)?.combat.player;
         if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
             return None;
@@ -392,7 +530,7 @@ impl Session {
         });
     }
     fn admit_damage_job(&mut self, job: BlastJob) {
-        if self.destruction.pending.len() >= MAX_JOBS {
+        if self.destruction.pending.len() + self.destruction.searches.len() >= MAX_JOBS {
             self.destruction.work.rejected_jobs += 1;
             super::events::note(
                 &mut self.events.diagnostics,
@@ -404,6 +542,7 @@ impl Session {
     }
     fn hide_damage_bricks(&mut self, scope: &Scope, ids: &[BrickId]) -> Result<()> {
         let due = self.simulation.state().tick.saturating_add(scope.delay);
+        let section = self.simulation.section_writer();
         for &id in ids {
             if self.simulation.damage_parent(id).is_none() {
                 self.simulation.begin_damage_family(id);
@@ -416,6 +555,7 @@ impl Session {
                 b.raycast = false;
                 b.colliding = false;
                 b.damage_hidden = true;
+                b.damage_section = section.map(|(started, group)| Box::new([started, group]));
             })
         })?;
         self.dirty.extend(ids.iter().copied());
@@ -443,6 +583,10 @@ impl Session {
         probe: &SupportProbe,
         blast: super::debris::BrickBlast,
     ) -> Result<Vec<BrickId>> {
+        if probe.exhausted {
+            self.destruction.work.capacity_holds += 1;
+            return Ok(Vec::new());
+        }
         let mut seeds = probe.neighbors.clone();
         let (_, protected) = self.remember_probe(id, probe);
         let original = self.simulation.state().bricks[&id].clone();
@@ -498,10 +642,14 @@ impl Session {
                     .map(|&id| self.simulation.index_bounds(id)),
             );
             let alpha = self.simulation.state().palette[usize::from(original.color)][3];
+            let root = self.simulation.damage_parent(id).unwrap_or(id);
             let limit = PIECES_PER_BLAST
                 .saturating_sub(job.made)
                 .min(self.destruction.tick_pieces_left)
                 .min(MAX_PIECES.saturating_sub(self.simulation.damage_part_count()))
+                .min(
+                    PIECES_PER_BLAST.saturating_sub(self.simulation.damage_family_part_count(root)),
+                )
                 .min(bri_world::MAX_BRICKS.saturating_sub(self.simulation.state().bricks.len()));
             let reach = job.reach.expect("split reach");
             let Some(plan) = fracture::split(
@@ -524,7 +672,16 @@ impl Session {
                         .context("Missing planned size")
                 })
                 .collect::<Result<_>>()?;
-            let root = self.simulation.damage_parent(id).unwrap_or(id);
+            if plan.taken.len() + 1 > self.cues.remaining().saturating_sub(16) {
+                self.destruction.work.capacity_holds += 1;
+                return Ok(Vec::new());
+            }
+            let fresh_bytes: u64 = bricks.iter().map(|b| b.stored_bound()).sum();
+            if fresh_bytes > self.destruction.mutation_bytes_left {
+                self.destruction.work.capacity_holds += 1;
+                return Ok(Vec::new());
+            }
+            self.destruction.mutation_bytes_left -= fresh_bytes;
             let fresh = match self
                 .simulation
                 .damage_transaction(|sim| sim.insert_pieces(bricks))
@@ -587,7 +744,13 @@ impl Session {
         result
     }
     fn run_damage_support(&mut self) -> Result<()> {
+        let now = self.simulation.state().tick;
+        self.destruction
+            .reservations
+            .retain(|_, reservation| reservation.until >= now);
+        self.simulation.retire_section_journal();
         self.destruction.tick_pieces_left = PIECES_PER_BLAST;
+        self.destruction.mutation_bytes_left = MUTATION_BYTES_PER_TICK;
         self.sync_damage_lifecycle();
         let (changes, map_change) = self.simulation.take_support_edits();
         for detached in std::mem::take(&mut self.destruction.detach) {
@@ -596,9 +759,11 @@ impl Session {
                     .iter()
                     .any(|b| detached.area.is_some_and(|a| a.intersection(*b).is_some()))
             {
-                self.destruction.searches.push_back(Search::new(
+                self.finish_section(&detached);
+                self.destruction.searches.push_back(Search::from_section(
                     detached.scope,
-                    detached.ids.into_iter().collect(),
+                    detached.ids,
+                    detached.next,
                 ));
             } else {
                 self.destruction.detach.push_back(detached);
@@ -606,7 +771,7 @@ impl Session {
         }
         for search in &mut self.destruction.searches {
             if map_change || search.watches(&changes) {
-                *search = Search::new(search.scope.clone(), search.seeds.clone());
+                search.restart();
             }
         }
         for job in &mut self.destruction.pending {
@@ -620,7 +785,7 @@ impl Session {
             }
         }
         let mut work = WORK_PER_TICK / 2;
-        let mut commits = COMMIT_PER_TICK;
+        let mut commits = COMMIT_PER_TICK.min(self.cues.remaining().saturating_sub(16));
         while work > 1 && commits > COMMIT_PER_TICK / 2 {
             if let Some(mut job) = self.destruction.pending.pop_front() {
                 if !job.scope.valid(self) {
@@ -657,20 +822,45 @@ impl Session {
                     if probe.step(&self.simulation, &mut work, |other| {
                         self.live_damage_brick(other)
                     })? {
-                        let seeds = self.apply_damage(&mut job, id, &probe, blast)?;
-                        commits -= 1;
-                        if !seeds.is_empty() {
-                            if let Some(search) = self
+                        let bytes = self
+                            .simulation
+                            .state()
+                            .bricks
+                            .get(&id)
+                            .map_or(0, |b| b.stored_bound());
+                        if bytes > MUTATION_BYTES_PER_TICK {
+                            self.destruction.work.capacity_holds += 1;
+                        } else if bytes > self.destruction.mutation_bytes_left {
+                            job.current = Some((id, probe, blast));
+                            self.destruction.pending.push_back(job);
+                            break;
+                        } else {
+                            self.destruction.mutation_bytes_left -= bytes;
+                            let seeds = self.apply_damage(&mut job, id, &probe, blast)?;
+                            commits -= 1;
+                            let retained_seeds: usize = self
                                 .destruction
                                 .searches
-                                .iter_mut()
-                                .find(|s| Arc::ptr_eq(&s.scope, &job.scope))
-                            {
-                                search.seeds.extend(seeds);
-                            } else {
-                                self.destruction
+                                .iter()
+                                .map(|s| {
+                                    s.seeds.len() + s.tail.as_ref().map_or(0, |tail| tail.ids.len())
+                                })
+                                .sum();
+                            if retained_seeds + seeds.len() > MAX_SECTION_MEMBERS * 2 {
+                                self.destruction.work.capacity_holds += 1;
+                            } else if !seeds.is_empty() {
+                                if let Some(search) = self
+                                    .destruction
                                     .searches
-                                    .push_back(Search::new(job.scope.clone(), seeds));
+                                    .iter_mut()
+                                    .find(|s| Arc::ptr_eq(&s.scope, &job.scope))
+                                {
+                                    Arc::make_mut(&mut search.seeds).extend(seeds);
+                                } else {
+                                    self.destruction
+                                        .searches
+                                        .push_back(Search::new(job.scope.clone(), seeds));
+                                }
                             }
                         }
                     } else {
@@ -696,7 +886,7 @@ impl Session {
         }
         for search in &mut self.destruction.searches {
             if map_edit || search.watches(&edits) {
-                *search = Search::new(search.scope.clone(), search.seeds.clone());
+                search.restart();
             }
         }
         for detached in std::mem::take(&mut self.destruction.detach) {
@@ -705,35 +895,130 @@ impl Session {
                     .iter()
                     .any(|b| detached.area.is_some_and(|a| a.intersection(*b).is_some()))
             {
-                self.destruction.searches.push_back(Search::new(
+                self.finish_section(&detached);
+                self.destruction.searches.push_back(Search::from_section(
                     detached.scope,
-                    detached.ids.into_iter().collect(),
+                    detached.ids,
+                    detached.next,
                 ));
             } else {
                 self.destruction.detach.push_back(detached);
             }
         }
         work += WORK_PER_TICK / 2;
+        let mut proof_members: usize = self
+            .destruction
+            .searches
+            .iter()
+            .map(|s| s.component.len() + s.supported.len())
+            .sum();
+        let mut waiting = 0;
         while work > 1 && commits > 0 {
             let Some(mut job) = self.destruction.searches.pop_front() else {
                 break;
             };
+            proof_members = proof_members.saturating_sub(job.component.len() + job.supported.len());
+            work -= 1;
             if !job.scope.valid(self) {
                 continue;
             }
             if job.frontier.is_empty() && job.probe.is_none() {
                 if !job.component.is_empty() {
+                    if job.expensive_look
+                        || job.looks.len() > crate::presentation::MAX_SECTION_LOOKS
+                        || job.quads > crate::presentation::MAX_SECTION_QUADS
+                        || job.draw_quads > crate::presentation::MAX_SECTION_DRAW_QUADS
+                        || job.buckets > crate::presentation::MAX_SECTION_BUCKETS
+                    {
+                        self.destruction.work.capacity_holds += 1;
+                        continue;
+                    }
                     if self.destruction.detach.len() >= 8 {
-                        self.destruction.searches.push_front(job);
-                        break;
+                        proof_members += job.component.len() + job.supported.len();
+                        self.destruction.searches.push_back(job);
+                        waiting += 1;
+                        if waiting >= self.destruction.searches.len() {
+                            break;
+                        }
+                        continue;
                     }
                     let ids = std::mem::take(&mut job.component);
+                    let reserved: usize = self
+                        .destruction
+                        .reservations
+                        .values()
+                        .map(|r| r.members)
+                        .sum();
+                    let looks: usize = self
+                        .destruction
+                        .reservations
+                        .values()
+                        .map(|r| r.looks)
+                        .sum();
+                    let quads: usize = self
+                        .destruction
+                        .reservations
+                        .values()
+                        .map(|r| r.quads)
+                        .sum();
+                    let buckets: usize = self
+                        .destruction
+                        .reservations
+                        .values()
+                        .map(|r| r.buckets)
+                        .sum();
+                    let draw: usize = self
+                        .destruction
+                        .reservations
+                        .values()
+                        .map(|r| r.draw_quads)
+                        .sum();
+                    if ids.len() > MAX_SECTION_MEMBERS.saturating_sub(reserved)
+                        || job.draw_quads
+                            > crate::presentation::MAX_SECTION_DRAW_QUADS.saturating_sub(draw)
+                        || job.looks.len()
+                            > crate::presentation::MAX_SECTION_LOOKS.saturating_sub(looks)
+                        || job.quads > crate::presentation::MAX_SECTION_QUADS.saturating_sub(quads)
+                        || job.buckets
+                            > crate::presentation::MAX_SECTION_BUCKETS.saturating_sub(buckets)
+                        || self.destruction.reservations.len() >= 64
+                    {
+                        // No destructive commitment without presentation capacity.
+                        self.destruction.work.capacity_holds += 1;
+                        job.component = ids;
+                        proof_members += job.component.len() + job.supported.len();
+                        self.destruction.searches.push_back(job);
+                        work -= 1;
+                        waiting += 1;
+                        if waiting >= self.destruction.searches.len() {
+                            break;
+                        }
+                        continue;
+                    }
+                    let ids = Arc::new(ids);
                     let shape = std::mem::take(&mut job.shape);
                     self.destruction.next_group += 1;
+                    self.destruction.reservations.insert(
+                        (self.simulation.state().tick, self.destruction.next_group),
+                        Reservation {
+                            members: ids.len(),
+                            looks: job.looks.len(),
+                            quads: job.quads,
+                            draw_quads: job.draw_quads,
+                            buckets: job.buckets,
+                            until: u64::MAX,
+                        },
+                    );
+                    self.simulation.begin_section(
+                        (self.simulation.state().tick, self.destruction.next_group),
+                        ids.clone(),
+                        Arc::new(std::mem::take(&mut job.parents)),
+                    );
                     self.destruction.detach.push_back(Detached {
                         scope: job.scope.clone(),
                         members: ids.len() as u32,
                         ids,
+                        next: None,
                         group: self.destruction.next_group,
                         started: self.simulation.state().tick,
                         origin: (shape.low + shape.high) * 0.5,
@@ -742,10 +1027,15 @@ impl Session {
                         area: job.area,
                     });
                     job.supported.clear();
+                    job.looks.clear();
+                    job.quads = 0;
+                    job.draw_quads = 0;
+                    job.buckets = 0;
                     self.destruction.work.sections += 1;
                 }
-                while let Some(&id) = job.seeds.get(job.next) {
-                    job.next += 1;
+                while work > 0 {
+                    work -= 1;
+                    let Some(id) = job.next_seed() else { break };
                     if self.live_damage_brick(id) && !job.supported.contains(&id) {
                         job.push(id, &self.simulation);
                         break;
@@ -755,13 +1045,15 @@ impl Session {
                     continue;
                 }
             }
+            waiting = 0;
             let (id, mut probe) = match job.probe.take() {
                 Some(probe) => probe,
                 None => {
                     let Reverse((_, id)) = job.frontier.pop().unwrap();
                     if !self.live_damage_brick(id) {
                         job.component.remove(&id);
-                        self.destruction.searches.push_front(job);
+                        proof_members += job.component.len() + job.supported.len();
+                        self.destruction.searches.push_back(job);
                         continue;
                     }
                     self.destruction.work.support_visits += 1;
@@ -773,10 +1065,17 @@ impl Session {
             if probe.step(&self.simulation, &mut work, |other| {
                 self.live_damage_brick(other)
             })? {
+                if probe.exhausted {
+                    self.destruction.work.capacity_holds += 1;
+                    continue;
+                }
                 let (rooted, _) = self.remember_probe(id, &probe);
                 let b = &self.simulation.state().bricks[&id];
                 if rooted
-                    || self.destruction.detach.iter().any(|d| d.ids.contains(&id))
+                    || self.destruction.detach.iter().any(|d| {
+                        d.ids.contains(&id)
+                            && !self.simulation.section_interrupted((d.started, d.group))
+                    })
                     || job.supported.contains(&id)
                     || self.simulation.definitions.get(b)?.indestructible
                     || !job.scope.allows(b)
@@ -784,27 +1083,70 @@ impl Session {
                     job.supported.extend(std::mem::take(&mut job.component));
                     job.frontier.clear();
                     job.shape = SectionShape::default();
+                    job.looks.clear();
+                    job.quads = 0;
+                    job.draw_quads = 0;
+                    job.expensive_look = false;
+                    job.parents.clear();
+                    job.buckets = 0;
                 } else {
                     for other in probe.neighbors {
                         job.push(other, &self.simulation);
+                        if job.component.len() > MAX_SECTION_MEMBERS {
+                            break;
+                        }
                     }
                 }
             } else {
                 job.probe = Some((id, probe));
             }
-            self.destruction.searches.push_front(job);
+            let retained = job.component.len() + job.supported.len();
+            if job.looks.len() > crate::presentation::MAX_SECTION_LOOKS
+                || job.quads > crate::presentation::MAX_SECTION_QUADS
+                || job.draw_quads > crate::presentation::MAX_SECTION_DRAW_QUADS
+                || job.expensive_look
+                || job.buckets > crate::presentation::MAX_SECTION_BUCKETS
+                || retained > MAX_SECTION_MEMBERS
+                || proof_members + retained > MAX_SECTION_MEMBERS * 2
+            {
+                self.destruction.work.capacity_holds += 1;
+            } else {
+                proof_members += retained;
+                self.destruction.searches.push_back(job);
+            }
         }
         let rounds = self.destruction.detach.len();
+        if rounds > 1 {
+            self.destruction.detach.rotate_left(1);
+        }
         let quota = (commits / rounds.max(1)).max(1);
         for _ in 0..rounds {
             let Some(mut detached) = self.destruction.detach.pop_front() else {
                 break;
             };
-            if !detached.scope.valid(self) {
+            if !detached.scope.valid(self)
+                || self
+                    .simulation
+                    .section_interrupted((detached.started, detached.group))
+            {
+                self.finish_section(&detached);
+                if detached.scope.valid(self) && detached.remaining().next().is_some() {
+                    self.destruction.searches.push_back(Search::from_section(
+                        detached.scope,
+                        detached.ids,
+                        detached.next,
+                    ));
+                }
                 continue;
             }
-            let ids: Vec<_> = (0..quota.min(commits))
-                .filter_map(|_| detached.ids.pop_first())
+            let candidates = detached.candidates(
+                quota.min(commits),
+                &self.simulation,
+                &mut self.destruction.mutation_bytes_left,
+            );
+            commits -= candidates.len();
+            let ids: Vec<_> = candidates
+                .into_iter()
                 .filter(|&id| self.live_damage_brick(id))
                 .collect();
             let mut cues = Vec::new();
@@ -822,8 +1164,16 @@ impl Session {
                 }
                 cues.push((kind, position));
             }
-            commits -= ids.len();
-            self.hide_damage_bricks(&detached.scope, &ids)?;
+            let previous = self
+                .simulation
+                .set_section_writer(Some((detached.started, detached.group)));
+            let hidden = self.hide_damage_bricks(&detached.scope, &ids);
+            self.simulation.set_section_writer(previous);
+            hidden?;
+            for &id in &ids {
+                self.simulation
+                    .section_member((detached.started, detached.group), id);
+            }
             self.destruction.work.detached_bricks += ids.len() as u64;
             for &id in &ids {
                 if self.simulation.damage_parent(id).is_none() {
@@ -833,15 +1183,33 @@ impl Session {
             for cue in cues {
                 self.emit_brick_kill(cue);
             }
-            if !detached.ids.is_empty() {
+            if detached.remaining().next().is_some() {
                 self.destruction.detach.push_back(detached);
+            } else {
+                self.finish_section(&detached);
             }
         }
         // Discard only the known section removals. Event outputs run later and
         // their changes are observed next tick before more members detach.
         let _ = self.simulation.take_support_edits();
+        self.flush_section_journal();
         self.destruction.work.query_work += u64::from(WORK_PER_TICK - work);
         Ok(())
+    }
+    fn finish_section(&mut self, section: &Detached) {
+        self.simulation
+            .seal_section((section.started, section.group), section.scope.delay);
+        if let Some(reservation) = self
+            .destruction
+            .reservations
+            .get_mut(&(section.started, section.group))
+        {
+            reservation.until = self
+                .simulation
+                .state()
+                .tick
+                .saturating_add(PRESENTATION_LEASE);
+        }
     }
 }
 fn content_namespace(reference: &ContentRef) -> String {

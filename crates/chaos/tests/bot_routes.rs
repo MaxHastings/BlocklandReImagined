@@ -455,7 +455,7 @@ fn soccer(extra: impl FnOnce(OwnerId) -> Vec<Brick>) -> (Session, OwnerId, u64) 
         goal.name = Some(name.into());
         goal.colliding = false;
         goal.raycast = false;
-        goal.rule_region = Some([3.0, 4.0, 3.0]);
+        goal.rule_region = Some(Box::new([3.0, 4.0, 3.0]));
         bricks.push(goal);
     }
     bricks.extend(extra(human));
@@ -594,7 +594,7 @@ fn drive_scene(goal: [f32; 3], region: [f32; 3]) -> (Session, OwnerId, OwnerId, 
     target.name = Some("car_park".into());
     target.colliding = false;
     target.raycast = false;
-    target.rule_region = Some(region);
+    target.rule_region = Some(Box::new(region));
     target.events = vec![Row {
         enabled: true,
         input: "onObjectEnter".into(),

@@ -2283,6 +2283,7 @@ impl Session {
                 b.raycast = raycast;
                 b.colliding = colliding;
                 b.damage_hidden = false;
+                b.damage_section = None;
             }
         }
         world
