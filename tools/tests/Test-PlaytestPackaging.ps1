@@ -122,6 +122,17 @@ try {
     $caught = $false
     try { & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot (Join-Path $temp 'dist-tampered') -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @() -ShaderCompilerArchive $tampered } catch { $caught = $_.Exception.Message }
     if ($caught -notlike '*not the pinned*') { throw "Packager accepted a shader compiler archive that is not the pinned one: $caught" }
+    # Repackaging an installed content list must not append default mods twice.
+    foreach ($id in @('tool_duplicator','tool_duplicator-rules')) {
+        $source = Join-Path $bundle "addons/$id"
+        $destination = Join-Path $fixture "content/addons/$id"
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+        Copy-Item -LiteralPath $source -Destination $destination -Recurse
+        $metadata = Get-Content (Join-Path $source 'package.json') -Raw | ConvertFrom-Json
+        $side = if ($id -eq 'tool_duplicator-rules') { 'server' } else { 'shared' }
+        $override.packages += [ordered]@{ id=$id; version=$metadata.version; side=$side; dir="addons/$id" }
+    }
+    [IO.File]::WriteAllText((Join-Path $fixture 'content/packages.json'), (ConvertTo-Json $override -Depth 5))
     $dist = Join-Path $temp 'dist'
     & (Join-Path $repo 'tools/package_playtest.ps1') -RepoRoot $fixture -ExecutablePath $exe -DestinationRoot $dist -Version 'test-fixture' -ExpectedExecutableSha256 $exeHash -SkipVersionCheck -CompanionExecutables @() -ShaderCompilerArchive $dxcArchive
     $package = Join-Path $dist 'BlocklandReImagined-test-fixture-windows'
@@ -145,6 +156,7 @@ try {
     if (-not $caught) { throw 'Verifier accepted a checksum-valid package with no menu images.' }
     if (-not (Select-String -LiteralPath (Join-Path $package 'CREDITS.md') -Pattern 'Kaje, Ephialtes' -SimpleMatch -Quiet)) { throw 'Expected the Stunt Plane credited in CREDITS.md.' }
     $shippedList = Get-Content (Join-Path $package 'content/packages.json') -Raw | ConvertFrom-Json
+    if (@($shippedList.packages | Group-Object id | Where-Object Count -gt 1).Count -gt 0 -or @($shippedList.packages | Group-Object dir | Where-Object Count -gt 1).Count -gt 0) { throw 'Repackaging duplicated an Add-On identity or directory.' }
     # After the base game, in the list's order, on the sides the game derives.
     $listed = @($shippedList.packages | Select-Object -Skip $fields.Count | ForEach-Object { "$($_.id)=$($_.side)@$($_.dir)" }) -join ' '
     # The Duplicator's host rules right after it, host-only; the Rule
