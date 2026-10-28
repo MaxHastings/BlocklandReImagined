@@ -534,6 +534,16 @@ pub fn remember_file_hashes_in(file: std::path::PathBuf) {
     cache.hashes = None;
 }
 
+/// A separate cache for each installed content root. Saving one installation
+/// prunes files it did not see; sharing its cache with another installation
+/// would therefore evict the other's verified hashes on every switch.
+/// Canonical roots make relative/absolute spellings of one install agree.
+pub fn content_hash_cache_file(root: &Path, state: &Path) -> Result<std::path::PathBuf> {
+    let canonical = root.canonicalize()?;
+    let key = hash_bytes(canonical.as_os_str().as_encoded_bytes());
+    Ok(state.join(format!("package-hashes-{key}.json")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,6 +569,49 @@ mod tests {
             .unwrap()
             .set_modified(at)
             .unwrap();
+    }
+
+    #[test]
+    fn switching_installations_keeps_each_verified_cache_and_rereads_edits() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let state = std::env::temp_dir().join(format!("bri-install-hashes-{unique}"));
+        let a = state.join("release");
+        let b = state.join("preview");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        aged(&a.join("asset.bin"), b"alpha", 60);
+        aged(&b.join("asset.bin"), b"bravo", 60);
+        let a_cache = content_hash_cache_file(&a, &state).unwrap();
+        let b_cache = content_hash_cache_file(&b, &state).unwrap();
+        assert_ne!(a_cache, b_cache);
+        assert_eq!(
+            a_cache,
+            content_hash_cache_file(&a.join("."), &state).unwrap()
+        );
+
+        // Simulate separate processes, including saving/pruning the other root.
+        for (root, cache) in [(&a, &a_cache), (&b, &b_cache)] {
+            let mut hashes = FileHashes::load(cache);
+            assert_eq!(
+                hash_dir_with(root, Some(&mut hashes)).unwrap(),
+                hash_dir(root).unwrap()
+            );
+            assert_eq!(hashes.read, 5);
+            hashes.save(cache).unwrap();
+        }
+        let mut hashes = FileHashes::load(&a_cache);
+        let original = hash_dir_with(&a, Some(&mut hashes)).unwrap();
+        assert_eq!(original, hash_dir(&a).unwrap());
+        assert_eq!(hashes.read, 0, "the preview must not evict the release");
+        aged(&a.join("asset.bin"), b"other", 30);
+        let edited = hash_dir_with(&a, Some(&mut hashes)).unwrap();
+        assert_ne!(edited, original);
+        assert_eq!(edited, hash_dir(&a).unwrap());
+        assert_eq!(hashes.read, 5, "an edit must still invalidate the hash");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
