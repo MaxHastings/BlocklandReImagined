@@ -198,3 +198,10 @@ candidate/PR, without turning this into a perfection project.
 
 Current mechanism/policies are in [brick-destruction.md](../architecture/brick-destruction.md).
 Final commands/results and package/PR identity belong in the new handoff receipt.
+
+The subsequent pirate-mast follow-up supersedes member-based quality admission
+and landed-member retirement: visible art, shared motion and independent body
+budgets are separate. Complete membership metadata accepts late arrivals,
+shape-aware motion precedes connected landing groups, and eight proved server
+groups share removal rounds. See the [preview.2 receipt](../progress/2026-10-27-complete-collapse-assemblies.md)
+for evidence, remaining approximations and the interrupted full-gate status.
