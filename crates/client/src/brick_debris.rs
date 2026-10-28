@@ -802,6 +802,7 @@ impl BrickDebris {
     /// Projectiles as drawn this frame. Each pushes every body it passes
     /// through once, and flies on as if the debris were not there.
     pub fn shots(&mut self, shots: &[Shot]) {
+        let chunks: Vec<_> = self.chunk_handles().collect();
         let owners: HashMap<RigidBodyHandle, u64> = self
             .bodies
             .values()
@@ -814,7 +815,15 @@ impl BrickDebris {
             .collect();
         for strike in self.shots.strike(&self.world, shots, &owners) {
             let rb = &mut self.world.bodies[strike.handle];
-            let impulse = strike.direction * PROJECTILE_MASS * strike.speed;
+            // Grouping must not make a hit disappear into a huge proxy mass.
+            // A restrained minimum jolt is cosmetic; the server shot continues.
+            let impulse_size =
+                (PROJECTILE_MASS * strike.speed).max(if chunks.contains(&strike.handle) {
+                    rb.mass() * 1.5
+                } else {
+                    0.
+                });
+            let impulse = strike.direction * impulse_size;
             rb.apply_impulse_at_point(
                 Vector::from_array(impulse.to_array()),
                 Vector::from_array(strike.point.to_array()),

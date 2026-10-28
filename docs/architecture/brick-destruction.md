@@ -102,9 +102,12 @@ Every admitted original member keeps its mesh, print, color and shape. A section
 shares one transform before landing. Its complete membership count, bounds and
 lowest footprint nearest the hit are fixed one-shot cue metadata, not a pose
 stream. Tall sections lean around that footprint before falling free; wide
-slabs drop and tilt; long narrow spans rotate. Eight cached actual member
-corners sweep to the next pose under a shared 256-candidate contact budget.
-Only upward floor contacts trigger landing; this remains cosmetic contact,
+slabs drop and tilt; long narrow spans rotate. Cached original corners plus a fixed 64-cell distribution of actual member
+surface points sweep to the next pose under a shared 4096-candidate budget.
+Large member faces contribute interior samples too. Spatial cells prefer their
+lowest material point, so a broad sail does not miss a narrow raised deck.
+Any solid-surface impact can end the shared fall, including the side of a hull;
+this remains cosmetic contact,
 not a structural solver or exact irregular-body collision.
 
 Late batches join the current falling or landed pose. Breakup waits for the
@@ -120,15 +123,23 @@ fall. Physics Quality controls target granularity (roughly sqrt(member count)
 at Best, scaled down at lower settings). All members stay visible, each with
 one assembly transform; original per-look mesh/texture instancing is reused.
 At most 64 assembly bodies share the existing global rigid-body budget with
-ordinary blast debris. Each assembly has one box proxy; assembly proxies
-ignore one another to prevent empty bounding-box overlap from exploding the
-structure. They collide with the map, surviving bricks and ordinary local
-pushers/debris. Sparse group contact is consequently approximate.
+ordinary blast debris. Assembly colliders merge original member boxes only when their full rectangular
+faces match. Their compound union preserves gaps between sails, beams and masts;
+it never fills a whole assembly's empty bounding space. There are at most 64
+primitive boxes per assembly and 2048 allocated primitive proxies across debris
+admission. Groups whose collision union exceeds the budget retain visible shared
+landing geometry. Assembly groups can collide with one another, the map,
+surviving bricks and ordinary local pushers/debris. Non-box member geometry
+retains the existing whole-brick bounding-proxy approximation.
 
 Assembly collision streaming uses its swept oriented bounds, not a tower-sized
 sphere, and shares 512 work units per frame (16 per terrain tile). Motion waits
-while nearby collision is prepared. Sleeping/budget-evicted assemblies retain
-their last pose and all their visible members through the normal fade. Physics
+while nearby collision is prepared. Sleeping assemblies keep their bodies and hit targets; Rapier already makes
+sleeping simulation cheap. Budget-evicted assemblies retain their last pose and
+all visible members through the normal fade. Shots wake allocated sleeping
+assemblies with a restrained minimum 1.5-unit/s local jolt, so a grouped mass
+does not swallow the visible reaction. Rockets still continue authoritatively:
+Maxwell explicitly retained cosmetic rubble after the preview.2 recording. Physics
 Off keeps the cheap intact fall/landing visual without independent bodies.
 There is a separate 65536-member render reservation and 1024-group metadata
 ceiling; excessive new groups are diagnosed and omitted as whole groups rather

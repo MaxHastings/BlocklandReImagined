@@ -6,12 +6,15 @@ use crate::local_physics::{GRAVITY, LocalRegion};
 use bri_sim::grid::Index;
 use std::collections::VecDeque;
 mod partition;
+mod proxy;
 use partition::Partition;
 
 pub(super) const MAX_VISIBLE: usize = 65_536;
 const MAX_CHUNKS: usize = 64;
-const WITNESSES: usize = 8;
+const WITNESSES: usize = 72;
+const MAX_PROXY_PARTS: usize = 2048;
 
+#[derive(Clone)]
 pub(super) struct SectionPiece {
     pub brick: BrickId,
     pub look: Look,
@@ -33,6 +36,8 @@ enum Motion {
 struct Chunk {
     local: Vec3,
     half: Vec3,
+    proxy: Option<SharedShape>,
+    parts: usize,
     center: Vec3,
     turn: Quat,
     velocity: Vec3,
@@ -160,33 +165,82 @@ impl Section {
         let i = self.pieces.len();
         self.index.insert(i as u64, partition::bounds(&p));
         self.remaining.insert(i);
-        // Eight extremal actual brick corners. Admission is linear once, not
-        // a scan through every brick every animation frame.
+        // Original corners plus distributed real material samples. Outer
+        // sail corners can miss a narrow deck while its middle clips through.
         for x in [-1., 1.] {
             for y in [-1., 1.] {
                 for z in [-1., 1.] {
-                    let point = p.offset + p.turn * (p.half * Vec3::new(x, y, z));
-                    if self.motion == Motion::Topple && point.y - self.pivot.y < self.half.y * 0.25
-                    {
-                        continue;
-                    }
-                    for w in 0..WITNESSES {
-                        let direction = Vec3::new(
-                            if w & 1 == 0 { -1. } else { 1. },
-                            if w & 2 == 0 { -1. } else { 1. },
-                            if w & 4 == 0 { -1. } else { 1. },
-                        );
-                        let score = (point / self.half.max(Vec3::splat(0.1))).dot(direction);
-                        if score > self.scores[w] {
-                            self.scores[w] = score;
-                            self.witnesses[w] = Some(point);
-                        }
+                    self.record_point(p.offset + p.turn * (p.half * Vec3::new(x, y, z)));
+                }
+            }
+        }
+        self.record_point(p.offset + p.turn * (Vec3::NEG_Y * p.half.y));
+        let axes = self.sample_axes();
+        let h = (p.turn * Vec3::X).abs() * p.half.x
+            + (p.turn * Vec3::Y).abs() * p.half.y
+            + (p.turn * Vec3::Z).abs() * p.half.z;
+        if h[axes[0]] > self.half[axes[0]] / 8. || h[axes[1]] > self.half[axes[1]] / 4. {
+            for x in 0..8 {
+                for y in 0..4 {
+                    for z in 0..2 {
+                        let target = self.grid_point([x, y, z]) * self.half;
+                        let mut point = target.clamp(p.offset - h, p.offset + h);
+                        point.y = p.offset.y - h.y;
+                        self.record_point(point);
                     }
                 }
             }
         }
         self.pieces.push(p);
         self.assignment.push(None);
+    }
+    fn record_point(&mut self, point: Vec3) {
+        if self.motion == Motion::Topple && point.y - self.pivot.y < self.half.y * 0.25 {
+            return;
+        }
+        let q = point / self.half.max(Vec3::splat(0.1));
+        for w in 0..8 {
+            let direction = Vec3::new(
+                if w & 1 == 0 { -1. } else { 1. },
+                if w & 2 == 0 { -1. } else { 1. },
+                if w & 4 == 0 { -1. } else { 1. },
+            );
+            let score = q.dot(direction);
+            if score > self.scores[w] {
+                self.scores[w] = score;
+                self.witnesses[w] = Some(point);
+            }
+        }
+        let axes = self.sample_axes();
+        let dims = [8, 4, 2];
+        let cells: [usize; 3] = std::array::from_fn(|i| {
+            (((q[axes[i]] + 1.) * 0.5 * dims[i] as f32).floor() as usize).min(dims[i] - 1)
+        });
+        let slot = 8 + cells[0] + 8 * cells[1] + 32 * cells[2];
+        let target = self.grid_point(cells);
+        let score = -64. * q.y - q.distance_squared(target);
+        if score > self.scores[slot] {
+            self.scores[slot] = score;
+            self.witnesses[slot] = Some(point);
+        }
+    }
+    fn sample_axes(&self) -> [usize; 3] {
+        if self.motion == Motion::Drop {
+            [0, 2, 1]
+        } else if self.half.x >= self.half.z {
+            [0, 1, 2]
+        } else {
+            [2, 1, 0]
+        }
+    }
+    fn grid_point(&self, cells: [usize; 3]) -> Vec3 {
+        let axes = self.sample_axes();
+        let dims = [8, 4, 2];
+        let mut target = Vec3::ZERO;
+        for i in 0..3 {
+            target[axes[i]] = (cells[i] as f32 + 0.5) / dims[i] as f32 * 2. - 1.;
+        }
+        target
     }
     fn advance_motion(
         &mut self,
@@ -209,7 +263,7 @@ impl Section {
             for point in self.witnesses.iter().flatten() {
                 let from = old + ot * *point + Vec3::Y * 0.02;
                 let to = next + nt * *point;
-                if to.y >= from.y - 0.001 {
+                if from.distance_squared(to) < 1e-6 {
                     continue;
                 }
                 let reach = from.distance(to);
@@ -273,9 +327,12 @@ impl Section {
                 self.assignment[i] = Some(self.chunks.len());
             }
             let local = (low + high) * 0.5;
+            let (proxy, parts) = proxy::shape(&self.pieces, &members, self.origin + local);
             self.chunks.push(Chunk {
                 local,
                 half: (high - low) * 0.5,
+                proxy,
+                parts,
                 center: center + turn * local,
                 turn,
                 velocity: (velocity + spin.cross(turn * local)).clamp_length_max(12.),
@@ -353,13 +410,22 @@ impl BrickDebris {
         Ok(())
     }
     pub(super) fn advance_sections(&mut self, dt: f32, building: &Building) -> Result<()> {
-        let mut contacts = 256;
+        let mut contacts = 4096;
         let mut planning = 4096;
         let mut collision = 512;
         let mut available = self
             .limit
             .saturating_sub(self.bodies.len() + self.chunk_handles().count());
         available = available.min(MAX_CHUNKS.saturating_sub(self.chunk_handles().count()));
+        let used_parts = self.bodies.len()
+            + self
+                .sections
+                .values()
+                .flat_map(|s| &s.chunks)
+                .filter(|c| c.handle.is_some())
+                .map(|c| c.parts)
+                .sum::<usize>();
+        let mut part_slots = MAX_PROXY_PARTS.saturating_sub(used_parts);
         for s in self.sections.values_mut() {
             s.age += dt;
             if s.age >= SOLID_SECONDS + FADE_SECONDS {
@@ -384,11 +450,16 @@ impl BrickDebris {
                 if c.released {
                     continue;
                 }
-                if c.handle.is_none() && available == 0 {
+                if c.handle.is_none()
+                    && (available == 0 || c.parts > part_slots || c.proxy.is_none())
+                {
                     continue;
                 }
-                if c.ready && c.handle.is_some_and(|h| self.world.bodies[h].is_sleeping()) {
-                    c.freeze(&mut self.world);
+                // Rapier already makes sleeping bodies cheap. Keep their hit
+                // targets so projectiles can wake the visible wreckage.
+                if c.handle.is_some_and(|h| self.world.bodies[h].is_sleeping())
+                    && c.generation == building.query_generation()
+                {
                     continue;
                 }
                 let (center, turn) = c.pose(&self.world);
@@ -428,7 +499,6 @@ impl BrickDebris {
                 if !c.ready {
                     continue;
                 }
-                let h = (c.half * BODY_SHRINK).max(Vec3::splat(0.01));
                 let body = RigidBodyBuilder::dynamic()
                     .pose(Pose::from_parts(
                         Vector::from_array(center.to_array()),
@@ -439,20 +509,22 @@ impl BrickDebris {
                     .linear_damping(0.15)
                     .angular_damping(0.5)
                     .ccd_enabled(true);
-                // Sparse assemblies use a box proxy, so ignore other assembly
-                // proxies: overlapping empty space must not explode on release.
-                let collider = ColliderBuilder::cuboid(h.x, h.y, h.z)
+                // Exact unions of original brick boxes preserve empty sail
+                // and beam space; a whole-group box invents solid air and can
+                // launch the group out of a live deck on first contact.
+                let collider = ColliderBuilder::new(c.proxy.as_ref().unwrap().clone())
                     .density(DENSITY)
                     .friction(PLASTIC_FRICTION)
                     .restitution(0.25)
                     .collision_groups(InteractionGroups::new(
                         Group::GROUP_2,
-                        Group::GROUP_1,
+                        Group::GROUP_1 | Group::GROUP_2,
                         InteractionTestMode::And,
                     ));
                 let (handle, _) = self.world.insert(body, collider);
                 c.handle = Some(handle);
                 available -= 1;
+                part_slots -= c.parts;
             }
         }
         self.sections.retain(|_, s| s.age < 30.);
@@ -676,6 +748,181 @@ mod tests {
         assert!(floor.pose(0.5).0.y < 8.);
         p.section_half = Vec3::new(12., 0.3, 0.5);
         assert_eq!(Section::new(&p, 1).motion, Motion::Span);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod landing_regressions {
+    use super::*;
+    fn piece(id: u64, at: Vec3) -> SectionPiece {
+        SectionPiece {
+            brick: id,
+            look: Look {
+                definition: "brick".into(),
+                color: 1,
+                color_effect: 0,
+                shape_effect: 0,
+                print: None,
+                shard: None,
+            },
+            offset: at,
+            turn: Quat::IDENTITY,
+            half: Vec3::new(0.5, 0.3, 0.5),
+            origin: Vec3::ZERO,
+            delay: 0.,
+            members: 1,
+            section_half: Vec3::ONE,
+            pivot: Vec3::ZERO,
+        }
+    }
+    #[test]
+    fn collision_union_keeps_the_opening_between_mast_members() {
+        let positions = [
+            (-1., 0.3),
+            (-1., 0.9),
+            (-1., 1.5),
+            (0., 1.5),
+            (1., 1.5),
+            (1., 0.9),
+            (1., 0.3),
+        ];
+        let pieces: Vec<_> = positions
+            .into_iter()
+            .enumerate()
+            .map(|(i, (x, y))| piece(i as u64, Vec3::new(x, y, 0.)))
+            .collect();
+        let ids: Vec<_> = (0..pieces.len()).collect();
+        let (shape, parts) = proxy::shape(&pieces, &ids, Vec3::ZERO);
+        let shape = shape.unwrap();
+        assert!(
+            parts <= 3,
+            "straight runs merge without filling the opening"
+        );
+        assert!(
+            !shape.contains_point(&Pose::IDENTITY, Vector::new(0., 0.3, 0.)),
+            "empty space inside a group is not solid debris"
+        );
+        assert!(shape.contains_point(&Pose::IDENTITY, Vector::new(-1., 0.3, 0.)));
+    }
+    #[test]
+    fn sleeping_visible_chunk_keeps_a_projectile_target_and_wakes_on_hit() -> Result<()> {
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        let p = piece(1, Vec3::new(0., 2., 0.));
+        d.add_section((0, 1), vec![p], &b)?;
+        for _ in 0..180 {
+            d.advance(1. / 60., &b)?;
+        }
+        let handle = d.sections[&(0, 1)].chunks[0]
+            .handle
+            .expect("settled art retains a hit target");
+        d.world.bodies[handle].sleep();
+        d.advance(1. / 60., &b)?;
+        assert_eq!(d.sections[&(0, 1)].chunks[0].handle, Some(handle));
+        let center = Vec3::from_array(d.world.bodies[handle].translation().to_array());
+        for sign in [-1., 1.] {
+            d.shots(&[Shot {
+                id: 99,
+                position: center + Vec3::Z * 2. * sign,
+                velocity: Vec3::Z * 40.,
+            }]);
+        }
+        assert_eq!(d.diagnostics.projectile_hits, 1);
+        assert!(!d.world.bodies[handle].is_sleeping());
+        assert!(
+            d.world.bodies[handle].linvel().length() >= 1.49,
+            "a group gets a visible hit reaction"
+        );
+        assert_eq!(d.instances().count(), 1);
+        Ok(())
+    }
+    #[test]
+    fn broad_sail_hits_a_narrow_deck_before_its_middle_passes_through() -> Result<()> {
+        let deck: Vec<_> = (5..=14)
+            .flat_map(|x| {
+                (-2..=2).map(move |z| (1000 + (x * 5 + z + 2) as u64, [x as f32, 6.7, z as f32]))
+            })
+            .collect();
+        let (b, _) = super::super::tests::building(&deck);
+        let mut pieces: Vec<_> = (0..34)
+            .map(|i| piece(i + 1, Vec3::new(0., 4.3 + i as f32 * 0.6, 0.)))
+            .collect();
+        for x in -4..=4 {
+            for y in 7..=22 {
+                if x != 0 {
+                    pieces.push(piece(
+                        pieces.len() as u64 + 1,
+                        Vec3::new(0., 4.3 + y as f32 * 0.6, x as f32),
+                    ));
+                }
+            }
+        }
+        for p in &mut pieces {
+            p.origin = Vec3::new(0., 14.2, 0.);
+            p.pivot = Vec3::new(0., 4., 0.);
+            p.section_half = Vec3::new(0.5, 10.2, 4.5);
+        }
+        let mut s = Section::new(&pieces[0], 1);
+        s.expected = pieces.len();
+        s.axis = Vec3::NEG_Z;
+        let mut old = Section::new(&pieces[0], 1);
+        old.expected = pieces.len();
+        old.axis = Vec3::NEG_Z;
+        for p in pieces.iter().cloned() {
+            old.admit(p);
+        }
+        old.witnesses[8..].fill(None);
+        for p in pieces {
+            s.admit(p);
+        }
+        for i in 0..180 {
+            old.age = (i + 1) as f32 / 60.;
+            old.advance_motion(&b, &mut 4096, &BTreeSet::new())?;
+            if old.landed {
+                break;
+            }
+        }
+        for i in 0..180 {
+            s.age = (i + 1) as f32 / 60.;
+            s.advance_motion(&b, &mut 4096, &BTreeSet::new())?;
+            if s.landed {
+                break;
+            }
+        }
+        assert!(s.landed);
+        fn lowest(s: &Section) -> f32 {
+            let (center, turn) = s.pose(s.shown);
+            let mut lowest = 7.0_f32;
+            for p in &s.pieces {
+                for x in [-1., 1.] {
+                    for y in [-1., 1.] {
+                        for z in [-1., 0., 1.] {
+                            let local =
+                                p.offset + Vec3::new(x * p.half.x, y * p.half.y, z * p.half.z);
+                            if local.y - s.pivot.y < s.half.y * 0.25 {
+                                continue;
+                            }
+                            let at = center + turn * local;
+                            if (4.5..=14.5).contains(&at.x) && at.z.abs() <= 2.5 {
+                                lowest = lowest.min(at.y);
+                            }
+                        }
+                    }
+                }
+            }
+            lowest
+        }
+        assert!(
+            lowest(&old) < 6.75,
+            "negative control: outer-corner probes must miss the raised narrow deck"
+        );
+        assert!(
+            lowest(&s) >= 6.75,
+            "sail penetrated deck to y={}; shared fall stopped too late at {}",
+            lowest(&s),
+            s.shown
+        );
         Ok(())
     }
 }

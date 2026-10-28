@@ -394,10 +394,7 @@ impl Building {
     pub(crate) fn section_probe(&self, from: Vec3, to: Vec3) -> SectionProbe {
         let reach = from.distance(to).max(0.001);
         let direction = (to - from).normalize_or(Vec3::NEG_Y);
-        let nearest = self
-            .map_ray(from, direction, reach)
-            .filter(|(_, n, _)| n.y > 0.25)
-            .map(|h| h.0);
+        let nearest = self.map_ray(from, direction, reach).map(|h| h.0);
         SectionProbe {
             from,
             direction,
@@ -419,7 +416,7 @@ impl Building {
                 Some(Some(id)) if !skip(id) && !self.bricks[&id].damage_hidden => {
                     let mut hit = None;
                     self.trace_brick(id, p.from, p.direction, p.reach, &mut hit)?;
-                    if let Some(hit) = hit.filter(|h| h.normal.y > 0.25) {
+                    if let Some(hit) = hit {
                         p.nearest = Some(p.nearest.map_or(hit.distance, |d| d.min(hit.distance)));
                     }
                 }

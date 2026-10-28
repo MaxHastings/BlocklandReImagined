@@ -34,8 +34,10 @@ Falling sections are local visuals: they cannot crush, carry players, block shot
 or leave permanent rubble. Tall sections tip about a base near the hit;
 wide slabs drop and tilt. Landing contact and assembly box colliders are
 cosmetic approximations. Physics Quality controls assembly breakup and bodies,
-not member visibility. Sleeping or budget-limited assemblies keep their art
-at the last pose through the normal fade. There is a separate 65536-member
+not member visibility. Settled assemblies should react when shot again: local chunks wake and move,
+while the authoritative rocket continues through cosmetic rubble. Watch the
+first impact against the deck/hull for clipping, jumps or floating pieces.
+Budget-limited assemblies keep their art through the normal fade. There is a separate 65536-member
 render ceiling for extreme simultaneous collapses; new groups beyond it can
 be omitted whole. Missing/interrupted cue batches remain one visible assembly
 instead of breaking apart prematurely. Unsupported printed/special
