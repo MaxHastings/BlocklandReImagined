@@ -15,6 +15,9 @@ pub const STEP: f32 = bri_physics::FIXED_DT;
 /// Steps per frame before time is dropped instead of catching up.
 pub const MAX_STEPS: u32 = 4;
 pub(crate) const MAX_STATIC_COLLIDERS: usize = 16_384;
+// Query/build work costs sixteen cache lookups. Callers retain their existing
+// real-geometry quota while overlapping bodies can reuse prepared tiles cheaply.
+pub(crate) const COLLISION_QUERY_COST: u32 = 16;
 /// Torque's world gravity (units/s^2), as the player and items use.
 pub const GRAVITY: f32 = 20.0;
 /// Distance around each moving body where surroundings are made solid.
@@ -77,6 +80,14 @@ pub struct Surroundings {
     statics: HashMap<Static, Option<ColliderHandle>>,
     generation: u64,
     cache_area: Option<(Vec3, Vec3)>,
+    brick_tiles: HashMap<[i32; 3], BrickTile>,
+}
+
+struct BrickTile {
+    generation: u64,
+    cursor: bri_sim::grid::QueryCursor,
+    blocked: Option<(BrickId, SharedShape, Pose)>,
+    done: bool,
 }
 
 /// Pausable collision streaming for a cosmetic assembly's actual swept box.
@@ -84,34 +95,42 @@ pub struct Surroundings {
 pub(crate) struct LocalRegion {
     pub low: Vec3,
     pub high: Vec3,
-    cursor: bri_sim::grid::QueryCursor,
-    bricks_done: bool,
+    brick: Option<[i32; 3]>,
+    first: [i32; 3],
+    last: [i32; 3],
     tile: Option<(i32, i32)>,
     first_z: i32,
     last_x: i32,
     last_z: i32,
-    blocked: Option<(BrickId, SharedShape, Pose)>,
 }
 impl LocalRegion {
     pub fn new(low: Vec3, high: Vec3) -> Self {
-        let min = std::array::from_fn(|a| (low[a] / bri_sim::grid::CELL[a]).floor() as i32);
-        let max: [i32; 3] =
-            std::array::from_fn(|a| (high[a] / bri_sim::grid::CELL[a]).ceil() as i32 + 1);
-        let first_z = (low.z / TERRAIN_CHUNK).floor() as i32;
+        let first: [i32; 3] = low.to_array().map(|v| (v / TERRAIN_CHUNK).floor() as i32);
+        let last: [i32; 3] = high.to_array().map(|v| (v / TERRAIN_CHUNK).floor() as i32);
         Self {
-            low,
-            high,
-            cursor: bri_sim::grid::QueryCursor::new(bri_sim::grid::Bounds {
-                min,
-                size: std::array::from_fn(|a| (max[a] - min[a]).max(1)),
-            }),
-            bricks_done: false,
-            tile: Some(((low.x / TERRAIN_CHUNK).floor() as i32, first_z)),
-            first_z,
-            last_x: (high.x / TERRAIN_CHUNK).floor() as i32,
-            last_z: (high.z / TERRAIN_CHUNK).floor() as i32,
-            blocked: None,
+            low: Vec3::from_array(first.map(|v| v as f32 * TERRAIN_CHUNK)),
+            high: Vec3::from_array(last.map(|v| (v + 1) as f32 * TERRAIN_CHUNK)),
+            brick: Some(first),
+            first,
+            last,
+            tile: Some((first[0], first[2])),
+            first_z: first[2],
+            last_x: last[0],
+            last_z: last[2],
         }
+    }
+    fn next_brick_tile(&mut self) {
+        let Some(mut key) = self.brick else { return };
+        key[2] += 1;
+        if key[2] > self.last[2] {
+            key[2] = self.first[2];
+            key[1] += 1;
+        }
+        if key[1] > self.last[1] {
+            key[1] = self.first[1];
+            key[0] += 1;
+        }
+        self.brick = (key[0] <= self.last[0]).then_some(key);
     }
     pub fn contains(&self, low: Vec3, high: Vec3) -> bool {
         low.cmpge(self.low).all() && high.cmple(self.high).all()
@@ -222,25 +241,65 @@ impl Surroundings {
         skip: impl Fn(BrickId) -> bool,
     ) -> Result<bool> {
         self.touch(region.low, region.high);
-        if region.blocked.is_some() && self.full() {
-            return Ok(false);
-        }
-        if let Some((id, shape, pose)) = region.blocked.take()
-            && !skip(id)
-            && !self.statics.contains_key(&Static::Brick(id))
-        {
-            let h = world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
-            self.statics.insert(Static::Brick(id), Some(h));
-        }
-        while *work > 0 && !region.bricks_done {
-            *work -= 1;
-            match building.section_solid_step(&mut region.cursor) {
-                None => region.bricks_done = true,
+        // Overlapping bodies share both completed and unfinished tile queries.
+        // The budget pays for world geometry once, not once per flying brick.
+        while *work > 0 && region.brick.is_some() {
+            let key = region.brick.unwrap();
+            let low = Vec3::from_array(key.map(|v| v as f32 * TERRAIN_CHUNK));
+            let high = low + Vec3::splat(TERRAIN_CHUNK);
+            let changed = self
+                .brick_tiles
+                .get(&key)
+                .is_none_or(|tile| building.query_changed_since(tile.generation, low, high));
+            if changed {
+                if !self.brick_tiles.contains_key(&key)
+                    && self.brick_tiles.len() >= MAX_STATIC_COLLIDERS
+                {
+                    return Ok(false);
+                }
+                self.brick_tiles.insert(
+                    key,
+                    BrickTile {
+                        generation: building.query_generation(),
+                        cursor: bri_sim::grid::QueryCursor::new(bri_sim::grid::Bounds {
+                            min: std::array::from_fn(|a| {
+                                (low[a] / bri_sim::grid::CELL[a]).round() as i32
+                            }),
+                            size: std::array::from_fn(|a| {
+                                (TERRAIN_CHUNK / bri_sim::grid::CELL[a]).round() as i32
+                            }),
+                        }),
+                        blocked: None,
+                        done: false,
+                    },
+                );
+            }
+            let tile = self.brick_tiles.get_mut(&key).unwrap();
+            tile.generation = building.query_generation();
+            let cost = if tile.done { 1 } else { COLLISION_QUERY_COST };
+            if *work < cost {
+                return Ok(false);
+            }
+            *work -= cost;
+            if tile.done {
+                region.next_brick_tile();
+                continue;
+            }
+            let candidate = if let Some(blocked) = tile.blocked.take() {
+                Some(Some(blocked))
+            } else {
+                building.section_solid_step(&mut tile.cursor)
+            };
+            match candidate {
+                None => {
+                    tile.done = true;
+                    region.next_brick_tile();
+                }
                 Some(Some((id, shape, pose)))
                     if !skip(id) && !self.statics.contains_key(&Static::Brick(id)) =>
                 {
-                    if self.full() {
-                        region.blocked = Some((id, shape, pose));
+                    if self.statics.len() >= MAX_STATIC_COLLIDERS {
+                        tile.blocked = Some((id, shape, pose));
                         return Ok(false);
                     }
                     let h = world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
@@ -249,15 +308,22 @@ impl Surroundings {
                 _ => {}
             }
         }
-        while *work >= 16 && region.bricks_done {
-            if self.full() {
-                return Ok(false);
-            }
+        while *work > 0 && region.brick.is_none() {
             let Some((cx, cz)) = region.tile else {
                 return Ok(true);
             };
-            *work -= 16;
-            self.load_terrain_tile(world, building, cx, cz)?;
+            // An overlapping body's already prepared tile is a cache lookup,
+            // not another terrain build. Charging it as a build made a burst
+            // of debris wait seconds for collision that already existed.
+            let cached = self.statics.contains_key(&Static::Terrain(cx, cz));
+            let cost = if cached { 1 } else { 16 * COLLISION_QUERY_COST };
+            if *work < cost || (!cached && self.full()) {
+                return Ok(false);
+            }
+            *work -= cost;
+            if !cached {
+                self.load_terrain_tile(world, building, cx, cz)?;
+            }
             let (nx, nz) = if cz < region.last_z {
                 (cx, cz + 1)
             } else {
@@ -265,7 +331,7 @@ impl Surroundings {
             };
             region.tile = (nx <= region.last_x).then_some((nx, nz));
         }
-        Ok(region.bricks_done && region.tile.is_none())
+        Ok(region.brick.is_none() && region.tile.is_none())
     }
     fn load_terrain_tile(
         &mut self,
@@ -309,6 +375,7 @@ impl Surroundings {
     /// the bodies that rested on them.
     pub fn clear(&mut self, world: &mut PhysicsWorld) {
         self.cache_area = None;
+        self.brick_tiles.clear();
         for handle in self.statics.drain().filter_map(|(_, h)| h) {
             world.remove_collider(handle);
         }
@@ -361,10 +428,18 @@ impl CollisionWindow {
             velocity,
             angular,
         } = motion;
-        let margin = Vec3::splat(0.1 + half.length() * angular * 0.5) + velocity.abs() * 0.5;
+        // Prepare two worst-case rendered frames ahead. A half-second spin
+        // sphere made a small brick request collision across entire buildings.
+        let ahead = STEP * MAX_STEPS as f32 * 2.;
+        let turn = (half.length() * angular * ahead).min(half.length() * 2.);
+        let margin = Vec3::splat(0.1 + turn) + velocity.abs() * ahead;
         let low = center - half - margin;
         let high = center + half + margin;
-        let changed = building.query_changed_since(self.generation, low, high);
+        let (watched_low, watched_high) = self
+            .region
+            .as_ref()
+            .map_or((low, high), |r| (r.low, r.high));
+        let changed = building.query_changed_since(self.generation, watched_low, watched_high);
         if changed || self.region.as_ref().is_none_or(|r| !r.contains(low, high)) {
             self.region = Some(LocalRegion::new(low - Vec3::ONE, high + Vec3::ONE));
             self.ready = false;

@@ -83,7 +83,39 @@ impl SupportProbe {
                 self.cells = None;
                 continue;
             }
-            match self.query.step(&sim.index) {
+            // A coarse bucket holds many bricks unrelated to these attachment
+            // faces. Batch at most sixteen cheap bounds rejects per credit;
+            // actual ground rays, attachment cells and candidates keep their
+            // original quota. This remains a bounded cursor, not an eager scan.
+            let mut next = Some(None);
+            for _ in 0..16 {
+                next = self.query.step(&sim.index);
+                match next {
+                    Some(Some(other)) if other != self.id => {
+                        let other_bounds = sim.index.bounds(other);
+                        // Connection cells may be recessed inside overlapping
+                        // mesh bounds (ramps/interlocking custom bricks).
+                        let vertical = bounds.min[1] < other_bounds.max()[1] + 1
+                            && other_bounds.min[1] < bounds.max()[1] + 1
+                            && [0, 2].into_iter().all(|a| {
+                                bounds.min[a] < other_bounds.max()[a]
+                                    && other_bounds.min[a] < bounds.max()[a]
+                            });
+                        let family_face = sim.damage_parent(self.id).is_some()
+                            && sim.damage_parent(self.id) == sim.damage_parent(other)
+                            && grid::share_face(bounds, other_bounds);
+                        if (vertical || family_face) && live(other) {
+                            break;
+                        }
+                        next = Some(None);
+                    }
+                    None => break,
+                    _ => {
+                        next = Some(None);
+                    }
+                }
+            }
+            match next {
                 None => return Ok(true),
                 Some(Some(other)) if other != self.id && live(other) => {
                     let other_bounds = sim.index.bounds(other);

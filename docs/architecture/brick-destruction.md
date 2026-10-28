@@ -10,8 +10,10 @@ Keep familiar whole-brick pops, believable blast scale and readable debris.
 Fun takes precedence over physical fidelity: make uncommon plausible outcomes
 accessible without increasing every explosion. No artificial/generated sounds,
 unrelated shake, oversized particles or added visual material. Existing game
-sounds may receive restrained pitch, level and timing variation; no new audio
-is required to deliver this increment. Cosmetic acceptance belongs to Maxwell.
+sounds retain their identity. Maxwell also authorized verified licensed real
+recordings for restrained plastic release/contact/landing cues on2026-10-28;
+see [recorded audio](../modding/brick-destruction-audio.md). Cosmetic acceptance
+belongs to Maxwell.
 
 Latest instruction supersedes the earlier optional switches: the full
 experience is enabled in free build and minigames. No new destruction/shards
@@ -99,7 +101,7 @@ remainder against the current world. It never promises an unreachable old total.
 Originals shared by several fragment sections wait for the latest section's
 restoration deadline. No original restores while one of its sections collects.
 
-This is explicitly a streamed authoritative operation: at most 128 candidates
+This is explicitly a streamed authoritative operation: at most 256 candidates
 are changed per tick, and uncommitted members still exist for gameplay. It is
 not an instantaneous atomic removal of an entire skyscraper. Brick state is
 truth for collision, queries and building tools; the common mutation boundary
@@ -110,7 +112,9 @@ Each operation publishes a Ready barrier with its actual committed count, then
 Retired when its remaining source references disappear. Source bricks carry a
 transient section tag, including packed replication. Clients stage received
 material at its original pose until Ready, missing-source reconciliation,
-incremental preparation and GPU model readiness all complete. Tagged world
+and GPU model readiness all complete. Contact witnesses prepare during
+member admission; the landing index can prepare in flight and does not gate
+the first coherent movement. Tagged world
 state recovers missing cues without inventing geometry. Restoration suppresses
 stale members immediately; retirement prevents late resurrection. The normal
 13-second visual lifetime starts after preparation, not during delivery.
@@ -118,7 +122,10 @@ stale members immediately; retirement prevents late resurrection. The normal
 ## Pipeline admission and budgets
 
 Server traversal, footprint rays and stud attachment cells share 8192 counted
-work units/tick. At most 128 damage/removal candidates and 2048 split cells are
+work units/tick. Each support-query credit batches at most16 cheap coarse-bucket
+rejects; actual ground rays and authored attachment work retain their quota.
+No query eagerly floods the component. At most256 damage/removal candidates and
+2048 split cells are
 admitted per tick; splits also have a 2048-cell per-blast limit. There are at
 most 16384 active surviving parts and 2048 descendants per original. Mutation
 payload estimates share 4 MiB/tick. These are work/allocation bounds, not an
@@ -153,8 +160,10 @@ Brick deltas still cost bandwidth proportional to affected material.
 
 Visible material, shared transforms and independently simulated bodies are
 separate resources. Every admitted member keeps its original mesh, color,
-print and shape. Preparation admits 256 members and four new model uploads per
-frame. All received material remains visible while that work completes. Tall
+print and shape. The landing index prepares256 members and models upload at
+most four new appearances per frame. All received material remains visible.
+Complete delivery and GPU readiness permit the shared fall; landing-index work
+continues during flight. Tall
 sections lean around a lowest footprint near the severed support; wide slabs
 drop and tilt; long spans rotate. Corners and 64 distributed material witnesses
 probe a 0.2-second contact horizon under a 4096-unit budget. The displayed clock
@@ -175,8 +184,14 @@ Ordinary debris and section chunks use one collision-window mechanism: prepare
 swept oriented surroundings ahead while retaining the previous safe window.
 Nearby edit history invalidates affected windows; distant edits do not pause
 unrelated rubble. Static cache capacity is bounded. Ordinary preparation is
-budgeted per fixed step; section preparation receives 512 units/frame. Genuine
-nearby resource pressure can still delay cosmetic motion.
+shared through bounded8-unit tiles, including in-progress queries. Completed
+coverage is invalidated over its whole area, so a newly built wall cannot be
+missed by a moving body. Ordinary preparation retains128 real geometry queries
+per fixed step and section preparation512 per frame. Cache lookups cost one
+sixteenth of a query; fresh terrain costs16 queries. Both geometry and lookup
+work remain bounded. The swept lookahead covers two worst-case frames rather
+than a half-second angular sphere. Genuine nearby resource pressure can still
+delay cosmetic motion.
 
 Shots use the displayed projectile path. Allocated bodies receive a mass-scaled
 local impulse and wake; preparing, frozen and shared assemblies also have bounded
@@ -184,7 +199,11 @@ source-box hit queries and restrained recoil. Gaps remain queryable gaps rather
 than one giant sail bounding box. This is a local visual response: authoritative
 projectiles continue through rubble and trigger no extra gameplay explosion.
 First observed segments cover one fixed step; terminal-only unseen trajectories
-are not guaranteed. No sound assets or synthetic effects were added.
+are not guaranteed. A64-entry recent explosion context preserves observed
+surface direction across delayed member packets without replaying its impulse.
+Context expires after the ordinary solid-debris interval and resets per session.
+Audio uses recorded assets and real local events through the existing mixer;
+no synthetic/generated sound or extra gameplay explosion is introduced.
 
 Existing source permission policy is shared by direct and follow-on damage,
 including the pre-existing LAN exception. WAN ownership/minigame restrictions

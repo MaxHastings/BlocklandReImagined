@@ -200,6 +200,7 @@ impl Section {
             return;
         }
         p.offset -= self.origin;
+        self.record_member(&p);
         self.pieces.push(p);
         self.assignment.push(None);
     }
@@ -212,33 +213,37 @@ impl Section {
                 .expect("unsealed section index")
                 .insert(i as u64, partition::bounds(&p));
             self.remaining.insert(i);
-            // Original corners plus distributed real material samples. Outer
-            // sail corners can miss a narrow deck while its middle clips through.
-            for x in [-1., 1.] {
-                for y in [-1., 1.] {
-                    for z in [-1., 1.] {
-                        self.record_point(p.offset + p.turn * (p.half * Vec3::new(x, y, z)));
-                    }
-                }
-            }
-            self.record_point(p.offset + p.turn * (Vec3::NEG_Y * p.half.y));
-            let axes = self.sample_axes();
-            let h = (p.turn * Vec3::X).abs() * p.half.x
-                + (p.turn * Vec3::Y).abs() * p.half.y
-                + (p.turn * Vec3::Z).abs() * p.half.z;
-            if h[axes[0]] > self.half[axes[0]] / 8. || h[axes[1]] > self.half[axes[1]] / 4. {
-                for x in 0..8 {
-                    for y in 0..4 {
-                        for z in 0..2 {
-                            let target = self.grid_point([x, y, z]) * self.half;
-                            let mut point = target.clamp(p.offset - h, p.offset + h);
-                            point.y = p.offset.y - h.y;
-                            self.record_point(point);
-                        }
-                    }
-                }
-            }
             self.prepared += 1;
+        }
+    }
+    // Admission is already spread over delivered members. Prepare the small
+    // contact witness set there; the landing index can catch up during flight.
+    fn record_member(&mut self, p: &SectionPiece) {
+        // Original corners plus distributed real material samples. Outer
+        // sail corners can miss a narrow deck while its middle clips through.
+        for x in [-1., 1.] {
+            for y in [-1., 1.] {
+                for z in [-1., 1.] {
+                    self.record_point(p.offset + p.turn * (p.half * Vec3::new(x, y, z)));
+                }
+            }
+        }
+        self.record_point(p.offset + p.turn * (Vec3::NEG_Y * p.half.y));
+        let axes = self.sample_axes();
+        let h = (p.turn * Vec3::X).abs() * p.half.x
+            + (p.turn * Vec3::Y).abs() * p.half.y
+            + (p.turn * Vec3::Z).abs() * p.half.z;
+        if h[axes[0]] > self.half[axes[0]] / 8. || h[axes[1]] > self.half[axes[1]] / 4. {
+            for x in 0..8 {
+                for y in 0..4 {
+                    for z in 0..2 {
+                        let target = self.grid_point([x, y, z]) * self.half;
+                        let mut point = target.clamp(p.offset - h, p.offset + h);
+                        point.y = p.offset.y - h.y;
+                        self.record_point(point);
+                    }
+                }
+            }
         }
     }
     fn record_point(&mut self, point: Vec3) {
@@ -344,12 +349,7 @@ impl Section {
         work: &mut u32,
         dead: &BTreeSet<BrickId>,
     ) -> Result<()> {
-        if !self.sealed
-            || !self.gpu_ready
-            || self.prepared != self.pieces.len()
-            || self.landed
-            || self.pieces.is_empty()
-        {
+        if !self.sealed || !self.gpu_ready || self.landed || self.pieces.is_empty() {
             return Ok(());
         }
         let (at, _) = self.pose(self.shown);
@@ -619,7 +619,7 @@ impl BrickDebris {
     pub(super) fn advance_sections(&mut self, dt: f32, building: &Building) -> Result<()> {
         let mut contacts = 4096;
         let mut planning = 4096;
-        let mut collision = 512;
+        let mut collision = 512 * crate::local_physics::COLLISION_QUERY_COST;
         let mut material = 256;
         let mut recovery = 256;
         let mut available = self
@@ -1000,6 +1000,70 @@ mod tests {
             }
             assert_eq!(reached.len(), ids.len());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn large_collapses_begin_moving_before_landing_partition_work_finishes() -> Result<()> {
+        let (building, _) = super::super::tests::building(&[]);
+        let mut late = Vec::new();
+        for (count, width) in [(40, 1), (1500, 20), (12000, 40)] {
+            let height = count / width;
+            let origin = [(width - 1) as f32 * 0.5, height as f32 * 0.3, 0.];
+            let cues: Vec<_> = (0..count)
+                .map(|i| {
+                    cue(
+                        i + 1,
+                        [(i % width) as f32, 0.3 + (i / width) as f32 * 0.6, 0.],
+                        count as u32,
+                        [width as f32 * 0.5, height as f32 * 0.3, 0.5],
+                        origin,
+                        [origin[0], 0., 0.],
+                    )
+                })
+                .collect();
+            let initial_tip = Vec3::from(cues.last().unwrap().position);
+            let mut d = BrickDebris::new();
+            d.set_limit(8);
+            d.cues(&cues, &building)?;
+            d.cues(
+                &[Cue {
+                    id: count + 1,
+                    tick: 1,
+                    position: origin,
+                    kind: CueKind::BrickSectionReady {
+                        group: 7,
+                        started: 0,
+                        members: count as u32,
+                    },
+                }],
+                &building,
+            )?;
+            let mut first = None;
+            let mut tip_at_100ms = 0.;
+            for frame in 1..=60 {
+                d.advance(1. / 60., &building)?;
+                assert_eq!(d.instances().count(), count as usize);
+                let tip = d.instances().last().unwrap().1.transform.w_axis.truncate();
+                let moved = tip.distance(initial_tip);
+                if first.is_none() && moved > 0.01 {
+                    first = Some(frame * 1000 / 60);
+                }
+                if frame == 6 {
+                    tip_at_100ms = moved;
+                }
+            }
+            eprintln!(
+                "collapse {count} members: first tip motion {first:?}ms; tip at100ms {tip_at_100ms:.3} units"
+            );
+            if first.is_none_or(|ms| ms > 100) {
+                late.push((count, first));
+            }
+        }
+        assert!(
+            late.is_empty(),
+            "sealed visible assemblies waited for partition preparation: {late:?}"
+        );
         Ok(())
     }
     #[test]

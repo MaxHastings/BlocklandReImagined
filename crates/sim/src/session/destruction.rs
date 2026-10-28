@@ -12,7 +12,9 @@ use std::{cmp::Reverse, collections::BinaryHeap, sync::Arc};
 const MAX_PIECES: usize = 16_384;
 const PIECES_PER_BLAST: usize = 2048;
 const WORK_PER_TICK: u32 = 8192;
-const COMMIT_PER_TICK: usize = 128;
+// Payload/cue limits still bound the commit. Two hundred fifty-six small
+// records avoid an extra second of delivery after a large proof completes.
+const COMMIT_PER_TICK: usize = 256;
 const MAX_JOBS: usize = 256;
 pub(super) const MUTATION_BYTES_PER_TICK: u64 = 4 * 1024 * 1024;
 /// Reserve presentation capacity before hiding any section member. An
