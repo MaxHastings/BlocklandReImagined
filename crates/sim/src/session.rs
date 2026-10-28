@@ -29,6 +29,7 @@ mod bots;
 pub use bots::{
     BotCandidate, BotDecision, BotDrive, BotEvidence, BotNotice, BotObjectiveDetail,
     BotPlannedHarm, BotReload, BotSurpriseView, BotTask, BotTeamView, BotThought, BotTuning,
+    BreachWork,
 };
 mod breakables;
 mod build_load;

@@ -4,6 +4,15 @@
 use super::*;
 
 impl Session {
+    pub(in crate::session) fn bot_spawn_properties(
+        &self,
+        bot: OwnerId,
+    ) -> Option<(BrickId, Option<u32>)> {
+        let id = self.bots.brains.get(&bot)?.brick?;
+        let brick = self.simulation.state().bricks.get(&id)?;
+        Some((id, brick.vehicle.as_ref().and_then(|v| v.team)))
+    }
+
     pub fn is_bot(&self, owner: OwnerId) -> bool {
         self.bots.is_bot(owner)
     }

@@ -771,6 +771,15 @@ impl State {
                 }))
     }
     pub(super) fn fail(&mut self, tick: u64, reason: &'static str) {
+        self.fail_for(tick, reason, APPROACH_TIMEOUT * 2);
+    }
+    /// A route attempt failed, not the action's rules or capabilities.
+    /// Reaching a destination can work after a local replan; blacklisting
+    /// delivery for a minute makes a carrier abandon it to chase enemies.
+    pub(super) fn navigation_failed(&mut self, tick: u64, reason: &'static str) {
+        self.fail_for(tick, reason, UNREACHED_TICKS);
+    }
+    fn fail_for(&mut self, tick: u64, reason: &'static str, retry: u64) {
         self.paused = false;
         if let Some(step) = self.step.take() {
             self.failed.give_up(
@@ -782,7 +791,7 @@ impl State {
                     round: step.round,
                     team: step.team,
                 },
-                tick.saturating_add(APPROACH_TIMEOUT * 2),
+                tick.saturating_add(retry),
             );
         }
         self.route.clear();

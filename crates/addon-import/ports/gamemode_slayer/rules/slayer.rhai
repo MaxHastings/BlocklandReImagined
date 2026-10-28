@@ -137,6 +137,23 @@ fn team_by_id(g, id) {
 // counts only connections (`numMembers["GameConnection"]`): sorting,
 // balancing and greetings.
 fn own_bot(p) { p.bot && p.spawner == "{{rules}}" }
+
+// A builder's hole keeps its explicit Team choice; otherwise a uniquely
+// matching team color binds it. Only unbound holes use ordinary auto sort.
+fn hole_team(g, p) {
+    if g == () || p.bot_brick == () || !uses_teams(g.id) { return (); }
+    if p.bot_spawn_team != () { return team_by_id(g, p.bot_spawn_team); }
+    let b = brick(p.bot_brick);
+    if b == () { return (); }
+    let found = ();
+    for t in g.teams {
+        if t.color == control_of(b) {
+            if found != () { return (); }
+            found = t;
+        }
+    }
+    found
+}
 // What killing `victim` is worth: the game's Kill Player, or Kill Bot for
 // these rules' bots while Bots Worth Kill Player is off (ours, not
 // Slayer's: there bots always had their own points).
@@ -2180,7 +2197,13 @@ fn on_spawn(p) {
     set_player(p, "last_kill", -1);
     set_player(p, "ff_extra", 0);
     let g = minigame(me.minigame);
-    kit(p, g, me.team);
+    let bound = hole_team(g, me);
+    let team = if bound == () { me.team } else { bound.id };
+    if bound != () && me.team != bound.id {
+        set_player(p, "no_balance", true);
+        set_team(p, bound.id);
+    }
+    kit(p, g, team);
     set_player(p, "skin", -1);
     dress(p);
     let r = round_of(me.minigame);
@@ -2727,7 +2750,13 @@ fn mg_joined(g, event) {
             tell(event.player, `${c5()} + Type ${c3()}/joinTeam [Team Name] ${c5()}to join a team. Type ${c3()}/listTeams ${c5()}to view a list of teams.`);
         }
     }
-    if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "auto_sort") {
+    let bound = hole_team(g, me);
+    if bound != () {
+        if me.team != bound.id {
+            set_player(event.player, "no_balance", true);
+            join(event.player, bound);
+        }
+    } else if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "auto_sort") {
         auto_sort(g, [event.player]);
     }
     // Late Join Time: more than one other player alive and the round older
@@ -2841,6 +2870,15 @@ fn mg_teams(g, event) {
     // noting them here would leave `team_lives_changed` nothing to change.
     // Only a team that is gone is forgotten.
     forget_gone_team_lives(g);
+    for b in bots() {
+        if b.minigame == g.id {
+            let bound = hole_team(g, b);
+            if bound != () && b.team != bound.id {
+                set_player(b.id, "no_balance", true);
+                join(b.id, bound);
+            }
+        }
+    }
     announce_new_teams(g, balance_new(g), event);
     save_last(g, event);
     // A team gone takes its bots with it; a new one gets its own.

@@ -37,6 +37,8 @@ use bri_weapons::ActorId;
 mod ability;
 mod act;
 mod arming;
+mod breach;
+pub use breach::BreachWork;
 mod behaviour;
 pub(crate) mod cadence;
 mod charged_control;
@@ -420,6 +422,8 @@ pub(super) struct Bots {
     relation_asks: std::sync::atomic::AtomicU64,
     relation_answers: std::sync::atomic::AtomicU64,
     goof_looks: u64,
+    breach_budget: u8,
+    breach_work: breach::BreachWork,
     /// Live dials (`/botset`) and where overrides are kept.
     tuning: tuning::Tuning,
     /// CPU time spent in `step_bots` ([`crate::cpu_time`]), for the bot
@@ -498,6 +502,7 @@ struct Brain {
     /// changing the goal or body.
     path_stop: Option<(Vec3, u64)>,
     partial_route: bool,
+    breach: breach::State,
     /// Where the best route home ended short of home and the bot stood at its
     /// end: going home from there is no use until it has been moved
     /// (`HOME_GIVEN_UP`), so `Return` stands instead of searching again.
@@ -777,6 +782,7 @@ impl Brain {
             settled: false,
             path_stop: None,
             partial_route: false,
+            breach: breach::State::default(),
             home_given_up: None,
             out_of_reach: None,
             reach: (3.0, 2.0),
@@ -1357,6 +1363,7 @@ struct Act {
     /// A goof's trigger (a spray can held, a tool clicked), which takes the
     /// trigger as an objective's tool does.
     goof_trigger: Option<bool>,
+    breach: Option<breach::Action>,
     callout: Option<String>,
 }
 /// What one bot sees this tick.
@@ -1379,6 +1386,7 @@ impl Session {
         let changes = self.simulation.take_collision_changes();
         let tick = self.simulation.state().tick;
         let crowd = self.bots.brains.len();
+        self.bots.breach_budget = 2;
         for (body, nav) in &mut self.bots.navs {
             nav.invalidate_all(&changes, body);
             nav.begin_tick_for(crowd);
@@ -1660,6 +1668,7 @@ impl Session {
             brain.fire_down = false;
             brain.objective_tool = false;
             brain.surprise.new_life();
+            brain.breach = breach::State::default();
             brain.chase_offset = Vec3::ZERO;
             brain.pinned = None;
             // A life it ended itself begins where respawning brought it.
@@ -1772,6 +1781,7 @@ impl Session {
             mounted_charging,
             objective,
             goof_trigger,
+            breach,
             callout,
         } = act;
         let brain = self.bots.brains.get_mut(&bot).unwrap();
@@ -1870,6 +1880,11 @@ impl Session {
             desired_down = false;
             cancel_hand_charge |= charging && last_down;
         }
+        if let Some(action) = breach {
+            brain.native_combat_tick = None;
+            desired_down = action.ready && !last_down;
+            cancel_hand_charge |= charging && last_down;
+        }
         if let Some(down) = goof_trigger {
             // A goof's click owns the trigger: pressed and let go as a
             // player fidgets, a wind-up's early release and all, never put
@@ -1879,6 +1894,8 @@ impl Session {
         }
         brain.acted.trigger = if goof_trigger.is_some() {
             Some(act::Trigger::Goof)
+        } else if breach.is_some() {
+            Some(act::Trigger::Breach)
         } else if objective_tool {
             Some(act::Trigger::Objective)
         } else {
@@ -1968,9 +1985,21 @@ impl Session {
                 return Ok(());
             }
         }
-        if (behaviour != Behaviour::Objective
-            || gunning
-            || objective.is_some_and(|view| view.enemy.is_some()))
+        if let Some(action) = breach
+            && self
+                .weapons
+                .actor(ActorId(bot))
+                .is_some_and(|a| a.selected != Some(action.slot))
+        {
+            self.abort_bot_hand_charge(bot)?;
+            self.equip_tool(bot, Some(action.slot))?;
+            self.bots.brains.get_mut(&bot).unwrap().fire_down = false;
+            return Ok(());
+        }
+        if breach.is_none()
+            && (behaviour != Behaviour::Objective
+                || gunning
+                || objective.is_some_and(|view| view.enemy.is_some()))
             && target.is_some()
             && !self.vehicles.weapon_seat(bot)
         {
@@ -2021,6 +2050,9 @@ impl Session {
                 // A bot's look reaches the host with its trigger.
                 let _ = self.weapon_trigger(bot, down, direction, false);
                 if down {
+                    if breach.is_some() {
+                        self.bot_breach_pressed(bot, tick);
+                    }
                     self.note_shot(bot);
                     let target = target.map(|s| s.owner);
                     self.surprise_fired(bot, native_choice, target, tick);
@@ -2227,7 +2259,7 @@ impl Session {
             // A door it may open stands across the way on from where the
             // route ends: the enemy is in reach once it is clicked open.
             if let Some((end, at)) = gave_up
-                && self.bot_opens_way(end, at)
+                && (self.bot_opens_way(end, at) || self.bot_breachable_way(bot, end, at, tick))
             {
                 self.bots.brains.get_mut(&bot).unwrap().out_of_reach = None;
             }
@@ -2291,7 +2323,7 @@ impl Session {
                         } else if !body.conservative {
                             brain
                                 .objective
-                                .fail(tick, "objective navigation made no progress");
+                                .navigation_failed(tick, "objective navigation made no progress");
                         }
                     }
                 } else {
@@ -2959,7 +2991,6 @@ impl Session {
             // one that hurt it, nor while it carries something.
             trapped: if brain.auto_respawn
                 && sight.target.is_none()
-                && threat.is_none()
                 && hurt_by.is_none()
                 && !holding
                 && !objective.is_some_and(|view| view.committed)
@@ -3579,6 +3610,25 @@ impl Session {
         if self.bot_gone(bot) {
             return Ok(());
         }
+        let breach = self.bot_breach(
+            bot,
+            tick,
+            sight.target.is_none()
+                && driving.is_none()
+                && swim.is_none()
+                && !wet
+                && state.grounded
+                && !self.seated(bot)
+                && !matches!(
+                    behaviour,
+                    Behaviour::Carry | Behaviour::Interact | Behaviour::Flee
+                )
+                && selected_objective.is_none_or(|v| v.trigger.is_none() && v.equip.is_none())
+                && act.trigger.is_none()
+                && act.direction.is_none()
+                && !extra.stand
+                && extra.direction.is_none(),
+        );
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         // Carried there (or as near as it gets: settled, or no way there):
         // swing, after holding it up a moment.
@@ -3799,6 +3849,14 @@ impl Session {
                 pitch: LOOK_DOWN,
             });
         }
+        if let Some(action) = breach {
+            let delta = action.aim - eye;
+            looks.push(act::Look {
+                by: act::Looker::Breach,
+                yaw: yaw_to(delta),
+                pitch: pitch_to(delta),
+            });
+        }
         let look = act::look(&looks);
         let (aim_yaw, aim_pitch) = (look.yaw, look.pitch);
         brain.acted.look = look.by;
@@ -3844,12 +3902,10 @@ impl Session {
                 ),
                 // Into a crawlspace: crouch on the way in (the body stays
                 // down until it has room to stand); one jumped into, once
-                // off the ground.
-                crouch: Some(
-                    next.crouch
-                        && flat(next.feet - feet).length() < crate::route::PRESS_NEAR
-                        && !(next.jump && state.grounded),
-                ),
+                // off the ground. A pulled waypoint may lie deep inside the
+                // gap: waiting until near it wedges the standing body at
+                // the entrance, before it can reach the crouch threshold.
+                crouch: Some(next.crouch && !(next.jump && state.grounded)),
                 // Bent round a body in the way, its walk is no longer
                 // the route's own: a step off the route's line is judged
                 // by an unplanned step's rules at an edge.
@@ -3868,6 +3924,9 @@ impl Session {
             });
         }
         let routed = proposals.first().and_then(|p| p.walk).unwrap_or(Vec3::ZERO);
+        if let Some(action) = breach {
+            proposals.push(act::Proposal::walk(act::Mover::Breach, action.walk));
+        }
         if let Some(push) = pushing {
             proposals.push(act::Proposal::walk(act::Mover::Push, push));
         }
@@ -4288,7 +4347,9 @@ impl Session {
                     carry.to = Spot::Found(None);
                 }
                 if behaviour == Behaviour::Objective {
-                    brain.objective.fail(tick, "objective navigation blocked");
+                    brain
+                        .objective
+                        .navigation_failed(tick, "objective navigation blocked");
                 }
                 brain.replans = 0;
                 brain.next_wander = tick + 120;
@@ -4357,6 +4418,12 @@ impl Session {
                 mounted_charging,
                 objective: selected_objective,
                 goof_trigger: act.trigger,
+                breach: breach.map(|mut a| {
+                    let delta = a.aim - eye;
+                    a.ready &= wrap(yaw_to(delta) - input.yaw).abs() < 0.025
+                        && (pitch_to(delta) - input.pitch).abs() < 0.025;
+                    a
+                }),
                 callout,
             },
         )

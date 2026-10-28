@@ -105,6 +105,10 @@ fn saved_match_vehicle_routes() -> Result<()> {
         true,
         Some(principal),
     )?;
+    ensure!(
+        !s.minigame_views().is_empty(),
+        "the saved mini-game was not restored"
+    );
     let mut samples = Vec::new();
     let mut bot_samples = Vec::new();
     let mut projectiles = Vec::new();
@@ -116,9 +120,12 @@ fn saved_match_vehicle_routes() -> Result<()> {
     let mut rounds = Vec::new();
     let mut seen_rounds = std::collections::BTreeSet::new();
     let mut reaction_cues = Vec::new();
+    let mut step_micros = Vec::with_capacity(seconds * 120);
     let nav_detail = std::env::var_os("BRI_DRIVE_NAV_DETAIL").is_some();
     for i in 0..seconds * 120 {
+        let began = std::time::Instant::now();
         s.step()?;
+        step_micros.push(began.elapsed().as_micros() as u64);
         for cue in s.take_cues() {
             if matches!(&cue.kind, bri_sim::presentation::CueKind::SoundShaped { profile, .. }
                 if profile.starts_with("npc_popculture:"))
@@ -167,6 +174,13 @@ fn saved_match_vehicle_routes() -> Result<()> {
                     "round": r.round, "players": r.players, "owners": r.owners, "teams": r.teams,
                 }));
             }
+        }
+        if i % (120 * 60) == 0 {
+            eprintln!(
+                "saved match: {} / {seconds} simulation seconds, {} bot failures",
+                i / 120,
+                s.bot_step_failures().0
+            );
         }
         if i % 120 == 0 {
             let thoughts = s.bot_thoughts();
@@ -217,7 +231,13 @@ fn saved_match_vehicle_routes() -> Result<()> {
         }
     }
     eprintln!("games={:?} chat={:?}", s.minigame_views(), s.chat());
-    ensure!(!samples.is_empty(), "the saved match spawned no vehicles");
+    ensure!(!bot_samples.is_empty(), "the saved match spawned no bots");
+    step_micros.sort_unstable();
+    let quantile = |q: usize| step_micros[(step_micros.len() - 1) * q / 100];
+    let breach = s.bot_breach_work();
+    let timing = serde_json::json!({"mean_us": step_micros.iter().sum::<u64>() as f64 / step_micros.len() as f64, "p50_us": quantile(50), "p95_us": quantile(95), "p99_us": quantile(99), "max_us": step_micros.last(), "bot_thread_cpu_mean_us": s.bot_think_nanos() as f64 / step_micros.len() as f64 / 1000.0});
+    let breach = serde_json::json!({"probes": breach.probes, "attempts": breach.attempts, "presses": breach.presses, "openings": breach.openings, "traversals": breach.traversals, "abandoned": breach.abandoned});
+    eprintln!("timing={timing} breach={breach}");
     let (failures, details) = s.bot_step_failures();
     ensure!(failures == 0, "bot control failures: {details:?}");
     let diagnostics = s.package_diagnostics();
@@ -246,7 +266,7 @@ fn saved_match_vehicle_routes() -> Result<()> {
     std::fs::write(
         output,
         serde_json::to_vec_pretty(
-            &serde_json::json!({"world": world_name, "bricks": bricks, "seconds": seconds, "bot_step_failures": failures, "samples": samples, "bot_samples": bot_samples, "projectiles": projectiles, "damage": damage, "deaths": deaths, "rounds": rounds, "reaction_cues": reaction_cues, "games": s.minigame_views(), "packages": packages, "rules_state": s.package_store(), "host": "passive owner, saved rules preserved", "chat": format!("{:?}", s.chat())}),
+            &serde_json::json!({"timing": timing, "breach": breach, "world": world_name, "bricks": bricks, "seconds": seconds, "bot_step_failures": failures, "samples": samples, "bot_samples": bot_samples, "projectiles": projectiles, "damage": damage, "deaths": deaths, "rounds": rounds, "reaction_cues": reaction_cues, "games": s.minigame_views(), "packages": packages, "rules_state": s.package_store(), "host": "passive owner, saved rules preserved", "chat": format!("{:?}", s.chat())}),
         )?,
     )?;
     Ok(())
