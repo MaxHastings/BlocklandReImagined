@@ -36,8 +36,39 @@ The first improved-contact fixture still penetrated 1.32 units, exposing both
 cell selection and the floor-only filter; corrected rather than loosening the
 threshold. Existing 1500-member/eight-body, late delivery and toppling cases pass.
 
-The scoped quick tier passed all 710 client unit tests (78 ignored); focused lint/units and an incremental playtest-profile build follow.
-Use a new preview.3 folder; leave the running preview.2 and accepted separate
-jet-audio installation untouched. PR #379 remains draft; full gate and human
-acceptance remain required before merge. Do not rerun the broad gate while
-Maxwell is testing. Original installations remain read-only.
+## Preview.3 handoff, 2026-10-28
+
+Engine commit 089c9400b0808874ecd9557c0a3c4b4755820e91 is pushed to draft PR #379.
+Quick and focused tiers both passed all 710 client unit tests (78 ignored), and
+all-target clippy passed. Six targeted section tests passed, including the
+old-corner negative control, open collision unions and settled projectile hits.
+
+Built client, server, importer, Add-On checker and runner with
+BRI_VERSION=v0.3.7-destruction-preview.3 cargo build --profile playtest --locked.
+This first profile population took 14m23s; keep its target/playtest cache for
+subsequent iterations. Prewarm unchanged server/dependency crates while working
+on client-only corrections; changing profile after the fix starts a new first
+build in this worktree. No broad physics gate was restarted during this handoff.
+
+The verified preview.2 snapshot supplied content, compiler DLLs, launcher and
+credits; five new paired executables and updated playtest notes replaced build
+outputs. Config normalization is permitted only for package enabled-state files;
+other copied inputs were verified against their prior manifest hashes. Main's
+live generated Foley fixtures were not used or refreshed; the concurrent jet
+audio chat owns those. The original source game and accepted audio installation
+remain untouched. Awaited packaged --check exited 0: 21 maps, 1396 definitions,
+35 save pictures and 14 modern light sets. Existing optional Butterfly Knife
+warnings remain. --version verified preview.3 and source hash 089c9400b.
+
+Launch E:/Downloads/Destruction-preview-2026-10-27-r3/BlocklandReImagined-v0.3.7-destruction-preview.3-windows/Launch.cmd.
+Client 98839040 bytes, SHA-256 7c632b4889e8df64b7fd800c89cf188bb6b383e0b0c66beae71fb057f9e692de.
+All 13173 file hashes, 117 unique package identities/directories and final ZIP
+CRCs passed; the copied root README version was corrected before final hashing.
+The parent contains DESTRUCTION-PREVIEW-RECEIPT.json and the archive. Logs and
+snapshot/check scripts are under ignored artifacts/collapse-assemblies/.
+
+Maxwell owns the corrected mast/settled-pile playtest. The PR remains unmerged;
+full gate and human acceptance are still required. After jet audio lands on main,
+bring that optional sound schema into the physics branch before using main's
+updated fixtures for the merge gate. This receipt establishes technical checks,
+not a claim that the new recorded scene has already been visually accepted.
