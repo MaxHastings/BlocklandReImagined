@@ -1489,7 +1489,7 @@ def ci_test(part=(0, 1), tier="full"):
     if tier != "full":
         say(f"{tier} tier: {len(nightly)} slow render targets are left to the nightly run")
     if tier == "pr":
-        say("pr tier: the slow packages' suites run after merge (ci_quick in gate-known-failures.toml)")
+        say("pr tier: extended suites run nightly/manual (ci_quick in gate-known-failures.toml)")
     skipped = ci_left_out(data, tier, labels)
     for label in sorted(labels):
         if label in skipped and label not in nightly:
@@ -1613,33 +1613,37 @@ def labels_from_metadata(metadata):
     return labels
 
 
-def target_filters(labels, kinds):
-    """cargo test arguments that build at least the targets `labels` name
-    (`kinds` as labels_from_metadata gives them). The filters apply across the
-    whole workspace, so features stay unified as in a full build and a name
-    another package shares is built there too."""
-    selected = {(kinds[label], label.split("/", 1)[1]) for label in labels}
-    args = ["--lib"] if any(kind == "lib" for kind, _ in selected) else []
-    for kind, name in sorted(selected):
-        if kind != "lib":
-            args += [f"--{kind}", name]
-    return args
-
-
 def ci_build_groups(labels, kinds):
-    """Exact package/target selections, grouping identical filters for reuse.
+    """Pack exact selections into a few shared Cargo dependency graphs.
 
-    All selected libraries can share one invocation; other packages share one
-    only when their target filters match. No shard links another's unit harness.
+    Libraries share one invocation. Other target names can be combined unless
+    they would select a foreign target in one of the selected packages. This
+    avoids both linking other shards' tests and resolving features per package.
     """
+    libraries = sorted(label.split("/", 1)[0] for label in labels if kinds[label] == "lib")
+    out = [(libraries, ["--lib"])] if libraries else []
     by_package = {}
     for label in sorted(labels):
-        by_package.setdefault(label.split("/", 1)[0], set()).add(label)
-    groups = {}
-    for package, selected in by_package.items():
-        filters = tuple(target_filters(selected, kinds))
-        groups.setdefault(filters, []).append(package)
-    return [(packages, list(filters)) for filters, packages in sorted(groups.items())]
+        if kinds[label] != "lib":
+            package, name = label.split("/", 1)
+            by_package.setdefault(package, set()).add((kinds[label], name))
+    groups = []
+    for package, selected in sorted(by_package.items(), key=lambda item: (-len(item[1]), item[0])):
+        forbidden = {(kind, label.split("/", 1)[1]) for label, kind in kinds.items()
+                     if label.startswith(package + "/") and label not in labels and kind != "lib"}
+        for packages, have, excluded in groups:
+            if selected & excluded or have & forbidden:
+                continue
+            packages.append(package)
+            have.update(selected)
+            excluded.update(forbidden)
+            break
+        else:
+            groups.append(([package], set(selected), forbidden))
+    for packages, selected, _ in groups:
+        filters = [arg for kind, name in sorted(selected) for arg in (f"--{kind}", name)]
+        out.append((sorted(packages), filters))
+    return out
 
 
 def ci_left_out(data, tier, labels=()):

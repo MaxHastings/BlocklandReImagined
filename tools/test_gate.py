@@ -114,6 +114,14 @@ class CiShards(unittest.TestCase):
         self.assertEqual(gate.ci_build_groups({"a/lib", "b/lib"}, kinds),
                          [(["a", "b"], ["--lib"])])
 
+    def test_compatible_test_names_share_a_graph_but_foreign_names_do_not(self):
+        kinds = {"a/x": "test", "a/y": "test", "b/z": "test", "c/x": "test", "c/y": "test"}
+        groups = gate.ci_build_groups({"a/x", "b/z", "c/y"}, kinds)
+        # a/x and c/y cannot share a filter union: it would build a/y and c/x.
+        self.assertEqual(len(groups), 2)
+        self.assertTrue(any("b" in packages and len(packages) == 2 for packages, _ in groups))
+        self.assertFalse(any("a" in packages and "c" in packages for packages, _ in groups))
+
     def test_the_shards_run_each_target_exactly_once(self):
         labels = [f"crate{i}/t" for i in range(23)]
         parts = [gate.shard(labels, (k, 4)) for k in range(4)]
@@ -168,9 +176,9 @@ class CiShards(unittest.TestCase):
         labels = gate.labels_from_metadata(metadata)
         self.assertEqual(labels, {"bri-a/lib": "lib", "bri-a/bri-a": "bin", "bri-a/flow": "test",
                                   "bri-b/lib": "lib", "bri-b/flow": "test"})
-        self.assertEqual(gate.target_filters({"bri-a/flow", "bri-b/flow", "bri-a/bri-a"}, labels),
-                         ["--bin", "bri-a", "--test", "flow"])
-        self.assertEqual(gate.target_filters({"bri-b/lib"}, labels), ["--lib"])
+        self.assertEqual(gate.ci_build_groups({"bri-a/flow", "bri-b/flow", "bri-a/bri-a"}, labels),
+                         [(["bri-a", "bri-b"], ["--bin", "bri-a", "--test", "flow"])])
+        self.assertEqual(gate.ci_build_groups({"bri-b/lib"}, labels), [(["bri-b"], ["--lib"])])
 
     def test_weighted_shards_balance_the_heavy_targets(self):
         weights = {"a/slow1": 100.0, "a/slow2": 90.0, "a/slow3": 80.0, "a/slow4": 70.0}

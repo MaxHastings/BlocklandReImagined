@@ -24,16 +24,18 @@ Changes:
   screens, admin screens and net graph. Retain fast UI/effect input/state cases.
 - Normal main CI uses the bounded PR tier; nightly/manual retains full CI.
 
-Evidence: 122 Python tool tests passed in 6 seconds, documentation checks passed,
+Evidence: 123 Python tool tests passed in 6 seconds, documentation checks passed,
 locked Cargo metadata parsed. Metadata target count drops 562 -> 523. Ordinary
 CI targets drop 312 -> 280 (empty harnesses plus eight GPU matrices). Checked
 all four planned shards against actual metadata: exactly the assigned targets,
-no foreign or duplicate unit harnesses. These are planning counts, not a claim
+no foreign or duplicate unit harnesses. Compatible selections now pack into
+three Cargo graphs per shard (one library graph, two other target groups),
+instead of 17-18 feature-resolving package invocations. These are planning counts, not a claim
 of measured wall-clock speedup. Platform CI is pending. No local Rust/GPU/full
 build was started during Maxwell's playtest.
 
 Loading is a separate unresolved runtime task. Maxwell's screenshot reports
-41.453 s map preparation, including 21.399 s hashes (450.5 MB), 10.053 s brick
+41.453 s map preparation, including 21.399 s hashes (540.5 MB), 10.053 s brick
 catalogs, 6.346 s world collision and 3.230 s animations. Existing source already
 has timestamp/length hash reuse and per-content definition caches; trace misses
 and invalidation before adding caches or bypassing verification. Acceptance

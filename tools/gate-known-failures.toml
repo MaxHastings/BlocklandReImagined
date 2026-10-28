@@ -311,7 +311,7 @@ target = "bri-client/night_qa"
 [ci_quick]
 slow_packages = ["bri-client", "bri-render", "bri-chaos", "bri-net"]
 keep = ["bri-client/lib", "bri-net/lib"]
-# Single targets that run after merge, not on a pull request: Slayer's teams
+# Additional targets for explicit main/full tiers: Slayer's teams
 # and Capture the Flag, the ported tiers and the bundled add-ons played in
 # game, 6 minutes of a shard together. They guard add-on features no pull
 # request to the engine core changes by accident.
