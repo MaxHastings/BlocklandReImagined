@@ -37,7 +37,8 @@ import gate  # noqa: E402
 
 # A change under these paths since the previous release changes what the
 # bundled originals import to, so the Add-On bundle is rebuilt and uploaded.
-BUNDLE_INPUTS = ('packages/default-addons.json', 'crates/addon-import/')
+BUNDLE_INPUTS = ('packages/default-addons.json', 'crates/addon-import/', 'tools/npc_reactions/',
+                 'tools/build_npc_reactions.py', 'tools/generated_addons.py', 'tools/addon_bundle.py')
 STARTED = time.time()
 
 

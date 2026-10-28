@@ -86,6 +86,7 @@ impl ScriptOp for Sound {
             && !profile.chars().any(char::is_control)
             && match at {
                 SoundAt::Position(p) => finite(p),
+                SoundAt::Speech { actor, position } => *actor > 0 && finite(position),
                 SoundAt::Player(_) => true,
             }
     }

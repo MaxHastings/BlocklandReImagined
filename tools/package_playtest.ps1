@@ -6,6 +6,8 @@ param(
     [string]$Version,
     [string]$ExpectedExecutableSha256,
     [switch]$ValidateOnly,
+    # Private previews need the verified playable folder before archive work.
+    [switch]$SkipArchive,
     [string]$VerifyPackage,
     # Also ship the Stress Lab mod packages (packages/stresslab), enabled in
     # content/packages.json.
@@ -400,7 +402,9 @@ $releasePath = Join-Path $DestinationRoot "BlocklandReImagined-$Version-windows"
 # BlocklandReImagined-windows.zip always fetches the newest; the folder inside
 # carries the version.
 $zipPath = Join-Path $DestinationRoot 'BlocklandReImagined-windows.zip'
-foreach ($existing in @($releasePath, $zipPath)) {
+$occupied = @($releasePath)
+if (-not $SkipArchive) { $occupied += $zipPath }
+foreach ($existing in $occupied) {
     if (Test-Path -LiteralPath $existing) { throw "Refusing to overwrite an existing playtest release: $existing" }
 }
 [IO.Directory]::CreateDirectory($releasePath) | Out-Null
@@ -457,10 +461,12 @@ try {
     Write-Host "Copied $contentFiles native content files ($contentBytes bytes), release executable $($exeInfo.Length) bytes."
     Write-Host 'The manifest lists every package file except itself; verify with -VerifyPackage.'
     # The folder as one zip: what players download.
-    New-ReleaseZip $releasePath $zipPath
-    Write-Host "Created $zipPath ($((Get-Item -LiteralPath $zipPath).Length) bytes)"
+    if (-not $SkipArchive) {
+        New-ReleaseZip $releasePath $zipPath
+        Write-Host "Created $zipPath ($((Get-Item -LiteralPath $zipPath).Length) bytes)"
+    }
 } catch {
-    if (Test-Path -LiteralPath $zipPath -PathType Leaf) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
+    if (-not $SkipArchive -and (Test-Path -LiteralPath $zipPath -PathType Leaf)) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
     $safeRoot = [IO.Path]::GetFullPath($DestinationRoot).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     $safeTarget = [IO.Path]::GetFullPath($releasePath)
     if ($safeTarget.StartsWith($safeRoot,[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $safeTarget -PathType Container)) {

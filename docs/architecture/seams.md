@@ -273,3 +273,6 @@ was checked against `Backgrounds` and `MenuBackground` in the v0.3.6 source,
 bringing the table to 193 declarations. Bot controls and prepared menu photos
 are integrated in PR302 (`34c508fa3`); the full gate and matching Windows CI
 pass. These source checks do not establish interactive acceptance.
+
+| Proximity voice transport and playout | QUIC datagrams with host-stamped identity/range, per-origin budgets, freshness limits, Opus FEC/PLC and bounded mixing; capture permission is distinct from local metering | Root PR #387 review | 32-client and device-free validation; human device/Internet acceptance pending |
+| Authored actor speech | `effects` operation `speak_at` explicitly attributes a one-shot sound to an actor; actual audio completion/cull/stop owns the shared name/talk presentation lifetime | Root PR #387 review | NPC reaction policy consumer and synthetic playback/animation checks |

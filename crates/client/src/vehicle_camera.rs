@@ -624,6 +624,7 @@ mod tests {
                         &rider,
                         time,
                         &AvatarAnimationInput {
+                            voice_talking: false,
                             mount_rotation: Some(turn),
                             sitting: seat.pose == "sit",
                             ..Default::default()

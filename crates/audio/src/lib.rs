@@ -20,6 +20,9 @@ pub mod reverb;
 pub mod runtime;
 pub mod schema;
 pub mod spatial;
+pub mod voice;
+#[cfg(feature = "cpal-output")]
+mod voice_device;
 pub mod wav;
 
 pub use bank::{BankOptions, ClipData, SoundAsset, SoundBank, Sustain};
@@ -29,3 +32,5 @@ pub use error::AudioError;
 pub use reverb::Room;
 pub use runtime::{AudioRuntime, AudioStats, OutputKind, RuntimeConfig};
 pub use spatial::{GainCurve, Hearing, Listener, Vec3, Window};
+#[cfg(feature = "cpal-output")]
+pub use voice_device::{CapturedFrame, VoiceChat, input_devices};

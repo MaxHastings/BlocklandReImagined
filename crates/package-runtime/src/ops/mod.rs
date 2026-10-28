@@ -489,6 +489,8 @@ impl MirrorAxis {
 pub enum SoundAt {
     /// In the world, heard by everyone near it.
     Position([f32; 3]),
+    /// Authored speech belongs to an actor; playback drives its talk display.
+    Speech { actor: u64, position: [f32; 3] },
     /// At one player's ears only.
     Player(u64),
 }

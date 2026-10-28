@@ -1405,6 +1405,8 @@ impl App {
             water_eyes,
             fog_end.clamped(1., FAR_PLANE),
         )?;
+        let mut speaking = self.voice.speaking_owners(view.owner);
+        speaking.extend(self.audio.speaking_owners());
         self.ui.core.name_tags = name_tags(
             view,
             self.motion.presented(),
@@ -1421,6 +1423,8 @@ impl App {
             ),
             self.ui.scale(),
             controls.observer().is_none(),
+            &speaking,
+            &self.voice.speaking_levels(view.owner),
             &passages,
             |drop| self.world_items.drop_center(drop),
             self.ui
@@ -2379,6 +2383,7 @@ impl App {
             .upload(frame.device, frame.queue, frame.ui_renderer);
         self.addons.hud_regions.register_textures(frame);
         self.addons.panel_textures.register_textures(frame);
+        self.voice_icons.register_textures(frame);
         // Until its pipelines finish compiling, the preview stays due.
         if (self.avatar.preview_dirty
             || self.ui.stack().contains(&bri_ui::screens::ScreenId::Avatar))

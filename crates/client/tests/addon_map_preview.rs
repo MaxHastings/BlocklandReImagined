@@ -218,6 +218,7 @@ fn addon_previews_decode_under_distinct_identities_and_draw_in_both_menus() -> R
         local_host: true,
         legacy_lan: false,
         supported: [AdminFeature::Maps].into(),
+        voice_muted: Default::default(),
         players: vec![],
         options: None,
     })));

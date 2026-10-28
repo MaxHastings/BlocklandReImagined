@@ -1444,6 +1444,10 @@ impl App {
                         .collect(),
                     server_name: a.name.clone(),
                     max_players: a.max_players,
+                    voice_chat: view.voice_chat,
+                    voice_muted: self.voice.muted().iter().copied().collect(),
+                    server_voice_muted: view.voice_muted.iter().copied().collect(),
+                    voice_speaking: self.voice.speaking_owners(view.owner).into_iter().collect(),
                 },
             );
         }

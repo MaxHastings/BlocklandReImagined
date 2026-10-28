@@ -53,7 +53,7 @@ impl Checkout {
         std::fs::create_dir_all(root.join("packages")).unwrap();
         std::fs::write(
             root.join("packages/default-addons.json"),
-            serde_json::to_vec_pretty(&json!({ "schema_version": 2, "addons": addons })).unwrap(),
+            serde_json::to_vec_pretty(&json!({ "schema_version": 3, "addons": addons })).unwrap(),
         )
         .unwrap();
         copy_port_entries(&repo(), &root);

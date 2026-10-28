@@ -813,6 +813,16 @@ pub struct Checkpoint {
     /// Enabled packages' state as this client sees it: keys visible to
     /// everyone, plus its own owner-visible keys in a welcome.
     pub package_state: bri_sim::session::PackageStateView,
+    /// Whether the host runs voice chat (its Add-On turned on before players
+    /// joined): off, no voices are relayed and clients hide the mute
+    /// controls. Fixed for the session.
+    #[serde(default)]
+    pub voice_chat: bool,
+    /// The players an admin has muted, by owner id; empty when the host does
+    /// not run voice chat or nobody is muted. `Delta` carries it whole,
+    /// whenever one changes.
+    #[serde(default)]
+    pub voice_muted: BTreeSet<u64>,
     /// How fast each falling projectile drops per tick, by definition, for
     /// coasting projectiles between updates.
     pub projectile_falls: BTreeMap<String, f32>,
@@ -870,6 +880,8 @@ impl Checkpoint {
             world_near_chunks: 0,
             entities: session.package_entities(),
             package_state: session.package_state(),
+            voice_chat: session.voice_chat(),
+            voice_muted: session.voice_mute_set().iter().copied().collect(),
             projectile_falls: session.projectile_falls(),
             world_shapes: session
                 .world_shapes()
@@ -1233,6 +1245,9 @@ pub struct Delta {
     pub vehicles: Option<Vec<bri_sim::session::VehicleInfo>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_scale: Option<f32>,
+    /// The players an admin has muted, whole, whenever one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_muted: Option<BTreeSet<u64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broken_shapes: Option<BTreeSet<u32>>,
     /// The Tutorial's targets, whole, whenever one launched, fell or left.
@@ -1287,6 +1302,7 @@ impl Delta {
             minigames,
             vehicles,
             time_scale,
+            voice_muted,
             broken_shapes,
             targets,
             map_lights,
@@ -1310,6 +1326,7 @@ impl Delta {
             && minigames.is_none()
             && vehicles.is_none()
             && time_scale.is_none()
+            && voice_muted.is_none()
             && broken_shapes.is_none()
             && targets.is_none()
             && map_lights.is_none()

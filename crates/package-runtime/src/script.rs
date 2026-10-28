@@ -2990,6 +2990,29 @@ fn register_api(engine: &mut Engine) {
             )))
         },
     );
+    // Explicit actor attribution: ordinary sound effects never imply speech.
+    engine.register_fn(
+        "speak_at",
+        |actor: Dynamic,
+         profile: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         volume: Dynamic,
+         pitch: Dynamic,
+         radius: Dynamic| {
+            push(Op::Sound(sound(
+                profile,
+                SoundAt::Speech {
+                    actor: id(&actor)?,
+                    position: [float(&x)?, float(&y)?, float(&z)?],
+                },
+                float(&volume)?,
+                float(&pitch)?,
+                float(&radius)?,
+            )))
+        },
+    );
     // With the volume, the pitch and the radius it is heard out to.
     engine.register_fn(
         "sound_at",

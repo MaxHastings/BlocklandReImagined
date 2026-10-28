@@ -183,10 +183,34 @@ impl Perform for ops::Sound {
                     },
                 );
             }
+            bri_package_runtime::ops::SoundAt::Speech { actor, position } => {
+                ensure!(session.peers.contains_key(&actor), "No such speech actor");
+                let sound = session
+                    .weapons
+                    .pack
+                    .sounds
+                    .get(&profile)
+                    .context("Unknown speech profile")?;
+                ensure!(!sound.looping && !sound.music, "Speech must be a one-shot");
+                if !session.is_voice_muted(actor) {
+                    session.cues.emit(
+                        tick,
+                        crate::presentation::CueKind::SoundShaped {
+                            speaker: Some(actor),
+                            profile,
+                            volume,
+                            pitch,
+                            radius,
+                        },
+                        position,
+                    );
+                }
+            }
             bri_package_runtime::ops::SoundAt::Position(position) => session.cues.emit(
                 tick,
                 if scaled {
                     crate::presentation::CueKind::SoundShaped {
+                        speaker: None,
                         profile,
                         volume,
                         pitch,

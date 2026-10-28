@@ -2923,3 +2923,27 @@ fn menu_slideshow_actual_pack_pixels_and_personal_photo() -> anyhow::Result<()> 
     );
     Ok(())
 }
+
+#[test]
+fn a_talking_name_is_bold_and_its_blue_follows_loudness() {
+    let white = [255u8; 3];
+    // Quiet speech is bold and only a fourth of the way over to dark blue.
+    let (quiet, bold) = super::voice_tag(white, 0.0);
+    assert!(bold, "talking is bold");
+    assert_eq!(quiet, [179, 217, 255], "quiet speech stays readable");
+    // Loud speech reaches dark blue itself.
+    let (loud, _) = super::voice_tag(white, 1.0);
+    assert_eq!(loud, [64, 160, 255], "full loudness is bright blue");
+    // The shade moves monotonically with the level in between...
+    let mid = super::voice_tag(white, 0.5).0;
+    assert_eq!(mid[2], 255);
+    for i in 0..2 {
+        assert!(
+            mid[i] < quiet[i] && mid[i] > loud[i],
+            "channel {i}: {mid:?}"
+        );
+    }
+    // ...and out-of-range levels are tamed to the ends.
+    assert_eq!(super::voice_tag(white, 9.0).0, loud);
+    assert_eq!(super::voice_tag(white, -1.0).0, quiet);
+}

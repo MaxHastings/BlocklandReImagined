@@ -1,0 +1,1 @@
+Voice payloads carry a one-byte talk-spurt reset flag (0/1) then bounded mono Opus packets of exactly 20 ms at 16 kHz; capture-clock sequences advance through silence and dropped capture frames. Replaces ADPCM; mixed codec builds are incompatible.

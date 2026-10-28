@@ -92,6 +92,8 @@ class BundleInputTests(unittest.TestCase):
     def test_only_list_importer_and_port_changes_rebuild_the_bundle(self):
         self.assertTrue(release.bundle_inputs_changed(['crates/addon-import/ports/x/entry.json']))
         self.assertTrue(release.bundle_inputs_changed(['packages/default-addons.json']))
+        self.assertTrue(release.bundle_inputs_changed(['tools/npc_reactions/reactions.rhai']))
+        self.assertTrue(release.bundle_inputs_changed(['tools/build_npc_reactions.py']))
         self.assertFalse(release.bundle_inputs_changed(['crates/client/src/main.rs', 'docs/x.md']))
 
 

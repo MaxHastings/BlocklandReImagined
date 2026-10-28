@@ -198,16 +198,21 @@ fn name_tags(pack: &Pack, dl: &mut DrawList, core: &Core) {
         }
         let x = (tag.x - font.width(&tag.text) as f32 / 2.0).round();
         let y = (tag.y - font.line_height() as f32).round();
-        let [r, g, b] = crate::api::name_outline(tag.color);
-        for dx in [-1.0, 0.0, 1.0].into_iter().filter(|_| tag.outline) {
-            for dy in [-1.0, 0.0, 1.0] {
-                if dx != 0.0 || dy != 0.0 {
-                    font.draw(dl, x + dx, y + dy, &tag.text, [r, g, b, alpha], &[]);
+        // A talking player's name is bold: a second pass one pixel over,
+        // the bitmap font having no weight of its own.
+        let passes: &[f32] = if tag.bold { &[x, x + 1.0] } else { &[x] };
+        for &px in passes {
+            let [r, g, b] = crate::api::name_outline(tag.color);
+            for dx in [-1.0, 0.0, 1.0].into_iter().filter(|_| tag.outline) {
+                for dy in [-1.0, 0.0, 1.0] {
+                    if dx != 0.0 || dy != 0.0 {
+                        font.draw(dl, px + dx, y + dy, &tag.text, [r, g, b, alpha], &[]);
+                    }
                 }
             }
+            let [r, g, b] = tag.color;
+            font.draw(dl, px, y, &tag.text, [r, g, b, alpha], &[]);
         }
-        let [r, g, b] = tag.color;
-        font.draw(dl, x, y, &tag.text, [r, g, b, alpha], &[]);
     }
 }
 
@@ -494,6 +499,18 @@ fn clip_slices([x0, y0, x1, y1]: [f32; 4], round: bool) -> Vec<Rect> {
 /// Pixel rows of a round clip: finer is a smoother circle and more draws.
 const ROUND_CLIP_ROW: i32 = 2;
 
+fn paint_panel_height(core: &Core) -> i32 {
+    let rows = core
+        .hud
+        .paint_rows
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(9)
+        .max(9) as i32;
+    rows * 17 + 1 + 18
+}
+
 fn hud(core: &Core) -> View {
     let (w, h) = core.logical;
     let m = &core.hud;
@@ -638,7 +655,7 @@ fn hud(core: &Core) -> View {
         }
         let px = -m.paint_slide.offset;
         let rows = m.paint_rows.iter().copied().max().unwrap_or(9).max(9) as i32;
-        let py = h - (rows * 17 + 1) - 18;
+        let py = h - paint_panel_height(core);
         let pw = m.paint_box_width();
         art(
             &mut v,
@@ -944,6 +961,218 @@ impl Screen for Play {
         hud(core).draw(pack, dl);
         package_panels(pack, dl, core);
         captions(pack, dl, core);
+        // The palette reaches the lower left corner. Keep the microphone
+        // above its actual footprint rather than covering a paint swatch.
+        let lift = if (core.hud.mode == ScrollMode::Paint || !core.hud.prefs.hide_paint_box)
+            && !core.hud.paint.is_empty()
+        {
+            paint_panel_height(core) + 18 // palette title bar
+        } else {
+            0
+        };
+        voice_indicator(dl, (core.logical.0, core.logical.1 - lift), core.voice);
+    }
+}
+
+/// The microphone's colour while nothing is heard or sent.
+const VOICE_DIM: crate::geom::Rgba = [90, 90, 90, 255];
+/// How visible the no-entry sign is while the microphone is disabled.
+const VOICE_BLOCKED_ALPHA: u8 = 128;
+/// The indicator's size and its distance from the screen's lower left corner,
+/// in logical pixels.
+const VOICE_ICON: f32 = 36.0;
+const VOICE_MARGIN: f32 = 12.0;
+
+/// What the voice indicator looks like: the microphone's tint and the
+/// no-entry sign's opacity.
+///
+/// A microphone that is open (Voice Activity Detection, or Push-to-Talk with
+/// its key held) is white while a voice is heard and dim otherwise. One that
+/// is disabled (Push-to-Talk with the key up, Disabled, or no microphone) is dim
+/// with the no-entry sign over it at half opacity.
+pub fn voice_look(v: crate::api::VoiceIndicator) -> (crate::geom::Rgba, u8) {
+    use crate::api::VoiceMode;
+
+    let open = !v.server_muted
+        && v.microphone
+        && match v.mode {
+            VoiceMode::PushToTalk => v.key_held,
+            VoiceMode::VoiceActivity => true,
+            VoiceMode::Disabled => false,
+        };
+
+    if !open {
+        return (VOICE_DIM, VOICE_BLOCKED_ALPHA);
+    }
+
+    let tint = if v.active {
+        [255, 255, 255, 191] // 25% transparent
+    } else {
+        [160, 160, 160, 191] // Dimmed and 25% transparent
+    };
+
+    (tint, 0)
+}
+
+/// The voice indicator in the lower left corner, over the HUD.
+fn voice_indicator(
+    dl: &mut DrawList,
+    logical: (i32, i32),
+    indicator: Option<crate::api::VoiceIndicator>,
+) {
+    let Some(indicator) = indicator else {
+        return;
+    };
+    // Disabled means neither symbol is drawn; unlike Push-to-Talk with its
+    // key up, this is not an active HUD state at all.
+    if indicator.mode == crate::api::VoiceMode::Disabled {
+        return;
+    }
+    let (w, h) = logical;
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let (tint, blocked) = voice_look(indicator);
+    let dst = [
+        VOICE_MARGIN,
+        h as f32 - VOICE_MARGIN - VOICE_ICON,
+        VOICE_ICON,
+        VOICE_ICON,
+    ];
+    dl.image(
+        crate::pack::TexKey::External(crate::api::VOICE_ICON_MICROPHONE),
+        [0.0, 0.0, 1.0, 1.0],
+        dst,
+        tint,
+        crate::draw::Filter::Linear,
+    );
+    if blocked != 0 {
+        // The no-entry artwork occupies the whole source square, while the
+        // microphone has transparent side padding. Draw the sign smaller and
+        // centered in the same cell so its visible diameter aligns with the
+        // microphone's visual footprint rather than its transparent canvas.
+        const NO_ENTRY_ICON: f32 = 26.0;
+        let inset = (VOICE_ICON - NO_ENTRY_ICON) * 0.5;
+        let sign = [dst[0] + inset, dst[1] + inset, NO_ENTRY_ICON, NO_ENTRY_ICON];
+        dl.image(
+            crate::pack::TexKey::External(crate::api::VOICE_ICON_NO_ENTRY),
+            [0.0, 0.0, 1.0, 1.0],
+            sign,
+            [255, 255, 255, blocked],
+            crate::draw::Filter::Linear,
+        );
+    }
+}
+
+#[cfg(test)]
+mod voice_indicator_tests {
+    use super::*;
+    use crate::api::{VOICE_ICON_MICROPHONE, VOICE_ICON_NO_ENTRY, VoiceIndicator, VoiceMode};
+
+    fn state(mode: VoiceMode, key_held: bool, active: bool, microphone: bool) -> VoiceIndicator {
+        VoiceIndicator {
+            mode,
+            key_held,
+            active,
+            microphone,
+            server_muted: false,
+        }
+    }
+
+    #[test]
+    fn voice_activity_shows_the_voice_and_never_the_sign() {
+        let m = VoiceMode::VoiceActivity;
+        // Open and heard: white at 25% transparency.
+        assert_eq!(
+            voice_look(state(m, false, true, true)),
+            ([255, 255, 255, 191], 0)
+        );
+        // Open but silent: dimmed and translucent.
+        assert_eq!(
+            voice_look(state(m, false, false, true)),
+            ([160, 160, 160, 191], 0)
+        );
+        // The key means nothing in this mode.
+        assert_eq!(
+            voice_look(state(m, true, false, true)),
+            ([160, 160, 160, 191], 0)
+        );
+    }
+
+    #[test]
+    fn push_to_talk_is_disabled_until_the_key_is_held() {
+        let m = VoiceMode::PushToTalk;
+        // Key up: dim, with the sign at half opacity, voice or not.
+        for active in [false, true] {
+            assert_eq!(
+                voice_look(state(m, false, active, true)),
+                (VOICE_DIM, VOICE_BLOCKED_ALPHA)
+            );
+        }
+        // Key down: the sign vanishes and the icon follows the voice.
+        assert_eq!(
+            voice_look(state(m, true, true, true)),
+            ([255, 255, 255, 191], 0)
+        );
+        assert_eq!(
+            voice_look(state(m, true, false, true)),
+            ([160, 160, 160, 191], 0)
+        );
+    }
+
+    #[test]
+    fn disabled_and_missing_microphones_hide_or_block_the_indicator() {
+        assert_eq!(
+            voice_look(state(VoiceMode::Disabled, true, true, true)),
+            (VOICE_DIM, VOICE_BLOCKED_ALPHA)
+        );
+        let mut dl = DrawList::new(Rect::new(0, 0, 800, 600));
+        voice_indicator(
+            &mut dl,
+            (800, 600),
+            Some(state(VoiceMode::Disabled, true, true, true)),
+        );
+        assert!(dl.cmds.is_empty(), "Disabled hides both icons");
+        assert_eq!(
+            voice_look(state(VoiceMode::VoiceActivity, false, true, false)),
+            (VOICE_DIM, VOICE_BLOCKED_ALPHA)
+        );
+    }
+
+    #[test]
+    fn the_indicator_centers_the_sign_over_the_microphone_in_the_corner() {
+        let mut dl = DrawList::new(Rect::new(0, 0, 800, 600));
+        voice_indicator(&mut dl, (800, 600), None);
+        assert!(dl.cmds.is_empty(), "nothing without a voice chat");
+        let held = state(VoiceMode::PushToTalk, false, false, true);
+        voice_indicator(&mut dl, (800, 600), Some(held));
+        let images: Vec<_> = dl
+            .cmds
+            .iter()
+            .filter_map(|c| match c {
+                crate::draw::DrawCmd::Image { tex, dst, tint, .. } => Some((tex, *dst, *tint)),
+                _ => None,
+            })
+            .collect();
+        // The sign is half transparent; a fully transparent one is not drawn.
+        assert_eq!(images.len(), 2);
+        assert_eq!(
+            images[0].0,
+            &crate::pack::TexKey::External(VOICE_ICON_MICROPHONE)
+        );
+        assert_eq!(
+            images[1].0,
+            &crate::pack::TexKey::External(VOICE_ICON_NO_ENTRY)
+        );
+        assert_eq!(images[1].2, [255, 255, 255, VOICE_BLOCKED_ALPHA]);
+        assert_eq!(images[0].1, [12.0, 552.0, 36.0, 36.0]);
+        let mut dl = DrawList::new(Rect::new(0, 0, 800, 600));
+        voice_indicator(
+            &mut dl,
+            (800, 600),
+            Some(state(VoiceMode::PushToTalk, true, true, true)),
+        );
+        assert_eq!(dl.cmds.len(), 1, "key held: no sign");
     }
 }
 

@@ -385,6 +385,10 @@ pub struct ClientAudio {
     runtime: AudioRuntime,
     pending: VecDeque<(String, Placement, Voice)>,
     contact_pending: VecDeque<(String, [f32; 3], u64, Voice)>,
+    speech_pending: VecDeque<(u64, String, [f32; 3], Voice)>,
+    speech: BTreeMap<u64, SpeechPlayback>,
+    speech_positions: BTreeMap<u64, [f32; 3]>,
+    speech_muted: BTreeSet<u64>,
     section_audio: bool,
     pub warnings: BTreeSet<String>,
     pub dropped: u64,
@@ -462,6 +466,14 @@ struct PlayingSource {
     pack_volume: f32,
     source: PositionalSource,
 }
+/// Completion events normally end speech. The decoded clip's duration is a
+/// finite fallback if an overloaded audio event ring loses that terminal event.
+struct SpeechPlayback {
+    handle: SoundHandle,
+    remaining: f64,
+    offset: [f32; 3],
+}
+
 struct HeldVoice {
     sound: String,
     handle: SoundHandle,
@@ -545,6 +557,10 @@ impl ClientAudio {
             runtime,
             pending: VecDeque::new(),
             contact_pending: VecDeque::new(),
+            speech_pending: VecDeque::new(),
+            speech: BTreeMap::new(),
+            speech_positions: BTreeMap::new(),
+            speech_muted: BTreeSet::new(),
             section_audio: false,
             warnings,
             dropped: 0,
@@ -734,6 +750,7 @@ impl ClientAudio {
             | CueKind::BodyFlash { .. }
             | CueKind::BodyShell { .. } => return,
             CueKind::SoundShaped {
+                speaker,
                 profile,
                 volume,
                 pitch,
@@ -744,7 +761,21 @@ impl ClientAudio {
                     pitch: *pitch,
                     radius: *radius,
                 };
-                self.profile_shaped(profile, Placement::World(cue.position), voice);
+                if let Some(actor) = speaker {
+                    if !self.speech_muted.contains(actor)
+                        && !self.is_looping(profile)
+                        && self.speech_pending.len() < 64
+                    {
+                        self.speech_pending.push_back((
+                            *actor,
+                            profile.clone(),
+                            cue.position,
+                            voice,
+                        ));
+                    }
+                } else {
+                    self.profile_shaped(profile, Placement::World(cue.position), voice);
+                }
                 return;
             }
             CueKind::WeaponSound { profile } => {
@@ -1099,6 +1130,15 @@ impl ClientAudio {
         placement: Placement,
         voice: Voice,
     ) -> Result<SoundHandle, AudioError> {
+        self.start_with_duration(profile, placement, voice)
+            .map(|(handle, _)| handle)
+    }
+    fn start_with_duration(
+        &mut self,
+        profile: &str,
+        placement: Placement,
+        voice: Voice,
+    ) -> Result<(SoundHandle, f64), AudioError> {
         let shaped = |asset: Arc<SoundAsset>| {
             if voice.pitch == 1.0 && voice.radius == 0.0 {
                 asset
@@ -1106,23 +1146,26 @@ impl ClientAudio {
                 Arc::new(asset.shaped(voice.pitch, voice.radius))
             }
         };
-        let handle = match self.pack_asset(profile) {
-            Some((asset, volume)) => {
-                self.runtime
-                    .play_asset(shaped(asset), placement, volume * voice.volume)
-            }
-            None => {
-                let asset = self.runtime.bank().resolve(profile)?.clone();
-                self.runtime
-                    .play_asset(shaped(asset), placement, voice.volume)
-            }
-        }?;
+        let (asset, volume) = match self.pack_asset(profile) {
+            Some((asset, volume)) => (shaped(asset), volume * voice.volume),
+            None => (
+                shaped(self.runtime.bank().resolve(profile)?.clone()),
+                voice.volume,
+            ),
+        };
+        let frames = match &asset.data {
+            bri_audio::ClipData::Pcm(pcm) => pcm.frames() as u64,
+            bri_audio::ClipData::Stream(stream) => stream.frames,
+        };
+        let duration =
+            frames as f64 / f64::from(asset.data.sample_rate()) / f64::from(asset.playback.pitch);
+        let handle = self.runtime.play_asset(asset, placement, volume)?;
         if let Placement::World(at) = placement
             && self.fresh_world.len() < FRESH_WORLD_LIMIT
         {
             self.fresh_world.push((handle, at));
         }
-        Ok(handle)
+        Ok((handle, duration))
     }
     /// Judge the way each world sound takes to the listener ([`bri_audio::Hearing`]) and cut its range to match: every looping
     /// source, and a sound just started once, where it began. `hearing_at` is asked for a point in the world. `room` is the
@@ -1385,6 +1428,10 @@ impl ClientAudio {
         self.held.clear();
         self.pending.clear();
         self.contact_pending.clear();
+        self.speech_pending.clear();
+        self.speech.clear();
+        self.speech_positions.clear();
+        self.speech_muted.clear();
         let result = self.runtime.stop_all();
         self.record(result);
         // Flush stop even if another session is started before the next normal frame.
@@ -1394,6 +1441,33 @@ impl ClientAudio {
         let result = self.runtime.set_listener(listener);
         self.record(result);
         // Listener precedes starts so distance culling cannot use last session's pose.
+        for speech in self.speech.values_mut() {
+            speech.remaining -= f64::from(seconds);
+        }
+        self.speech.retain(|_, speech| speech.remaining > 0.0);
+        while let Some((actor, profile, at, voice)) = self.speech_pending.pop_front() {
+            if self.speech_muted.contains(&actor) {
+                continue;
+            }
+            if let Some(previous) = self.speech.remove(&actor) {
+                let result = self.runtime.stop(previous.handle);
+                self.record(result);
+            }
+            match self.start_with_duration(&profile, Placement::World(at), voice) {
+                Ok((handle, duration)) => {
+                    let feet = self.speech_positions.get(&actor).copied().unwrap_or(at);
+                    self.speech.insert(
+                        actor,
+                        SpeechPlayback {
+                            handle,
+                            remaining: duration + 0.1,
+                            offset: std::array::from_fn(|axis| at[axis] - feet[axis]),
+                        },
+                    );
+                }
+                Err(error) => self.record(Err(error)),
+            }
+        }
         while let Some((id, placement, voice)) = self.pending.pop_front() {
             let result = self.start(&id, placement, voice).map(|_| ());
             self.record(result);
@@ -1461,8 +1535,42 @@ impl ClientAudio {
             };
             if let Some(handle) = ended {
                 self.held.retain(|_, v| v.handle != handle);
+                self.speech.retain(|_, speech| speech.handle != handle);
             }
         }
+    }
+    /// Authored dialogue is active only while its actual audio handle lives.
+    /// Finished, stopped and culled voices all clear it in the same update.
+    pub fn speaking_owners(&self) -> impl Iterator<Item = u64> + '_ {
+        self.speech.keys().copied()
+    }
+    pub fn sync_speech_mutes(
+        &mut self,
+        muted: BTreeSet<u64>,
+        actors: &BTreeMap<u64, bri_sim::player::PlayerState>,
+    ) {
+        let stop: Vec<_> = self
+            .speech
+            .iter()
+            .filter(|(actor, _)| muted.contains(actor) || !actors.contains_key(actor))
+            .map(|(actor, speech)| (*actor, speech.handle))
+            .collect();
+        for (actor, handle) in stop {
+            self.speech.remove(&actor);
+            let result = self.runtime.stop(handle);
+            self.record(result);
+        }
+        self.speech_positions = actors
+            .iter()
+            .map(|(actor, state)| (*actor, state.feet))
+            .collect();
+        for (actor, speech) in &self.speech {
+            if let Some(feet) = self.speech_positions.get(actor) {
+                let at = std::array::from_fn(|axis| feet[axis] + speech.offset[axis]);
+                let _ = self.runtime.set_source_position(speech.handle, at);
+            }
+        }
+        self.speech_muted = muted;
     }
     pub fn stats(&self) -> AudioStats {
         self.runtime.stats()
@@ -1503,6 +1611,57 @@ impl WorldVolume {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_speech_ends_on_completion_replacement_mute_and_session_exit() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let cue = bri_sim::presentation::Cue {
+            id: 1,
+            tick: 1,
+            position: [0., 0., -2.],
+            kind: CueKind::SoundShaped {
+                speaker: Some(7),
+                profile: crate::testing::audio::EVENT_SOUND.into(),
+                volume: 1.0,
+                pitch: 1.0,
+                radius: 40.0,
+            },
+        };
+        audio.cue(&cue);
+        audio.tick(0.01, Listener::default());
+        assert_eq!(audio.speaking_owners().collect::<Vec<_>>(), vec![7]);
+        let first = audio.speech[&7].handle;
+        audio.cue(&cue);
+        audio.tick(0.01, Listener::default());
+        assert_ne!(
+            audio.speech[&7].handle, first,
+            "new speech replaces its previous handle"
+        );
+        for _ in 0..40 {
+            audio.tick(0.01, Listener::default());
+        }
+        assert!(
+            audio.speech.is_empty(),
+            "actual 250 ms one-shot completion clears speech"
+        );
+        audio.cue(&cue);
+        audio.tick(0.01, Listener::default());
+        audio.sync_speech_mutes(BTreeSet::from([7]), &BTreeMap::new());
+        assert!(audio.speech.is_empty(), "mute purges speaking immediately");
+        audio.cue(&cue);
+        audio.tick(0.01, Listener::default());
+        assert!(
+            audio.speech.is_empty(),
+            "muted speech cannot queue a new start"
+        );
+        audio.speech_muted.clear();
+        audio.cue(&cue);
+        audio.tick(0.01, Listener::default());
+        audio.clear();
+        assert!(audio.speech.is_empty() && audio.speech_pending.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn held_actor_audio_keeps_one_voice_across_frames_and_short_releases() -> Result<()> {

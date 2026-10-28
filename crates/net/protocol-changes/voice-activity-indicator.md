@@ -1,0 +1,1 @@
+Adds upstream `VoiceActivity` speech-state datagrams and downstream `VoiceActivity` updates keyed by `OwnerId`, carrying a boolean active-speaking state; the host broadcasts them beyond proximity audio range and expires stale active states.
