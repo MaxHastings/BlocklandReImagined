@@ -12,6 +12,25 @@ import gate
 
 
 class GateScope(unittest.TestCase):
+    def test_parent_push_proof_requires_exact_commit_base_and_live_lock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            lock = root / "gate.lock"
+            lock.write_text("parent-token", encoding="utf-8")
+            proof = {"sha": "tip", "base": "base", "token": "parent-token", "full": False}
+            with patch.object(gate, "gate_root", return_value=root), \
+                 patch.object(gate, "FULL_GATE", False), \
+                 patch.dict(os.environ, BRI_GATE_PUSH_CHECK=json.dumps(proof)):
+                self.assertTrue(gate.parent_push_checked("tip", "base"))
+                self.assertFalse(gate.parent_push_checked("other", "base"))
+                self.assertFalse(gate.parent_push_checked("tip", "moved"))
+                with patch.object(gate, "FULL_GATE", True):
+                    self.assertFalse(gate.parent_push_checked("tip", "base"))
+                os.utime(lock, (1, 1))
+                self.assertFalse(gate.parent_push_checked("tip", "base"))
+                lock.unlink()
+                self.assertFalse(gate.parent_push_checked("tip", "base"))
+
     def test_ordinary_commit_uses_scoped_checks_and_full_is_explicit(self):
         def git(*args):
             return {"rev-parse": "base", "rev-list": "tip", "diff": "tools/check.py"}.get(args[0], "")
@@ -29,6 +48,19 @@ class GateScope(unittest.TestCase):
             with patch.object(gate, "FULL_GATE", True):
                 self.assertTrue(gate.gate_commit("tip", False))
                 full.assert_called_once_with("tip", Path("unused"), ["tools/check.py"])
+            scoped.reset_mock()
+            full.reset_mock()
+            with patch.dict(os.environ, BRI_GATE_PUSH_CHECK="proof"), \
+                 patch.object(gate, "parent_push_checked", return_value=True), \
+                 patch.object(gate, "FULL_GATE", False):
+                self.assertTrue(gate.gate_commit("tip", False, reuse_push=True))
+                scoped.assert_not_called()
+                full.assert_not_called()
+            with patch.dict(os.environ, BRI_GATE_PUSH_CHECK="stale"), \
+                 patch.object(gate, "parent_push_checked", return_value=False):
+                self.assertFalse(gate.gate_commit("tip", False, reuse_push=True))
+                scoped.assert_not_called()
+                full.assert_not_called()
 
 
 class ProcessExit(unittest.TestCase):
