@@ -112,3 +112,21 @@ all tests of eight dependent crates;724 client units passed,78 ignored by
 the normal focused tier. No failures or test exceptions. The integrated gate
 will also run ignored cases. Committing this unchanged implementation for
 Windows CI, warm playtest build and the full integrated gate.
+
+CI1355 caught four default-package tests whose explicit expected load lists
+were missing the newly enabled audio package. This was an omitted acceptance
+fixture update, not a disabled check or a runtime failure. Update all seven
+relevant expected lists in package/defaults tests to require audio in its actual
+load position, retaining the checks for fresh installs, old lists, host-rule
+companions and player-disabled packages. Windows build/clippy and the other
+three Linux shards passed; the full local gate is finishing its original run.
+Preview.5 candidate54c03e2fc already passed actual packaged startup,13191 file
+hashes,118 unique package identities and ZIP CRCs. The sixteen native audio
+package files match committed bytes; it is enabled once and is the only native
+provider. Preserve this receipt, then validate the test-only correction and
+refresh the executable stamp/package for the final head.
+
+Fixture correction: ten default-installation tests passed, then the focused
+package tier (depth0 because this change is test-only) passed formatting,
+all-target clippy and every package test in10s. No production behavior changed.
+The final integrated gate and CI still cover the full dependent graph.
