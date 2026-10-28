@@ -259,6 +259,8 @@ labels are retained so earlier progress notes remain traceable.
 | GPU startup pixel validation | Generic textured draw, reversed depth, bounded readback and compatible unorm presentation views; diagnostics are distinct from full world acceptance | Root rendering portability audit | candidate; RGBA/BGRA and sRGB storage probes pass locally, integrated package checks pending | yes: `device_probe::check` and `check_surface_view` in render/src/device_probe.rs, integrated in v0.3.5 |
 | Combined participant capacity | Shared `MAX_PARTICIPANTS` bounds active/loading humans and bots across Session admission and replica validation; human connection slots and bot count remain independently bounded | Root Interdiction finite encounter correction | candidate; bounded admission, actual two-client roster and 32/64-bot optimized checks pass; gate pending | yes: package-runtime/src/ops/mod.rs, sim/src/session.rs and net/src/replica.rs |
 
+| NPC outcome reports for presentation policy | Existing bounded bot report queue exposes provider-confirmed carriage, requested objective completion and repeated commanded-movement stalls. Packages own reactions; no content names, AI commands or round-win inference | Root Afghan gameplay/audio integration | Native saved-match trace and content-free policy tests; human listening/playtest acceptance remains open | yes: sim/session/bots/reports.rs, package-runtime/content.rs and script.rs |
+
 Release recheck (2026-10-23): all 192 declarations were searched against current
 production source, including the explicit source paths in the checked column.
 Historical owner states remain history. Sprint has no dedicated engine input,

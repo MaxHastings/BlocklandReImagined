@@ -14,8 +14,8 @@ The read-only local `TDM Afghan.world.json` has SHA-256
 It contains 14,107 bricks, two stock tanks, saved Slayer CTF rules, eight slots
 per team and rooftop flags. The source save and generated v20 content stay out
 of Git. The headless trace restores the saved game for its recorded owner,
-retaining loadouts, damage, teams, objectives, ordinary boarding, weapons,
-vehicle destruction and round resets. It injects no bot tasks or controls.
+retaining loadouts, damage, teams, objectives, ordinary boarding, weapons and
+vehicle destruction/replacement. It injects no bot tasks or controls.
 
 Expected travel is through vehicle-sized streets to useful ground approaches,
 then ordinary dismounting/walking for a feet-only rooftop objective. Parking at
@@ -62,9 +62,10 @@ The local `artifacts/afghan-*.json` and logs preserve successive interventions,
 including negative results: route invalidation or actual hulls alone did not
 solve travel. A support-floor correction allowed the southern tank to travel
 131.74 units in one three-minute candidate. Cross-section corridors allowed the
-northern tank to travel 147.33 units and the ordinary match to reset its round.
-An earlier 600-second candidate match completed, including combat, destruction,
-respawns and round resets. Tracks are grouped by the observed spawn location
+northern tank to travel 147.33 units. An earlier description inferred a round
+reset from replacement vehicle IDs; that was not established by canonical round
+results and is not claimed. An earlier 600-second candidate match completed,
+including combat, destruction and respawns. Tracks group observed spawn locations
 across replacement vehicle IDs (not treated as one immortal vehicle):
 
 | Observed travel | South spawn | North spawn |

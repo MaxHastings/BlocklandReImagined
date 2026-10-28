@@ -4791,6 +4791,17 @@ impl Runtime {
                 (behaviour.on_bot_friend_died, "on_bot_friend_died", 2),
                 (behaviour.on_bot_lost_enemy, "on_bot_lost_enemy", 2),
                 (behaviour.on_bot_out_of_ammo, "on_bot_out_of_ammo", 1),
+                (
+                    behaviour.on_bot_objective_acquired,
+                    "on_bot_objective_acquired",
+                    1,
+                ),
+                (
+                    behaviour.on_bot_objective_completed,
+                    "on_bot_objective_completed",
+                    1,
+                ),
+                (behaviour.on_bot_stalled, "on_bot_stalled", 1),
             ] {
                 if declared {
                     need(name.into(), arity, name);

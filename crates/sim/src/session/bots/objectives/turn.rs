@@ -97,6 +97,11 @@ impl Session {
             .as_ref()
             .and_then(|d| d.observed_completion(self, context.and_then(|c| c.2)))
         {
+            if outcome {
+                self.bots
+                    .reports
+                    .tell(super::super::Report::ObjectiveCompleted(bot));
+            }
             let diagnostic = match &state.desired.as_ref()?.completion {
                 Completion::PackageCounter(_) => "objective completed: declared package state",
                 Completion::Place(_) => "objective completed: declared place worked",
@@ -152,6 +157,12 @@ impl Session {
             } else {
                 match step.progress(self, bot, tick).unwrap() {
                     Progress::Changed => {
+                        if matches!(&step.executor, Executor::Package(action) if action.acquired(self, bot))
+                        {
+                            self.bots
+                                .reports
+                                .tell(super::super::Report::ObjectiveAcquired(bot));
+                        }
                         // The authoritative effect changed the model. Keep a
                         // still-valid native grip for this repair turn while
                         // the fair grounding budget selects the next step.

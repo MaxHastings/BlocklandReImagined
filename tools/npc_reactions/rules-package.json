@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "npc_popculture_rules",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "NPC Pop-Culture Reaction Policy",
+  "description": "Server-only situational reaction mixing for the optional local recording pack.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": {"source": "original"},
+  "dependencies": {"npc_popculture": "^1.0.0"},
+  "capabilities": ["effects"],
+  "provides": [
+    {"kind": "behaviour", "id": "npc_popculture_rules:behaviour/reactions", "file": "behaviour.json"},
+    {"kind": "script", "id": "npc_popculture_rules:script/reactions", "file": "reactions.rhai"},
+    {"kind": "script", "id": "npc_popculture_rules:script/catalog", "file": "catalog.rhai"}
+  ]
+}

@@ -163,3 +163,12 @@ remain open.
 
 Maxwell performs interactive acceptance. No interactive game window or input
 automation is part of this work. The full alpha acceptance remains open.
+
+The [integrated gameplay/audio follow-up](2026-10-28-contextual-npc-reactions.md)
+records two further generic liveness corrections found during repeated traces:
+retargeting the same intent no longer erases failed physical headway, and a
+stationary ungrounded empty-route pose can leave collision contact through the
+existing safe-floor step-off query. Guard boundaries remain enforced. Its final
+pre-rebase 600-second candidate has no long stationary travel candidates across
+all 15 bots; the two tank cohorts reach 114.28 / 140.90 units. The recipe,
+source provenance, final checks and integration handoff are linked there.

@@ -115,9 +115,17 @@ fn saved_match_vehicle_routes() -> Result<()> {
     let mut seen_deaths = std::collections::BTreeSet::new();
     let mut rounds = Vec::new();
     let mut seen_rounds = std::collections::BTreeSet::new();
+    let mut reaction_cues = Vec::new();
     let nav_detail = std::env::var_os("BRI_DRIVE_NAV_DETAIL").is_some();
     for i in 0..seconds * 120 {
         s.step()?;
+        for cue in s.take_cues() {
+            if matches!(&cue.kind, bri_sim::presentation::CueKind::SoundShaped { profile, .. }
+                if profile.starts_with("npc_popculture:"))
+            {
+                reaction_cues.push(cue);
+            }
+        }
         let tick = s.simulation().state().tick;
         let weapons = s.weapon_view();
         for p in weapons.fired() {
@@ -212,13 +220,33 @@ fn saved_match_vehicle_routes() -> Result<()> {
     ensure!(!samples.is_empty(), "the saved match spawned no vehicles");
     let (failures, details) = s.bot_step_failures();
     ensure!(failures == 0, "bot control failures: {details:?}");
+    let diagnostics = s.package_diagnostics();
+    ensure!(
+        !diagnostics
+            .iter()
+            .any(|d| d.severity == bri_package::diag::Severity::Error),
+        "package runtime errors: {diagnostics:?}"
+    );
+    if addons.iter().any(|id| id == "npc_popculture") {
+        ensure!(
+            s.package_store()
+                .is_some_and(|store| store.namespace("npc_popculture_rules").is_some()),
+            "requested reaction policy was not loaded"
+        );
+        if seconds >= 120 {
+            ensure!(
+                !reaction_cues.is_empty(),
+                "requested reactions never reached presentation"
+            );
+        }
+    }
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(
         output,
         serde_json::to_vec_pretty(
-            &serde_json::json!({"world": world_name, "bricks": bricks, "seconds": seconds, "bot_step_failures": failures, "samples": samples, "bot_samples": bot_samples, "projectiles": projectiles, "damage": damage, "deaths": deaths, "rounds": rounds, "games": s.minigame_views(), "packages": packages, "rules_state": s.package_store(), "host": "passive owner, saved rules preserved", "chat": format!("{:?}", s.chat())}),
+            &serde_json::json!({"world": world_name, "bricks": bricks, "seconds": seconds, "bot_step_failures": failures, "samples": samples, "bot_samples": bot_samples, "projectiles": projectiles, "damage": damage, "deaths": deaths, "rounds": rounds, "reaction_cues": reaction_cues, "games": s.minigame_views(), "packages": packages, "rules_state": s.package_store(), "host": "passive owner, saved rules preserved", "chat": format!("{:?}", s.chat())}),
         )?,
     )?;
     Ok(())

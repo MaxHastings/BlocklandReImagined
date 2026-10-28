@@ -1315,7 +1315,7 @@ impl Session {
     ) -> Option<Vec3> {
         const SIDES: usize = 16;
         let want = flat(toward - feet).normalize_or_zero();
-        let depth = (feet.y - toward.y).max(0.0) + body.step + 0.5;
+        let depth = ((feet.y - toward.y).max(0.0) + body.step + 0.5).min(body.drop);
         let others: Vec<(Vec3, f32)> = self
             .peers
             .iter()
@@ -1371,6 +1371,39 @@ impl Session {
             }
         }
         best.map(|(_, at)| at)
+    }
+
+    /// An empty route at a stationary, ungrounded pose is not normal flight.
+    /// Only after a full no-motion window, choose nearby safe floor using
+    /// the existing step-off checks. Never steer a real fall or active jets.
+    pub(super) fn bot_stranded_step(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+        state: &crate::player::PlayerState,
+        tick: u64,
+    ) -> Option<Vec3> {
+        let brain = self.bots.brains.get(&bot)?;
+        let (stopped, since) = brain.path_stop?;
+        if self.seated(bot)
+            || state.grounded
+            || state.jetting
+            || Vec3::from(state.velocity).length_squared() > 0.25
+            || feet.distance(stopped) > 0.2
+            || tick < since.saturating_add(120)
+            || brain.search.is_some()
+        {
+            return None;
+        }
+        let goal = brain.goal?.point(brain.home);
+        self.bot_step_off(
+            bot,
+            feet,
+            body,
+            Vec3::new(goal.x, feet.y - body.drop, goal.z),
+            feet.y,
+        )
     }
 
     /// A vehicle is a body the walk grid leaves out (`nav`): one a walking
@@ -2302,6 +2335,9 @@ impl Session {
                 brain.settled = false;
                 // A place it cannot drive to is looked for elsewhere.
                 brain.explore.to = None;
+            }
+            if stuck == VEHICLE_STALLED {
+                self.bots.reports.tell(Report::Stalled(bot));
             }
             if stuck >= VEHICLE_GIVE_UP {
                 brain.next_interaction = tick + GIVE_UP_TICKS;
