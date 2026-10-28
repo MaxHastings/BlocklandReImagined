@@ -171,10 +171,19 @@ impl Body {
         } else {
             ((self.width - CELL) * 0.5).max(self.width * 0.25)
         };
-        let lift = (self.step * 0.5)
-            .min(height * 0.3)
-            .max(self.bottom)
-            .min(height - 0.01);
+        // A chassis spans both sides while its wheels cross a low step.
+        // Sampling the lower floor must not treat the old support top as a
+        // wall through the back half of its footprint. Admit the same step
+        // height as `edge`; posed driving sweeps still check the real hull.
+        // Pedestrians keep their existing clearance and crawl semantics.
+        let lift = (if self.conservative {
+            self.step + STEP_SLACK
+        } else {
+            self.step * 0.5
+        })
+        .min(height * 0.3)
+        .max(self.bottom)
+        .min(height - 0.01);
         (half_width, lift, height - lift)
     }
 }
@@ -2537,6 +2546,69 @@ mod tests {
             }
         }
         panic!("chassis route never completed");
+    }
+
+    #[test]
+    fn a_low_clearance_chassis_can_leave_its_step_height_support_plate() {
+        let physics = world(&[
+            floor(),
+            (Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 0.2, 2.0)),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+            solid: &all_solid,
+        };
+        let mut chassis = body();
+        chassis.width = 4.8;
+        chassis.height = 3.3;
+        chassis.crouch_height = 3.3;
+        chassis.step = 0.2;
+        chassis.jump = 0.2;
+        chassis.crawl_jump = 0.2;
+        chassis.drop = 0.4;
+        chassis.conservative = true;
+        chassis.bottom = 0.04;
+        for (from, to) in [
+            (Vec3::Y * 0.2, Vec3::NEG_Z * 10.0),
+            (Vec3::NEG_Z * 10.0, Vec3::Y * 0.2),
+        ] {
+            let mut nav = Nav::default();
+            nav.unmetered();
+            let mut search = Search::new(from, to, 24.0).unlimited();
+            let found = loop {
+                if let Some(found) = search.step(&mut nav, &ground, &chassis) {
+                    break found;
+                }
+            };
+            let route = path(found);
+            assert!(!route.is_empty());
+            assert!(
+                route.last().unwrap().feet.distance(to) < 1.0,
+                "the wheel-supported transition connects both floors: {route:?}"
+            );
+            assert!(
+                route
+                    .iter()
+                    .all(|p| !p.jump && !p.crouch && p.through.is_none())
+            );
+        }
+        let tall = world(&[
+            floor(),
+            (Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 1.0, 2.0)),
+        ]);
+        let blocked = Ground {
+            physics: &tall,
+            ..ground
+        };
+        assert!(
+            !blocked.fits(&chassis, Vec3::ZERO, false),
+            "real walls still block the full footprint"
+        );
     }
 
     #[test]

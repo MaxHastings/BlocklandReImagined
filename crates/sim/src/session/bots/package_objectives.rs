@@ -320,6 +320,10 @@ impl Action {
         };
         Some(objectives::View::locomotion(point, point + Vec3::Y))
     }
+    pub(super) fn acquired(&self, session: &Session, bot: OwnerId) -> bool {
+        matches!(self, Self::Pickup { stamp }
+            if stamp.carried(session, bot) == Some(Carried::ThisSource))
+    }
     pub(super) fn observe(&self, session: &Session, bot: OwnerId) -> Progress {
         if self.stamp().completion(session, bot) == Some(true) {
             return Progress::Changed;

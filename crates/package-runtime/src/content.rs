@@ -460,6 +460,19 @@ pub struct Behaviour {
     /// for want of rounds; again only after it has fired since.
     #[serde(default)]
     pub on_bot_out_of_ammo: bool,
+    /// `on_bot_objective_acquired(bot)` after a provider's carried-state
+    /// observation confirms the source was acquired, once per pickup step.
+    #[serde(default)]
+    pub on_bot_objective_acquired: bool,
+    /// `on_bot_objective_completed(bot)` after the requested authoritative
+    /// completion is observed. An ended round without the requested win is
+    /// not success. This describes an individual objective, not a round win.
+    #[serde(default)]
+    pub on_bot_objective_completed: bool,
+    /// `on_bot_stalled(bot)` when commanded movement repeatedly makes no
+    /// headway. Planned pauses, guards and deliberate goofs do not report it.
+    #[serde(default)]
+    pub on_bot_stalled: bool,
     /// `on_contact(info)` as two bodies begin to touch: `info` is
     /// `#{ kind, by, target, vehicle, target_vehicle, from, speed, velocity }`.
     /// `kind` is `"body"` (a player's body meeting another's), `"vehicle"`

@@ -1,0 +1,1918 @@
+{
+  "schema_version": 1,
+  "clips": [
+    {
+      "id": "doh",
+      "url": "https://memebtn.com/sounds/doh.mp3",
+      "page": "https://memebtn.com/sound/doh/",
+      "events": [
+        "minor_damage",
+        "stalled"
+      ],
+      "tier": "micro",
+      "title": "Doh",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "394866d4afad6e2fa6a9b50453e45dbbd7ae1e3005d6330f943818c7b4d82647"
+    },
+    {
+      "id": "roblox-oof",
+      "url": "https://memebtn.com/sounds/roblox-oof.mp3",
+      "page": "https://memebtn.com/sound/roblox-oof/",
+      "events": [
+        "minor_damage",
+        "death"
+      ],
+      "tier": "micro",
+      "title": "Roblox Oof",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "dfcdbbd0d7e4a62b68f6634a1a96b6bc4d9da18357df6f3914b6d95ed2609654"
+    },
+    {
+      "id": "minecraft-damage",
+      "url": "https://memebtn.com/sounds/minecraft-damage.mp3",
+      "page": "https://memebtn.com/sound/minecraft-damage/",
+      "events": [
+        "minor_damage"
+      ],
+      "tier": "micro",
+      "title": "Minecraft Damage",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "66aef841af2b9d877fb0333d7959f7e4ee068c41bf883518a7c4158ce2f43132"
+    },
+    {
+      "id": "ack",
+      "url": "https://memebtn.com/sounds/ack.mp3",
+      "page": "https://memebtn.com/sound/ack/",
+      "events": [
+        "minor_damage"
+      ],
+      "tier": "micro",
+      "title": "Ack",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": 0.9,
+      "sha256": "a465d6b6837388b7b50b9b2a40cc506ff22e07987fbf222cce4eeb3742f41dbe",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "waluigi-wah",
+      "url": "https://memebtn.com/sounds/waluigi-wah.mp3",
+      "page": "https://memebtn.com/sound/waluigi-wah/",
+      "events": [
+        "minor_damage"
+      ],
+      "tier": "micro",
+      "title": "Waluigi Wah",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "ecf149a982591965e026b6d4b743b559849bb4d6a1f9d27c64f2d88828e4bf26"
+    },
+    {
+      "id": "knuckles-oh-no",
+      "url": "https://memebtn.com/sounds/knuckles-oh-no.mp3",
+      "page": "https://memebtn.com/sound/knuckles-oh-no/",
+      "events": [
+        "minor_damage"
+      ],
+      "tier": "micro",
+      "title": "Knuckles Oh No",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "8f95e44a3a5f7a7a15121cdd287ff60f8611b721f930c1a524d8107d4c9aa34a"
+    },
+    {
+      "id": "my-leg",
+      "url": "https://memebtn.com/sounds/my-leg.mp3",
+      "page": "https://memebtn.com/sound/my-leg/",
+      "events": [
+        "heavy_damage"
+      ],
+      "tier": "quote",
+      "title": "My Leg",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "37726badf142164b27f765c3a067dbc2af8b760e9622a117d5702c12d613bc84"
+    },
+    {
+      "id": "emotional-damage",
+      "url": "https://memebtn.com/sounds/emotional-damage.mp3",
+      "page": "https://memebtn.com/sound/emotional-damage/",
+      "events": [
+        "heavy_damage"
+      ],
+      "tier": "quote",
+      "title": "Emotional Damage",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "11612ffb3e6864b56c4a6c47eabf31fae3144f385d1e586dbfa58009a35869d2"
+    },
+    {
+      "id": "thats-a-lot-of-damage",
+      "url": "https://memebtn.com/sounds/thats-a-lot-of-damage.mp3",
+      "page": "https://memebtn.com/sound/thats-a-lot-of-damage/",
+      "events": [
+        "heavy_damage"
+      ],
+      "tier": "quote",
+      "title": "Thats A Lot Of Damage",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "826e71611987899b343757a14dbc9b9a7ea1ef9052ff7c54d21cad27c598ba7e"
+    },
+    {
+      "id": "he-needs-some-milk",
+      "url": "https://memebtn.com/sounds/he-needs-some-milk.mp3",
+      "page": "https://memebtn.com/sound/he-needs-some-milk/",
+      "events": [
+        "heavy_damage"
+      ],
+      "tier": "quote",
+      "title": "He Needs Some Milk",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "3496d2d9b62ab56ae1c1a712d27ee6e93568923b30e48c8f69896c0b56252d46"
+    },
+    {
+      "id": "wilhelm-scream",
+      "url": "https://memebtn.com/sounds/wilhelm-scream.mp3",
+      "page": "https://memebtn.com/sound/wilhelm-scream/",
+      "events": [
+        "death"
+      ],
+      "tier": "rare",
+      "title": "Wilhelm Scream",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "319ea48a86d632adfbecfbe28452bd4c1565e0900e0602c2a00edbee7f2d0d99"
+    },
+    {
+      "id": "lego-yoda-death",
+      "url": "https://memebtn.com/sounds/lego-yoda-death.mp3",
+      "page": "https://memebtn.com/sound/lego-yoda-death/",
+      "events": [
+        "death"
+      ],
+      "tier": "micro",
+      "title": "Lego Yoda Death",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "e5d7abedf106b804ed941c30d1720c673da900797549d8400d05f95d0d5bcfc0"
+    },
+    {
+      "id": "pacman-death",
+      "url": "https://memebtn.com/sounds/pacman-death.mp3",
+      "page": "https://memebtn.com/sound/pacman-death/",
+      "events": [
+        "death"
+      ],
+      "tier": "micro",
+      "title": "Pacman Death",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "bc1c493a8791cc80f968d8404b066a9cd937d0753faaba3d2e579aaf75480d86"
+    },
+    {
+      "id": "mario-death",
+      "url": "https://memebtn.com/sounds/mario-death.mp3",
+      "page": "https://memebtn.com/sound/mario-death/",
+      "events": [
+        "death"
+      ],
+      "tier": "micro",
+      "title": "Mario Death",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "b66cbfe986f150646ab1cee2f9eeddf685536e6307e38a98c834dfef3f1db695"
+    },
+    {
+      "id": "fortnite-death",
+      "url": "https://memebtn.com/sounds/fortnite-death.mp3",
+      "page": "https://memebtn.com/sound/fortnite-death/",
+      "events": [
+        "death"
+      ],
+      "tier": "micro",
+      "title": "Fortnite Death",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "50d52c033c424a4bd7dbbcce03c6908f926d5a8093677c6772d5d33145758a7d"
+    },
+    {
+      "id": "goofy-yell",
+      "url": "https://memebtn.com/sounds/goofy-yell.mp3",
+      "page": "https://memebtn.com/sound/goofy-yell/",
+      "events": [
+        "fall"
+      ],
+      "tier": "rare",
+      "title": "Goofy Yell",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "bad586826f76c269252dc9e10bb8d368f034d41d83e16c9be56e25dc022e0cd3"
+    },
+    {
+      "id": "kirby-falling",
+      "url": "https://memebtn.com/sounds/kirby-falling.mp3",
+      "page": "https://memebtn.com/sound/kirby-falling/",
+      "events": [
+        "fall"
+      ],
+      "tier": "micro",
+      "title": "Kirby Falling",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "10822546da1e45ff32c6651c18fdb2ae007d3e0fa3d647252e029bae59da35ac"
+    },
+    {
+      "id": "yeet",
+      "url": "https://memebtn.com/sounds/yeet.mp3",
+      "page": "https://memebtn.com/sound/yeet/",
+      "events": [
+        "fall"
+      ],
+      "tier": "micro",
+      "title": "Yeet",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "67f521bc05337ad4bd42a823e551a4088a73fd74bbea0bec42e175fbf3279617"
+    },
+    {
+      "id": "ahhh-scream",
+      "url": "https://memebtn.com/sounds/ahhh-scream.mp3",
+      "page": "https://memebtn.com/sound/ahhh-scream/",
+      "events": [
+        "fall"
+      ],
+      "tier": "micro",
+      "title": "Ahhh Scream",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "0761ad4d823b664995b141f3d6d7af7c835947c15cbf787cc8b311c0bca5755d"
+    },
+    {
+      "id": "screaming-goat",
+      "url": "https://memebtn.com/sounds/screaming-goat.mp3",
+      "page": "https://memebtn.com/sound/screaming-goat/",
+      "events": [
+        "fall"
+      ],
+      "tier": "micro",
+      "title": "Screaming Goat",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "5844659736c68d68de8b72aa44a7b0e3aecd8bd2971707d3ac64b1853760b184"
+    },
+    {
+      "id": "metal-pipe-falling",
+      "url": "https://memebtn.com/sounds/metal-pipe-falling.mp3",
+      "page": "https://memebtn.com/sound/metal-pipe-falling/",
+      "events": [
+        "landing"
+      ],
+      "tier": "micro",
+      "title": "Metal Pipe Falling",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "c5ce0150d5334750cbe6ad1ef109311df2815f971b2cf6311b5153fe45b5745a"
+    },
+    {
+      "id": "spongebob-boowomp",
+      "url": "https://memebtn.com/sounds/spongebob-boowomp.mp3",
+      "page": "https://memebtn.com/sound/spongebob-boowomp/",
+      "events": [
+        "landing"
+      ],
+      "tier": "micro",
+      "title": "Spongebob Boowomp",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "5255018fabca57b448e3f3705f98a6b1044d24fb4cb8fd5966fc1d5038fa8c96"
+    },
+    {
+      "id": "windows-xp-error",
+      "url": "https://memebtn.com/sounds/windows-xp-error.mp3",
+      "page": "https://memebtn.com/sound/windows-xp-error/",
+      "events": [
+        "landing",
+        "heavy_damage",
+        "out_of_ammo"
+      ],
+      "tier": "micro",
+      "title": "Windows Xp Error",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "984eff576ad78045b6624a5c9681946033e7e22a48a4f0b5e57cf14372a06f0c"
+    },
+    {
+      "id": "doge-bonk",
+      "url": "https://memebtn.com/sounds/doge-bonk.mp3",
+      "page": "https://memebtn.com/sound/doge-bonk/",
+      "events": [
+        "landing"
+      ],
+      "tier": "micro",
+      "title": "Doge Bonk",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "2dda3db9ffcbfaa708f47fc8fa10e969c164974f446b7902eeab46a2c267bbf1"
+    },
+    {
+      "id": "bone-crack",
+      "url": "https://memebtn.com/sounds/bone-crack.mp3",
+      "page": "https://memebtn.com/sound/bone-crack/",
+      "events": [
+        "landing"
+      ],
+      "tier": "micro",
+      "title": "Bone Crack",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "b507e20fedd996d524c7829858c779e1822047feb6c19dca15d5838b44bddd1b"
+    },
+    {
+      "id": "metal-gear-solid-alert",
+      "url": "https://memebtn.com/sounds/metal-gear-solid-alert.mp3",
+      "page": "https://memebtn.com/sound/metal-gear-solid-alert/",
+      "events": [
+        "spotted",
+        "grenade"
+      ],
+      "tier": "micro",
+      "title": "Metal Gear Solid Alert",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "203b3caeada8b09fb7d9277d4d03f0c92d621ba58645bee2c02cf2e6bded25fe"
+    },
+    {
+      "id": "enemy-spotted",
+      "url": "https://memebtn.com/sounds/enemy-spotted.mp3",
+      "page": "https://memebtn.com/sound/enemy-spotted/",
+      "events": [
+        "spotted"
+      ],
+      "tier": "micro",
+      "title": "Enemy Spotted",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "3f0669c555fd94fea26a742a966f039ceecce683aa33b6a50e65ed4a0f7e1731"
+    },
+    {
+      "id": "newtype-flash",
+      "url": "https://memebtn.com/sounds/newtype-flash.mp3",
+      "page": "https://memebtn.com/sound/newtype-flash/",
+      "events": [
+        "spotted"
+      ],
+      "tier": "micro",
+      "title": "Newtype Flash",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "177602636b082c62b143f8e4f89158cd1917dcd2b655d82c3ae2672049b039a5"
+    },
+    {
+      "id": "challenger-approaching",
+      "url": "https://memebtn.com/sounds/challenger-approaching.mp3",
+      "page": "https://memebtn.com/sound/challenger-approaching/",
+      "events": [
+        "spotted"
+      ],
+      "tier": "micro",
+      "title": "Challenger Approaching",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.5,
+      "sha256": "183f644c040af9d053a8be9c102f6e6b7c3f3db1703b84b9273bcd00978992da",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "hey-listen",
+      "url": "https://memebtn.com/sounds/hey-listen.mp3",
+      "page": "https://memebtn.com/sound/hey-listen/",
+      "events": [
+        "spotted"
+      ],
+      "tier": "micro",
+      "title": "Hey Listen",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "6af11faa914fb377b7a12d9c9fc616c6d366f431f9e77cb78a141860e4bea5d3"
+    },
+    {
+      "id": "im-in-danger",
+      "url": "https://memebtn.com/sounds/im-in-danger.mp3",
+      "page": "https://memebtn.com/sound/im-in-danger/",
+      "events": [
+        "grenade"
+      ],
+      "tier": "quote",
+      "title": "Im In Danger",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "22be557008ff3e0a4df9bcfd3a754d4fe03e535021f4e290af9a3ad7e08a6aa8"
+    },
+    {
+      "id": "fire-in-the-hole",
+      "url": "https://memebtn.com/sounds/fire-in-the-hole.mp3",
+      "page": "https://memebtn.com/sound/fire-in-the-hole/",
+      "events": [
+        "grenade"
+      ],
+      "tier": "quote",
+      "title": "Fire In The Hole",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "1aa6681a61065abd3f519153d66d74b0a6aba38d64120380dbac4d47084e73eb"
+    },
+    {
+      "id": "nope",
+      "url": "https://memebtn.com/sounds/nope.mp3",
+      "page": "https://memebtn.com/sound/nope/",
+      "events": [
+        "grenade"
+      ],
+      "tier": "quote",
+      "title": "Nope",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "e9312426d0d8376839d0c1f399eecd9062925f456f21c1936b8d36973c363754"
+    },
+    {
+      "id": "oh-hell-no",
+      "url": "https://memebtn.com/sounds/oh-hell-no.mp3",
+      "page": "https://memebtn.com/sound/oh-hell-no/",
+      "events": [
+        "grenade"
+      ],
+      "tier": "quote",
+      "title": "Oh Hell No",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "d8af854d4e8e5467eda04dfd8d9c8563b9ff5087cf0b6fce2d4af661a01340f2"
+    },
+    {
+      "id": "jojo-oh-no",
+      "url": "https://memebtn.com/sounds/jojo-oh-no.mp3",
+      "page": "https://memebtn.com/sound/jojo-oh-no/",
+      "events": [
+        "grenade"
+      ],
+      "tier": "quote",
+      "title": "Jojo Oh No",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "608d7ab2c35e5b7acd646140290dc86781731b17c069f4b3b2c9f63864cebe48"
+    },
+    {
+      "id": "minecraft-glass-break",
+      "url": "https://memebtn.com/sounds/minecraft-glass-break.mp3",
+      "page": "https://memebtn.com/sound/minecraft-glass-break/",
+      "events": [
+        "under_fire"
+      ],
+      "tier": "micro",
+      "title": "Minecraft Glass Break",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "1f2c1c131dfc2dd5c378a632189f3a91b6d51042c75a3bb7d4fdd8b204fcb25e"
+    },
+    {
+      "id": "half-life-crowbar",
+      "url": "https://memebtn.com/sounds/half-life-crowbar.mp3",
+      "page": "https://memebtn.com/sound/half-life-crowbar/",
+      "events": [
+        "under_fire"
+      ],
+      "tier": "micro",
+      "title": "Half Life Crowbar",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "7d0c9079ce5510af000da835d33b96a5fb335d9620da7d5d6466f7b3eb9aab03"
+    },
+    {
+      "id": "mlg-hitmarker",
+      "url": "https://memebtn.com/sounds/mlg-hitmarker.mp3",
+      "page": "https://memebtn.com/sound/mlg-hitmarker/",
+      "events": [
+        "under_fire"
+      ],
+      "tier": "micro",
+      "title": "Mlg Hitmarker",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "b145d8312e4ff2218ef0aa6884a9b6decf4d780800e2bf169393a57bea48f719"
+    },
+    {
+      "id": "punch",
+      "url": "https://memebtn.com/sounds/punch.mp3",
+      "page": "https://memebtn.com/sound/punch/",
+      "events": [
+        "under_fire"
+      ],
+      "tier": "micro",
+      "title": "Punch",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "93826106daa115166d70b1e50cc0e350fa3fecba85043f4f2f876b8566ca750f"
+    },
+    {
+      "id": "slap",
+      "url": "https://memebtn.com/sounds/slap.mp3",
+      "page": "https://memebtn.com/sound/slap/",
+      "events": [
+        "under_fire"
+      ],
+      "tier": "micro",
+      "title": "Slap",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "b4fcc65367b0f4e8965efb988da2a1b3603a621a98a8815df2e2295077d2441f"
+    },
+    {
+      "id": "tim-allen-grunt",
+      "url": "https://memebtn.com/sounds/tim-allen-grunt.mp3",
+      "page": "https://memebtn.com/sound/tim-allen-grunt/",
+      "events": [
+        "heard_fire"
+      ],
+      "tier": "micro",
+      "title": "Tim Allen Grunt",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "cefa10f352ea272466c142f9e2fb4486177f913c4cc58ed95cd0241a00dd6a36"
+    },
+    {
+      "id": "minecraft-villager",
+      "url": "https://memebtn.com/sounds/minecraft-villager.mp3",
+      "page": "https://memebtn.com/sound/minecraft-villager/",
+      "events": [
+        "heard_fire"
+      ],
+      "tier": "micro",
+      "title": "Minecraft Villager",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "d7499f4c162b4924ad5485577277075ba28cf853e59c191f4e2f5bd54b103e20"
+    },
+    {
+      "id": "huh-cat",
+      "url": "https://memebtn.com/sounds/huh-cat.mp3",
+      "page": "https://memebtn.com/sound/huh-cat/",
+      "events": [
+        "heard_fire"
+      ],
+      "tier": "micro",
+      "title": "Huh Cat",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "34d4ab98d9b4f0c9a509899b1f6c29c440b026a3e217a28ea867da7fae366cc1"
+    },
+    {
+      "id": "vine-boom",
+      "url": "https://memebtn.com/sounds/vine-boom.mp3",
+      "page": "https://memebtn.com/sound/vine-boom/",
+      "events": [
+        "heard_fire",
+        "multi_kill"
+      ],
+      "tier": "micro",
+      "title": "Vine Boom",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "59199c45cf6ba5dd8bcf9d7a7b0739df12298dcd65ee4c1219a0468a2a8919e4"
+    },
+    {
+      "id": "record-scratch",
+      "url": "https://memebtn.com/sounds/record-scratch.mp3",
+      "page": "https://memebtn.com/sound/record-scratch/",
+      "events": [
+        "heard_fire"
+      ],
+      "tier": "micro",
+      "title": "Record Scratch",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "e6ef20f875addc68e888cc5212ba3158a30714c411d2ea7f28e1d802e7803d8b"
+    },
+    {
+      "id": "what-da-dog-doin",
+      "url": "https://memebtn.com/sounds/what-da-dog-doin.mp3",
+      "page": "https://memebtn.com/sound/what-da-dog-doin/",
+      "events": [
+        "lost_enemy"
+      ],
+      "tier": "quote",
+      "title": "What Da Dog Doin",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "8d761d2b092ab4fe4f420a022baa82bd007a2788082b71d07203698cf2d6b852"
+    },
+    {
+      "id": "why-are-you-running",
+      "url": "https://memebtn.com/sounds/why-are-you-running.mp3",
+      "page": "https://memebtn.com/sound/why-are-you-running/",
+      "events": [
+        "lost_enemy"
+      ],
+      "tier": "quote",
+      "title": "Why Are You Running",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "12278c7b65ce152f81e19236b430cb6264d1ecd5be0225196057497845b64ac6"
+    },
+    {
+      "id": "charlie-brown-teacher",
+      "url": "https://memebtn.com/sounds/charlie-brown-teacher.mp3",
+      "page": "https://memebtn.com/sound/charlie-brown-teacher/",
+      "events": [
+        "lost_enemy"
+      ],
+      "tier": "micro",
+      "title": "Charlie Brown Teacher",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.5,
+      "sha256": "c5ec47f1586ef1f6b8a3fad2b229ecf793d7a2c205a61a47a1b62015c14a86b2",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "crickets",
+      "url": "https://memebtn.com/sounds/crickets.mp3",
+      "page": "https://memebtn.com/sound/crickets/",
+      "events": [
+        "lost_enemy"
+      ],
+      "tier": "micro",
+      "title": "Crickets",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.5,
+      "sha256": "7562979c8791554a56d66be9b555f51178507439a3f9514cafa6a46f2703b42b",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "m1-garand-ping",
+      "url": "https://memebtn.com/sounds/m1-garand-ping.mp3",
+      "page": "https://memebtn.com/sound/m1-garand-ping/",
+      "events": [
+        "out_of_ammo"
+      ],
+      "tier": "micro",
+      "title": "M1 Garand Ping",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "8d6ae86ccbc3e8e60c016cb4d26011bb93ec098b05b44ba57dad0e0d59abf6d5"
+    },
+    {
+      "id": "buzzer",
+      "url": "https://memebtn.com/sounds/buzzer.mp3",
+      "page": "https://memebtn.com/sound/buzzer/",
+      "events": [
+        "out_of_ammo"
+      ],
+      "tier": "micro",
+      "title": "Buzzer",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "cd2ec075ef30ebf97aff3d38ab9903d275fc1f1611b64cfd91f62bd51e2c770c"
+    },
+    {
+      "id": "incorrect-buzzer",
+      "url": "https://memebtn.com/sounds/incorrect-buzzer.mp3",
+      "page": "https://memebtn.com/sound/incorrect-buzzer/",
+      "events": [
+        "out_of_ammo"
+      ],
+      "tier": "micro",
+      "title": "Incorrect Buzzer",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "f0a9901e7c02d3acd049e3ffdf29f7677fe9422bd85edc8de2daaac31bde4f11"
+    },
+    {
+      "id": "denied",
+      "url": "https://memebtn.com/sounds/denied.mp3",
+      "page": "https://memebtn.com/sound/denied/",
+      "events": [
+        "out_of_ammo"
+      ],
+      "tier": "micro",
+      "title": "Denied",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "5dec58a407c132bc250dcb90dfcebe2f8e3b4608540ebde28b8b273a0b91e361"
+    },
+    {
+      "id": "windows-10-error",
+      "url": "https://memebtn.com/sounds/windows-10-error.mp3",
+      "page": "https://memebtn.com/sound/windows-10-error/",
+      "events": [
+        "out_of_ammo"
+      ],
+      "tier": "micro",
+      "title": "Windows 10 Error",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "d9ab8c69ced235eefd4c95112e5b38db7568531cf247f873043776edaaedd349"
+    },
+    {
+      "id": "darth-vader-noooo",
+      "url": "https://memebtn.com/sounds/darth-vader-noooo.mp3",
+      "page": "https://memebtn.com/sound/darth-vader-noooo/",
+      "events": [
+        "friend_died"
+      ],
+      "tier": "quote",
+      "title": "Darth Vader Noooo",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 2.7,
+      "sha256": "654e4ed03afdf93521a18cd2e9d234c2e2ecb29fc0a27b260854e7f2330b5d9f",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "no-god-please-no",
+      "url": "https://memebtn.com/sounds/no-god-please-no.mp3",
+      "page": "https://memebtn.com/sound/no-god-please-no/",
+      "events": [
+        "friend_died"
+      ],
+      "tier": "quote",
+      "title": "No God Please No",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 3.0,
+      "sha256": "fd273648d47975215e9ee7c1cbf540a58f4e6c00afc57f03e7b660326eceb4d1",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "oh-my-god",
+      "url": "https://memebtn.com/sounds/oh-my-god.mp3",
+      "page": "https://memebtn.com/sound/oh-my-god/",
+      "events": [
+        "friend_died"
+      ],
+      "tier": "quote",
+      "title": "Oh My God",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "6e140b546cde76b5575e1dd62bb6568d6b355dd759db182b497fdde2bd38c67a"
+    },
+    {
+      "id": "another-one",
+      "url": "https://memebtn.com/sounds/another-one.mp3",
+      "page": "https://memebtn.com/sound/another-one/",
+      "events": [
+        "kill"
+      ],
+      "tier": "quote",
+      "title": "Another One",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "2a1f77091877b0b1f66ac2957e93b9b08d02fefb2e5e458a7063a28dc3fe7657"
+    },
+    {
+      "id": "youre-too-slow",
+      "url": "https://memebtn.com/sounds/youre-too-slow.mp3",
+      "page": "https://memebtn.com/sound/youre-too-slow/",
+      "events": [
+        "kill"
+      ],
+      "tier": "quote",
+      "title": "Youre Too Slow",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "9756fc14b7a5d79ff86922c5d2d41ead8af833afb9b09d980633b8038e349e55"
+    },
+    {
+      "id": "noice",
+      "url": "https://memebtn.com/sounds/noice.mp3",
+      "page": "https://memebtn.com/sound/noice/",
+      "events": [
+        "kill"
+      ],
+      "tier": "quote",
+      "title": "Noice",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "e439c7c98bc2fee1482868162a3f7ebb5870a63b76910f9d00e440f1aaebeae5"
+    },
+    {
+      "id": "wii-sports-nice-shot",
+      "url": "https://memebtn.com/sounds/wii-sports-nice-shot.mp3",
+      "page": "https://memebtn.com/sound/wii-sports-nice-shot/",
+      "events": [
+        "kill"
+      ],
+      "tier": "quote",
+      "title": "Wii Sports Nice Shot",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "deca01c10d16eb470d30a3d41dce35e6570a96e2d71c6595f84fbdefa7eaa240"
+    },
+    {
+      "id": "ha-got-eem",
+      "url": "https://memebtn.com/sounds/ha-got-eem.mp3",
+      "page": "https://memebtn.com/sound/ha-got-eem/",
+      "events": [
+        "kill"
+      ],
+      "tier": "quote",
+      "title": "Ha Got Eem",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "da460c47823dbd2c1c955644ecfb7e6e09a68a4f7a510500cd3e8d65a5a45454"
+    },
+    {
+      "id": "boom-headshot",
+      "url": "https://memebtn.com/sounds/boom-headshot.mp3",
+      "page": "https://memebtn.com/sound/boom-headshot/",
+      "events": [
+        "multi_kill"
+      ],
+      "tier": "rare",
+      "title": "Boom Headshot",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "placement_note": "Rare overconfident multikill boast, not a confirmed headshot report.",
+      "sha256": "81ac6739ad3c56363fce43ed5e60936a93d2439442e1414e53775da250819a16"
+    },
+    {
+      "id": "oh-baby-a-triple",
+      "url": "https://memebtn.com/sounds/oh-baby-a-triple.mp3",
+      "page": "https://memebtn.com/sound/oh-baby-a-triple/",
+      "events": [
+        "multi_kill"
+      ],
+      "tier": "rare",
+      "title": "Oh Baby A Triple",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "8983c5ead3f9a4c496d5b4667f9e2eb61a01cc1333a56fd5efd3ff1ae209e3e0"
+    },
+    {
+      "id": "its-over-9000",
+      "url": "https://memebtn.com/sounds/its-over-9000.mp3",
+      "page": "https://memebtn.com/sound/its-over-9000/",
+      "events": [
+        "multi_kill"
+      ],
+      "tier": "rare",
+      "title": "Its Over 9000",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "6914a8dc1058a4093f73517d6a514acae0927d74feb8e1a9540f73647505d355"
+    },
+    {
+      "id": "omae-wa-mou-shindeiru",
+      "url": "https://memebtn.com/sounds/omae-wa-mou-shindeiru.mp3",
+      "page": "https://memebtn.com/sound/omae-wa-mou-shindeiru/",
+      "events": [
+        "multi_kill"
+      ],
+      "tier": "rare",
+      "title": "Omae Wa Mou Shindeiru",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 4.8,
+      "sha256": "430d552780f6138340d0995faafa8bc8a3b3f9e6102762fab877e4504332585c",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "roblox-old-winning",
+      "url": "https://memebtn.com/sounds/roblox-old-winning.mp3",
+      "page": "https://memebtn.com/sound/roblox-old-winning/",
+      "events": [
+        "round_win"
+      ],
+      "tier": "micro",
+      "title": "Roblox Old Winning",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "5cb5df0ef947854fca6d84e60bc1e1ad1a98961867f63a4a3361af606514f347"
+    },
+    {
+      "id": "mario-1-up",
+      "url": "https://memebtn.com/sounds/mario-1-up.mp3",
+      "page": "https://memebtn.com/sound/mario-1-up/",
+      "events": [
+        "round_win",
+        "kill"
+      ],
+      "tier": "micro",
+      "title": "Mario 1 Up",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "5a9b58ae18523bb3b43b13403706f9bb4343e99c3021cf060a410879bd07b208"
+    },
+    {
+      "id": "crowd-cheering",
+      "url": "https://memebtn.com/sounds/crowd-cheering.mp3",
+      "page": "https://memebtn.com/sound/crowd-cheering/",
+      "events": [
+        "round_win"
+      ],
+      "tier": "micro",
+      "title": "Crowd Cheering",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.7,
+      "sha256": "4435f6d16a7119ca8aab1d0335b6d2851b3b2a97ef0bfec551c95c1a6a60edd7",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "yay",
+      "url": "https://memebtn.com/sounds/yay.mp3",
+      "page": "https://memebtn.com/sound/yay/",
+      "events": [
+        "round_win"
+      ],
+      "tier": "micro",
+      "title": "Yay",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.2,
+      "sha256": "0b9d54c62d1371d9ef760b112b5d3eb82a897dd67e1d8a0277889c7112662e74",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "ta-da",
+      "url": "https://memebtn.com/sounds/ta-da.mp3",
+      "page": "https://memebtn.com/sound/ta-da/",
+      "events": [
+        "round_win"
+      ],
+      "tier": "micro",
+      "title": "Ta Da",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "187688014e8abcd360001b83ee54ee2f302722f30da3666c1d2b60362f13f0ad"
+    },
+    {
+      "id": "mission-failed",
+      "url": "https://memebtn.com/sounds/mission-failed.mp3",
+      "page": "https://memebtn.com/sound/mission-failed/",
+      "events": [
+        "round_loss"
+      ],
+      "tier": "micro",
+      "title": "Mission Failed",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "6de13bb255ed9cf7b2f4497792baa07356f23582a6b8af54260fac0706fab301"
+    },
+    {
+      "id": "price-is-right-losing-horn",
+      "url": "https://memebtn.com/sounds/price-is-right-losing-horn.mp3",
+      "page": "https://memebtn.com/sound/price-is-right-losing-horn/",
+      "events": [
+        "round_loss"
+      ],
+      "tier": "micro",
+      "title": "Price Is Right Losing Horn",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 2.5,
+      "sha256": "bbc771dda92fc7a9fba6f189cb51bd1c82fc60f355c21ed0a52c8c3a7d569256",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "womp-womp",
+      "url": "https://memebtn.com/sounds/womp-womp.mp3",
+      "page": "https://memebtn.com/sound/womp-womp/",
+      "events": [
+        "round_loss"
+      ],
+      "tier": "micro",
+      "title": "Womp Womp",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.7,
+      "sha256": "843c14cfc5d4e4631d6e0dcfa372e9e846f3458fd04a99f207699fd9a112393e",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "windows-xp-shutdown",
+      "url": "https://memebtn.com/sounds/windows-xp-shutdown.mp3",
+      "page": "https://memebtn.com/sound/windows-xp-shutdown/",
+      "events": [
+        "round_loss"
+      ],
+      "tier": "micro",
+      "title": "Windows Xp Shutdown",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "beb060de40c6d0e995da73110631d4d406f48116e40c74820aae3554627d17bf"
+    },
+    {
+      "id": "yawn",
+      "url": "https://memebtn.com/sounds/yawn.mp3",
+      "page": "https://memebtn.com/sound/yawn/",
+      "events": [
+        "idle"
+      ],
+      "tier": "micro",
+      "title": "Yawn",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "134c0648b51ed5c3b8738eb9df8bd5e842918699ab01ed350e92456ab8c93aad"
+    },
+    {
+      "id": "snore-mimimi",
+      "url": "https://memebtn.com/sounds/snore-mimimi.mp3",
+      "page": "https://memebtn.com/sound/snore-mimimi/",
+      "events": [
+        "idle"
+      ],
+      "tier": "micro",
+      "title": "Snore Mimimi",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.7,
+      "sha256": "af16996a72e255b0ed2f375bd81a1ec2ed9b7567de7cf656595405ac3d8c9164",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "squidward-walking",
+      "url": "https://memebtn.com/sounds/squidward-walking.mp3",
+      "page": "https://memebtn.com/sound/squidward-walking/",
+      "events": [
+        "idle"
+      ],
+      "tier": "micro",
+      "title": "Squidward Walking",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.5,
+      "sha256": "4f3b9adf946e4e557e45b13d5595e2c595827866c625cbefa3f4c84f4dc3fb81",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "owen-wilson-wow",
+      "url": "https://memebtn.com/sounds/owen-wilson-wow.mp3",
+      "page": "https://memebtn.com/sound/owen-wilson-wow/",
+      "events": [
+        "idle"
+      ],
+      "tier": "micro",
+      "title": "Owen Wilson Wow",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "ce1b23d47c67c8727bd85e46d8133f2499784dd5191b4358f930f32ab13684ec"
+    },
+    {
+      "id": "pokemon-center-heal",
+      "url": "https://memebtn.com/sounds/pokemon-center-heal.mp3",
+      "page": "https://memebtn.com/sound/pokemon-center-heal/",
+      "events": [
+        "healed"
+      ],
+      "tier": "micro",
+      "title": "Pokemon Center Heal",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "43421045d1e9eacb056788d44b3275ab21da4ae31f88aaa206a7b969114ba961"
+    },
+    {
+      "id": "minecraft-eating",
+      "url": "https://memebtn.com/sounds/minecraft-eating.mp3",
+      "page": "https://memebtn.com/sound/minecraft-eating/",
+      "events": [
+        "healed"
+      ],
+      "tier": "micro",
+      "title": "Minecraft Eating",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "c25bb744745d474eaa50926f2e6e78badedf7cde3c947da9b0a8294497ea7c96"
+    },
+    {
+      "id": "minecraft-level-up",
+      "url": "https://memebtn.com/sounds/minecraft-level-up.mp3",
+      "page": "https://memebtn.com/sound/minecraft-level-up/",
+      "events": [
+        "healed"
+      ],
+      "tier": "micro",
+      "title": "Minecraft Level Up",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 1.4,
+      "sha256": "98154abda370fb87b2398b7d61defebd8d7416ffac1217eabe88852529afdb56",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "sonic-ring",
+      "url": "https://memebtn.com/sounds/sonic-ring.mp3",
+      "page": "https://memebtn.com/sound/sonic-ring/",
+      "events": [
+        "healed"
+      ],
+      "tier": "micro",
+      "title": "Sonic Ring",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "8d9bb0ad913c4ce77aaee800cbae4e7f4a8c6cdb7209b27d8193b08e8f2191f5"
+    },
+    {
+      "id": "slurp",
+      "url": "https://memebtn.com/sounds/slurp.mp3",
+      "page": "https://memebtn.com/sound/slurp/",
+      "events": [
+        "healed"
+      ],
+      "tier": "micro",
+      "title": "Slurp",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "71922d16ff44132297607cc3968add08c01f5f84e6857f2b646e38c925902284"
+    },
+    {
+      "id": "roger-roger",
+      "url": "https://memebtn.com/sounds/roger-roger.mp3",
+      "page": "https://memebtn.com/sound/roger-roger/",
+      "events": [
+        "mounted"
+      ],
+      "tier": "quote",
+      "title": "Roger Roger",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "2180693fbb44f9d238bda4b572da79a16927f45cf49d8e5ed59d27cd2f511a3d"
+    },
+    {
+      "id": "lets-get-ready-to-rumble",
+      "url": "https://memebtn.com/sounds/lets-get-ready-to-rumble.mp3",
+      "page": "https://memebtn.com/sound/lets-get-ready-to-rumble/",
+      "events": [
+        "mounted"
+      ],
+      "tier": "quote",
+      "title": "Lets Get Ready To Rumble",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 4.6,
+      "sha256": "c292424d87196b30a993166b79dd153262849571b126440254a4064db8a6d5c1",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "dababy-lets-go",
+      "url": "https://memebtn.com/sounds/dababy-lets-go.mp3",
+      "page": "https://memebtn.com/sound/dababy-lets-go/",
+      "events": [
+        "mounted"
+      ],
+      "tier": "quote",
+      "title": "Dababy Lets Go",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "89dc68fcb678241086122952c4ddcede41af40eda29dd0d0bb779689f1e050fe"
+    },
+    {
+      "id": "yee-haw",
+      "url": "https://memebtn.com/sounds/yee-haw.mp3",
+      "page": "https://memebtn.com/sound/yee-haw/",
+      "events": [
+        "mounted"
+      ],
+      "tier": "quote",
+      "title": "Yee Haw",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "70a6fb3d0ae1249fe592e91b39516bb9568a294c9bd556fe2eac799721c7ffbb"
+    },
+    {
+      "id": "swoosh",
+      "url": "https://memebtn.com/sounds/swoosh.mp3",
+      "page": "https://memebtn.com/sound/swoosh/",
+      "events": [
+        "dismounted"
+      ],
+      "tier": "micro",
+      "title": "Swoosh",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "b85b6e154c884546527650a5744cd80d86530e0f54c7bad6995a3b6c3a5a9b19"
+    },
+    {
+      "id": "boing",
+      "url": "https://memebtn.com/sounds/boing.mp3",
+      "page": "https://memebtn.com/sound/boing/",
+      "events": [
+        "dismounted"
+      ],
+      "tier": "micro",
+      "title": "Boing",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "5b412bed365cf99814ef06726930ae3bc03886b346c9af8ee16f69fedc92dc24"
+    },
+    {
+      "id": "teleport",
+      "url": "https://memebtn.com/sounds/teleport.mp3",
+      "page": "https://memebtn.com/sound/teleport/",
+      "events": [
+        "dismounted"
+      ],
+      "tier": "micro",
+      "title": "Teleport",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "b2b353f1fb5bcf8a2bab7af6cce0d04303454490756ae11d70b4d4e6359d59e6"
+    },
+    {
+      "id": "mario-pipe",
+      "url": "https://memebtn.com/sounds/mario-pipe.mp3",
+      "page": "https://memebtn.com/sound/mario-pipe/",
+      "events": [
+        "dismounted"
+      ],
+      "tier": "micro",
+      "title": "Mario Pipe",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "6eda47e6e7459f3d922fad3e6a81da81dbfa3fd33c93a2ae2778c47d19257499"
+    },
+    {
+      "id": "pop",
+      "url": "https://memebtn.com/sounds/pop.mp3",
+      "page": "https://memebtn.com/sound/pop/",
+      "events": [
+        "dismounted"
+      ],
+      "tier": "micro",
+      "title": "Pop",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "6007d5c0d02498eb05a5c030c843a9e7b50203ab9ccbdb7037cf28f8a381a32c"
+    },
+    {
+      "id": "hello-there",
+      "url": "https://memebtn.com/sounds/hello-there.mp3",
+      "page": "https://memebtn.com/sound/hello-there/",
+      "events": [
+        "spawn"
+      ],
+      "tier": "quote",
+      "title": "Hello There",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "e841b727eb3bb2137084e4fb825ceca1f5fcf214d1b5cf41ef7dd156072cb4d4"
+    },
+    {
+      "id": "its-a-me-mario",
+      "url": "https://memebtn.com/sounds/its-a-me-mario.mp3",
+      "page": "https://memebtn.com/sound/its-a-me-mario/",
+      "events": [
+        "spawn"
+      ],
+      "tier": "quote",
+      "title": "Its A Me Mario",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "b29113285dbd82001b12b6e22e61c6b1f22da5f1c78f0396241d4e674815cf4e"
+    },
+    {
+      "id": "im-ready-spongebob",
+      "url": "https://memebtn.com/sounds/im-ready-spongebob.mp3",
+      "page": "https://memebtn.com/sound/im-ready-spongebob/",
+      "events": [
+        "spawn"
+      ],
+      "tier": "quote",
+      "title": "Im Ready Spongebob",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "08c9b45e350f35d1f7184002cf86fb4acd320775b54beebe55b72521f6f4c954"
+    },
+    {
+      "id": "roblox-hi",
+      "url": "https://memebtn.com/sounds/roblox-hi.mp3",
+      "page": "https://memebtn.com/sound/roblox-hi/",
+      "events": [
+        "spawn"
+      ],
+      "tier": "quote",
+      "title": "Roblox Hi",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "c3e133641e8e34f40d0de17a48e5218588e4579bd42a7a2a92f51ba3793a15d3"
+    },
+    {
+      "id": "mine-mine-mine",
+      "url": "https://memebtn.com/sounds/mine-mine-mine.mp3",
+      "page": "https://memebtn.com/sound/mine-mine-mine/",
+      "events": [
+        "objective_acquired"
+      ],
+      "tier": "quote",
+      "title": "Mine Mine Mine",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 2.5,
+      "sha256": "0d753fb8cab2fcb17bd780c9b890f65c2dc38d0cba25615edadd5fb9327cf211",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "zelda-item-get",
+      "url": "https://memebtn.com/sounds/zelda-item-get.mp3",
+      "page": "https://memebtn.com/sound/zelda-item-get/",
+      "events": [
+        "objective_acquired"
+      ],
+      "tier": "micro",
+      "title": "Zelda Item Get",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "cff7fab50d611c131816c7ba5ab2ee15895d5b2f0b1d6bc0a7b193a0b1035635"
+    },
+    {
+      "id": "ka-ching",
+      "url": "https://memebtn.com/sounds/ka-ching.mp3",
+      "page": "https://memebtn.com/sound/ka-ching/",
+      "events": [
+        "objective_acquired"
+      ],
+      "tier": "micro",
+      "title": "Ka Ching",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "d2aa13ad15b2b1d6bc029dcd72e9ab67dd1f61549e9f4b91b176f1577f15d09a"
+    },
+    {
+      "id": "that-was-easy",
+      "url": "https://memebtn.com/sounds/that-was-easy.mp3",
+      "page": "https://memebtn.com/sound/that-was-easy/",
+      "events": [
+        "objective_completed"
+      ],
+      "tier": "micro",
+      "title": "That Was Easy",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "eda7123ce77f55bb62daf1783cc27820ffd82a1022de6237495d7a664dc114d8"
+    },
+    {
+      "id": "pokemon-level-up",
+      "url": "https://memebtn.com/sounds/pokemon-level-up.mp3",
+      "page": "https://memebtn.com/sound/pokemon-level-up/",
+      "events": [
+        "objective_completed"
+      ],
+      "tier": "micro",
+      "title": "Pokemon Level Up",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "a5e81113d42321667d2a566b7606830b9324e844eba392384ff1ace3530bb9cf"
+    },
+    {
+      "id": "correct-answer",
+      "url": "https://memebtn.com/sounds/correct-answer.mp3",
+      "page": "https://memebtn.com/sound/correct-answer/",
+      "events": [
+        "objective_completed"
+      ],
+      "tier": "micro",
+      "title": "Correct Answer",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "e948fec37aa07fd177b94da864b85af36cad57309b9e420559a77892295170f2"
+    },
+    {
+      "id": "confetti-pop",
+      "url": "https://memebtn.com/sounds/confetti-pop.mp3",
+      "page": "https://memebtn.com/sound/confetti-pop/",
+      "events": [
+        "objective_completed"
+      ],
+      "tier": "micro",
+      "title": "Confetti Pop",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "445a00b60ac8b7b16337fa44eb095f911772bcfc70272ebe707bd20d0b7dee25"
+    },
+    {
+      "id": "bruh",
+      "url": "https://memebtn.com/sounds/bruh.mp3",
+      "page": "https://memebtn.com/sound/bruh/",
+      "events": [
+        "stalled"
+      ],
+      "tier": "micro",
+      "title": "Bruh",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "abae78263f413650a7c717a52c78d1b8dff492b8d186ca9f21d1db981729a13d"
+    },
+    {
+      "id": "cartoon-slip",
+      "url": "https://memebtn.com/sounds/cartoon-slip.mp3",
+      "page": "https://memebtn.com/sound/cartoon-slip/",
+      "events": [
+        "stalled"
+      ],
+      "tier": "micro",
+      "title": "Cartoon Slip",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "6395b2daed852e5f41410ef21a0d43622f2bb259596c24a78c59adfd6bdec201"
+    },
+    {
+      "id": "cartoon-running",
+      "url": "https://memebtn.com/sounds/cartoon-running.mp3",
+      "page": "https://memebtn.com/sound/cartoon-running/",
+      "events": [
+        "stalled"
+      ],
+      "tier": "micro",
+      "title": "Cartoon Running",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "249e4df32da8cb064c413232d9dcb1bdf88cba2dd54997503bc72efa26c2b4b8"
+    },
+    {
+      "id": "clown-horn",
+      "url": "https://memebtn.com/sounds/clown-horn.mp3",
+      "page": "https://memebtn.com/sound/clown-horn/",
+      "events": [
+        "stalled"
+      ],
+      "tier": "micro",
+      "title": "Clown Horn",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "d5ca4bb1fcd0362c8a8923937c346c99f56e1e4988764836ac164f0036ce3f80"
+    },
+    {
+      "id": "sad-violin",
+      "url": "https://memebtn.com/sounds/sad-violin.mp3",
+      "page": "https://memebtn.com/sound/sad-violin/",
+      "events": [
+        "stalled"
+      ],
+      "tier": "micro",
+      "title": "Sad Violin",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": 2.0,
+      "sha256": "4f2b44800f73ec630eccad4a974ac132b7130128379ede2d65da37b925d0eb0c",
+      "processing_note": "Explicit short excerpt; complete original retained in private cache for audition."
+    },
+    {
+      "id": "mario-jump",
+      "url": "https://memebtn.com/sounds/mario-jump.mp3",
+      "page": "https://memebtn.com/sound/mario-jump/",
+      "events": [
+        "launch"
+      ],
+      "tier": "micro",
+      "title": "Mario Jump",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "b203b52a671f293810c7f1159a8c0c612ece86ae2fa86e80cd733bdca6c2d49c"
+    },
+    {
+      "id": "instant-transmission",
+      "url": "https://memebtn.com/sounds/instant-transmission.mp3",
+      "page": "https://memebtn.com/sound/instant-transmission/",
+      "events": [
+        "launch"
+      ],
+      "tier": "micro",
+      "title": "Instant Transmission",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "eb48d3d2f9b889aff23e2145cb5d1a5fa7e5980fac4d93d9048065b7c8483eab"
+    },
+    {
+      "id": "jutsu-activation",
+      "url": "https://memebtn.com/sounds/jutsu-activation.mp3",
+      "page": "https://memebtn.com/sound/jutsu-activation/",
+      "events": [
+        "launch"
+      ],
+      "tier": "micro",
+      "title": "Jutsu Activation",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "8feec16852b94843d24a542164ebbd7227215a0efd6fcfe00a9dfff5cf9233c4"
+    },
+    {
+      "id": "raaah",
+      "url": "https://memebtn.com/sounds/raaah.mp3",
+      "page": "https://memebtn.com/sound/raaah/",
+      "events": [
+        "launch"
+      ],
+      "tier": "micro",
+      "title": "Raaah",
+      "source": "MemeBtn public soundboard (uploader attribution unverified)",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "iconic": false,
+      "start": 0.0,
+      "end": null,
+      "sha256": "38bd244c6b0a3828fe691feb9194d684f2bc03c292ccb0ebc194515ef2deb18b"
+    },
+    {
+      "id": "its-a-trap",
+      "title": "Its A Trap",
+      "page": "https://instantsbutton.com/sound/its-a-trap",
+      "url": "https://storage.instantsbutton.com/its-a-trap.mp3",
+      "source": "Public soundboard recording; uploader attribution unverified",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "events": [
+        "grenade"
+      ],
+      "tier": "quote",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "1a2153913ce9c0038e32499d4382ef9e0b3bf7ebd0996af0acd84416b28f29ae"
+    },
+    {
+      "id": "we-did-it",
+      "title": "We Did It",
+      "page": "https://www.myinstants.com/en/instant/dora-we-did-it/",
+      "url": "https://www.myinstants.com/media/sounds/we-did-it_1.mp3",
+      "source": "Public soundboard recording; uploader attribution unverified",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "events": [
+        "round_win"
+      ],
+      "tier": "quote",
+      "iconic": true,
+      "start": 0.0,
+      "end": 2.8,
+      "sha256": "caeb75459418ecb50155ce7044a52ef32cc8403f3b22c54a21f9e49fea2717fc"
+    },
+    {
+      "id": "game-over-man",
+      "title": "Game Over Man",
+      "page": "https://instantsbutton.com/sound/game-over-man-game-over",
+      "url": "https://storage.instantsbutton.com/game-over-man-game-over.mp3",
+      "source": "Public soundboard recording; uploader attribution unverified",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "events": [
+        "round_loss"
+      ],
+      "tier": "quote",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "bee014d5005ea39e599d5949cf9a8fb54dd467f453eb8d0474e9692130047e4d"
+    },
+    {
+      "id": "huge-mistake",
+      "title": "Huge Mistake",
+      "page": "https://www.myinstants.com/es/instant/ive-made-a-huge-mistake-84389/",
+      "url": "https://www.myinstants.com/media/sounds/y2mate_3hZHpxU.mp3",
+      "source": "Public soundboard recording; uploader attribution unverified",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "events": [
+        "stalled"
+      ],
+      "tier": "quote",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "e635dbcffe0f19503b76efe972f8c7af391a2222c6398eb225904293b5634885"
+    },
+    {
+      "id": "must-have-been-the-wind",
+      "title": "Must Have Been The Wind",
+      "page": "https://www.myinstants.com/en/instant/must-have-been-the-wind-18643/",
+      "url": "https://www.myinstants.com/media/sounds/must-have-been-the-wind.mp3",
+      "source": "Public soundboard recording; uploader attribution unverified",
+      "rights": "Unverified: local audition only; do not redistribute recordings",
+      "events": [
+        "lost_enemy"
+      ],
+      "tier": "quote",
+      "iconic": true,
+      "start": 0.0,
+      "end": null,
+      "sha256": "f06e1dfd017ccf5514041d7f8ddca61db8ac050ca49af086b0ae168929296d92"
+    }
+  ]
+}

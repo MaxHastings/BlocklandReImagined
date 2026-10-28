@@ -130,6 +130,7 @@ pub struct BotThought {
     /// The controls it pressed last tick (walk, look and buttons), before a
     /// seat converted them: what a watcher reads for jitter.
     pub input: MoveInput,
+    pub driving: Option<BotDriving>,
     /// What the shot it planned this tick would do (`harm`): to its
     /// enemies, to its own side, and whether it would kill a teammate.
     pub planned: Option<BotPlannedHarm>,
@@ -138,6 +139,21 @@ pub struct BotThought {
     /// (`hand_combat::validate_unplanned`).
     pub gate: Option<(u64, &'static str)>,
 }
+/// The actual driver adapter's last controls and stopping evidence. Unlike
+/// BotThought::input these have already been converted from walking intent.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct BotDriving {
+    pub vehicle: u64,
+    pub waypoint: Option<[f32; 3]>,
+    pub throttle: f32,
+    pub brake: bool,
+    pub obstacle: bool,
+    pub edge: bool,
+    pub waiting: bool,
+    pub recovering: bool,
+    pub idle_ticks: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BotPlannedHarm {
     pub enemy: f32,
@@ -463,10 +479,24 @@ struct Brain {
     /// new goal is searched, when it heads that way, so a goal that moves
     /// on (the next search spot, a chase's runner) never stops it dead.
     bridge: Option<Waypoint>,
+    /// Routes and unfinished searches belong to the body that planned them.
+    /// Boarding, changing control seats, dismounting or changing a body must
+    /// not reuse a pedestrian jump/crawl route for a chassis (or the reverse).
+    path_body: Option<Body>,
+    driving: Option<BotDriving>,
+    /// A collision-checked straight departure into the conservative drive grid.
+    drive_departure: Option<Vec3>,
+    /// Keep one side while walking around a moving chassis. A changing
+    /// grid waypoint must not reverse that local detour every tick.
+    vehicle_detour: Option<(u64, f32)>,
     search: Option<Search>,
     /// The goal's plan is walked (or none exists): no new search until the
     /// goal changes or the bot gets stuck.
     settled: bool,
+    /// An empty/finished route is evidence about this pose. An impulse,
+    /// moving support or fall can make a new approach possible without
+    /// changing the goal or body.
+    path_stop: Option<(Vec3, u64)>,
     partial_route: bool,
     /// Where the best route home ended short of home and the bot stood at its
     /// end: going home from there is no use until it has been moved
@@ -739,8 +769,13 @@ impl Brain {
             goal: None,
             plan: Vec::new(),
             bridge: None,
+            path_body: None,
+            driving: None,
+            drive_departure: None,
+            vehicle_detour: None,
             search: None,
             settled: false,
+            path_stop: None,
             partial_route: false,
             home_given_up: None,
             out_of_reach: None,
@@ -851,9 +886,27 @@ impl Brain {
         self.strafe = (side, until);
         side
     }
+    fn navigate_as(&mut self, body: &Body) {
+        if self.path_body.as_ref() != Some(body) {
+            self.path_body = Some(body.clone());
+            self.drive_departure = None;
+            self.vehicle_detour = None;
+            self.plan.clear();
+            self.search = None;
+            self.bridge = None;
+            self.partial_route = false;
+            self.settled = false;
+            self.path_stop = None;
+            self.progress.reset();
+        }
+    }
     fn set_goal(&mut self, goal: Option<Goal>) {
         if self.goal != goal {
+            let same_intent = self.goal.zip(goal).is_some_and(|(old, new)| {
+                std::mem::discriminant(&old) == std::mem::discriminant(&new)
+            });
             self.goal = goal;
+            self.drive_departure = None;
             self.bridge =
                 self.plan.first().copied().filter(|w| {
                     w.mode == Mode::Walk && w.through.is_none() && !w.jump && !w.crouch
@@ -861,8 +914,15 @@ impl Brain {
             self.plan.clear();
             self.search = None;
             self.replans = 0;
-            self.progress.reset();
+            // Updating the destination of the same intent is not physical
+            // headway. Do not let target drift postpone stuck recovery.
+            // A different intent (returning to a guard post, standing to
+            // fight, stopping) starts afresh, as do actual pauses below.
+            if !same_intent {
+                self.progress.reset();
+            }
             self.settled = false;
+            self.path_stop = None;
             self.partial_route = false;
         }
     }
@@ -1573,6 +1633,12 @@ impl Session {
             let _ = self.request_respawn(bot);
         }
         if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.set_goal(Some(Goal::Home));
+            assert_eq!(
+                brain.progress.stalls(),
+                0,
+                "returning to a post starts a new attempt"
+            );
             brain.set_goal(None);
             brain.target = None;
             brain.memory = None;
@@ -1981,6 +2047,20 @@ impl Session {
     ) -> Option<Waypoint> {
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let home = brain.home;
+        if brain.settled
+            && brain
+                .path_stop
+                .is_some_and(|(at, _)| feet.distance(at) > body.width.max(crate::nav::CELL))
+        {
+            brain.settled = false;
+            brain.path_stop = None;
+            brain.partial_route = false;
+            brain.out_of_reach = None;
+            brain.progress.reset();
+        }
+        if !brain.settled {
+            brain.path_stop = None;
+        }
         let mut wanted = None;
         if let Some(height) = swim {
             // In water it swims straight there, keeping to the water.
@@ -2193,7 +2273,8 @@ impl Session {
             }
             if brain.plan.is_empty() && brain.search.is_none() {
                 // Walked the whole plan: arrived, or as near as it goes.
-                if matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home))
+                if (body.conservative && !matches!(brain.goal, Some(Goal::Wander(_)))
+                    || matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home)))
                     && brain.partial_route
                 {
                     // A search reaches only so far across and expands only so
@@ -2207,7 +2288,7 @@ impl Session {
                         brain.settled = true;
                         if matches!(brain.goal, Some(Goal::Home)) {
                             brain.home_given_up = Some(feet);
-                        } else {
+                        } else if !body.conservative {
                             brain
                                 .objective
                                 .fail(tick, "objective navigation made no progress");
@@ -2216,7 +2297,9 @@ impl Session {
                 } else {
                     brain.settled = true;
                 }
-                if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home)) {
+                if matches!(brain.goal, Some(Goal::Wander(_) | Goal::Home))
+                    && (!body.conservative || brain.settled)
+                {
                     brain.goal = None;
                 }
             }
@@ -2274,9 +2357,16 @@ impl Session {
                 wanted = Some(Waypoint::walk(point));
             }
         }
+        let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if brain.settled {
+            brain.path_stop.get_or_insert((feet, tick));
+        }
         wanted
     }
     fn step_bot(&mut self, bot: OwnerId, tick: u64) -> Result<()> {
+        if let Some(brain) = self.bots.brains.get_mut(&bot) {
+            brain.driving = None;
+        }
         if self.bots.failing == Some(bot) {
             anyhow::bail!("this bot's steps were made to fail");
         }
@@ -3266,7 +3356,48 @@ impl Session {
         }
         // Path.
         let home = brain.home;
-        let mut wanted = self.bot_path(bot, feet, &body, costs, swim, &state, tick);
+        self.bots.brains.get_mut(&bot).unwrap().navigate_as(&body);
+        let departure = self.bots.brains[&bot].drive_departure;
+        let mut wanted = if let Some(to) = departure.filter(|to| flat(*to - feet).length() > 0.5) {
+            Some(Waypoint::walk(to))
+        } else {
+            if departure.is_some() {
+                let brain = self.bots.brains.get_mut(&bot).unwrap();
+                brain.drive_departure = None;
+                brain.settled = false;
+            }
+            self.bot_path(bot, feet, &body, costs, swim, &state, tick)
+        };
+        if wanted.is_none()
+            && driving.is_some()
+            && (tick + bot).is_multiple_of(60)
+            && self.bots.brains[&bot].search.is_none()
+            && let Some(goal) = self.bots.brains[&bot].goal
+            && let Some(to) = self.bot_vehicle_departure(bot, feet, &body, goal.point(home))
+        {
+            self.bots.brains.get_mut(&bot).unwrap().drive_departure = Some(to);
+            wanted = Some(Waypoint::walk(to));
+        }
+        // A contact can hold an ungrounded body on a corner after a blast
+        // or failed hop. Waiting for a landing cannot recover that pose.
+        // Reuse the bounded safe-floor departure and ordinary air steering,
+        // retaining its waypoint until it clears the obstruction.
+        if wanted.is_none()
+            && driving.is_none()
+            && swim.is_none()
+            && !wet
+            && let Some(to) = self.bot_stranded_step(bot, feet, &body, &state, tick)
+        {
+            let next = Waypoint::walk(to);
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.plan = vec![next];
+            brain.search = None;
+            brain.partial_route = true;
+            brain.segment_anchor = feet;
+            brain.settled = false;
+            brain.path_stop = None;
+            wanted = Some(next);
+        }
         // Standing on a body (a vehicle's roof, a crate, a head): the
         // world has no floor anywhere under its feet (its middle can stand
         // over a gap between bricks it stands on).
@@ -4178,6 +4309,9 @@ impl Session {
         let brain_footing = brain.footing;
         if brain.acted.stalls == 2 {
             self.tell_stall(bot, feet, tick);
+            if stalled {
+                self.bots.reports.tell(Report::Stalled(bot));
+            }
         }
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
@@ -4522,5 +4656,219 @@ mod hop_tests {
             &tuning,
             jets as f32 / 120.0
         ));
+    }
+}
+
+#[cfg(test)]
+mod navigation_body_tests {
+    use super::*;
+
+    #[test]
+    fn changing_search_targets_cannot_erase_failed_physical_headway() {
+        for moving in [false, true] {
+            let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, 1, 0);
+            let mut failures = 0;
+            for tick in 0..360 {
+                if tick % 12 == 0 {
+                    brain.set_goal(Some(Goal::Search(Vec3::new(tick as f32, 2.0, 30.0))));
+                }
+                let feet = if moving {
+                    Vec3::X * (tick as f32 / 120.0) * 6.0
+                } else {
+                    Vec3::ZERO
+                };
+                if brain.progress.stalled(feet, 6.0, 120.0, tick) {
+                    failures += 1;
+                }
+            }
+            if moving {
+                assert_eq!(failures, 0, "ordinary moving pursuit is still progress");
+            } else {
+                assert!(
+                    failures >= 2,
+                    "retargeting must not suppress hop/replan recovery"
+                );
+            }
+            brain.set_goal(None);
+            assert_eq!(
+                brain.progress.stalls(),
+                0,
+                "an intentional stop ends the attempt"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ungrounded_empty_route_can_depart_but_real_flight_and_guards_do_not() {
+        let sim = crate::simulation::Simulation::new(
+            bri_world::World::new("Departure".into(), "fixture".into(), vec![[1.0; 4]]),
+            crate::testing::definitions(),
+            vec![
+                rapier3d::prelude::ColliderBuilder::cuboid(30.0, 0.5, 30.0)
+                    .translation(Vec3::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap();
+        let mut s = Session::new(sim);
+        let feet = Vec3::Y * 2.0;
+        let bot = s.join("Hung up".into(), feet, true).unwrap();
+        let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
+        brain.set_goal(Some(Goal::Objective(Vec3::X * 20.0)));
+        brain.path_stop = Some((feet, 0));
+        s.bots.brains.insert(bot, brain);
+        let body = Body::of(s.peers[&bot].player.tuning(), 1.0);
+        let mut state = s.peers[&bot].player.state().clone();
+        state.grounded = false;
+        assert!(s.bot_stranded_step(bot, feet, &body, &state, 60).is_none());
+        let to = s.bot_stranded_step(bot, feet, &body, &state, 121).unwrap();
+        assert!(to.y.abs() < 0.02 && flat(to - feet).length() >= body.width);
+        assert!(feet.y - to.y <= body.drop);
+        state.velocity = [0.0, -5.0, 0.0];
+        assert!(s.bot_stranded_step(bot, feet, &body, &state, 121).is_none());
+        state.velocity = [0.0; 3];
+        state.jetting = true;
+        assert!(s.bot_stranded_step(bot, feet, &body, &state, 121).is_none());
+        state.jetting = false;
+        state.grounded = true;
+        assert!(s.bot_stranded_step(bot, feet, &body, &state, 121).is_none());
+        state.grounded = false;
+        s.bots.brains.get_mut(&bot).unwrap().set_goal(None);
+        assert!(s.bot_stranded_step(bot, feet, &body, &state, 121).is_none());
+    }
+
+    #[test]
+    fn an_empty_airborne_route_is_reconsidered_after_landing_without_a_new_goal() {
+        let sim = crate::simulation::Simulation::new(
+            bri_world::World::new("Landing".into(), "fixture".into(), vec![[1.0; 4]]),
+            crate::testing::definitions(),
+            vec![
+                rapier3d::prelude::ColliderBuilder::cuboid(30.0, 0.5, 30.0)
+                    .translation(Vec3::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap();
+        let mut s = Session::new(sim);
+        let air = Vec3::Y * 20.0;
+        let bot = s.join("Displaced".into(), air, true).unwrap();
+        let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
+        let goal = Goal::Objective(Vec3::X * 12.0);
+        brain.set_goal(Some(goal));
+        s.bots.brains.insert(bot, brain);
+        let body = Body::of(s.peers[&bot].player.tuning(), 1.0);
+        let mut state = s.peers[&bot].player.state().clone();
+        assert!(
+            s.bot_path(bot, air, &body, Default::default(), None, &state, 1)
+                .is_none()
+        );
+        assert!(
+            s.bots.brains[&bot].settled,
+            "there was no start node in the air"
+        );
+        state.grounded = true;
+        state.feet = [0.0; 3];
+        let next = s.bot_path(bot, Vec3::ZERO, &body, Default::default(), None, &state, 2);
+        let brain = &s.bots.brains[&bot];
+        assert_eq!(
+            brain.goal,
+            Some(goal),
+            "ordinary displacement does not abandon the objective"
+        );
+        assert!(
+            next.is_some() || brain.search.is_some(),
+            "landing makes the same objective approachable again"
+        );
+        assert!(!brain.settled);
+    }
+
+    #[test]
+    fn a_partial_idle_drive_is_finished_instead_of_becoming_an_endless_pursuit() {
+        let sim = crate::simulation::Simulation::new(
+            bri_world::World::new("Idle drive".into(), "fixture".into(), vec![[1.0; 4]]),
+            crate::testing::definitions(),
+            vec![],
+        )
+        .unwrap();
+        let mut s = Session::new(sim);
+        let bot = s.join("Idler".into(), Vec3::Y * 3.0, true).unwrap();
+        let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
+        brain.set_goal(Some(Goal::Wander(Vec3::X * 12.0)));
+        brain.plan.push(Waypoint::walk(Vec3::X * 0.1));
+        brain.partial_route = true;
+        brain.segment_anchor = Vec3::NEG_X * 10.0;
+        s.bots.brains.insert(bot, brain);
+        let mut body = Body::of(s.peers[&bot].player.tuning(), 1.0);
+        body.conservative = true;
+        let state = s.peers[&bot].player.state().clone();
+        s.bot_path(bot, Vec3::ZERO, &body, Default::default(), None, &state, 1);
+        let brain = &s.bots.brains[&bot];
+        assert!(
+            brain.settled && brain.goal.is_none(),
+            "an incidental stroll can end short; meaningful pursuit/transport is tested separately"
+        );
+    }
+
+    #[test]
+    fn a_partial_drive_segment_is_not_arrival_or_a_reason_to_explore_elsewhere() {
+        for conservative in [false, true] {
+            let sim = crate::simulation::Simulation::new(
+                bri_world::World::new("Segments".into(), "fixture".into(), vec![[1.0; 4]]),
+                crate::testing::definitions(),
+                vec![],
+            )
+            .unwrap();
+            let mut session = Session::new(sim);
+            let bot = session
+                .join("Searcher".into(), Vec3::Y * 3.0, true)
+                .unwrap();
+            let feet = Vec3::ZERO;
+            let mut brain = Brain::new(None, BotKind::default(), feet, bot, 0);
+            let goal = Goal::Search(Vec3::X * 100.0);
+            brain.goal = Some(goal);
+            brain.plan = vec![Waypoint::walk(Vec3::X * 0.1)];
+            brain.partial_route = true;
+            brain.segment_anchor = Vec3::NEG_X * 10.0;
+            session.bots.brains.insert(bot, brain);
+            let mut body = Body::of(session.peers[&bot].player.tuning(), 1.0);
+            body.conservative = conservative;
+            let state = session.peers[&bot].player.state().clone();
+            session.bot_path(bot, feet, &body, Default::default(), None, &state, 1);
+            let brain = &session.bots.brains[&bot];
+            assert_eq!(brain.goal, Some(goal));
+            assert_eq!(
+                brain.settled, !conservative,
+                "only the pedestrian search treats its partial endpoint as settled"
+            );
+        }
+    }
+
+    #[test]
+    fn boarding_and_dismounting_invalidate_routes_without_dropping_the_goal() {
+        let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, 1, 0);
+        let walker = Body::of(&crate::player::PlayerTuning::default(), 1.0);
+        brain.navigate_as(&walker);
+        let goal = Goal::Objective(Vec3::new(20.0, 8.0, -30.0));
+        brain.set_goal(Some(goal));
+        let mut jump = Waypoint::walk(Vec3::new(2.0, 3.0, 0.0));
+        jump.jump = true;
+        brain.plan.push(jump);
+        brain.bridge = Some(jump);
+        brain.search = Some(Search::new(Vec3::ZERO, goal.point(Vec3::ZERO), 72.0));
+        brain.settled = true;
+        brain.partial_route = true;
+        brain.navigate_as(&walker);
+        assert_eq!(brain.plan.len(), 1, "the unchanged body retains its work");
+        let mut chassis = walker.clone();
+        chassis.width = 7.0;
+        chassis.conservative = true;
+        chassis.jump = 0.2;
+        brain.navigate_as(&chassis);
+        assert_eq!(brain.goal, Some(goal));
+        assert!(brain.plan.is_empty() && brain.bridge.is_none() && brain.search.is_none());
+        assert!(!brain.settled && !brain.partial_route);
+        brain.plan.push(Waypoint::walk(Vec3::X * 10.0));
+        brain.drive_departure = Some(Vec3::X * 3.0);
+        brain.navigate_as(&walker);
+        assert_eq!(brain.goal, Some(goal));
+        assert!(brain.plan.is_empty() && brain.drive_departure.is_none());
     }
 }
