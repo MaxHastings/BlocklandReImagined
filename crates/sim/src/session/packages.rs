@@ -4121,7 +4121,7 @@ impl Session {
     }
     /// What a bot noticed (`bots::Report`), told to the hook of every package
     /// that declares it, in load order: `(bot, other)`, or `(bot)` for
-    /// running out of ammo.
+    /// running out of ammo, objective outcomes or stalled movement.
     pub(super) fn package_bot_report(&mut self, report: super::bots::Report) {
         let Some(host) = self.packages.as_ref() else {
             return;
@@ -4134,7 +4134,11 @@ impl Session {
             "on_bot_sees_grenade" => b.on_bot_sees_grenade,
             "on_bot_friend_died" => b.on_bot_friend_died,
             "on_bot_lost_enemy" => b.on_bot_lost_enemy,
-            _ => b.on_bot_out_of_ammo,
+            "on_bot_out_of_ammo" => b.on_bot_out_of_ammo,
+            "on_bot_objective_acquired" => b.on_bot_objective_acquired,
+            "on_bot_objective_completed" => b.on_bot_objective_completed,
+            "on_bot_stalled" => b.on_bot_stalled,
+            _ => false,
         };
         let hooks: Vec<String> = host
             .catalog

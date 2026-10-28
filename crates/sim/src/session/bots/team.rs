@@ -361,11 +361,13 @@ impl Session {
     }
 
     /// The vehicle whose controls `bot` holds while one of its seats is
-    /// free: an offer, moving or not, for as long as a seat stays free. An
-    /// ally that takes it up claims the seat, and the driver waits for it
-    /// while that claim lives (`bot_seated_input`).
+    /// free during bounded crew assembly. After departure nearby allies may
+    /// still board, but an endless succession of distant claims cannot stop it.
     pub(super) fn team_seats(&self, bot: OwnerId) -> Option<u64> {
         let (vehicle, seat) = self.mounted(bot)?;
+        if !self.bot_assembling_crew(bot, self.simulation.state().tick) {
+            return None;
+        }
         let w = self.vehicles.world.as_ref()?;
         let d = w.definition_of(bri_vehicles::VehicleId(vehicle))?;
         (d.seats.get(usize::from(seat))?.controls

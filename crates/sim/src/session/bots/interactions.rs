@@ -264,7 +264,36 @@ impl Session {
         d.runover_damage > 0.0
             && self.mounted(target).is_none()
             && self.can_damage_player(bot, target, false)
+            && self.bot_vehicle_reaches_player(&v, target, Vec3::from(them.player.state().feet))
             && flat(Vec3::from(them.player.state().feet) - at).length() < near
+    }
+
+    /// A horizontal drive cannot strike a body above or below the real
+    /// chassis. Use its instantiated collider heights and the target's actual
+    /// posture/scale, not visual bounds or the gun's horizontal near band.
+    /// `feet` is the caller's observation, including dated seat opportunities.
+    fn bot_vehicle_reaches_player(&self, v: &VehicleSnapshot, target: OwnerId, feet: Vec3) -> bool {
+        let (Some((bottom, top)), Some(peer)) =
+            (self.bot_vehicle_heights(v), self.peers.get(&target))
+        else {
+            return false;
+        };
+        let state = peer.player.state();
+        let head = feet.y + crate::water::body_height(state, peer.player.tuning()) * state.scale;
+        top > feet.y && bottom < head
+    }
+
+    fn bot_vehicle_heights(&self, v: &VehicleSnapshot) -> Option<(f32, f32)> {
+        self.vehicles
+            .world
+            .as_ref()?
+            .colliders_of(&self.simulation.physics, v.id)
+            .into_iter()
+            .map(|handle| {
+                let bounds = self.simulation.physics.colliders[handle].compute_aabb();
+                (bounds.mins.y, bounds.maxs.y)
+            })
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
     }
 
     pub(super) fn observe_bot_objects(&mut self) {
@@ -388,6 +417,14 @@ impl Session {
                     .owner_claim(other, tick)
                     .is_some_and(|c| c.resource.vehicle() == vehicle)
         })
+    }
+
+    /// Assembly has one deadline per ride, not a fresh wait for every new
+    /// claimant. Otherwise a succession of nearby bots parks a driver forever.
+    pub(super) fn bot_assembling_crew(&self, bot: OwnerId, tick: u64) -> bool {
+        self.bots.brains[&bot]
+            .vehicle_since
+            .is_none_or(|(_, since)| tick < since + DISMOUNT_BEAT)
     }
 
     /// Whether the teammate bot at `v`'s controls goes `bot`'s way: where
@@ -569,7 +606,8 @@ impl Session {
                 let runs_over = want == Want::Fight
                     && d.runover_damage > 0.0
                     && self.mounted(subject).is_none()
-                    && self.can_damage_player(bot, subject, false);
+                    && self.can_damage_player(bot, subject, false)
+                    && self.bot_vehicle_reaches_player(v, subject, enemy);
                 let cruise = if runs_over {
                     d.max_speed
                 } else {
@@ -646,6 +684,7 @@ impl Session {
                 let point = Vec3::new(approach.point.x, feet.y, approach.point.z);
                 if self.bot_ally_corridor(
                     bot,
+                    v,
                     at,
                     toward.normalize(),
                     toward.length() - short,
@@ -828,6 +867,7 @@ impl Session {
     fn bot_ally_corridor(
         &self,
         bot: OwnerId,
+        source: &VehicleSnapshot,
         at: Vec3,
         direction: Vec3,
         length: f32,
@@ -845,12 +885,17 @@ impl Session {
                 && p.combat.alive
                 && !self.seated(*o)
                 && self.bot_allies(bot, *o)
+                && self.bot_vehicle_reaches_player(source, *o, Vec3::from(p.player.state().feet))
                 && within(
                     Vec3::from(p.player.state().feet),
                     p.player.tuning().width * 0.5,
                 )
         }) || self.bots.objects.iter().any(|v| {
             self.mounted(bot).is_none_or(|(id, _)| id != v.id.0)
+                && self
+                    .bot_vehicle_heights(source)
+                    .zip(self.bot_vehicle_heights(v))
+                    .is_none_or(|(a, b)| a.1 > b.0 && a.0 < b.1)
                 && v.seats.iter().any(|s| {
                     s.occupant
                         .is_some_and(|o| o.owner.0 != bot && self.bot_allies(bot, o.owner.0))
@@ -1270,7 +1315,7 @@ impl Session {
     ) -> Option<Vec3> {
         const SIDES: usize = 16;
         let want = flat(toward - feet).normalize_or_zero();
-        let depth = (feet.y - toward.y).max(0.0) + body.step + 0.5;
+        let depth = ((feet.y - toward.y).max(0.0) + body.step + 0.5).min(body.drop);
         let others: Vec<(Vec3, f32)> = self
             .peers
             .iter()
@@ -1328,13 +1373,46 @@ impl Session {
         best.map(|(_, at)| at)
     }
 
+    /// An empty route at a stationary, ungrounded pose is not normal flight.
+    /// Only after a full no-motion window, choose nearby safe floor using
+    /// the existing step-off checks. Never steer a real fall or active jets.
+    pub(super) fn bot_stranded_step(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &crate::nav::Body,
+        state: &crate::player::PlayerState,
+        tick: u64,
+    ) -> Option<Vec3> {
+        let brain = self.bots.brains.get(&bot)?;
+        let (stopped, since) = brain.path_stop?;
+        if self.seated(bot)
+            || state.grounded
+            || state.jetting
+            || Vec3::from(state.velocity).length_squared() > 0.25
+            || feet.distance(stopped) > 0.2
+            || tick < since.saturating_add(120)
+            || brain.search.is_some()
+        {
+            return None;
+        }
+        let goal = brain.goal?.point(brain.home);
+        self.bot_step_off(
+            bot,
+            feet,
+            body,
+            Vec3::new(goal.x, feet.y - body.drop, goal.z),
+            feet.y,
+        )
+    }
+
     /// A vehicle is a body the walk grid leaves out (`nav`): one a walking
     /// bot is about to walk into is walked round by its nearer side, not
     /// pressed against (which pushes it, `movables`) or hopped onto. Not the
     /// one it stands on or is inside, makes for (`goal`, a seat beside it)
     /// or whose crew is its `quarry`.
     pub(super) fn bot_vehicle_detour(
-        &self,
+        &mut self,
         bot: OwnerId,
         desired: Vec3,
         quarry: Option<OwnerId>,
@@ -1386,14 +1464,28 @@ impl Session {
             if !ahead {
                 continue;
             }
-            let side = desired.cross(centre - feet).y;
-            let tangent = if side > 0.0 {
-                Vec3::new(desired.z, 0.0, -desired.x)
-            } else {
-                Vec3::new(-desired.z, 0.0, desired.x)
-            };
+            let side = self.bots.brains[&bot]
+                .vehicle_detour
+                .filter(|(id, _)| *id == v.id.0)
+                .map_or_else(
+                    || {
+                        if desired.cross(centre - feet).y > 0.0 {
+                            1.0
+                        } else {
+                            -1.0
+                        }
+                    },
+                    |(_, side)| side,
+                );
+            self.bots.brains.get_mut(&bot).unwrap().vehicle_detour = Some((v.id.0, side));
+            // Follow the body boundary on that side. A tangent to each new
+            // grid direction can point back the way it just walked, producing
+            // a repeated side-to-side shuffle at the same hull or seat.
+            let inward = flat(centre - feet).normalize_or_zero();
+            let tangent = Vec3::new(inward.z, 0.0, -inward.x) * side;
             return (desired * 0.25 + tangent).normalize_or_zero();
         }
+        self.bots.brains.get_mut(&bot).unwrap().vehicle_detour = None;
         desired
     }
 
@@ -1429,12 +1521,11 @@ impl Session {
             chords
         };
         let at = Vec3::from(v.transform.position);
-        chords(ally_length)
+        chords(ally_length).into_iter().any(|(from, _, way, step)| {
+            self.bot_ally_corridor(bot, v, at + from, way, step, radius)
+        }) || chords(length)
             .into_iter()
-            .any(|(from, _, way, step)| self.bot_ally_corridor(bot, at + from, way, step, radius))
-            || chords(length).into_iter().any(|(from, turn, way, step)| {
-                !self.bot_hull_clear(bot, v, (from, turn), way, step)
-            })
+            .any(|(from, turn, way, step)| !self.bot_hull_clear(bot, v, (from, turn), way, step))
     }
 
     /// Whether a chassis whose middle reaches `at`, rolling `way`, would
@@ -1507,27 +1598,10 @@ impl Session {
         direction: Vec3,
         reach: f32,
     ) -> bool {
-        let Some(d) = self
-            .vehicles
-            .world
-            .as_ref()
-            .and_then(|w| w.definition(&v.definition))
-        else {
+        let Some(world) = self.vehicles.world.as_ref() else {
             return false;
         };
-        let min = Vec3::from(d.bounds_min) * v.scale;
-        let max = Vec3::from(d.bounds_max) * v.scale;
-        let mut half = (max - min) * 0.5;
-        half.y = (half.y - 0.15).max(0.05);
-        let local_centre = (max + min) * 0.5 + Vec3::Y * 0.15;
-        let rotation = offset.1 * glam::Quat::from_array(v.transform.rotation);
-        let at = Vec3::from(v.transform.position) + offset.0 + rotation * local_centre;
-        let pose = Pose {
-            translation: at,
-            rotation,
-            ..Default::default()
-        };
-        let shape = Cuboid::new(half);
+        let origin = Vec3::from(v.transform.position);
         let own_tag = super::super::vehicles::VEHICLE_TAG | u128::from(v.id.0);
         let subject = self.bots.brains[&bot].memory.map(|k| k.subject);
         let predicate = |_: ColliderHandle, c: &Collider| {
@@ -1547,24 +1621,48 @@ impl Session {
             }
             true
         };
-        self.simulation
-            .physics
-            .query_pipeline_with_filter(
-                QueryFilter::default()
-                    .exclude_sensors()
-                    .predicate(&predicate),
-            )
-            .cast_shape(
+        let query = self.simulation.physics.query_pipeline_with_filter(
+            QueryFilter::default()
+                .exclude_sensors()
+                .predicate(&predicate),
+        );
+        let cast = |pose: Pose, shape: &dyn Shape| {
+            let hit = query.cast_shape(
                 &pose,
                 direction * reach,
-                &shape,
+                shape,
                 ShapeCastOptions {
                     max_time_of_impact: 1.0,
-                    stop_at_penetration: true,
+                    // Existing support/contact is not a new obstruction when
+                    // travelling tangent to it or out of it. Physics owns contact.
+                    stop_at_penetration: false,
                     ..Default::default()
                 },
-            )
-            .is_none()
+            );
+            hit.is_none()
+        };
+        let colliders = world.colliders_of(&self.simulation.physics, v.id);
+        !colliders.is_empty()
+            && colliders.into_iter().all(|handle| {
+                let collider = &self.simulation.physics.colliders[handle];
+                let current = collider.position();
+                let pose = Pose {
+                    translation: origin + offset.0 + offset.1 * (current.translation - origin),
+                    rotation: offset.1 * current.rotation,
+                    ..Default::default()
+                };
+                // Use exactly the instantiated collision geometry, including
+                // scale, body offsets and the independently posed attachment.
+                // Visual bounds fill empty corners beside a tapered hull.
+                if let Some(compound) = collider.shape().as_compound() {
+                    compound
+                        .shapes()
+                        .iter()
+                        .all(|(local, shape)| cast(pose * *local, shape.as_ref()))
+                } else {
+                    cast(pose, collider.shape())
+                }
+            })
     }
 
     pub(super) fn bot_crew_ready(&self, bot: OwnerId, tick: u64) -> bool {
@@ -1626,12 +1724,24 @@ impl Session {
             .fold(min.y, f32::min);
         let centre = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * v.scale * 0.5;
         let size = (Vec3::from(d.bounds_max) - Vec3::from(d.bounds_min)) * v.scale;
+        let origin = Vec3::from(v.transform.position);
+        let mut feet = origin
+            + glam::Quat::from_array(v.transform.rotation) * Vec3::new(centre.x, support, centre.z);
+        // Fully extended suspension is not the floor of a loaded vehicle.
+        // Anchor the grid to the actual supporting world surface, including
+        // a spawn plate under the chassis, rather than a point below it.
+        let top = Vec3::new(feet.x, origin.y + 0.2, feet.z);
+        if let Some(down) = self.world_ray(top, Vec3::NEG_Y, (top.y - feet.y).max(0.0) + 0.4) {
+            feet.y = top.y - down;
+        }
         Some((
-            Vec3::from(v.transform.position)
-                + glam::Quat::from_array(v.transform.rotation)
-                    * Vec3::new(centre.x, support, centre.z),
+            feet,
             Body {
-                width: Vec3::new(size.x, 0.0, size.z).length(),
+                // The grid proposes a corridor for the vehicle's cross-section.
+                // A square as wide as its diagonal rejects streets and parked
+                // poses that the real oriented chassis fits. Actual posed hull
+                // sweeps above remain authoritative for driving and turns.
+                width: size.x.min(size.z),
                 height: Vec3::from(d.bounds_max).y * v.scale - support,
                 crouch_height: Vec3::from(d.bounds_max).y * v.scale - support,
                 step: 0.2,
@@ -1649,6 +1759,113 @@ impl Session {
                 motion: crate::route::Motion::of(&crate::player::PlayerTuning::default()),
                 leaps: crate::reach::Leaps::none(),
             },
+        ))
+    }
+
+    /// A legal parking pose can be outside the orientation-independent grid:
+    /// its circumscribed square fills empty space beside the actual hull.
+    /// Join that grid by a bounded straight forward/reverse leg checked with
+    /// the instantiated collision shapes. Never narrow the grid or teleport
+    /// its start through a wall to make a route appear possible.
+    pub(super) fn bot_vehicle_departure(
+        &self,
+        bot: OwnerId,
+        feet: Vec3,
+        body: &Body,
+        goal: Vec3,
+    ) -> Option<Vec3> {
+        let (id, _) = self.mounted(bot)?;
+        let v = self
+            .vehicles
+            .world
+            .as_ref()?
+            .vehicle_snapshot(&self.simulation.physics, VehicleId(id))?;
+        let sim = &self.simulation;
+        let terrain = |o, d, r| sim.terrain_ray(o, d, r);
+        let waters = sim.liquids();
+        let ground = Ground {
+            physics: &sim.physics,
+            terrain: &terrain,
+            passages: sim.passages(),
+            waters: &waters,
+            bodies: &[],
+            motions: &[],
+            solid: &crate::nav::all_solid,
+        };
+        if ground.fits(body, feet, false) {
+            return None;
+        }
+        let forward =
+            flat(glam::Quat::from_array(v.transform.rotation) * Vec3::NEG_Z).normalize_or_zero();
+        let mut best: Option<(f32, Vec3)> = None;
+        // At most 48 candidate floors; only clear grid entries need a hull
+        // sweep. The chosen leg is retained until reached or the goal changes.
+        for sign in [1.0, -1.0] {
+            let way = forward * sign;
+            for i in 1..=24 {
+                let distance = body.width * i as f32 / 16.0;
+                let at = feet + way * distance;
+                let down = self.world_ray(
+                    at + Vec3::Y * (body.step + 0.5),
+                    Vec3::NEG_Y,
+                    body.step + body.drop + 0.5,
+                );
+                let Some(down) = down else {
+                    continue;
+                };
+                let at = at + Vec3::Y * (body.step + 0.5 - down);
+                if !ground.fits(body, at, false) {
+                    continue;
+                }
+                if !self.bot_vehicle_clear(bot, &v, way, distance)
+                    || self.bot_vehicle_edge(
+                        &v,
+                        Vec3::from(v.transform.position) + way * distance,
+                        way,
+                    )
+                {
+                    break;
+                }
+                let score = flat(at - goal).length() + distance;
+                if best.is_none_or(|(old, _)| score < old) {
+                    best = Some((score, at));
+                }
+                break;
+            }
+        }
+        best.map(|(_, at)| at)
+    }
+
+    /// On-demand route-start evidence for headless reports. This does not
+    /// spend the live planner's budget or alter its searches/controls.
+    pub fn bot_drive_diagnostic(&self, bot: OwnerId) -> Option<String> {
+        let brain = self.bots.brains.get(&bot)?;
+        let (feet, body) = self.bot_vehicle_body(bot)?;
+        let terrain = |o, d, r| self.simulation.terrain_ray(o, d, r);
+        let waters = self.simulation.liquids();
+        let ground = Ground {
+            physics: &self.simulation.physics,
+            terrain: &terrain,
+            passages: self.simulation.passages(),
+            waters: &waters,
+            bodies: &[],
+            motions: &[],
+            solid: &crate::nav::all_solid,
+        };
+        let mut nav = Nav::default();
+        nav.unmetered();
+        let node = nav.node_at(&ground, &body, feet);
+        let neighbors = nav.closed_in(&ground, &body, feet);
+        let departure = brain
+            .goal
+            .and_then(|g| self.bot_vehicle_departure(bot, feet, &body, g.point(brain.home)));
+        Some(format!(
+            "feet={feet:?} width={} height={} bottom={} fits={} node={node:?} neighbors={neighbors} retained={:?} proposed={departure:?}",
+            body.width,
+            body.height,
+            body.bottom,
+            ground.fits(&body, feet, false),
+            brain.drive_departure
         ))
     }
 
@@ -1827,7 +2044,14 @@ impl Session {
                         && self.can_damage_player(bot, *t, false)
                 })
                 .and_then(|t| self.peers.get(&t))
-                .filter(|p| p.combat.alive)
+                .filter(|p| {
+                    p.combat.alive
+                        && self.bot_vehicle_reaches_player(
+                            &v,
+                            p.player.state().owner,
+                            Vec3::from(p.player.state().feet),
+                        )
+                })
                 .map(|p| flat(Vec3::from(p.player.state().feet) - at));
             let toward = next
                 .filter(|p| p.through.is_none())
@@ -1867,10 +2091,6 @@ impl Session {
                 },
             };
             let gear = match toward {
-                // As of the tick before: this tick's headway is noted below.
-                _ if backing_up(brain.vehicle_headway.idle(tick).saturating_sub(1)) => {
-                    crate::route::Gear::Reverse { nose: false }
-                }
                 Some(delta) => crate::route::gear(&drive, error, delta.length(), brain.drive_gear),
                 None => crate::route::Gear::Forward,
             };
@@ -1909,7 +2129,8 @@ impl Session {
             input.right = 0.0;
             // An ally coming for a seat is waited for as long as its claim
             // lives: while it keeps closing on the seat (`claims`).
-            let waiting = self.bot_coming_aboard(bot, vehicle, tick);
+            let waiting =
+                self.bot_assembling_crew(bot, tick) && self.bot_coming_aboard(bot, vehicle, tick);
             // Where it rolls before it can stop (`Handling::stopping`),
             // along the arc it is turning on now: a hull in the way, or an
             // ally on foot, is braked for.
@@ -1970,7 +2191,8 @@ impl Session {
                     input.yaw = wrap(previous - v.mouse_steering[0].clamp(-0.04, 0.04));
                 }
             }
-            let hazard = hazard || edge;
+            let obstacle = hazard;
+            let hazard = obstacle || edge;
             let distance = toward.map_or(0.0, |delta| delta.length());
             // The leave leg (`route`): a chassis that cannot hurt the one it
             // chases (no gun, and no runover for someone not on foot) only
@@ -1984,17 +2206,19 @@ impl Session {
                 self.peers.get(&t).map(|p| {
                     let state = p.player.state();
                     (
-                        self.mounted(t).is_some(),
+                        self.mounted(t).is_none()
+                            && d.runover_damage > 0.0
+                            && self.bot_vehicle_reaches_player(&v, t, Vec3::from(state.feet)),
                         Vec3::from(state.feet),
                         Vec3::from(state.velocity),
                     )
                 })
             });
             let standoff = (d.bounds_max[2] - d.bounds_min[2]) * v.scale * 0.5 + LEAVE_REACH;
-            let carried = target.filter(|(mounted, _, _)| {
+            let carried = target.filter(|(runover, _, _)| {
                 matches!(behaviour, Behaviour::Chase | Behaviour::Fight)
                     && d.weapon.is_none()
-                    && (*mounted || d.runover_damage <= 0.0)
+                    && !runover
             });
             let gap = carried.map(|(_, enemy, _)| flat(enemy - at).length() - standoff);
             let corner_speed =
@@ -2058,8 +2282,16 @@ impl Session {
             if waiting || !pursuing {
                 brain.vehicle_headway.mark(at, tick);
             } else {
+                let goal = brain
+                    .goal
+                    .map(|g| g.point(brain.home))
+                    .or_else(|| toward.map(|delta| at + delta));
                 brain.vehicle_headway.note(at, tick, |mark, at| {
-                    flat(at - mark).length() >= VEHICLE_PROGRESS
+                    // Backing away to recover, or being pushed sideways,
+                    // does not renew a blocked journey by itself.
+                    goal.is_some_and(|goal| {
+                        flat(goal - at).length() + VEHICLE_PROGRESS <= flat(goal - mark).length()
+                    })
                 });
             }
             let stuck = brain.vehicle_headway.idle(tick);
@@ -2081,8 +2313,20 @@ impl Session {
                 )
                 && !self.bot_vehicle_edge(&v, at - travel * radius, -travel);
             if behind_clear {
-                input.forward = -0.5;
-                input.jump = false;
+                // This is opposite the requested travel, whose rear we just
+                // checked, rather than unconditionally reverse transmission.
+                // Straighten the wheels and stop forward momentum first.
+                input.forward = if signed_speed * travel_sign > STOPPED_SPEED {
+                    0.0
+                } else {
+                    -0.5 * travel_sign
+                };
+                input.jump = input.forward == 0.0;
+                if looks {
+                    input.head_yaw = 0.0;
+                } else {
+                    input.yaw = wrap(previous - v.mouse_steering[0].clamp(-0.04, 0.04));
+                }
             }
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             if stuck >= VEHICLE_STALLED && stuck.is_multiple_of(120) {
@@ -2091,6 +2335,9 @@ impl Session {
                 brain.settled = false;
                 // A place it cannot drive to is looked for elsewhere.
                 brain.explore.to = None;
+            }
+            if stuck == VEHICLE_STALLED {
+                self.bots.reports.tell(Report::Stalled(bot));
             }
             if stuck >= VEHICLE_GIVE_UP {
                 brain.next_interaction = tick + GIVE_UP_TICKS;
@@ -2110,6 +2357,19 @@ impl Session {
                 return Ok(MoveInput {
                     yaw: self.bots.brains[&bot].yaw,
                     ..Default::default()
+                });
+            }
+            if self.mounted(bot) == Some((vehicle, seat)) {
+                self.bots.brains.get_mut(&bot).unwrap().driving = Some(BotDriving {
+                    vehicle,
+                    waypoint: next.map(|p| p.feet.to_array()),
+                    throttle: input.forward,
+                    brake: input.jump,
+                    obstacle,
+                    edge,
+                    waiting,
+                    recovering: backing_up(stuck),
+                    idle_ticks: stuck,
                 });
             }
         } else {
@@ -2386,5 +2646,271 @@ mod passage_tests {
             .teleport(&mut s.simulation.physics, at, 0.0)
             .unwrap();
         assert_eq!(s.bot_walk_direction(a, Vec3::Z, None, None), Vec3::Z);
+    }
+}
+
+#[cfg(test)]
+mod driving_collision_tests {
+    use super::*;
+
+    fn tapered_chassis(obstacles: Vec<ColliderBuilder>) -> (Session, OwnerId, VehicleSnapshot) {
+        let sim = crate::simulation::Simulation::new(
+            bri_world::World::new("Tapered collision".into(), "fixture".into(), vec![[1.0; 4]]),
+            crate::testing::definitions(),
+            obstacles,
+        )
+        .unwrap();
+        let mut s = Session::new(sim);
+        let pack = bri_vehicles::testing::pack_with(|d| {
+            if d.id == bri_vehicles::testing::CAR {
+                d.bounds_min = [-2.0, 0.0, -4.0];
+                d.bounds_max = [2.0, 2.0, 4.0];
+                d.collision_hulls = vec![vec![
+                    [-0.4, 0.0, -4.0],
+                    [0.4, 0.0, -4.0],
+                    [-0.4, 2.0, -4.0],
+                    [0.4, 2.0, -4.0],
+                    [-2.0, 0.0, 4.0],
+                    [2.0, 0.0, 4.0],
+                    [-2.0, 2.0, 4.0],
+                    [2.0, 2.0, 4.0],
+                ]];
+            }
+        });
+        s.set_vehicle_pack(pack, vec![]).unwrap();
+        let bot = s
+            .join("Driver".into(), Vec3::new(20.0, 3.0, 0.0), true)
+            .unwrap();
+        s.bots.brains.insert(
+            bot,
+            Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0),
+        );
+        let world = s.vehicles.world.as_mut().unwrap();
+        world
+            .spawn(
+                &mut s.simulation.physics,
+                bri_vehicles::Spawn {
+                    id: VehicleId(1),
+                    owner: bri_vehicles::OwnerId(bot),
+                    definition: bri_vehicles::testing::CAR.into(),
+                    transform: Default::default(),
+                    spawn_id: None,
+                    respawn_ticks: None,
+                    scale: 1.0,
+                },
+            )
+            .unwrap();
+        for h in world.colliders_of(&s.simulation.physics, VehicleId(1)) {
+            s.simulation.physics.colliders[h].user_data =
+                super::super::super::vehicles::VEHICLE_TAG | 1;
+        }
+        s.simulation.physics.step();
+        let v = s
+            .vehicles
+            .world
+            .as_ref()
+            .unwrap()
+            .vehicle_snapshot(&s.simulation.physics, VehicleId(1))
+            .unwrap();
+        (s, bot, v)
+    }
+
+    #[test]
+    fn empty_visual_corners_do_not_block_a_tapered_driving_hull() {
+        let pillar = ColliderBuilder::cuboid(0.2, 1.0, 0.2).translation(Vec3::new(1.6, 1.0, -3.0));
+        let (s, bot, v) = tapered_chassis(vec![pillar]);
+        assert!(s.bot_vehicle_clear(bot, &v, Vec3::NEG_Z, 2.0));
+        assert!(
+            !s.bot_vehicle_clear(bot, &v, Vec3::X, 2.0),
+            "the real broad side still hits the pillar"
+        );
+    }
+
+    #[test]
+    fn real_obstacles_and_support_contacts_keep_distinct_meanings() {
+        let floor = ColliderBuilder::cuboid(30.0, 0.5, 30.0).translation(Vec3::new(0.0, -0.5, 0.0));
+        let wall = ColliderBuilder::cuboid(10.0, 3.0, 0.2).translation(Vec3::new(0.0, 3.0, -6.0));
+        let (s, bot, v) = tapered_chassis(vec![floor, wall]);
+        assert!(
+            s.bot_vehicle_clear(bot, &v, Vec3::Z, 2.0),
+            "may depart from its supporting floor"
+        );
+        assert!(
+            !s.bot_vehicle_clear(bot, &v, Vec3::NEG_Z, 4.0),
+            "must brake for the actual wall"
+        );
+    }
+
+    #[test]
+    fn crew_wait_has_one_deadline_even_when_claimants_change() {
+        let (mut s, bot, _) = tapered_chassis(vec![]);
+        s.bots.brains.get_mut(&bot).unwrap().vehicle_since = Some((1, 100));
+        assert!(s.bot_assembling_crew(bot, 100 + DISMOUNT_BEAT - 1));
+        assert!(!s.bot_assembling_crew(bot, 100 + DISMOUNT_BEAT));
+        assert!(!s.bot_assembling_crew(bot, 10_000));
+    }
+
+    #[test]
+    fn a_rooftop_enemy_is_not_a_runover_target_even_inside_the_guns_near_edge() {
+        let floor = ColliderBuilder::cuboid(30.0, 0.5, 30.0).translation(Vec3::new(0.0, -0.5, 0.0));
+        let roof = ColliderBuilder::cuboid(2.0, 0.5, 2.0).translation(Vec3::new(8.0, 9.5, 0.0));
+        let (mut s, bot, v) = tapered_chassis(vec![floor, roof]);
+        let high = s
+            .join("On roof".into(), Vec3::new(8.0, 10.05, 0.0), false)
+            .unwrap();
+        let low = s
+            .join("On street".into(), Vec3::new(8.0, 0.05, 0.0), false)
+            .unwrap();
+        super::super::harm::one_game(&mut s, bot, high);
+        // The second fixture target joins that same game's authoritative rules.
+        let game = s.game_of(bot).unwrap();
+        s.command(
+            low,
+            1,
+            super::super::super::Command::MiniGame(super::super::super::MiniGameRequest::Join {
+                game: game.0,
+            }),
+        )
+        .unwrap();
+        let peer = s.peers.get_mut(&low).unwrap();
+        peer.player
+            .teleport(&mut s.simulation.physics, Vec3::new(8.0, 0.05, 0.0), 0.0)
+            .unwrap();
+        peer.combat.shot_once = true;
+        s.peers
+            .get_mut(&bot)
+            .unwrap()
+            .player
+            .teleport(
+                &mut s.simulation.physics,
+                Vec3::from(v.seats[0].transform.position),
+                0.0,
+            )
+            .unwrap();
+        s.board_vehicle(bot, 1, 0).unwrap();
+        assert!(
+            s.bot_runs_over_near(bot, low, 12.0),
+            "grounded enemies still permit runover"
+        );
+        assert!(
+            !s.bot_runs_over_near(bot, high, 12.0),
+            "a nearby roof does not make its occupant reachable by the chassis"
+        );
+    }
+
+    #[test]
+    fn an_ally_above_the_chassis_is_not_a_phantom_traffic_obstacle() {
+        let floor = ColliderBuilder::cuboid(30.0, 0.5, 30.0).translation(Vec3::new(0.0, -0.5, 0.0));
+        let roof = ColliderBuilder::cuboid(2.0, 0.5, 2.0).translation(Vec3::new(8.0, 9.5, 0.0));
+        let (mut s, bot, v) = tapered_chassis(vec![floor, roof]);
+        let ally = s
+            .join("Ally".into(), Vec3::new(8.0, 10.05, 0.0), false)
+            .unwrap();
+        super::super::harm::one_game(&mut s, bot, ally);
+        let game = s.game_of(bot).unwrap();
+        let (teams, _) = s
+            .minigames
+            .set_teams(
+                game,
+                vec![bri_minigames::TeamSpec {
+                    id: None,
+                    name: "Crew".into(),
+                    color: 0,
+                    player_type: None,
+                }],
+                false,
+                false,
+            )
+            .unwrap();
+        for owner in [bot, ally] {
+            s.minigames
+                .assign_team(s.peers[&owner].combat.player, Some(teams[0]))
+                .unwrap();
+        }
+        s.bots.relations.lock().unwrap().clear();
+        assert!(s.bot_allies(bot, ally));
+        assert!(
+            !s.bot_ally_corridor(bot, &v, Vec3::ZERO, Vec3::X, 12.0, 2.0),
+            "a roof above the road does not close the road below"
+        );
+        s.peers
+            .get_mut(&ally)
+            .unwrap()
+            .player
+            .teleport(&mut s.simulation.physics, Vec3::new(8.0, 0.05, 0.0), 0.0)
+            .unwrap();
+        assert!(
+            s.bot_ally_corridor(bot, &v, Vec3::ZERO, Vec3::X, 12.0, 2.0),
+            "the same ally on the street still requires braking"
+        );
+    }
+
+    #[test]
+    fn a_changing_grid_waypoint_does_not_reverse_a_walk_around_the_same_chassis() {
+        let (mut s, bot, _) = tapered_chassis(vec![]);
+        s.peers
+            .get_mut(&bot)
+            .unwrap()
+            .player
+            .teleport(&mut s.simulation.physics, Vec3::new(-2.7, 0.05, 0.0), 0.0)
+            .unwrap();
+        s.observe_bot_objects();
+        let goal = Some(Vec3::X * 8.0);
+        let first = s.bot_vehicle_detour(bot, Vec3::new(0.8, 0.0, 0.6), None, goal);
+        let second = s.bot_vehicle_detour(bot, Vec3::new(0.8, 0.0, -0.6), None, goal);
+        assert!(first.z.abs() > 0.5 && second.z.abs() > 0.5);
+        assert!(
+            first.z * second.z > 0.0,
+            "the grid's next point changed; the obstacle and chosen way around it did not: {first:?} -> {second:?}"
+        );
+        let away = s.bot_vehicle_detour(bot, Vec3::NEG_X, None, Some(Vec3::NEG_X * 12.0));
+        assert_eq!(
+            away,
+            Vec3::NEG_X,
+            "a clear new direction is not held to the old detour"
+        );
+        assert!(s.bots.brains[&bot].vehicle_detour.is_none());
+    }
+
+    #[test]
+    fn drive_navigation_starts_on_the_actual_spawn_plate_not_extended_suspension() {
+        let floor = ColliderBuilder::cuboid(30.0, 0.5, 30.0).translation(Vec3::new(0.0, -0.1, 0.0));
+        let plate = ColliderBuilder::cuboid(2.0, 0.1, 2.0).translation(Vec3::new(0.0, 0.5, 0.0));
+        let (mut s, bot, _) = tapered_chassis(vec![floor, plate]);
+        for _ in 0..240 {
+            s.vehicles
+                .world
+                .as_mut()
+                .unwrap()
+                .pre_step(&mut s.simulation.physics, &[])
+                .unwrap();
+            s.simulation.physics.step();
+            s.vehicles
+                .world
+                .as_mut()
+                .unwrap()
+                .post_step(&mut s.simulation.physics)
+                .unwrap();
+        }
+        let v = s
+            .vehicles
+            .world
+            .as_ref()
+            .unwrap()
+            .vehicle_snapshot(&s.simulation.physics, VehicleId(1))
+            .unwrap();
+        let seat = Vec3::from(v.seats[0].transform.position);
+        s.peers
+            .get_mut(&bot)
+            .unwrap()
+            .player
+            .teleport(&mut s.simulation.physics, seat, 0.0)
+            .unwrap();
+        s.board_vehicle(bot, 1, 0).unwrap();
+        let (feet, _) = s.bot_vehicle_body(bot).unwrap();
+        assert!(
+            (feet.y - 0.6).abs() < 0.01,
+            "the grid starts at the supporting plate: {feet:?}"
+        );
     }
 }

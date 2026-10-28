@@ -563,6 +563,78 @@ fn a_lone_crew_at_the_gun_takes_the_controls_to_run_down_an_enemy_too_near_for_i
 }
 
 #[test]
+fn a_lone_gunner_does_not_take_the_controls_to_ram_an_enemy_on_a_roof() {
+    let mut g = Game::new(ROVER, 1, 1.0, false);
+    let bot = g.bots()[0];
+    for _ in 0..120 * 15 {
+        g.steps(1);
+        if g.s.mounted(bot) == Some((g.vehicle, 0)) {
+            break;
+        }
+    }
+    assert_eq!(g.s.mounted(bot), Some((g.vehicle, 0)), "at the gun first");
+    let beside = g.position() + Vec3::X * 3.5;
+    let roof = Vec3::new(
+        (beside.x * 2.0).round() * 0.5,
+        6.1,
+        (beside.z * 2.0).round() * 0.5,
+    );
+    let mut world = World::new(
+        "Elevated opponent".into(),
+        "chaos/map".into(),
+        vec![[1.0; 4]],
+    );
+    world.owners = g.s.simulation().state().owners.clone();
+    let mut plate = Brick::new(
+        ContentRef::Resolved(fixture::PLATE.into()),
+        roof.to_array(),
+        g.human,
+    );
+    plate.raycast = false;
+    world.bricks.insert(1, plate);
+    world.next_brick_id = 2;
+    let before = g.s.simulation().state().bricks.len();
+    g.send(
+        g.human,
+        Command::LoadBuild {
+            build: Box::new(SavedBuild::new(world)),
+            ownership: true,
+        },
+    );
+    g.steps(5);
+    assert_eq!(g.s.simulation().state().bricks.len(), before + 1);
+    g.send(
+        g.human,
+        Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+            eye: (roof + Vec3::Y * 1.75).to_array(),
+            yaw: 0.0,
+            pitch: 0.0,
+        })),
+    );
+    let mut seen = false;
+    for _ in 0..120 * 3 {
+        g.steps(1);
+        seen |=
+            g.s.bot_thoughts()
+                .iter()
+                .any(|t| t.bot == bot && t.visible == Some(g.human));
+        assert_ne!(
+            g.s.mounted(bot),
+            Some((g.vehicle, 2)),
+            "an elevated opponent is not a chassis strike: {}",
+            g.diagnostics()
+        );
+    }
+    assert!(feet_of(&g, g.human).y > 6.0, "target remained on its roof");
+    assert!(seen, "the gunner actually perceived the elevated enemy");
+    assert_eq!(
+        g.s.mounted(bot),
+        Some((g.vehicle, 0)),
+        "it kept its useful gun role"
+    );
+}
+
+#[test]
 fn a_foreign_vehicle_outside_the_bots_minigame_is_not_an_opportunity() {
     let mut g = Game::new(ROVER, 2, 1.0, true);
     let mut nearest = f32::MAX;

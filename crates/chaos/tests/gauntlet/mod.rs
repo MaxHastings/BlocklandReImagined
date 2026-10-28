@@ -520,10 +520,11 @@ pub struct Report {
     /// Switches to an option other than the plain pick.
     pub surprised: u64,
     /// Behaviour share report (`shares`): ticks each living bot spent in
-    /// each kind of activity (a behaviour, `goof`, `vehicle`), mounted
-    /// bots included, and the total.
+    /// each kind of activity (a behaviour or explicit `goof`), mounted
+    /// bots included, and the total. Riding is a separate physical axis.
     pub kinds: BTreeMap<String, u64>,
     pub kind_ticks: u64,
+    pub mounted_ticks: u64,
     /// Kinds the chooser scored above zero at least once (offered).
     pub offered: BTreeSet<String>,
     /// Ticks each other choice point's option was in effect

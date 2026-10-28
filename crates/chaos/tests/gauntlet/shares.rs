@@ -5,10 +5,13 @@
 //!
 //! Kinds are read from the brain's own readout (`BotThought`), not new
 //! instrumentation: the behaviour in effect, `goof` while a flavour
-//! interrupt runs, `vehicle` while mounted; and, per other choice point,
-//! its option in effect (`aim:feet`, `route:left`). A kind is *offered*
-//! when the chooser scored it above zero (its candidates), or when a kind
-//! its band names in `offered_by` was. Only `enforced` bands fail a test.
+//! interrupt runs; and, per other choice point, its option in effect
+//! (`aim:feet`, `route:left`).
+//! Fighting or completing an objective still counts while seated. Mounted
+//! time is an overlapping physical measure, not a replacement for activity.
+//! A kind is offered when the chooser scored it above zero (its candidates),
+//! or when a kind its band names in `offered_by` was. Only `enforced` bands
+//! fail a test.
 use super::{Report, TICKS_PER_SECOND};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -27,18 +30,12 @@ pub fn sample(
     tick: u64,
     first: u64,
 ) {
-    let kind = if mounted {
-        "vehicle"
-    } else if thought.surprise.interrupt.is_some() {
-        "goof"
-    } else {
-        thought.behaviour
-    };
-    *report.kinds.entry(kind.into()).or_default() += 1;
-    report.kind_ticks += 1;
-    if !report.offered.contains(kind) {
-        report.offered.insert(kind.into());
-    }
+    let kind = record_kind(
+        report,
+        thought.behaviour,
+        thought.surprise.interrupt.is_some(),
+        mounted,
+    );
     let window = ((tick - first) / WINDOW_TICKS) as usize;
     if report.goof_windows.len() <= window {
         report.goof_windows.resize(window + 1, (0, 0));
@@ -71,6 +68,18 @@ pub fn sample(
                 .or_default() += 1;
         }
     }
+}
+
+fn record_kind<'a>(report: &mut Report, behaviour: &'a str, goof: bool, mounted: bool) -> &'a str {
+    let kind = if goof { "goof" } else { behaviour };
+    *report.kinds.entry(kind.into()).or_default() += 1;
+    report.kind_ticks += 1;
+    report.offered.insert(kind.into());
+    if mounted {
+        report.mounted_ticks += 1;
+        report.offered.insert("vehicle".into());
+    }
+    kind
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -207,6 +216,9 @@ pub struct Row {
 /// The share of `kind` in `report`: of bot time, or of its choice
 /// point's time for an option (`aim:feet`).
 pub fn share(report: &Report, kind: &str) -> f32 {
+    if kind == "vehicle" {
+        return report.mounted_ticks as f32 / report.kind_ticks.max(1) as f32;
+    }
     match kind.split_once(':') {
         Some((domain, _)) => {
             let total = report.domain_ticks.get(domain).copied().unwrap_or(0);
@@ -387,5 +399,29 @@ mod tests {
     fn the_shipped_bands_parse() {
         let bands = Bands::shipped();
         assert!(bands.kinds.values().any(|b| b.enforced != Enforce::Off));
+    }
+
+    #[test]
+    fn mounted_combat_is_not_hidden_or_double_counted_in_activity_variety() {
+        let mut r = Report::default();
+        for _ in 0..30 {
+            record_kind(&mut r, "fight", false, true);
+        }
+        for _ in 0..70 {
+            record_kind(&mut r, "chase", false, true);
+        }
+        assert!((share(&r, "fight") - 0.3).abs() < 1e-6);
+        assert!((share(&r, "chase") - 0.7).abs() < 1e-6);
+        assert_eq!(
+            share(&r, "vehicle"),
+            1.0,
+            "physical riding still measures every mounted tick"
+        );
+        assert!(
+            (variety(&r) - 0.8813).abs() < 0.001,
+            "the physical axis must not inflate activity entropy"
+        );
+        assert_eq!(record_kind(&mut r, "wander", true, true), "goof");
+        assert_eq!(r.kinds.get("goof"), Some(&1));
     }
 }

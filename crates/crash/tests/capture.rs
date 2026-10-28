@@ -5,6 +5,30 @@ use std::{fs, path::Path, process::Command};
 const CASE: &str = "BRI_CRASH_CASE";
 const DIR: &str = "BRI_CRASH_DIR";
 
+// Snapshot cases exercise one controlled crash at a time. The loader-busy
+// case supplies its own adversarial concurrency; competing snapshot/stall
+// fixtures are not part of that scenario.
+#[cfg(windows)]
+static NATIVE_CASE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// The production constant bounds two intentional waits, not process startup,
+// file I/O, scheduling or Windows teardown. Keep the subprocess bounded without
+// treating that internal wait sum as an end-to-end wall-clock guarantee.
+#[cfg(windows)]
+const CHILD_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[cfg(windows)]
+fn native_command(case: &str, dir: &Path) -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "child_entry", "--nocapture", "--test-threads=1"])
+        .env(CASE, case)
+        .env(DIR, dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(fs::File::create(dir.join("child-stderr.log")).unwrap());
+    command
+}
+
 fn child(case: &str, dir: &Path) -> std::process::Output {
     Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "child_entry", "--nocapture", "--test-threads=1"])
@@ -14,40 +38,26 @@ fn child(case: &str, dir: &Path) -> std::process::Output {
         .unwrap()
 }
 
-/// A native-crash child, killed if it is still running once its capture
-/// can no longer be waiting for anything ([`bri_crash::NATIVE_CAPTURE_WAIT`]):
-/// a hung capture fails the test instead of hanging it. Returns stderr, or
-/// None when it hung.
+/// A bounded native-crash subprocess. Stderr goes directly to a file: no extra
+/// pipe-reader thread competes with capture or needs an unbounded join.
 #[cfg(windows)]
-fn crashing_child(case: &str, dir: &Path) -> Option<String> {
-    use std::io::Read;
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "child_entry", "--nocapture", "--test-threads=1"])
-        .env(CASE, case)
-        .env(DIR, dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    // Read stderr as it comes, so a full pipe never stalls the child.
-    let mut pipe = child.stderr.take().unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = pipe.read_to_string(&mut text);
-        text
-    });
-    let deadline = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
+fn crashing_child(case: &str, dir: &Path) -> String {
+    let mut child = native_command(case, dir).spawn().unwrap();
+    let deadline = std::time::Instant::now() + CHILD_WAIT;
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             assert!(!status.success());
-            return Some(reader.join().unwrap());
+            return fs::read_to_string(dir.join("child-stderr.log")).unwrap();
         }
         if std::time::Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return None;
+            panic!(
+                "native-crash child {case} exceeded {CHILD_WAIT:?}: {}",
+                fs::read_to_string(dir.join("child-stderr.log")).unwrap_or_default()
+            );
         }
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
@@ -69,6 +79,15 @@ fn child_entry() {
         return;
     };
     let dir = std::path::PathBuf::from(std::env::var(DIR).unwrap());
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX, SetErrorMode,
+        };
+        // SAFETY: affects only this disposable child. The application's own
+        // exception filter still runs, without WER UI/teardown in the fixture.
+        unsafe { SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX) };
+    }
     bri_crash::install("capture-test", std::slice::from_ref(&dir)).unwrap();
     eprintln!("line before the crash");
     match case.as_str() {
@@ -207,14 +226,6 @@ fn assert_captured(dir: &Path, stderr: &str) {
 #[cfg(windows)]
 const ACCESS_VIOLATION: u32 = 0xC000_0005;
 
-#[cfg(windows)]
-#[test]
-fn a_native_crash_leaves_a_minidump_and_a_report() {
-    let dir = tempfile::tempdir().unwrap();
-    let stderr = crashing_child("native", dir.path()).expect("the crash capture hung");
-    assert_captured(dir.path(), &stderr);
-}
-
 /// A dump that never finishes: the crash stops waiting at its `DUMP_WAIT`
 /// and the report says so, and the dump's snapshot clone (a process of its
 /// own holding the crashed one's memory) is ended with it, not left
@@ -222,28 +233,17 @@ fn a_native_crash_leaves_a_minidump_and_a_report() {
 #[cfg(windows)]
 #[test]
 fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
-    use std::io::Read;
+    let _case = NATIVE_CASE.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "child_entry", "--nocapture", "--test-threads=1"])
-        .env(CASE, "native")
-        .env(DIR, dir.path())
+    let mut child = native_command("native", dir.path())
         .env(bri_crash::STALL_DUMP_VAR, "1")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let mut pipe = child.stderr.take().unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = pipe.read_to_string(&mut text);
-        text
-    });
     // The snapshot is taken: its clone runs as the child's child.
-    let deadline = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
+    let deadline = std::time::Instant::now() + CHILD_WAIT;
     while processes::children(child.id()).is_empty() {
         assert!(std::time::Instant::now() < deadline, "no snapshot taken");
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     // The crash gives up on the dump and writes its report.
     let reports = loop {
@@ -256,13 +256,13 @@ fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
             break reports;
         }
         assert!(std::time::Instant::now() < deadline, "no report written");
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(10));
     };
     // Require both the crashed process and its clone to disappear within
     // the cleanup bound. Toolhelp returns a snapshot: the parent and clone
     // can exit between that snapshot and try_wait, so their separately
     // observed states cannot establish which one exited first.
-    let released = std::time::Instant::now() + bri_crash::NATIVE_CAPTURE_WAIT;
+    let released = std::time::Instant::now() + CHILD_WAIT;
     let status = loop {
         let status = child.try_wait().unwrap();
         let clones = processes::children(child.id());
@@ -280,7 +280,6 @@ fn a_dump_that_never_finishes_leaves_no_snapshot_behind() {
     let report = fs::read_to_string(&reports[0]).unwrap();
     assert!(report.contains("did not finish in time"), "{report}");
     assert!(!status.success());
-    let _ = reader.join();
 }
 
 /// Running copies of this executable started by another: a snapshot's
@@ -332,8 +331,9 @@ mod processes {
 #[cfg(windows)]
 #[test]
 fn a_native_crash_while_other_threads_load_libraries_still_dumps() {
+    let _case = NATIVE_CASE.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let stderr = crashing_child("loader_busy", dir.path()).expect("the crash capture hung");
+    let stderr = crashing_child("loader_busy", dir.path());
     assert_captured(dir.path(), &stderr);
 }
 

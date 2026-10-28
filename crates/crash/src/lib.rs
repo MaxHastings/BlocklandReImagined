@@ -30,9 +30,9 @@ pub const PRODUCT: &str = "Blockland ReImagined";
 
 pub const KEEP_SESSIONS: usize = 20;
 pub const KEEP_CRASHES: usize = 10;
-/// The longest a native crash's capture waits on other threads: for its
-/// minidump, then for the session log. A crashing process still running past
-/// it is hung.
+/// Sum of the native capture's explicit waits for the minidump and session log.
+/// This excludes process startup, filesystem work, scheduling and Windows
+/// Error Reporting teardown; it is not an end-to-end process exit deadline.
 #[cfg(windows)]
 pub const NATIVE_CAPTURE_WAIT: std::time::Duration =
     windows::DUMP_WAIT.saturating_add(windows::DRAIN_WAIT);

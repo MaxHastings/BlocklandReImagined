@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "script": "reactions.rhai",
+  "modules": ["catalog.rhai"],
+  "state": {
+    "global": {
+      "rng": {"default": 513719, "persist": false},
+      "pending": {"default": [], "persist": false},
+      "active": {"default": [], "persist": false},
+      "recent": {"default": {}, "persist": false},
+      "next": {"default": 0, "persist": false},
+      "played": {"default": 0, "persist": false},
+      "by_event": {"default": {}, "persist": false},
+      "by_clip": {"default": {}, "persist": false},
+      "by_tier": {"default": {}, "persist": false},
+      "eligible": {"default": {}, "persist": false}
+    },
+    "player": {
+      "voice": {"default": {}, "persist": false}
+    }
+  },
+  "tick_interval": 30,
+  "on_spawn": true,
+  "on_death": true,
+  "on_minigame": true,
+  "on_bot_spotted": true,
+  "on_bot_heard_gunfire": true,
+  "on_bot_under_fire": true,
+  "on_bot_sees_grenade": true,
+  "on_bot_friend_died": true,
+  "on_bot_lost_enemy": true,
+  "on_bot_out_of_ammo": true,
+  "on_bot_objective_acquired": true,
+  "on_bot_objective_completed": true,
+  "on_bot_stalled": true
+}

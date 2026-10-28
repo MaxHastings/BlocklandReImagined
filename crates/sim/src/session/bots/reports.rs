@@ -1,6 +1,7 @@
 //! What bots tell the rules about their surroundings: spotting an enemy,
 //! hearing gunfire, being shot at, seeing a grenade or an ally die, losing
-//! an enemy, running dry. The brain decides nothing from them; an Add-On's
+//! an enemy, running dry, observed objective outcomes and failed headway.
+//! The brain decides nothing from them; an Add-On's
 //! hooks (`on_bot_spotted` and the others of `content::Behaviour`) say what a
 //! bot does about it, such as calling it out. Each is told once per
 //! occurrence, to every package that declares it, after the bots have
@@ -18,6 +19,9 @@ pub(in crate::session) enum Report {
     FriendDied(OwnerId, OwnerId),
     LostEnemy(OwnerId, OwnerId),
     OutOfAmmo(OwnerId),
+    ObjectiveAcquired(OwnerId),
+    ObjectiveCompleted(OwnerId),
+    Stalled(OwnerId),
 }
 
 impl Report {
@@ -30,7 +34,10 @@ impl Report {
             | Self::SeesGrenade(b, _)
             | Self::FriendDied(b, _)
             | Self::LostEnemy(b, _)
-            | Self::OutOfAmmo(b) => b,
+            | Self::OutOfAmmo(b)
+            | Self::ObjectiveAcquired(b)
+            | Self::ObjectiveCompleted(b)
+            | Self::Stalled(b) => b,
         }
     }
     /// The hook that hears it, and its arguments after the bot.
@@ -43,6 +50,9 @@ impl Report {
             Self::FriendDied(_, f) => ("on_bot_friend_died", Some(f)),
             Self::LostEnemy(_, e) => ("on_bot_lost_enemy", Some(e)),
             Self::OutOfAmmo(_) => ("on_bot_out_of_ammo", None),
+            Self::ObjectiveAcquired(_) => ("on_bot_objective_acquired", None),
+            Self::ObjectiveCompleted(_) => ("on_bot_objective_completed", None),
+            Self::Stalled(_) => ("on_bot_stalled", None),
         }
     }
 }
