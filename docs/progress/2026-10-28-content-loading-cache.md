@@ -7,7 +7,7 @@ Those targets are not established for a truly cold content read.
 The exact screenshot log is `E:/Downloads/BlocklandReImagined-v0.3.7-windows/logs/session-20261028-163108.log`,
 engine b927779dc. Bedroom preparation took 41.453 s: animations 3.230 s,
 brick catalogs 10.053 s, world collision 6.346 s, verification 21.399 s reading
-540.5 MB. The earlier practical-validation note misread that byte count.
+540.5 MB.
 An earlier session on the same engine (`session-20261028-042037.log`) took
 35.266 s; `session-20261028-043111.log` then prepared Bedroom in 2.642 s,
 including reading the same 538.4 MB in 1.241 s. Source changes cannot explain

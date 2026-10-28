@@ -1489,7 +1489,7 @@ def ci_test(part=(0, 1), tier="full"):
     if tier != "full":
         say(f"{tier} tier: {len(nightly)} slow render targets are left to the nightly run")
     if tier == "pr":
-        say("pr tier: the slow packages' suites run after merge (ci_quick in gate-known-failures.toml)")
+        say("pr tier: extended suites run nightly/manual (ci_quick in gate-known-failures.toml)")
     skipped = ci_left_out(data, tier, labels)
     for label in sorted(labels):
         if label in skipped and label not in nightly:
@@ -1615,9 +1615,8 @@ def labels_from_metadata(metadata):
 
 def target_filters(labels, kinds):
     """cargo test arguments that build at least the targets `labels` name
-    (`kinds` as labels_from_metadata gives them). The filters apply across the
-    whole workspace, so features stay unified as in a full build and a name
-    another package shares is built there too."""
+    (`kinds` as labels_from_metadata gives them). Cargo applies these to all
+    selected packages; ci_build_groups scopes the package selection as well."""
     selected = {(kinds[label], label.split("/", 1)[1]) for label in labels}
     args = ["--lib"] if any(kind == "lib" for kind, _ in selected) else []
     for kind, name in sorted(selected):

@@ -33,7 +33,7 @@ of measured wall-clock speedup. Platform CI is pending. No local Rust/GPU/full
 build was started during Maxwell's playtest.
 
 Loading is a separate unresolved runtime task. Maxwell's screenshot reports
-41.453 s map preparation, including 21.399 s hashes (450.5 MB), 10.053 s brick
+41.453 s map preparation, including 21.399 s hashes (540.5 MB), 10.053 s brick
 catalogs, 6.346 s world collision and 3.230 s animations. Existing source already
 has timestamp/length hash reuse and per-content definition caches; trace misses
 and invalidation before adding caches or bypassing verification. Acceptance
