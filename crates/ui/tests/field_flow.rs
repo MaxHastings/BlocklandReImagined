@@ -1051,9 +1051,12 @@ fn players(u: &mut Ui) {
         ],
         server_name: "Field flow".into(),
         max_players: 8,
-        // The host runs voice chat: the list's mute button shows.
+        // The host runs voice chat: the list's mute button and Voice column
+        // show; Walker is muted locally, Guesty by an admin.
         voice_chat: true,
         voice_muted: vec![9],
+        server_voice_muted: vec![7],
+        voice_speaking: vec![1],
     });
     u.update(0);
 }

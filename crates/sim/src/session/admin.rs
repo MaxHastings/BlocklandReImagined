@@ -713,16 +713,21 @@ impl AdminRuntime {
                         .connection_to_owner
                         .get(&target)
                         .context("That player is no longer connected")?;
+                    // `serverCmdKick`'s neighbour: say who was silenced, and
+                    // with the same line and sound when they are heard again.
+                    let name = session.peers.get(&owner).map(|p| p.name.clone());
                     if muted {
                         session.mute_voice(owner);
-                        // `serverCmdKick`'s neighbour: say who was silenced.
-                        let name = session.peers.get(&owner).map(|p| p.name.clone());
                         session.admin_announce(format!(
                             "\u{E003}{actor_name}\u{E002} muted \u{E003}{}'s voice",
                             name.unwrap_or_default()
                         ));
                     } else {
                         session.unmute_voice(owner);
+                        session.admin_announce(format!(
+                            "\u{E003}{actor_name}\u{E002} unmuted \u{E003}{}'s voice",
+                            name.unwrap_or_default()
+                        ));
                     }
                     changed = true;
                 }

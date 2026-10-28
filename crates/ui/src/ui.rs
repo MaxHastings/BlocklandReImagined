@@ -406,6 +406,13 @@ pub struct Core {
     /// The players this player has muted locally, by owner id; local only,
     /// never sent to the host.
     pub voice_muted: BTreeSet<u64>,
+    /// The players an admin has muted on the host, by owner id; empty when
+    /// the host does not run voice chat. Shown as "Muted" in the F2 list's
+    /// Voice column, like a local mute.
+    pub server_voice_muted: BTreeSet<u64>,
+    /// The players heard speaking right now, by owner id; the F2 list's Voice
+    /// column shows them as "On".
+    pub voice_speaking: BTreeSet<u64>,
     pub admin: crate::models::admin::AdminModel,
     /// The host's environment and the Environment window's draft.
     pub environment: crate::models::environment::EnvironmentModel,
@@ -623,6 +630,8 @@ impl Core {
         self.players.clear();
         self.voice_on_server = false;
         self.voice_muted.clear();
+        self.server_voice_muted.clear();
+        self.voice_speaking.clear();
         self.minigames = MiniGameUiState::default();
         self.report = None;
         self.panel = None;
@@ -1676,6 +1685,8 @@ impl Ui {
             players: Vec::new(),
             voice_on_server: false,
             voice_muted: BTreeSet::new(),
+            server_voice_muted: BTreeSet::new(),
+            voice_speaking: BTreeSet::new(),
             admin: Default::default(),
             environment: Default::default(),
             minigames: MiniGameUiState::default(),
@@ -2326,12 +2337,16 @@ impl Ui {
                 max_players,
                 voice_chat,
                 voice_muted,
+                server_voice_muted,
+                voice_speaking,
             } => {
                 c.players = rows;
                 c.server_name = server_name;
                 c.max_players = max_players;
                 c.voice_on_server = voice_chat;
                 c.voice_muted = voice_muted.into_iter().collect();
+                c.server_voice_muted = server_voice_muted.into_iter().collect();
+                c.voice_speaking = voice_speaking.into_iter().collect();
             }
             UiUpdate::MiniGames(state) => {
                 c.minigames = state;

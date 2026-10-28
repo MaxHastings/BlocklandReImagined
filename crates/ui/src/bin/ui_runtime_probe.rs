@@ -410,9 +410,12 @@ fn main() -> Result<()> {
             }],
             server_name: "Native UI verification".into(),
             max_players: 8,
-            // The host runs voice chat: the list's mute button shows.
+            // The host runs voice chat: the list's mute button and Voice
+            // column show.
             voice_chat: true,
             voice_muted: vec![],
+            server_voice_muted: vec![],
+            voice_speaking: vec![],
         });
         ui.core.push(ScreenId::PlayerList);
         ui.update(0);

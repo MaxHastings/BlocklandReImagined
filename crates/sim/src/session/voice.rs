@@ -3,6 +3,7 @@
 
 use super::Session;
 use bri_world::OwnerId;
+use std::collections::BTreeSet;
 
 /// The id of the voice chat's Add-On package. A host runs it when the player
 /// has it turned on in Add-Ons, before any player joins; off, the host relays
@@ -28,5 +29,10 @@ impl Session {
     /// Whether `owner`'s voice is muted by an admin right now.
     pub fn is_voice_muted(&self, owner: OwnerId) -> bool {
         self.voice_muted.contains(&owner)
+    }
+    /// The players an admin has muted right now, by owner id; the host
+    /// broadcasts this set so every client can show it in the player list.
+    pub fn voice_mute_set(&self) -> &BTreeSet<OwnerId> {
+        &self.voice_muted
     }
 }

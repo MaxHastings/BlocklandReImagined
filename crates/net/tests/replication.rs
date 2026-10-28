@@ -33,6 +33,7 @@ fn checkpoint() -> Checkpoint {
         vehicles: vec![],
         vehicle_poses: vec![],
         time_scale: 1.0,
+        voice_muted: Default::default(),
         world_bricks: 0,
         world_chunks: 0,
         world_near_chunks: 0,
@@ -97,6 +98,7 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -170,6 +172,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -228,6 +231,7 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -280,6 +284,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -323,6 +328,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
             minigames: None,
             vehicles: None,
             time_scale: None,
+            voice_muted: None,
             broken_shapes: None,
             targets: None,
             map_lights: None,
@@ -365,6 +371,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -418,6 +425,7 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -522,6 +530,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -754,6 +763,7 @@ fn smashed_map_shapes_replicate_and_stay_bounded() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: Some((0..5000).collect()),
         targets: None,
         map_lights: None,
@@ -803,6 +813,7 @@ fn tutorial_targets_replicate_whole_and_invalid_ones_are_refused() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: Some(vec![target(1, false), target(1, true)]),
         map_lights: None,
@@ -862,6 +873,7 @@ fn map_light_rules_replicate_whole_and_are_checked() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: Some(vec![MapLightRule {
@@ -951,6 +963,7 @@ fn world_shapes_replicate_by_set_and_are_checked() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -1022,6 +1035,7 @@ fn environment_replicates_whole_and_is_checked() {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -1141,6 +1155,7 @@ fn contact_geometry_delta(cues: Vec<bri_sim::presentation::Cue>) -> Delta {
         minigames: None,
         vehicles: None,
         time_scale: None,
+        voice_muted: None,
         broken_shapes: None,
         targets: None,
         map_lights: None,
@@ -1330,4 +1345,43 @@ fn loading_and_active_roster_share_one_budget_in_checkpoints_and_deltas() {
     assert!(replica.update(delta).is_err());
     assert_eq!(replica.cursor, 0);
     assert_eq!(replica.loading.len(), 127);
+}
+
+#[test]
+fn voice_mute_set_travels_checkpoint_and_delta() {
+    // Checkpoint: the host's mute list arrives with the join.
+    let mut start = checkpoint();
+    start.voice_muted.insert(7);
+    let mut replica = Replica::new(start).unwrap();
+    assert_eq!(replica.voice_muted, std::collections::BTreeSet::from([7]));
+
+    // Delta: the whole set whenever it changes...
+    let mut delta = contact_geometry_delta(Vec::new());
+    delta.voice_muted = Some(std::collections::BTreeSet::from([9]));
+    assert!(replica.update(delta).is_ok());
+    assert_eq!(replica.voice_muted, std::collections::BTreeSet::from([9]));
+
+    // ...and a tick without one leaves it alone.
+    let mut quiet = contact_geometry_delta(Vec::new());
+    quiet.base = 1;
+    quiet.cursor = 2;
+    quiet.tick = 12;
+    assert!(quiet.voice_muted.is_none());
+    assert!(replica.update(quiet).is_ok());
+    assert_eq!(replica.voice_muted, std::collections::BTreeSet::from([9]));
+
+    // And the wire keeps it: a delta with the set encodes and decodes whole.
+    let mut sent = contact_geometry_delta(Vec::new());
+    sent.base = 2;
+    sent.cursor = 3;
+    sent.tick = 13;
+    sent.voice_muted = Some(std::collections::BTreeSet::from([7, 9]));
+    let bytes = codec::encode(&Message::Update(sent)).unwrap();
+    let Message::Update(decoded) = codec::decode(&bytes).unwrap() else {
+        panic!("message kind")
+    };
+    assert_eq!(
+        decoded.voice_muted,
+        Some(std::collections::BTreeSet::from([7, 9]))
+    );
 }

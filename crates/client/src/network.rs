@@ -60,6 +60,9 @@ pub struct View {
     /// Whether the host runs voice chat (its Add-On on before players
     /// joined): off, no voices are relayed and the mute controls hide.
     pub voice_chat: bool,
+    /// The players an admin has muted, by owner id; empty when the host does
+    /// not run voice chat.
+    pub voice_muted: std::collections::BTreeSet<OwnerId>,
     pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     /// Admin `/timeScale`: game time per real second.
@@ -436,6 +439,7 @@ fn publish(
         checkpoint_cue_cursor,
         admin_snapshot: client.admin_snapshot.clone(),
         voice_chat: client.replica.voice_chat,
+        voice_muted: client.replica.voice_muted.clone(),
         vitals: client.replica.vitals.clone(),
         minigames: client.replica.minigames.clone(),
         time_scale: client.replica.time_scale,

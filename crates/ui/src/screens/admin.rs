@@ -296,7 +296,7 @@ impl AdminScreen {
                 ("NativeHostOptions", "Host Options"),
                 ("NativeAdminCredentials", "Passwords"),
                 ("NativeAddOnSettings", "Add-On Settings"),
-                ("NativeMutePlayer", "Mute Voice"),
+                ("NativeMutePlayer", "Mute"),
             ];
             let taken: Vec<Rect> = view.nodes[parent]
                 .children
@@ -677,8 +677,7 @@ impl AdminScreen {
                         .snapshot
                         .as_ref()
                         .is_some_and(|s| s.voice_muted.contains(&t));
-                    self.view
-                        .set_text(n, if muted { "Unmute Voice" } else { "Mute Voice" });
+                    self.view.set_text(n, if muted { "Unmute" } else { "Mute" });
                 }
                 self.view.set_active(
                     n,

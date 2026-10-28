@@ -1627,6 +1627,20 @@ fn an_admin_mutes_a_players_voice_and_the_snapshot_says_so() {
     let after = g.s.admin_state(host).unwrap();
     assert_eq!(after.voice_muted, BTreeSet::from([guest_conn.0]));
 
+    // Everyone but owner 0 hears who was silenced — with the admin sound.
+    for peer in [host, guest] {
+        assert!(
+            g.log.iter().any(|(to, n)| *to == peer && matches!(n, Notice::Chat(t) if t.contains("\u{e002} muted ") && t.contains("Guest's voice"))),
+            "the mute is announced to {peer}"
+        );
+        assert!(
+            g.log
+                .iter()
+                .any(|(to, n)| *to == peer && matches!(n, Notice::Sound(s) if s == "AdminSound")),
+            "with the admin sound for {peer}"
+        );
+    }
+
     let reply = g
         .cmd(host, admin(Action::VoiceUnmute { target: guest_conn }))
         .unwrap();
@@ -1635,6 +1649,14 @@ fn an_admin_mutes_a_players_voice_and_the_snapshot_says_so() {
     };
     assert!(!g.s.is_voice_muted(guest), "the mute is off again");
     assert!(reply.snapshot.voice_muted.is_empty());
+
+    // The unmute is announced the same way, with the same sound.
+    for peer in [host, guest] {
+        assert!(
+            g.log.iter().any(|(to, n)| *to == peer && matches!(n, Notice::Chat(t) if t.contains("unmuted") && t.contains("Guest's voice"))),
+            "the unmute is announced to {peer}"
+        );
+    }
 }
 
 /// Requests (host, no Add-On): Admin(VoiceMute guest); (guest, with the

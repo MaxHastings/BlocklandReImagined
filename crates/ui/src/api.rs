@@ -2059,6 +2059,13 @@ pub enum UiUpdate {
         voice_chat: bool,
         /// The players this player has muted locally, by owner id.
         voice_muted: Vec<u64>,
+        /// The players an admin has muted on the host, by owner id; empty
+        /// when the host does not run voice chat.
+        server_voice_muted: Vec<u64>,
+        /// The players heard speaking right now, by owner id (the F2 list's
+        /// Voice column says "On" for them). Players this player has muted
+        /// locally are left out by the sender.
+        voice_speaking: Vec<u64>,
     },
     MiniGames(MiniGameUiState),
     MiniGameInvite(MiniGameInvitation),
