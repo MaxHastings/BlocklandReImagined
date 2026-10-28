@@ -47,10 +47,10 @@
         0.0,
         0.0299
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -6.0,
-      "rms_dbfs": -24.03,
-      "sha256": "dedfe1ed66d9225ab2561d902c18ae26c203c8f1c17516376f6ce37d8ad2455c"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -0.0,
+      "rms_dbfs": -18.03,
+      "sha256": "e2439fe8c483c9718a069330b32e5a7c2d491e3a0a715d61a2b5dc2930e224e5"
     },
     {
       "file": "assets/sounds/snap2.wav",
@@ -59,10 +59,10 @@
         0.0,
         0.0606
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -6.0,
-      "rms_dbfs": -28.46,
-      "sha256": "40721c3a9bb3a3f3b96caed5ba94ac5c28163e5c695e9a638f6bc565e949655b"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -0.0,
+      "rms_dbfs": -22.46,
+      "sha256": "73dec964c054066fc2320398bb237e042d83bd3c5bc48f2d4ac22af427e7558c"
     },
     {
       "file": "assets/sounds/click1.wav",
@@ -71,10 +71,10 @@
         0.42,
         0.64
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -6.0,
-      "rms_dbfs": -36.12,
-      "sha256": "79a8daf22e9cb271eee0c4127c2bceda716938c4e627fd500e78b2b802c5b9fb"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -0.0,
+      "rms_dbfs": -30.13,
+      "sha256": "d9906e64e5d5a0304020718c1c3742051713ebe4586c8ee913ec82cbbbc9b964"
     },
     {
       "file": "assets/sounds/click2.wav",
@@ -83,10 +83,10 @@
         2.2,
         2.42
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -6.0,
-      "rms_dbfs": -32.83,
-      "sha256": "a0e44b6b6820d37f30c337d63cebc0e88a9e4a25818a1488ec03bfb56819615c"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -0.0,
+      "rms_dbfs": -26.83,
+      "sha256": "0e1b7a54acf927216720e037a8b61dec120a0086d9c2d2abbf02cc60ba1fa49d"
     },
     {
       "file": "assets/sounds/click3.wav",
@@ -95,10 +95,10 @@
         6.5,
         6.71
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -12.05,
-      "rms_dbfs": -25.03,
-      "sha256": "08925e8ab9a63df7f031cd6154aa4087ce8b8899a06a66d565523d7edc962b48"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -6.05,
+      "rms_dbfs": -19.04,
+      "sha256": "ab889979e4a61bf4f9799ecc1308ffc5b8eb573907727123d46e49db6761e922"
     },
     {
       "file": "assets/sounds/click4.wav",
@@ -107,10 +107,10 @@
         9.7,
         9.91
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -6.85,
-      "rms_dbfs": -28.96,
-      "sha256": "7a7992d5d5837ec41e2a8e6323ac5a7960028d5cf4b0f9f04b2057530f0e3c3d"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -0.85,
+      "rms_dbfs": -22.96,
+      "sha256": "5a9d23bebf778509d1b23b97e4013a6250f47ecb65887abe718edf21434752a9"
     },
     {
       "file": "assets/sounds/click5.wav",
@@ -119,10 +119,10 @@
         13.6,
         13.81
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -12.19,
-      "rms_dbfs": -28.69,
-      "sha256": "adc6cfe53ccfc1c269815165d56ce0dddb1a7c905f6ffe53dfc8ed5e66583465"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -6.19,
+      "rms_dbfs": -22.69,
+      "sha256": "fb9821c6282a0f5e1bc65344866db4f2b98fda11dd2669c12e0fdb249bd3ef2a"
     },
     {
       "file": "assets/sounds/click6.wav",
@@ -131,10 +131,10 @@
         17.47,
         17.69
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -12.41,
-      "rms_dbfs": -26.98,
-      "sha256": "9f6541f27febf58342de04ba6d134a83e4edb0d040c3303136740c95dacef534"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -6.41,
+      "rms_dbfs": -20.98,
+      "sha256": "e556cac34e441d5839c4e1d8712240c31423495ca24a11fbdf58ac2c0af7503c"
     },
     {
       "file": "assets/sounds/landing1.wav",
@@ -143,10 +143,10 @@
         0.0,
         0.85
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -13.66,
-      "rms_dbfs": -29.66,
-      "sha256": "59fc6dda1401d4ff3f2589b2d8b8a5cbb00b1e23af0c2649da20da1da4371aa0"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -7.66,
+      "rms_dbfs": -23.66,
+      "sha256": "b130deb943f908e01c80a76205d95b606b8d7891c7778e3c5f196fd8a3803db9"
     },
     {
       "file": "assets/sounds/landing2.wav",
@@ -155,10 +155,10 @@
         0.1,
         1.1
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -13.89,
-      "rms_dbfs": -30.0,
-      "sha256": "8c66fd38cc5f59ace0f98d5dc5dcd95a21dc900823f19f9c5e2ca49134e2b62e"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -7.89,
+      "rms_dbfs": -24.0,
+      "sha256": "4bfd2b4766f91fc9dd06a1e4140eddbb17919b9b22f0552e65619290079ad166"
     },
     {
       "file": "assets/sounds/landing3.wav",
@@ -167,10 +167,11 @@
         0.02,
         0.92
       ],
-      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only",
-      "peak_dbfs": -13.62,
-      "rms_dbfs": -29.37,
-      "sha256": "e2e39a6f01e74ffe2a2f39bd8bc96a8077fa284280f57d44a7edaf8d1ee22948"
+      "modifications": "mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment",
+      "peak_dbfs": -7.62,
+      "rms_dbfs": -23.37,
+      "sha256": "c7e2e2e95abbcaa2dfe18b724dd16ccd2eea6b9d9c0aa99784700d972266ca32"
     }
-  ]
+  ],
+  "playback_gain_db": 6.0
 }

@@ -443,6 +443,62 @@ fn exhausted_partition_budget_holds_the_block_instead_of_amplifying_the_blast() 
 }
 
 #[test]
+fn temporary_split_allowances_defer_without_consuming_or_mutating_the_hit() {
+    let (mut s, owner) = session();
+    let root = place(&mut s, owner, "8x8x3", [0., 0.3, 0.], false);
+    s.blow_up_bricks(owner, None, Vec3::new(1.5, 0.3, -2.), &impact(0.6))
+        .unwrap();
+    let mut job = s.destruction.pending.pop_front().unwrap();
+    let mut probe = SupportProbe::new(&s.simulation, root);
+    let mut work = 100_000;
+    assert!(
+        probe
+            .step(&s.simulation, &mut work, |id| s.live_damage_brick(id))
+            .unwrap()
+    );
+    let blast = job.blast;
+    for (pieces, bytes) in [(0, MUTATION_BYTES_PER_TICK), (PIECES_PER_BLAST, 0)] {
+        s.destruction.tick_pieces_left = pieces;
+        s.destruction.mutation_bytes_left = bytes;
+        assert!(
+            s.apply_damage(&mut job, root, &probe, blast)
+                .unwrap()
+                .is_none()
+        );
+        assert!(s.live_damage_brick(root));
+        assert_eq!(s.simulation.damage_part_count(), 0);
+        assert_eq!(job.made, 0);
+        assert!(s.take_cues().is_empty());
+    }
+    s.destruction.tick_pieces_left = PIECES_PER_BLAST;
+    s.destruction.mutation_bytes_left = MUTATION_BYTES_PER_TICK;
+    for _ in 0..crate::presentation::MAX_CUES {
+        s.cues.emit(0, CueKind::Plant, [0.; 3]);
+    }
+    let cursor = s.cues.cursor();
+    assert!(
+        s.apply_damage(&mut job, root, &probe, blast)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(s.cues.cursor(), cursor, "retry must not drop or add a cue");
+    assert!(s.live_damage_brick(root));
+    assert_eq!(job.made, 0);
+    s.take_cues();
+    assert!(
+        s.apply_damage(&mut job, root, &probe, blast)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        !s.live_damage_brick(root),
+        "the retained hit must work with fresh allowance"
+    );
+    assert!(job.made > 0);
+    assert!(!s.take_cues().is_empty());
+}
+
+#[test]
 fn admitted_damage_keeps_its_owner_permissions_after_shooter_disconnects() {
     let (mut s, owner) = session();
     let brick = place(&mut s, owner, "1x1x3", [0.25, 0.3, 0.25], false);
@@ -628,6 +684,45 @@ fn exhausted_presentation_admission_holds_source_until_capacity_is_available() {
             .any(|c| matches!(c.kind, CueKind::BrickSectionRetired { group: 1, .. }))
     );
     assert!(s.destruction.reservations.is_empty());
+}
+
+#[test]
+fn many_small_collapses_do_not_hold_a_new_section_for_the_lease() {
+    let (mut s, owner) = session();
+    let scope = s.damage_scope(owner, Vec3::ZERO).unwrap();
+    // Simulate a busy match's recent small collapses. Their combined material
+    // is tiny, but the old independent 64-group admission cap held the next
+    // small structure standing until a thirty-second reservation expired.
+    for group in 1..=64 {
+        s.destruction.reservations.insert(
+            (0, group),
+            Reservation {
+                members: 1,
+                looks: 1,
+                quads: 6,
+                draw_quads: 6,
+                buckets: 1,
+                until: PRESENTATION_LEASE,
+            },
+        );
+    }
+    s.destruction.next_group = 64;
+    let id = place(&mut s, owner, "1x1x3", [0.25, 5.3, 0.25], false);
+    let mut search = Search::new(scope, vec![id]);
+    search.push(id, &s.simulation);
+    s.destruction.searches.push_back(search);
+    let _ = s.simulation.take_support_edits();
+    s.run_damage_support().unwrap();
+    assert!(
+        !s.live_damage_brick(id),
+        "a small unsupported section waited behind metadata reservations"
+    );
+    assert!(
+        s.take_cues()
+            .iter()
+            .any(|c| matches!(c.kind, CueKind::BrickSectionReady { members: 1, .. }))
+    );
+    assert_eq!(s.destruction.work.capacity_holds, 0);
 }
 
 #[test]

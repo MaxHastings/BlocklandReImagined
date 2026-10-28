@@ -23,6 +23,8 @@ CLIPS = [
 ]
 RATE = 48000
 NAMESPACE = "brick-destruction-audio"
+# Maxwell accepted this listening adjustment in Preview 11 (2026-10-28).
+PLAYBACK_GAIN_DB = 6.0
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -74,14 +76,19 @@ def main():
         rms_target=-22 if name.startswith('landing') else -20
         gain=min(4.,10**(target/20)/peak,10**(rms_target/20)/max(active_rms,1e-9))
         pcm=array.array('h',(round(max(-.9999,min(.9999,v*gain))*32767) for v in clip))
+        playback_gain = 10 ** (PLAYBACK_GAIN_DB / 20)
+        adjusted = [round(v * playback_gain) for v in pcm]
+        if min(adjusted) < -32768 or max(adjusted) > 32767:
+            raise ValueError(f"Playback gain clips: {name}")
+        pcm = array.array('h', adjusted)
+        peak_out = max(map(abs, pcm)) / 32768
+        rms = math.sqrt(sum(v*v for v in pcm) / len(pcm)) / 32768
         if sys.byteorder!='little':pcm.byteswap()
         path=sounds/f'{name}.wav'
         with wave.open(str(path),'wb') as wav:
             wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(RATE);wav.writeframes(pcm.tobytes())
-        peak_out=max(abs(v*gain) for v in clip)
-        rms=math.sqrt(sum((v*gain)**2 for v in clip)/len(clip))
         record=dict(file=f'assets/sounds/{name}.wav',source=identity,trim=[start,end],
-            modifications='mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain only',
+            modifications='mono 48kHz PCM16; DC removal; 0.5ms entrance/5ms exit (20ms exit on landing); bounded peak/active-RMS gain; +6 dB accepted listening adjustment',
             peak_dbfs=round(20*math.log10(peak_out),2),rms_dbfs=round(20*math.log10(rms),2),sha256=digest(path.read_bytes()))
         outputs.append(record)
         print(f"{name}: {len(clip)/RATE:.3f}s, peak {record['peak_dbfs']:.2f}dBFS, RMS {record['rms_dbfs']:.2f}dBFS")
@@ -98,7 +105,7 @@ def main():
     (args.output/'assets/weapons.json').write_text(json.dumps(pack,indent=2)+'\n',encoding='utf-8',newline='\n')
     provenance=dict(format='Public Freesound HQ MP3 previews, not original WAV masters',
         processor=subprocess.run([args.ffmpeg,'-version'],check=True,capture_output=True,text=True).stdout.splitlines()[0],
-        sources=[s for s in SOURCES if s['id'] in used],outputs=outputs)
+        sources=[s for s in SOURCES if s['id'] in used],outputs=outputs,playback_gain_db=PLAYBACK_GAIN_DB)
     (args.output/'SOURCES.json').write_text(json.dumps(provenance,indent=2)+'\n',encoding='utf-8',newline='\n')
     manifest=dict(schema_version=1,id=NAMESPACE,version='1.0.0',api=1,name='Brick Destruction Audio',
         description='Restrained recorded plastic clicks and clatter for local brick destruction.',

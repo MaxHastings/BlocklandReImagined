@@ -568,7 +568,7 @@ impl BrickDebris {
         // Independent render safety ceiling. Never charge member bricks to
         // the rigid-body limit. Normal quality changes preserve every member.
         if !self.sections.contains_key(&key)
-            && (self.sections.len() >= 1024
+            && (self.sections.len() >= bri_sim::presentation::MAX_SECTION_GROUPS
                 || self
                     .sections
                     .values()
@@ -582,7 +582,7 @@ impl BrickDebris {
             // old presentation before discarding newly removed material.
             while self.sections.values().map(|s| s.expected).sum::<usize>() + pieces[0].members
                 > MAX_VISIBLE
-                || self.sections.len() >= 1024
+                || self.sections.len() >= bri_sim::presentation::MAX_SECTION_GROUPS
             {
                 let Some(oldest) = self
                     .sections

@@ -14,6 +14,9 @@ Inputs are publicly playable HQ MP3 previews, not the original WAV masters.
 Exact source links, input/output SHA256, trims and modifications are in SOURCES.json.
 No generated audio or synthetic replacement sound was used. Processing is mono
 conversion, resampling, DC removal, tiny entrance/exit fades and bounded gain.
+The exports include the +6 dB listening adjustment Maxwell accepted in Preview 11.
+This preserves the relative snap/contact/landing levels and the existing voice
+limits. The preparation tool rejects exports that would clip at the new gain.
 
 The mixer still owns spatialization, room/sound-carry effects and volume controls.
 The authored ranges are 24 units for snaps,18 for individual contacts and40 for

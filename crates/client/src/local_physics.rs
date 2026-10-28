@@ -137,6 +137,22 @@ impl LocalRegion {
     }
 }
 impl Surroundings {
+    /// A newly restored/inserted solid can overlap a sleeper without an active
+    /// dynamic pair to wake it. Query the existing broad phase at that solid,
+    /// instead of restarting the sleep timer for the whole debris world.
+    fn insert_static(world: &mut PhysicsWorld, collider: ColliderBuilder) -> ColliderHandle {
+        let collider = collider.build();
+        let affected: Vec<_> = world
+            .intersect_aabb_conservative(collider.compute_aabb(), QueryFilter::only_dynamic())
+            .filter_map(|(_, c)| c.parent())
+            .filter(|h| world.bodies[*h].is_sleeping())
+            .collect();
+        let handle = world.insert_collider(collider, None);
+        for body in affected {
+            world.wake_up(body, true);
+        }
+        handle
+    }
     fn touch(&mut self, low: Vec3, high: Vec3) {
         self.cache_area = Some(
             self.cache_area
@@ -148,8 +164,8 @@ impl Surroundings {
     }
     /// Put the map in (again whenever its solid shapes changed: another
     /// map, or a shape smashed), and forget the nearby bricks the build no
-    /// longer has where they were made solid (waking every body, which may
-    /// have lost its support). Bricks that did not change stay: a build
+    /// longer has where they were made solid. Rapier wakes the bodies touching
+    /// removed colliders on the next step. Bricks that did not change stay: a build
     /// changing anywhere (a door, a blinking light) neither rebuilds them
     /// nor wakes resting bodies. Returns whether the build changed, when
     /// [`Self::load`] should look round resting bodies too. Call before it.
@@ -197,9 +213,6 @@ impl Surroundings {
                 world.remove_collider(handle);
             }
         }
-        if !stale.is_empty() {
-            world.wake_up_all(true);
-        }
         true
     }
     /// Make bricks and terrain solid inside each box (low, high), except
@@ -218,8 +231,7 @@ impl Surroundings {
                 if skip(id) || self.statics.contains_key(&Static::Brick(id)) {
                     continue;
                 }
-                let handle =
-                    world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
+                let handle = Self::insert_static(world, ColliderBuilder::new(shape).position(pose));
                 self.statics.insert(Static::Brick(id), Some(handle));
                 added += 1;
             }
@@ -302,7 +314,7 @@ impl Surroundings {
                         tile.blocked = Some((id, shape, pose));
                         return Ok(false);
                     }
-                    let h = world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
+                    let h = Self::insert_static(world, ColliderBuilder::new(shape).position(pose));
                     self.statics.insert(Static::Brick(id), Some(h));
                 }
                 _ => {}
@@ -355,7 +367,7 @@ impl Surroundings {
             1 => shapes.pop().map(|(_, s)| s),
             _ => Some(SharedShape::compound(shapes)),
         };
-        let handle = shape.map(|shape| world.insert_collider(ColliderBuilder::new(shape), None));
+        let handle = shape.map(|shape| Self::insert_static(world, ColliderBuilder::new(shape)));
         self.statics.insert(Static::Terrain(cx, cz), handle);
         Ok(())
     }
@@ -379,7 +391,6 @@ impl Surroundings {
         for handle in self.statics.drain().filter_map(|(_, h)| h) {
             world.remove_collider(handle);
         }
-        world.wake_up_all(true);
     }
     /// Bricks and terrain patches solid right now.
     pub fn len(&self) -> usize {
