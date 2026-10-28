@@ -14,28 +14,51 @@ const CLIPS: [&[u8]; 4] = [
 // Maxwell's -1.5 dB adjustment after the first base-game playtest. Contact
 // gain remains +2.5 dB, making the combined change +1 dB over original F.
 const PROFILE_VOLUME: f32 = 0.841_395_14;
+const LAND_ID: &str = "bri:foley/blockhead/land_01";
+const LAND_FILE: &str = "sounds/blockhead/land_01.wav";
+const LAND_RESOURCE: &str = "bri/foley/blockhead/land_01.wav";
+const LAND_CLIP: &[u8] = include_bytes!("../../../assets/blockhead-footsteps/land_01.wav");
 
 pub fn install(pack: &mut Pack, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out.join("sounds/blockhead"))?;
     for (index, bytes) in CLIPS.into_iter().enumerate() {
         let id = format!("bri:footsteps/blockhead/step_{:02}", index + 1);
         let file = format!("sounds/blockhead/step_{:02}.wav", index + 1);
-        ensure!(!pack.sounds.contains_key(&id), "duplicate base sound {id}");
-        std::fs::write(out.join(&file), bytes)?;
-        pack.sounds.insert(
-            id.clone(),
-            serde_json::from_value(serde_json::json!({
-                "file":file, "volume":PROFILE_VOLUME
-            }))?,
-        );
-        pack.resources.push(Resource {
-            path: format!("bri/foley/blockhead/step_{:02}.wav", index + 1),
-            sha256: super::hash(bytes),
-            native_file: Some(file),
-            diagnostics: Vec::new(),
-            package: None,
-        });
+        install_sound(
+            pack,
+            out,
+            &id,
+            &file,
+            &format!("bri/foley/blockhead/step_{:02}.wav", index + 1),
+            bytes,
+            PROFILE_VOLUME,
+        )?;
     }
+    install_sound(pack, out, LAND_ID, LAND_FILE, LAND_RESOURCE, LAND_CLIP, 1.0)
+}
+
+fn install_sound(
+    pack: &mut Pack,
+    out: &Path,
+    id: &str,
+    file: &str,
+    resource: &str,
+    bytes: &[u8],
+    volume: f32,
+) -> Result<()> {
+    ensure!(!pack.sounds.contains_key(id), "duplicate base sound {id}");
+    std::fs::write(out.join(file), bytes)?;
+    pack.sounds.insert(
+        id.into(),
+        serde_json::from_value(serde_json::json!({"file":file, "volume":volume}))?,
+    );
+    pack.resources.push(Resource {
+        path: resource.into(),
+        sha256: super::hash(bytes),
+        native_file: Some(file.into()),
+        diagnostics: Vec::new(),
+        package: None,
+    });
     Ok(())
 }
 
@@ -50,6 +73,9 @@ pub fn refresh(out: &Path) -> Result<Pack> {
         let path = format!("bri/foley/blockhead/step_{index:02}.wav");
         pack.resources.retain(|resource| resource.path != path);
     }
+    pack.sounds.remove(LAND_ID);
+    pack.resources
+        .retain(|resource| resource.path != LAND_RESOURCE);
     install(&mut pack, out)?;
     pack.validate()?;
     let temporary = out.join("weapons.foley.tmp");
@@ -72,7 +98,12 @@ mod tests {
         let policy: serde_json::Value = serde_json::from_str(include_str!(
             "../../../assets/blockhead-footsteps/sounds.json"
         ))?;
-        for id in policy["footsteps"].as_array().unwrap() {
+        for id in policy["footsteps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(std::iter::once(&policy["land"]))
+        {
             let id = id.as_str().unwrap();
             let sound: &SoundDef = &pack.sounds[id];
             let bytes = std::fs::read(out.join(&sound.file))?;

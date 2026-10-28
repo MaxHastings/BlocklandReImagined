@@ -1010,6 +1010,11 @@ mod tests {
         let standard = table.resolve(PlayerType::Standard.archetype());
         assert!(standard.sounds.jump.is_none());
         assert_eq!(standard.sounds.footsteps.len(), 4);
+        assert_eq!(
+            standard.sounds.land.as_deref(),
+            Some("bri:foley/blockhead/land_01")
+        );
+        assert!(horse.sounds.land.is_none());
         assert!(horse.sounds.footsteps.is_empty());
         let mut loud = horse.clone();
         loud.sounds.pain = Some("x".repeat(Sounds::MAX_NAME + 1));

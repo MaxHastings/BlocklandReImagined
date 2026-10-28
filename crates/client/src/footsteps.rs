@@ -89,7 +89,7 @@ struct Walker {
     covered: f32,
     variants: Variants,
     grounded: bool,
-    /// The fastest it fell since it last stood.
+    /// Downward speed in the last airborne sample, before touchdown.
     falling: f32,
     /// Whether the last frame's jump take-off was already heard.
     airborne: bool,
@@ -260,7 +260,7 @@ impl Footsteps {
             walker.falling = if player.grounded {
                 0.0
             } else {
-                walker.falling.max(-velocity.y)
+                (-velocity.y).max(0.0)
             };
             walker.grounded = player.grounded;
             // A body whose clips mark their footfalls steps on those instead
@@ -688,6 +688,41 @@ mod tests {
             assert!(
                 steps
                     .update(1.0 / 60.0, [blockhead], &archetypes, |_| "default".into())
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn slowing_a_fall_before_touchdown_does_not_bank_a_landing_impact() {
+        let archetypes = Archetypes::default();
+        let id = ArchetypeId(0);
+        for last_speed in [-1.0, 2.0] {
+            let mut steps = Footsteps::default();
+            for (speed, grounded) in [(-20.0, false), (last_speed, false), (0.0, true)] {
+                assert!(
+                    steps
+                        .update(
+                            1.0 / 60.0,
+                            [player(id, [0.0, speed, 0.0], grounded)],
+                            &archetypes,
+                            |_| "default".into()
+                        )
+                        .is_empty()
+                );
+            }
+        }
+        // Joining, standing, and small support fluctuations have no impact.
+        let mut steps = Footsteps::default();
+        for (speed, grounded) in [(0.0, true), (0.0, true), (-1.0, false), (0.0, true)] {
+            assert!(
+                steps
+                    .update(
+                        1.0 / 60.0,
+                        [player(id, [0.0, speed, 0.0], grounded)],
+                        &archetypes,
+                        |_| "default".into()
+                    )
                     .is_empty()
             );
         }
