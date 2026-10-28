@@ -27,7 +27,12 @@ For an existing generated content directory use its absolute path as `--output`.
 It is a listening handoff, not evidence that every clip has been auditioned or
 cleared. The processing is mono PCM16/22.05 kHz, explicit catalog excerpts,
 silence trimming with margins, DC removal, bounded RMS/peak normalization and
-6 ms fades. No synthesized voice, claimed impersonation or generated substitute
+6 ms fades. The target RMS is 0.16 (about -15.9 dBFS), bounded by a 0.88
+sample peak and an 8x normalization limit; high-crest recordings can remain
+below that target. Profile and reaction gains are unity, and speech uses the
+ordinary 10/60-unit positional range. This avoids the earlier double gain
+reduction and shorter range that made voices hard to hear during combat.
+No synthesized voice, claimed impersonation or generated substitute
 is used. Long recordings retain their full originals in the private cache.
 
 The 18 requested headline references have source recordings in the catalog.
