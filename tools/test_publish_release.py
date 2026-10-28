@@ -89,6 +89,15 @@ class NotesTests(unittest.TestCase):
 
 
 class BundleInputTests(unittest.TestCase):
+    def test_release_bundle_validation_has_its_cargo_metadata_dependencies(self):
+        workflows = pathlib.Path(__file__).resolve().parents[1] / '.github/workflows'
+        for name in ['release.yml', 'mac-release-asset.yml', 'linux-release-asset.yml']:
+            with self.subTest(workflow=name):
+                text = (workflows / name).read_text(encoding='utf-8')
+                fetch = text.index('- name: Fetch the Add-On bundle')
+                self.assertLess(text.index('- uses: dtolnay/rust-toolchain@'), fetch)
+                self.assertLess(text.index('- uses: mozilla-actions/sccache-action@'), fetch)
+
     def test_release_refreshes_conversion_dependencies_and_ignores_documentation(self):
         self.assertTrue(release.bundle_inputs_changed(['crates/addon-import/ports/x/entry.json']))
         self.assertTrue(release.bundle_inputs_changed(['packages/default-addons.json']))

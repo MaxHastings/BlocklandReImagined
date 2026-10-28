@@ -56,6 +56,14 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
+      # Bundle freshness queries Cargo metadata, so install its toolchain and
+      # configured compiler wrapper before fetching/validating the bundle.
+      - uses: dtolnay/rust-toolchain@1.93
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-mac
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
       # The same private content and credited original Add-Ons the Windows
       # build fetches; publish_release.py checks the three zips' base content
       # is byte-identical before a release is published.
@@ -68,12 +76,6 @@ jobs:
         run: python3 tools/addon_bundle.py fetch
         env:
           GITHUB_TOKEN: ${{ github.token }}
-
-      - uses: dtolnay/rust-toolchain@1.93
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-mac
-      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Build the game, Add-On importer and modder tools
         run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
