@@ -578,23 +578,25 @@ impl Session {
         self.dirty.extend(ids.iter().copied());
         Ok(())
     }
+    /// None defers an untouched hit until next tick's presentation/mutation
+    /// allowance. Some(empty) is a permanent refusal or a protected brick.
     fn apply_damage(
         &mut self,
         job: &mut BlastJob,
         id: BrickId,
         probe: &SupportProbe,
         blast: super::debris::BrickBlast,
-    ) -> Result<Vec<BrickId>> {
+    ) -> Result<Option<Vec<BrickId>>> {
         if probe.exhausted {
             self.destruction.work.capacity_holds += 1;
-            return Ok(Vec::new());
+            return Ok(Some(Vec::new()));
         }
         let mut seeds = probe.neighbors.clone();
         let (_, protected) = self.remember_probe(id, probe);
         let original = self.simulation.state().bricks[&id].clone();
         let d = self.simulation.definitions.get(&original)?;
         if protected || d.indestructible || !original.colliding || !job.scope.allows(&original) {
-            return Ok(Vec::new());
+            return Ok(Some(Vec::new()));
         }
         let volume = d.mesh.footprint_studs[0] as f32
             * d.mesh.footprint_studs[1] as f32
@@ -623,7 +625,7 @@ impl Session {
             self.emit_brick_kill(cue);
         } else {
             if !d.is_plain_box() || original.print.is_some() {
-                return Ok(Vec::new());
+                return Ok(Some(Vec::new()));
             }
             let namespace = content_namespace(&original.definition);
             if self.destruction.palette_revision != self.simulation.definitions.entries.len() {
@@ -647,7 +649,6 @@ impl Session {
             let root = self.simulation.damage_parent(id).unwrap_or(id);
             let limit = PIECES_PER_BLAST
                 .saturating_sub(job.made)
-                .min(self.destruction.tick_pieces_left)
                 .min(MAX_PIECES.saturating_sub(self.simulation.damage_part_count()))
                 .min(
                     PIECES_PER_BLAST.saturating_sub(self.simulation.damage_family_part_count(root)),
@@ -663,8 +664,13 @@ impl Session {
                 limit,
             ) else {
                 self.destruction.work.capacity_holds += 1;
-                return Ok(Vec::new());
+                return Ok(Some(Vec::new()));
             };
+            if plan.standing.len() + plan.taken.len() > self.destruction.tick_pieces_left
+                || plan.taken.len() + 1 > self.cues.remaining().saturating_sub(16)
+            {
+                return Ok(None);
+            }
             let bricks: Vec<_> = plan
                 .standing
                 .iter()
@@ -674,14 +680,13 @@ impl Session {
                         .context("Missing planned size")
                 })
                 .collect::<Result<_>>()?;
-            if plan.taken.len() + 1 > self.cues.remaining().saturating_sub(16) {
-                self.destruction.work.capacity_holds += 1;
-                return Ok(Vec::new());
-            }
             let fresh_bytes: u64 = bricks.iter().map(|b| b.stored_bound()).sum();
-            if fresh_bytes > self.destruction.mutation_bytes_left {
+            if fresh_bytes > MUTATION_BYTES_PER_TICK.saturating_sub(original.stored_bound()) {
                 self.destruction.work.capacity_holds += 1;
-                return Ok(Vec::new());
+                return Ok(Some(Vec::new()));
+            }
+            if fresh_bytes > self.destruction.mutation_bytes_left {
+                return Ok(None);
             }
             self.destruction.mutation_bytes_left -= fresh_bytes;
             let fresh = match self
@@ -695,7 +700,7 @@ impl Session {
                         &mut self.events.diagnostics,
                         format!("Split held without changing material: {error}"),
                     );
-                    return Ok(Vec::new());
+                    return Ok(Some(Vec::new()));
                 }
             };
             job.made += fresh.len();
@@ -729,7 +734,7 @@ impl Session {
                 self.fire_input(root, "onBlownUp", Some(job.scope.source));
             }
         }
-        Ok(seeds)
+        Ok(Some(seeds))
     }
     pub(super) fn step_damage_support(&mut self) -> Result<()> {
         if self.destruction.pending.is_empty()
@@ -838,7 +843,13 @@ impl Session {
                             break;
                         } else {
                             self.destruction.mutation_bytes_left -= bytes;
-                            let seeds = self.apply_damage(&mut job, id, &probe, blast)?;
+                            let Some(seeds) = self.apply_damage(&mut job, id, &probe, blast)?
+                            else {
+                                self.destruction.mutation_bytes_left += bytes;
+                                job.current = Some((id, probe, blast));
+                                self.destruction.pending.push_back(job);
+                                break;
+                            };
                             commits -= 1;
                             let retained_seeds: usize = self
                                 .destruction
@@ -983,7 +994,8 @@ impl Session {
                         || job.quads > crate::presentation::MAX_SECTION_QUADS.saturating_sub(quads)
                         || job.buckets
                             > crate::presentation::MAX_SECTION_BUCKETS.saturating_sub(buckets)
-                        || self.destruction.reservations.len() >= 64
+                        || self.destruction.reservations.len()
+                            >= crate::presentation::MAX_SECTION_GROUPS
                     {
                         // No destructive commitment without presentation capacity.
                         self.destruction.work.capacity_holds += 1;

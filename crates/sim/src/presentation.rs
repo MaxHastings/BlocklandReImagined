@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 pub const MAX_CUES: usize = 4096;
 pub const MAX_SECTION_MEMBERS: usize = 65_536;
+/// Shared metadata capacity; material/geometry admission has independent bounds.
+pub const MAX_SECTION_GROUPS: usize = 1024;
 pub const MAX_SECTION_LOOKS: usize = 256;
 pub const MAX_SECTION_QUADS: usize = 65_536;
 pub const MAX_SECTION_DRAW_QUADS: usize = 524_288;

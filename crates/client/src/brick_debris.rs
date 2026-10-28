@@ -854,9 +854,9 @@ impl BrickDebris {
         // drops steps, and debris must not outlive its time because of it.
         self.age(dt);
         let surroundings_span = crate::frame_trace::span("debris surroundings");
-        if self.surroundings.sync(&mut self.world, building) {
-            self.world.wake_up_all(true);
-        }
+        // Collider removal wakes its actual contacts in Rapier. Waking every
+        // body here kept unrelated settled piles active throughout a battle.
+        self.surroundings.sync(&mut self.world, building);
         drop(surroundings_span);
         if self.surroundings.full()
             && self
@@ -926,11 +926,29 @@ impl BrickDebris {
         }
         self.pushers.settle();
         if started.elapsed() >= std::time::Duration::from_millis(8) {
+            let (awake, waiting) = self
+                .bodies
+                .values()
+                .map(|b| b.handle)
+                .chain(self.chunk_handles())
+                .fold((0, 0), |(awake, waiting), h| {
+                    let b = &self.world.bodies[h];
+                    (
+                        awake + usize::from(b.is_enabled() && !b.is_sleeping()),
+                        waiting + usize::from(!b.is_enabled()),
+                    )
+                });
+            let staging = self
+                .sections
+                .values()
+                .filter(|s| !s.sealed || !s.gpu_ready)
+                .count();
             crate::frame_trace::note(format!(
-                "debris: {} loose bodies, {} chunk bodies, {} section members, {steps} fixed steps",
+                "debris: {} loose bodies, {} chunk bodies, {} section members, {awake} awake, {waiting} waiting for collision, {staging} staged sections, {} static colliders, {steps} fixed steps",
                 self.bodies.len(),
                 self.chunk_handles().count(),
                 self.section_piece_count(),
+                self.surroundings.len(),
             ));
         }
         Ok(())
@@ -2194,6 +2212,61 @@ pub(crate) mod tests {
         for (now, then) in debris.positions().iter().zip(&settled) {
             assert!(now.distance(*then) < 0.05, "crept from {then} to {now}");
         }
+    }
+
+    #[test]
+    fn nearby_edits_leave_unaffected_rubble_asleep_but_removed_support_drops_it() {
+        let (mut building, mut world) = building(&[(100, [0., 2.3, 0.]), (101, [6., 0.3, 0.])]);
+        let mut debris = BrickDebris::new();
+        debris
+            .cues(
+                &[lying(1, [0., 2.9, 0.]), lying(2, [6., 0.9, 0.])],
+                &building,
+            )
+            .unwrap();
+        run(&mut debris, &building, 1.);
+        let handles: Vec<_> = debris.bodies.values().map(|b| b.handle).collect();
+        let before = debris.positions();
+        for h in &handles {
+            debris.world.bodies[*h].sleep();
+        }
+        // Both supports are inside the loaded surroundings. A paint update
+        // changes the query generation without changing either collider.
+        world.bricks.get_mut(&100).unwrap().color ^= 1;
+        building.sync_world(&world).unwrap();
+        debris.advance(1. / 60., &building).unwrap();
+        assert!(
+            handles
+                .iter()
+                .all(|h| debris.world.bodies[*h].is_sleeping()),
+            "paint must not wake a settled pile"
+        );
+        assert_eq!(before, debris.positions());
+
+        world.bricks.remove(&100);
+        building.sync_world(&world).unwrap();
+        run(&mut debris, &building, 0.4);
+        assert!(
+            debris.positions()[0].y < before[0].y - 0.5,
+            "removing the actual support must wake and drop its rubble"
+        );
+        assert!(
+            debris.world.bodies[handles[1]].is_sleeping(),
+            "removing a separate support must not wake unrelated rubble"
+        );
+        assert_eq!(before[1], debris.positions()[1]);
+
+        // Inserting a new brick overlapping a sleeper must still displace it.
+        world.bricks.insert(
+            102,
+            bri_world::Brick::new(ContentRef::Resolved("brick".into()), [6., 0.9, 0.], 1),
+        );
+        building.sync_world(&world).unwrap();
+        run(&mut debris, &building, 0.25);
+        assert!(
+            debris.positions()[1].distance(before[1]) > 0.05,
+            "new solid geometry must reach sleeping rubble too"
+        );
     }
 
     #[test]

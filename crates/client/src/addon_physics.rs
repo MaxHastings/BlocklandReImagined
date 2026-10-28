@@ -693,7 +693,9 @@ impl AddOnPhysics {
         }
         let rebuilt = self.surroundings.sync(&mut self.world, building);
         if rebuilt {
-            // A brick that appeared under or in a resting body wakes it.
+            // Prepare new solids near sleepers. Surroundings owns local
+            // wake-up on insertion; a new nearby non-touching brick must not
+            // restart this body's sleep timer.
             for body in self.bodies.values() {
                 let rb = &self.world.bodies[body.handle];
                 if !rb.is_sleeping() {
@@ -701,13 +703,8 @@ impl AddOnPhysics {
                 }
                 let around =
                     Surroundings::reach(vec3(rb.translation()), Vec3::ZERO, body.extent, 0.0);
-                if self
-                    .surroundings
-                    .load(&mut self.world, building, &[around], |_| false)?
-                    > 0
-                {
-                    self.world.wake_up(body.handle, true);
-                }
+                self.surroundings
+                    .load(&mut self.world, building, &[around], |_| false)?;
             }
         }
         self.accumulator += dt;
