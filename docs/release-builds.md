@@ -42,7 +42,7 @@ names), correct any recorded state that has gone stale, and note in
 That page is where a modder learns whether their download has a seam.
 
 The loopback-join release smoke needs an original v20 Add-On archive and a GPU,
-so it stays on the PC. Tag a commit that passed `tools/gate.py`, which already
+so it stays on the PC. Tag a commit that passed `tools/gate.py --full`, which already
 ran every content test on it.
 
 ### Old saves before a release
@@ -194,7 +194,7 @@ python tools/release.py <new-version> --branch codex/<release-branch>
    `--upload` to upload regardless.)
 2. **Release builds start**: a build-only `release.yml` run at the branch,
    Windows, macOS and Linux in parallel, while the gate runs.
-3. **The gate** (`tools/gate.py`) on that commit. It goes first: any queued
+3. **The extended gate** (`tools/gate.py --full`) on that commit. It goes first: any queued
    perf or benchmark runs on the PC wait until it finishes.
 4. **Push and tag.** The exact gated commit is pushed to main through the
    pre-push hook and tagged with the version. The hook can reuse an exact gate

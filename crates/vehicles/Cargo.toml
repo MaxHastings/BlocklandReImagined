@@ -17,3 +17,10 @@ bri-motor = { path = "../motor" }
 bri-package = { path = "../package" }
 bri-physics = { path = "../physics" }
 [dev-dependencies]
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "vehicle_probe"
+path = "src/bin/vehicle_probe.rs"
+test = false

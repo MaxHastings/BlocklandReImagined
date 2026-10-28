@@ -22,3 +22,10 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "stresslab-soak"
+path = "src/bin/stresslab-soak.rs"
+test = false

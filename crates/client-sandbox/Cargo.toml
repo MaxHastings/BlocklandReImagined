@@ -30,3 +30,10 @@ wgpu = { workspace = true, features = ["naga-ir"] }
 [dev-dependencies]
 tempfile.workspace = true
 wat = "=1.248.0"
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "bri-addon-preview"
+path = "src/bin/bri-addon-preview.rs"
+test = false

@@ -28,14 +28,24 @@ bytemuck = { workspace = true, optional = true }
 [[bin]]
 name = "ui_gallery"
 required-features = ["gpu"]
+test = false
 
 [[bin]]
 name = "ui_runtime_probe"
 required-features = ["gpu"]
+test = false
 
 [[bin]]
 name = "ml_text_probe"
 required-features = ["gpu"]
+test = false
 
 [dev-dependencies]
 bri-package = { path = "../package" }
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "controls_probe"
+path = "src/bin/controls_probe.rs"
+test = false

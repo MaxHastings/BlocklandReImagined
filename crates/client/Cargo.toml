@@ -75,3 +75,40 @@ zip.workspace = true
 # Paused clocks for the loading watchdog tests.
 tokio = { workspace = true, features = ["test-util"] }
 bri-addon-import = { path = "../addon-import" }
+
+# CLI probes have no unit tests; keep building the actual executables,
+# without linking duplicate empty libtest harnesses.
+[[bin]]
+name = "brick_load_bench"
+path = "src/bin/brick_load_bench.rs"
+test = false
+
+[[bin]]
+name = "debris_probe"
+path = "src/bin/debris_probe.rs"
+test = false
+
+[[bin]]
+name = "lighting_probe"
+path = "src/bin/lighting_probe.rs"
+test = false
+
+[[bin]]
+name = "perf_probe"
+path = "src/bin/perf_probe.rs"
+test = false
+
+[[bin]]
+name = "saves_host_probe"
+path = "src/bin/saves_host_probe.rs"
+test = false
+
+[[bin]]
+name = "scene_snapshot"
+path = "src/bin/scene_snapshot.rs"
+test = false
+
+[[bin]]
+name = "soccer_probe"
+path = "src/bin/soccer_probe.rs"
+test = false

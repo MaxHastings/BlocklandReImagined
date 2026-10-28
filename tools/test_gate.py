@@ -6,8 +6,29 @@ from unittest.mock import patch
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import gate
+
+
+class GateScope(unittest.TestCase):
+    def test_ordinary_commit_uses_scoped_checks_and_full_is_explicit(self):
+        def git(*args):
+            return {"rev-parse": "base", "rev-list": "tip", "diff": "tools/check.py"}.get(args[0], "")
+        with patch.object(gate, "git", side_effect=git), \
+             patch.object(gate.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
+             patch.object(gate, "history_check", return_value=[]), \
+             patch.object(gate, "oversized_blobs", return_value=[]), \
+             patch.object(gate, "gate_root", return_value=Path("unused")), \
+             patch.object(gate, "scoped_gate", return_value=True) as scoped, \
+             patch.object(gate, "full_gate", return_value=True) as full:
+            with patch.object(gate, "FULL_GATE", False):
+                self.assertTrue(gate.gate_commit("tip", False))
+                scoped.assert_called_once()
+                full.assert_not_called()
+            with patch.object(gate, "FULL_GATE", True):
+                self.assertTrue(gate.gate_commit("tip", False))
+                full.assert_called_once_with("tip", Path("unused"), ["tools/check.py"])
 
 
 class ProcessExit(unittest.TestCase):
@@ -71,6 +92,28 @@ class TestPlanning(unittest.TestCase):
 
 
 class CiShards(unittest.TestCase):
+    def test_compile_groups_select_exactly_the_shards_packages_and_targets(self):
+        # --workspace --lib used to compile all three libraries on every shard.
+        kinds = {"a/lib": "lib", "b/lib": "lib", "c/lib": "lib",
+                 "a/flow": "test", "b/flow": "test", "c/other": "test"}
+        mine = {"a/lib", "b/lib", "a/flow"}
+        groups = gate.ci_build_groups(mine, kinds)
+        built = []
+        for packages, filters in groups:
+            for label, kind in kinds.items():
+                package, name = label.split("/")
+                selected = "--lib" in filters if kind == "lib" else any(
+                    filters[i:i + 2] == [f"--{kind}", name] for i in range(len(filters) - 1))
+                if package in packages and selected:
+                    built.append(label)
+        self.assertCountEqual(built, mine)
+        self.assertFalse(any("c" in packages for packages, _ in groups))
+
+    def test_library_only_packages_share_one_build_graph(self):
+        kinds = {"a/lib": "lib", "b/lib": "lib", "c/lib": "lib"}
+        self.assertEqual(gate.ci_build_groups({"a/lib", "b/lib"}, kinds),
+                         [(["a", "b"], ["--lib"])])
+
     def test_the_shards_run_each_target_exactly_once(self):
         labels = [f"crate{i}/t" for i in range(23)]
         parts = [gate.shard(labels, (k, 4)) for k in range(4)]
