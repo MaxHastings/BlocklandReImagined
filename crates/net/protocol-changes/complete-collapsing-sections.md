@@ -1,0 +1,1 @@
+BrickDeath::Section adds total membership, shape bounds and broken-base pivot to existing one-shot removal cues. This supports complete local chunk presentation and shape-aware toppling; no physics pose stream.

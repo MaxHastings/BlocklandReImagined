@@ -7,7 +7,7 @@ pub const MAX_CUES: usize = 4096;
 pub const MAX_BRICK_FORCE: f32 = 1000.;
 /// How clients draw a brick's death. v20 draws the two differently
 /// (`blocklandv20.exe`; see docs/audits/brick-damage.md).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BrickDeath {
     /// `killBrick` (hammer, wands, undo, chain kills): the brick hops,
     /// spins and falls straight through everything while it fades. It
@@ -21,9 +21,15 @@ pub enum BrickDeath {
     /// enough to crack comes apart into a few shards, as plastic does
     /// under a hard blow.
     Hit,
-    /// One detached stud-connected section. The group is its lowest brick
-    /// ID, not a physics handle. All poses and landing breakup are local.
-    Section { group: u64, started: u64 },
+    /// One detached stud-connected section. The group is a generation ID,
+    /// not a physics handle. All poses and landing breakup are local.
+    Section {
+        group: u64,
+        started: u64,
+        members: u32,
+        half: [f32; 3],
+        pivot: [f32; 3],
+    },
     /// Hidden original of a stud partition; no duplicate debris is drawn.
     Partition,
 }
@@ -218,12 +224,26 @@ impl Cue {
     pub fn validate(&self) -> Result<()> {
         let text = |s: &str| s.len() <= 128 && !s.chars().any(char::is_control);
         if let CueKind::BrickKill {
-            death: BrickDeath::Section { group, started },
+            death:
+                BrickDeath::Section {
+                    group,
+                    started,
+                    members,
+                    half,
+                    pivot,
+                },
             ..
         } = &self.kind
         {
             ensure!(
-                *group > 0 && *started <= self.tick,
+                *group > 0
+                    && *started <= self.tick
+                    && *members > 0
+                    && (*members as usize) <= bri_world::MAX_BRICKS
+                    && half
+                        .iter()
+                        .all(|v| v.is_finite() && *v > 0. && *v <= 1_000_000.)
+                    && pivot.iter().all(|v| v.is_finite() && v.abs() <= 1_000_000.),
                 "Invalid section generation"
             );
         }

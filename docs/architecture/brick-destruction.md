@@ -97,17 +97,49 @@ Respawns drain 128 originals per tick, with collisions refreshed in a batch.
 Nearby topology changes invalidate pending proofs; unrelated far builds do not.
 Permissions/round attribution are captured on admission; reset cancels stale work.
 
-An intact client section uses a shared analytic fall/tumble transform, not a
-compound rigid body. Four local downward probes share 256 candidate steps per
-frame and pause before publishing untested motion. It breaks on upward floor
-contact into only its admitted original constituents. Side walls do not trigger
-breakup. There is no stress/weight solver, crushing, rubble planting or intact
-section interaction with players, weapons or portals. Constituent debris uses
-the existing local physics interactions after breakup. The existing 13-second
-lifetime includes the fall. Quality caps apply to members, not just group count.
-Retired groups reject late members instead of restarting their collapse; a late
-member after landing may be cosmetically omitted. Four probes are a deliberate
-cosmetic approximation, not exact rigid-body contact for an irregular tower.
+Client presentation separates visible material, assembly motion, and physics.
+Every admitted original member keeps its mesh, print, color and shape. A section
+shares one transform before landing. Its complete membership count, bounds and
+lowest footprint nearest the hit are fixed one-shot cue metadata, not a pose
+stream. Tall sections lean around that footprint before falling free; wide
+slabs drop and tilt; long narrow spans rotate. Eight cached actual member
+corners sweep to the next pose under a shared 256-candidate contact budget.
+Only upward floor contacts trigger landing; this remains cosmetic contact,
+not a structural solver or exact irregular-body collision.
+
+Late batches join the current falling or landed pose. Breakup waits for the
+reported total, so a landed first batch cannot discard later members. If a
+section is interrupted by world edits or cue delivery is incomplete, the
+received members retain their shared pose and fade normally rather than
+inventing missing art or restarting. Expired groups retain metadata for 30s.
+The normal 13-second visual lifetime includes the fall.
+
+After complete delivery, connected face-neighbor region growth plans compact
+assemblies with a shared 4096-candidate budget per frame, starting during the
+fall. Physics Quality controls target granularity (roughly sqrt(member count)
+at Best, scaled down at lower settings). All members stay visible, each with
+one assembly transform; original per-look mesh/texture instancing is reused.
+At most 64 assembly bodies share the existing global rigid-body budget with
+ordinary blast debris. Each assembly has one box proxy; assembly proxies
+ignore one another to prevent empty bounding-box overlap from exploding the
+structure. They collide with the map, surviving bricks and ordinary local
+pushers/debris. Sparse group contact is consequently approximate.
+
+Assembly collision streaming uses its swept oriented bounds, not a tower-sized
+sphere, and shares 512 work units per frame (16 per terrain tile). Motion waits
+while nearby collision is prepared. Sleeping/budget-evicted assemblies retain
+their last pose and all their visible members through the normal fade. Physics
+Off keeps the cheap intact fall/landing visual without independent bodies.
+There is a separate 65536-member render reservation and 1024-group metadata
+ceiling; excessive new groups are diagnosed and omitted as whole groups rather
+than arbitrarily truncating their members. This is not unlimited skyscraper
+rendering. Intact falling sections cannot crush, carry or block gameplay;
+post-landing assemblies remain entirely local, with no motion replication.
+
+Up to eight proved-loose server groups drain removals round-robin within the
+same existing 128-change tick budget. Proof discovery is still incremental;
+this removes delivery serialization, not the cost of proving connectivity.
+Nearby direct damage and authored edits both invalidate queued proofs.
 
 Compatible split sizes come from the same content namespace, cached only when
 an oversized plain brick needs them. Unsupported shapes/prints/catalog sizes

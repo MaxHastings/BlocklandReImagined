@@ -77,6 +77,42 @@ pub struct Surroundings {
     generation: u64,
 }
 
+/// Pausable collision streaming for a cosmetic assembly's actual swept box.
+/// No spherical reach proportional to the height of a tower.
+pub(crate) struct LocalRegion {
+    pub low: Vec3,
+    pub high: Vec3,
+    cursor: bri_sim::grid::QueryCursor,
+    bricks_done: bool,
+    tile: Option<(i32, i32)>,
+    first_z: i32,
+    last_x: i32,
+    last_z: i32,
+}
+impl LocalRegion {
+    pub fn new(low: Vec3, high: Vec3) -> Self {
+        let min = std::array::from_fn(|a| (low[a] / bri_sim::grid::CELL[a]).floor() as i32);
+        let max: [i32; 3] =
+            std::array::from_fn(|a| (high[a] / bri_sim::grid::CELL[a]).ceil() as i32 + 1);
+        let first_z = (low.z / TERRAIN_CHUNK).floor() as i32;
+        Self {
+            low,
+            high,
+            cursor: bri_sim::grid::QueryCursor::new(bri_sim::grid::Bounds {
+                min,
+                size: std::array::from_fn(|a| (max[a] - min[a]).max(1)),
+            }),
+            bricks_done: false,
+            tile: Some(((low.x / TERRAIN_CHUNK).floor() as i32, first_z)),
+            first_z,
+            last_x: (high.x / TERRAIN_CHUNK).floor() as i32,
+            last_z: (high.z / TERRAIN_CHUNK).floor() as i32,
+        }
+    }
+    pub fn contains(&self, low: Vec3, high: Vec3) -> bool {
+        low.cmpge(self.low).all() && high.cmple(self.high).all()
+    }
+}
 impl Surroundings {
     /// Put the map in (again whenever its solid shapes changed: another
     /// map, or a shape smashed), and forget the nearby bricks the build no
@@ -150,30 +186,73 @@ impl Surroundings {
             let chunk = |v: f32| (v / TERRAIN_CHUNK).floor() as i32;
             for cx in chunk(low.x)..=chunk(high.x) {
                 for cz in chunk(low.z)..=chunk(high.z) {
-                    if self.statics.contains_key(&Static::Terrain(cx, cz)) {
-                        continue;
-                    }
-                    let min = Vec3::new(cx as f32, 0.0, cz as f32) * TERRAIN_CHUNK;
-                    let max = min + Vec3::new(TERRAIN_CHUNK, 0.0, TERRAIN_CHUNK);
-                    // One patch per terrain field; overlapping fields share
-                    // the chunk through a compound.
-                    let mut shapes: Vec<_> = building
-                        .terrain_patches(min, max)?
-                        .into_iter()
-                        .map(|p| (Pose::IDENTITY, SharedShape::new(p)))
-                        .collect();
-                    let shape = match shapes.len() {
-                        0 => None,
-                        1 => shapes.pop().map(|(_, s)| s),
-                        _ => Some(SharedShape::compound(shapes)),
-                    };
-                    let handle =
-                        shape.map(|shape| world.insert_collider(ColliderBuilder::new(shape), None));
-                    self.statics.insert(Static::Terrain(cx, cz), handle);
+                    self.load_terrain_tile(world, building, cx, cz)?;
                 }
             }
         }
         Ok(added)
+    }
+    pub(crate) fn load_region(
+        &mut self,
+        world: &mut PhysicsWorld,
+        building: &Building,
+        region: &mut LocalRegion,
+        work: &mut u32,
+        skip: impl Fn(BrickId) -> bool,
+    ) -> Result<bool> {
+        while *work > 0 && !region.bricks_done {
+            *work -= 1;
+            match building.section_solid_step(&mut region.cursor) {
+                None => region.bricks_done = true,
+                Some(Some((id, shape, pose)))
+                    if !skip(id) && !self.statics.contains_key(&Static::Brick(id)) =>
+                {
+                    let h = world.insert_collider(ColliderBuilder::new(shape).position(pose), None);
+                    self.statics.insert(Static::Brick(id), Some(h));
+                }
+                _ => {}
+            }
+        }
+        while *work >= 16 && region.bricks_done {
+            let Some((cx, cz)) = region.tile else {
+                return Ok(true);
+            };
+            *work -= 16;
+            self.load_terrain_tile(world, building, cx, cz)?;
+            let (nx, nz) = if cz < region.last_z {
+                (cx, cz + 1)
+            } else {
+                (cx + 1, region.first_z)
+            };
+            region.tile = (nx <= region.last_x).then_some((nx, nz));
+        }
+        Ok(region.bricks_done && region.tile.is_none())
+    }
+    fn load_terrain_tile(
+        &mut self,
+        world: &mut PhysicsWorld,
+        building: &Building,
+        cx: i32,
+        cz: i32,
+    ) -> Result<()> {
+        if self.statics.contains_key(&Static::Terrain(cx, cz)) {
+            return Ok(());
+        }
+        let min = Vec3::new(cx as f32, 0., cz as f32) * TERRAIN_CHUNK;
+        let max = min + Vec3::new(TERRAIN_CHUNK, 0., TERRAIN_CHUNK);
+        let mut shapes: Vec<_> = building
+            .terrain_patches(min, max)?
+            .into_iter()
+            .map(|p| (Pose::IDENTITY, SharedShape::new(p)))
+            .collect();
+        let shape = match shapes.len() {
+            0 => None,
+            1 => shapes.pop().map(|(_, s)| s),
+            _ => Some(SharedShape::compound(shapes)),
+        };
+        let handle = shape.map(|shape| world.insert_collider(ColliderBuilder::new(shape), None));
+        self.statics.insert(Static::Terrain(cx, cz), handle);
+        Ok(())
     }
     /// The box round a moving body that must be solid for the next
     /// `seconds` of its motion.

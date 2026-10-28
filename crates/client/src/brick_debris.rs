@@ -90,7 +90,7 @@ const DENSITY: f32 = 5.0;
 const MAX_LOOKS: usize = 64;
 /// Most instances one look draws: bodies and ghosts within the limit, plus
 /// falling bricks.
-const MAX_INSTANCES: usize = 3 * MAX_LIMIT;
+const MAX_INSTANCES: usize = sections::MAX_VISIBLE + 3 * MAX_LIMIT;
 
 // A killed brick, from `blocklandv20.exe`: the fxDTSBrick death update
 // (0x5399a8-0x539c0a) throws it; its advance (0x53cfa9-0x53d11c) moves it
@@ -321,19 +321,8 @@ impl BrickDebris {
     /// removed before a frame drew them just go.
     fn evict_to(&mut self, keep: usize) -> u64 {
         let mut gone = 0;
-        while self.section_piece_count() > keep {
-            let key = *self
-                .sections
-                .iter()
-                .find(|(_, s)| !s.pieces.is_empty())
-                .expect("sections over limit")
-                .0;
-            let section = self.sections.get_mut(&key).unwrap();
-            gone += section.pieces.len() as u64;
-            section.pieces.clear();
-            section.landed = true;
-        }
-        let keep = keep.saturating_sub(self.section_piece_count());
+        gone += self.freeze_chunks(keep);
+        let keep = keep.saturating_sub(self.chunk_handles().count());
         while self.bodies.len() > keep {
             let (_, oldest) = self.bodies.pop_first().expect("bodies over the limit");
             let rb = &self.world.bodies[oldest.handle];
@@ -362,7 +351,7 @@ impl BrickDebris {
         self.falling.len()
     }
     pub fn len(&self) -> usize {
-        self.bodies.len() + self.section_piece_count()
+        self.bodies.len() + self.chunk_handles().count()
     }
     pub fn is_empty(&self) -> bool {
         self.bodies.is_empty() && self.section_piece_count() == 0
@@ -480,13 +469,19 @@ impl BrickDebris {
                 print: print.clone(),
                 shard: None,
             };
-            if let BrickDeath::Section { group, started } = death {
+            if let BrickDeath::Section {
+                group,
+                started,
+                members,
+                half: section_half,
+                pivot,
+            } = death
+            {
                 self.surroundings.forget_brick(&mut self.world, *brick);
                 sections
                     .entry((*started, *group))
                     .or_default()
                     .push(SectionPiece {
-                        cue: cue.id,
                         brick: *brick,
                         look,
                         offset: Vec3::from(cue.position),
@@ -494,6 +489,9 @@ impl BrickDebris {
                         half,
                         origin: Vec3::from(*origin),
                         delay: cue.tick.saturating_sub(*started) as f32 / 120.0,
+                        members: *members as usize,
+                        section_half: Vec3::from(*section_half),
+                        pivot: Vec3::from(*pivot),
                     });
                 spawned += 1;
                 continue;
@@ -534,7 +532,7 @@ impl BrickDebris {
             // room for its shards.
             let center = Vec3::from(cue.position);
             let turn = Quat::from_rotation_y(-f32::from(*quarter_turns) * FRAC_PI_2);
-            let available = self.limit.saturating_sub(self.section_piece_count());
+            let available = self.limit.saturating_sub(self.chunk_handles().count());
             if available == 0 {
                 self.diagnostics.skipped += 1;
                 continue;
@@ -742,16 +740,15 @@ impl BrickDebris {
         // Lifetimes run on frame time, not simulated steps: a slow frame
         // drops steps, and debris must not outlive its time because of it.
         self.age(dt);
+        if self.surroundings.sync(&mut self.world, building) {
+            self.world.wake_up_all(true);
+        }
         self.advance_sections(dt, building)?;
         if self.bodies.is_empty() && self.section_piece_count() == 0 {
             self.accumulator = 0.0;
             self.surroundings.clear(&mut self.world);
             self.pushers.clear(&mut self.world);
             return Ok(());
-        }
-        // Bricks changed: resting debris looks again for its support.
-        if self.surroundings.sync(&mut self.world, building) {
-            self.world.wake_up_all(true);
         }
         self.accumulator += dt;
         let mut steps = (self.accumulator / STEP) as u32;
@@ -773,7 +770,10 @@ impl BrickDebris {
                 true => Vec::new(),
                 false => crate::local_physics::middles(
                     &self.world,
-                    self.bodies.values().map(|b| b.handle),
+                    self.bodies
+                        .values()
+                        .map(|b| b.handle)
+                        .chain(self.chunk_handles()),
                 ),
             };
             self.world.step();
@@ -786,11 +786,14 @@ impl BrickDebris {
     /// Only those near debris take part; they are kinematic, so debris
     /// moves out of their way and never moves them.
     pub fn push(&mut self, pushers: &[Pusher]) {
-        let (world, bodies) = (&mut self.world, &self.bodies);
-        let centers: Vec<Vec3> = bodies
+        let centers: Vec<Vec3> = self
+            .bodies
             .values()
-            .map(|b| Vec3::from_array(world.bodies[b.handle].translation().to_array()))
+            .map(|b| b.handle)
+            .chain(self.chunk_handles())
+            .map(|h| Vec3::from_array(self.world.bodies[h].translation().to_array()))
             .collect();
+        let world = &mut self.world;
         self.pushers.update(world, pushers, |p| {
             let reach = PUSHER_REACH + p.half.max_element();
             centers.iter().any(|c| c.distance(p.center) < reach)
@@ -802,9 +805,11 @@ impl BrickDebris {
         let owners: HashMap<RigidBodyHandle, u64> = self
             .bodies
             .values()
-            .map(|b| {
-                let (index, generation) = b.handle.0.into_raw_parts();
-                (b.handle, u64::from(generation) << 32 | u64::from(index))
+            .map(|b| b.handle)
+            .chain(self.chunk_handles())
+            .map(|handle| {
+                let (index, generation) = handle.0.into_raw_parts();
+                (handle, u64::from(generation) << 32 | u64::from(index))
             })
             .collect();
         for strike in self.shots.strike(&self.world, shots, &owners) {
@@ -830,8 +835,14 @@ impl BrickDebris {
         {
             return;
         }
-        for body in self.bodies.values() {
-            let rb = &mut self.world.bodies[body.handle];
+        let handles: Vec<_> = self
+            .bodies
+            .values()
+            .map(|b| b.handle)
+            .chain(self.chunk_handles())
+            .collect();
+        for handle in handles {
+            let rb = &mut self.world.bodies[handle];
             let at = Vec3::from_array(rb.translation().to_array());
             let offset = at - origin;
             let distance = offset.length();
@@ -937,16 +948,15 @@ impl BrickDebris {
     /// What the physics has to chew on right now, for probes.
     pub fn work(&self) -> DebrisWork {
         DebrisWork {
-            bodies: self.bodies.len() + self.sections.len(),
+            bodies: self.bodies.len() + self.chunk_handles().count(),
             awake: self
                 .bodies
                 .values()
                 .filter(|b| !self.world.bodies[b.handle].is_sleeping())
                 .count()
                 + self
-                    .sections
-                    .values()
-                    .filter(|s| !s.pieces.is_empty())
+                    .chunk_handles()
+                    .filter(|&h| !self.world.bodies[h].is_sleeping())
                     .count(),
             statics: self.surroundings.len(),
             touching: self

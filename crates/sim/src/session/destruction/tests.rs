@@ -197,7 +197,7 @@ fn settle(s: &mut Session) {
         s.step_damage_support().unwrap();
         if s.destruction.pending.is_empty()
             && s.destruction.searches.is_empty()
-            && s.destruction.detach.is_none()
+            && s.destruction.detach.is_empty()
         {
             return;
         }
@@ -321,4 +321,72 @@ fn admitted_damage_keeps_its_owner_permissions_after_shooter_disconnects() {
     s.disconnect(owner).unwrap();
     settle(&mut s);
     assert!(!s.live_damage_brick(brick));
+}
+
+#[test]
+fn independent_sections_share_commit_budget_and_report_complete_shape() {
+    let (mut s, owner) = session();
+    let scope = s.damage_scope(owner, Vec3::ZERO).unwrap();
+    for group in 1..=2 {
+        let ids: BTreeSet<_> = (0..160)
+            .map(|i| {
+                place(
+                    &mut s,
+                    owner,
+                    "1x1x3",
+                    [group as f32 * 10. + 0.25, 5.3 + i as f32 * 0.6, 0.25],
+                    false,
+                )
+            })
+            .collect();
+        s.destruction.detach.push_back(Detached {
+            scope: scope.clone(),
+            ids,
+            group,
+            started: 0,
+            origin: Vec3::new(group as f32 * 10., 53., 0.),
+            half: Vec3::new(0.25, 48., 0.25),
+            pivot: Vec3::new(group as f32 * 10., 5., 0.),
+            members: 160,
+            area: None,
+        });
+    }
+    let _ = s.simulation.take_support_edits();
+    s.run_damage_support().unwrap();
+    let first = s.take_cues();
+    let mut groups = BTreeMap::new();
+    for c in &first {
+        c.validate().unwrap();
+        if let CueKind::BrickKill {
+            death:
+                BrickDeath::Section {
+                    group,
+                    members,
+                    half,
+                    pivot,
+                    ..
+                },
+            ..
+        } = c.kind
+        {
+            assert_eq!(members, 160);
+            assert_eq!(half, [0.25, 48., 0.25]);
+            assert_eq!(pivot[1], 5.);
+            *groups.entry(group).or_insert(0) += 1;
+        }
+    }
+    assert_eq!(
+        groups.len(),
+        2,
+        "a second proven group starts before the first drains"
+    );
+    assert_eq!(groups.values().sum::<usize>(), COMMIT_PER_TICK);
+    let mut total = first.len();
+    while !s.destruction.detach.is_empty() {
+        let before = s.destruction.work.detached_bricks;
+        s.run_damage_support().unwrap();
+        assert!(s.destruction.work.detached_bricks - before <= COMMIT_PER_TICK as u64);
+        total += s.take_cues().len();
+    }
+    assert_eq!(total, 320);
 }

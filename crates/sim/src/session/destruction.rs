@@ -19,7 +19,7 @@ const MAX_JOBS: usize = 256;
 pub(super) struct Destruction {
     pending: VecDeque<BlastJob>,
     searches: VecDeque<Search>,
-    detach: Option<Detached>,
+    detach: VecDeque<Detached>,
     roots: BTreeMap<BrickId, (Bounds, bool, bool)>,
     palettes: BTreeMap<String, Pieces>,
     palette_revision: usize,
@@ -40,6 +40,7 @@ pub struct DestructionWork {
 }
 struct Scope {
     source: OwnerId,
+    impact: Vec3,
     game: Option<(mg::GameId, u64)>,
     rules: mg::MinigamesWorld,
     damage_source: mg::DamageSource,
@@ -102,6 +103,7 @@ struct Search {
     probe: Option<(BrickId, SupportProbe)>,
     watched: Vec<Bounds>,
     area: Option<Bounds>,
+    shape: SectionShape,
 }
 impl Search {
     fn new(scope: Arc<Scope>, seeds: Vec<BrickId>) -> Self {
@@ -115,10 +117,14 @@ impl Search {
             probe: None,
             watched: Vec::new(),
             area: None,
+            shape: SectionShape::default(),
         }
     }
     fn push(&mut self, id: BrickId, sim: &Simulation) {
         if self.component.insert(id) {
+            if let Some((low, high)) = sim.brick_box(id) {
+                self.shape.include(low, high, self.scope.impact);
+            }
             self.frontier
                 .push(Reverse((sim.index_bounds(id).min[1], id)));
         }
@@ -141,12 +147,47 @@ impl Search {
         self.watched.push(area);
     }
 }
+#[derive(Clone)]
+struct SectionShape {
+    low: Vec3,
+    high: Vec3,
+    base: Vec3,
+}
+impl Default for SectionShape {
+    fn default() -> Self {
+        Self {
+            low: Vec3::splat(f32::INFINITY),
+            high: Vec3::splat(f32::NEG_INFINITY),
+            base: Vec3::ZERO,
+        }
+    }
+}
+impl SectionShape {
+    fn include(&mut self, low: Vec3, high: Vec3, impact: Vec3) {
+        let base = Vec3::new(
+            impact.x.max(low.x).min(high.x),
+            low.y,
+            impact.z.max(low.z).min(high.z),
+        );
+        if low.y < self.low.y - 0.001
+            || ((low.y - self.low.y).abs() < 0.001
+                && base.distance_squared(impact) < self.base.distance_squared(impact))
+        {
+            self.base = base;
+        }
+        self.low = self.low.min(low);
+        self.high = self.high.max(high);
+    }
+}
 struct Detached {
     scope: Arc<Scope>,
-    ids: VecDeque<BrickId>,
+    ids: BTreeSet<BrickId>,
     group: u64,
     started: u64,
     origin: Vec3,
+    half: Vec3,
+    pivot: Vec3,
+    members: u32,
     area: Option<Bounds>,
 }
 
@@ -223,7 +264,7 @@ impl Session {
         }
         (rooted, protected)
     }
-    fn damage_scope(&self, source: OwnerId) -> Option<Arc<Scope>> {
+    fn damage_scope(&self, source: OwnerId, impact: Vec3) -> Option<Arc<Scope>> {
         let player = self.peers.get(&source)?.combat.player;
         if self.teleport_lockout(source, super::admin_players::TELEPORT_WEAPON_LOCK_MS, false) {
             return None;
@@ -252,6 +293,7 @@ impl Session {
         }
         Some(Arc::new(Scope {
             source,
+            impact,
             game: game.and_then(|id| self.minigames.game(id).ok().map(|g| (id, g.round))),
             rules: self.minigames.clone(),
             damage_source: self.minigames.projectile_source(player).ok()?,
@@ -279,7 +321,7 @@ impl Session {
         position: Vec3,
         impact: &bri_weapons::BrickImpact,
     ) {
-        let Some(scope) = self.damage_scope(source) else {
+        let Some(scope) = self.damage_scope(source, position) else {
             return;
         };
         if !impact.direct && target.is_some() || impact.max_volume <= 0.0 {
@@ -330,7 +372,9 @@ impl Session {
         source: OwnerId,
         kills: &[(BrickId, super::debris::BrickBlast)],
     ) {
-        let Some(scope) = self.damage_scope(source) else {
+        let Some(scope) =
+            self.damage_scope(source, kills.first().map_or(Vec3::ZERO, |k| k.1.origin))
+        else {
             return;
         };
         let Some(&(_, blast)) = kills.first() else {
@@ -531,7 +575,7 @@ impl Session {
     pub(super) fn step_damage_support(&mut self) -> Result<()> {
         if self.destruction.pending.is_empty()
             && self.destruction.searches.is_empty()
-            && self.destruction.detach.is_none()
+            && self.destruction.detach.is_empty()
         {
             self.sync_damage_lifecycle();
             let _ = self.simulation.take_support_edits();
@@ -546,17 +590,19 @@ impl Session {
         self.destruction.tick_pieces_left = PIECES_PER_BLAST;
         self.sync_damage_lifecycle();
         let (changes, map_change) = self.simulation.take_support_edits();
-        if self.destruction.detach.as_ref().is_some_and(|d| {
-            map_change
+        for detached in std::mem::take(&mut self.destruction.detach) {
+            if map_change
                 || changes
                     .iter()
-                    .any(|b| d.area.is_some_and(|a| a.intersection(*b).is_some()))
-        }) {
-            let detached = self.destruction.detach.take().unwrap();
-            self.destruction.searches.push_front(Search::new(
-                detached.scope,
-                detached.ids.into_iter().collect(),
-            ));
+                    .any(|b| detached.area.is_some_and(|a| a.intersection(*b).is_some()))
+            {
+                self.destruction.searches.push_back(Search::new(
+                    detached.scope,
+                    detached.ids.into_iter().collect(),
+                ));
+            } else {
+                self.destruction.detach.push_back(detached);
+            }
         }
         for search in &mut self.destruction.searches {
             if map_change || search.watches(&changes) {
@@ -653,6 +699,20 @@ impl Session {
                 *search = Search::new(search.scope.clone(), search.seeds.clone());
             }
         }
+        for detached in std::mem::take(&mut self.destruction.detach) {
+            if map_edit
+                || edits
+                    .iter()
+                    .any(|b| detached.area.is_some_and(|a| a.intersection(*b).is_some()))
+            {
+                self.destruction.searches.push_back(Search::new(
+                    detached.scope,
+                    detached.ids.into_iter().collect(),
+                ));
+            } else {
+                self.destruction.detach.push_back(detached);
+            }
+        }
         work += WORK_PER_TICK / 2;
         while work > 1 && commits > 0 {
             let Some(mut job) = self.destruction.searches.pop_front() else {
@@ -663,29 +723,24 @@ impl Session {
             }
             if job.frontier.is_empty() && job.probe.is_none() {
                 if !job.component.is_empty() {
-                    if self.destruction.detach.is_some() {
+                    if self.destruction.detach.len() >= 8 {
                         self.destruction.searches.push_front(job);
                         break;
                     }
-                    let ids: VecDeque<_> = job.component.iter().copied().collect();
-                    let mut low = Vec3::splat(f32::INFINITY);
-                    let mut high = Vec3::splat(f32::NEG_INFINITY);
-                    for &id in &ids {
-                        if let Some((a, b)) = self.simulation.brick_box(id) {
-                            low = low.min(a);
-                            high = high.max(b);
-                        }
-                    }
+                    let ids = std::mem::take(&mut job.component);
+                    let shape = std::mem::take(&mut job.shape);
                     self.destruction.next_group += 1;
-                    self.destruction.detach = Some(Detached {
+                    self.destruction.detach.push_back(Detached {
                         scope: job.scope.clone(),
+                        members: ids.len() as u32,
                         ids,
                         group: self.destruction.next_group,
                         started: self.simulation.state().tick,
-                        origin: (low + high) * 0.5,
+                        origin: (shape.low + shape.high) * 0.5,
+                        half: (shape.high - shape.low) * 0.5,
+                        pivot: shape.base,
                         area: job.area,
                     });
-                    job.component.clear();
                     job.supported.clear();
                     self.destruction.work.sections += 1;
                 }
@@ -721,12 +776,14 @@ impl Session {
                 let (rooted, _) = self.remember_probe(id, &probe);
                 let b = &self.simulation.state().bricks[&id];
                 if rooted
+                    || self.destruction.detach.iter().any(|d| d.ids.contains(&id))
                     || job.supported.contains(&id)
                     || self.simulation.definitions.get(b)?.indestructible
                     || !job.scope.allows(b)
                 {
                     job.supported.extend(std::mem::take(&mut job.component));
                     job.frontier.clear();
+                    job.shape = SectionShape::default();
                 } else {
                     for other in probe.neighbors {
                         job.push(other, &self.simulation);
@@ -737,11 +794,17 @@ impl Session {
             }
             self.destruction.searches.push_front(job);
         }
-        if let Some(mut detached) = self.destruction.detach.take()
-            && detached.scope.valid(self)
-        {
-            let ids: Vec<_> = (0..commits)
-                .filter_map(|_| detached.ids.pop_front())
+        let rounds = self.destruction.detach.len();
+        let quota = (commits / rounds.max(1)).max(1);
+        for _ in 0..rounds {
+            let Some(mut detached) = self.destruction.detach.pop_front() else {
+                break;
+            };
+            if !detached.scope.valid(self) {
+                continue;
+            }
+            let ids: Vec<_> = (0..quota.min(commits))
+                .filter_map(|_| detached.ids.pop_first())
                 .filter(|&id| self.live_damage_brick(id))
                 .collect();
             let mut cues = Vec::new();
@@ -751,11 +814,15 @@ impl Session {
                     *death = BrickDeath::Section {
                         group: detached.group,
                         started: detached.started,
+                        members: detached.members,
+                        half: detached.half.to_array(),
+                        pivot: detached.pivot.to_array(),
                     };
                     *origin = detached.origin.to_array();
                 }
                 cues.push((kind, position));
             }
+            commits -= ids.len();
             self.hide_damage_bricks(&detached.scope, &ids)?;
             self.destruction.work.detached_bricks += ids.len() as u64;
             for &id in &ids {
@@ -767,7 +834,7 @@ impl Session {
                 self.emit_brick_kill(cue);
             }
             if !detached.ids.is_empty() {
-                self.destruction.detach = Some(detached);
+                self.destruction.detach.push_back(detached);
             }
         }
         // Discard only the known section removals. Event outputs run later and

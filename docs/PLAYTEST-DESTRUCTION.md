@@ -4,7 +4,14 @@ This separate build enables the full destruction experience. Use the existing
 Physics Quality setting; there is no extra destruction/shard switch. The server
 and clients must use this same preview version.
 
-Start with **Afghanistan DM**, equip the Rocket Launcher, and use a minigame
+First retry the **pirate ship mast**: shoot its base support and watch the
+mast, sails and flag stay recognizable together as they tip. On landing they
+should separate into connected assemblies, keeping their original little
+bricks. Repeat at a lower Physics Quality: breakup should be coarser, without
+losing half the sail. Also try two supported structures losing their supports
+in one blast, and restoration after a large collapse.
+
+Then use **Afghanistan DM**, equip the Rocket Launcher, and use a minigame
 with brick damage enabled (and all players' bricks enabled for the bundled map).
 Try the center of an upper floor, a floor edge, and the ceiling corner by a wall.
 Ordinary small bricks should still pop off whole. Large plain floors/blocks
@@ -24,9 +31,14 @@ Also judge repeated blasts: the uncommon cracked plastic should add variety
 without becoming noisy or exhausting. Radius and force have not been enlarged.
 
 Falling sections are local visuals: they cannot crush, carry players, block shots
-or leave permanent rubble. Intact sections have a gentle shared fall/tumble and
-approximate floor probes; constituent bricks use normal local physics after
-breakup. Physics Quality may omit cosmetic members. Unsupported printed/special
+or leave permanent rubble. Tall sections tip about a base near the hit;
+wide slabs drop and tilt. Landing contact and assembly box colliders are
+cosmetic approximations. Physics Quality controls assembly breakup and bodies,
+not member visibility. Sleeping or budget-limited assemblies keep their art
+at the last pose through the normal fade. There is a separate 65536-member
+render ceiling for extreme simultaneous collapses; new groups beyond it can
+be omitted whole. Missing/interrupted cue batches remain one visible assembly
+instead of breaking apart prematurely. Unsupported printed/special
 shapes retain their previous weapon size rules. At a split resource/catalog
 limit, an oversized brick stays intact instead of vanishing wholesale.
 
