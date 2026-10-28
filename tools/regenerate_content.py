@@ -170,10 +170,11 @@ def tree_digest(root):
     """Content hash of a source file or directory, line endings normalized so a
     Windows checkout and a Linux one agree."""
     root = pathlib.Path(root)
-    files = [root] if root.is_file() else sorted(
+    files = [root] if root.is_file() else sorted((
         p for p in root.rglob('*')
         if p.is_file() and not SKIP_DIRS.intersection(p.relative_to(root).parts[:-1])
-        and p.suffix != '.md' and p.name != 'Cargo.lock')
+        and p.suffix != '.md' and p.name != 'Cargo.lock'),
+        key=lambda p: p.relative_to(root).as_posix())
     digest = hashlib.sha256()
     for path in files:
         digest.update(path.relative_to(root).as_posix().encode() + b'\0')

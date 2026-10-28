@@ -1,4 +1,4 @@
-# Release bundle validation needs its toolchain first
+# Release bundle prerequisites and portable source identity
 
 The approved combined v0.4.0 candidate's code matches main
 `67d7e3da58af2e9fea643f9ae56469a7f3b4fd43`. Build-only release run
@@ -11,7 +11,17 @@ Move the existing Rust/cache/sccache setup before content fetch in Windows,
 macOS and Linux workflows. Preserve the complete recipe/inventory validation,
 source pins and generated assets. This changes workflow ordering only, with a
 regression checking those dependencies precede bundle validation in all three
-release paths; no game or importer source changes and no content regeneration.
+release paths. No game or native importer source changes.
+
+A follow-up source-order diagnostic also exposed a genuine cross-platform
+recipe mismatch hidden behind that first failure: Path ordering case-folds on
+Windows. Cargo.toml sorts after base-packages.json/build.rs in two converter
+dependencies there, but before them on Unix. Source tree fingerprints now sort
+explicit relative POSIX strings and retain newline normalization. An invented
+mixed-case/nested fixture checks the exact digest across line endings. Rebuild
+the native bundle with the unchanged existing importer and pinned inputs to
+produce genuinely regenerated outputs and portable receipts; do not restamp
+old files or bypass generation validation.
 
 Focused Python release/tool checks, current-main history validation and platform
 CI must pass before merging. Re-dispatch build-only release from the resulting

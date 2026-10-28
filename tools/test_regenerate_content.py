@@ -10,6 +10,24 @@ import regenerate_content as regen
 import content_packs
 
 
+class SourceIdentityTests(unittest.TestCase):
+    def test_source_tree_has_canonical_case_sensitive_order_and_line_endings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            names = ['src/lib.rs', 'build.rs', 'base-packages.json', 'src.rs', 'Cargo.toml']
+            expected = hashlib.sha256()
+            for name in names:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'source\r\n')
+            for name in sorted(names):
+                expected.update(name.encode() + b'\0source\n\0')
+            self.assertEqual(regen.tree_digest(root), expected.hexdigest())
+            for name in names:
+                (root / name).write_bytes(b'source\n')
+            self.assertEqual(regen.tree_digest(root), expected.hexdigest())
+
+
 class ReferenceViewTests(unittest.TestCase):
     def test_packaged_menu_guard_rejects_empty_or_changed_art_even_with_matching_self_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
