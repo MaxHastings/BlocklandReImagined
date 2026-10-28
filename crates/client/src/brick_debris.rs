@@ -544,7 +544,11 @@ impl BrickDebris {
                         half,
                         origin: Vec3::from(*origin),
                         tick: cue.tick,
-                        active: !building.restored_after(*brick, cue.tick),
+                        active: !building.section_source_retired_after(
+                            *brick,
+                            cue.tick,
+                            [*started, *group],
+                        ),
                         members: *members as usize,
                         section_half: Vec3::from(*section_half),
                         pivot: Vec3::from(*pivot),

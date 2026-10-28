@@ -637,7 +637,13 @@ impl BrickDebris {
             }
             if s.source_generation != building.damage_generation() {
                 for (i, piece) in s.pieces.iter_mut().enumerate() {
-                    if piece.active && building.restored_after(piece.brick, piece.tick) {
+                    if piece.active
+                        && building.section_source_retired_after(
+                            piece.brick,
+                            piece.tick,
+                            [key.0, key.1],
+                        )
+                    {
                         piece.active = false;
                         if let Some(chunk) = s.assignment[i] {
                             s.chunks[chunk].freeze(&mut self.world);
@@ -1367,6 +1373,61 @@ mod lifecycle_regressions {
 #[cfg(test)]
 mod recovery_regressions {
     use super::*;
+    #[test]
+    fn removed_fragment_retires_before_the_rest_of_its_section() -> Result<()> {
+        let (mut b, _) = super::super::tests::building(&[]);
+        let mut world = bri_net::protocol::PublicWorld {
+            name: "test".into(),
+            map_id: "test".into(),
+            palette: vec![[1.; 4]; 2],
+            bricks: Default::default(),
+        };
+        for (id, x) in [(1, 0.), (2, 1.)] {
+            let mut brick =
+                bri_world::Brick::new(ContentRef::Resolved("brick".into()), [x, 3.3, 0.], 0);
+            brick.visible = false;
+            brick.raycast = false;
+            brick.colliding = false;
+            brick.damage_hidden = true;
+            brick.damage_section = Some(Box::new([0, 7]));
+            world.bricks.insert(id, brick);
+        }
+        b.sync_world(&world)?;
+        b.set_world_tick(10);
+        let mut d = BrickDebris::new();
+        d.set_limit(0);
+        let cues: Vec<_> = [(1, 0.), (2, 1.)]
+            .into_iter()
+            .map(|(id, x)| {
+                super::tests::cue(
+                    id,
+                    [x, 3.3, 0.],
+                    2,
+                    [1., 0.3, 0.5],
+                    [0.5, 3.3, 0.],
+                    [0.5, 3., 0.],
+                )
+            })
+            .collect();
+        d.cues(&cues, &b)?;
+        d.advance(1. / 60., &b)?;
+        assert_eq!(d.instances().count(), 2);
+        // Family restoration deletes this transient fragment while another
+        // original still owns its member of the same streamed section.
+        world.bricks.remove(&1);
+        world.bricks.insert(
+            3,
+            bri_world::Brick::new(ContentRef::Resolved("brick".into()), [0., 3.3, 0.], 0),
+        );
+        b.sync_world(&world)?;
+        b.set_world_tick(11);
+        d.advance(1. / 60., &b)?;
+        assert_eq!(d.instances().count(), 1);
+        assert!(!d.sections[&(0, 7)].pieces[0].active);
+        assert!(d.sections[&(0, 7)].pieces[1].active);
+        Ok(())
+    }
+
     #[test]
     fn authoritative_section_tags_recover_missing_cues_without_inventing_material() -> Result<()> {
         let (mut b, _) = super::super::tests::building(&[]);

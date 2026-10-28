@@ -412,6 +412,18 @@ impl Building {
         self.world_tick.is_some_and(|at| at >= tick)
             && self.bricks.get(&id).is_some_and(|b| !b.damage_hidden)
     }
+    pub(crate) fn section_source_retired_after(
+        &self,
+        id: BrickId,
+        tick: u64,
+        key: [u64; 2],
+    ) -> bool {
+        self.world_at(tick)
+            && self
+                .bricks
+                .get(&id)
+                .is_none_or(|b| b.damage_section.as_deref() != Some(&key))
+    }
     pub(crate) fn section_solid_step(
         &self,
         cursor: &mut grid::QueryCursor,

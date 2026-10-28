@@ -76,3 +76,27 @@ render/transport costs still scale with material. No claim of arbitrary
 million-brick fixed-cost collapse or human feel acceptance is made. Maxwell
 alone performs interactive gameplay; no visible game or input automation was
 used. Warm build output is retained while this playtest work remains active.
+
+## Final source-retirement follow-up
+
+Review during integration found that fragment restoration deletes a transient
+source ID, while the old client visibility predicate only recognized a present,
+restored brick. One fragment could therefore outlive its replacement original
+until the rest of its section retired. Section presentation now consults exact
+current generation ownership after the relevant world tick, both at admission
+and on source changes. Ordinary whole debris retains its existing predicate.
+A regression removes one fragment while another original still owns a section
+member; only that retired fragment disappears. Focused client verification
+passed formatting, all-target clippy and 719 units (78 ignored), 178 seconds.
+Commands: `python tools/check.py focused --crates bri-client` and the earlier
+`python tools/check.py focused` (2786 tests across 239 results, 256 ignored).
+
+Candidate 864d3282b built all five playtest executables with
+`BRI_VERSION=v0.3.7-destruction-preview.4 cargo build --profile playtest --locked
+--bin bri-client --bin bri-server --bin bri-import-addon --bin bri-addon-check
+--bin bri-addon-run`, 11m53s. Its full gate passed history/tools, all-target build
+(598s), content startup (14s) and all-workspace clippy (218s); tests were still
+running when this follow-up was prepared. This earlier result is superseded for
+final readiness by the source-retirement correction. Final-head gate/CI and
+packaging must pass before merge. No check was bypassed and no gameplay was
+automated. Final receipts belong with the separate preview.4 package and PR379.
