@@ -682,6 +682,7 @@ mod tests {
                     ]
                     .into_iter()
                     .collect(),
+                    voice_muted: Default::default(),
                     players: vec![AdminPlayer {
                         connection: 7,
                         name: "Builder".into(),

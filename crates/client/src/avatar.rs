@@ -1311,6 +1311,8 @@ pub struct AvatarAnimationInput {
     /// Current thread-3 builder or chat animation (`playThread(3, ...)`):
     /// brick shifts, rotations, plant, undo, activate and talk.
     pub gesture: Option<ActionAnimation>,
+    /// Audible speech composes the body's additive talk clip.
+    pub voice_talking: bool,
     /// Dead bodies hold the original `death1` sequence.
     pub dead: bool,
     /// How a dead body fell (the host's [`bri_sim::session::DeathPose`]):
@@ -2442,7 +2444,7 @@ impl AvatarMesh {
             })
             .collect();
         let bri_content::body_pose::BodyLayerPlan {
-            layers,
+            mut layers,
             unacted,
             transition_at: at,
             unacted_transition_at,
@@ -2471,6 +2473,29 @@ impl AvatarMesh {
                 prone: player.posture.prone,
             },
         )?;
+        // Voice activity composes the stock additive talk clip over locomotion
+        // and any other thread. Cycling this short one-shot is important: the
+        // authored Blockhead clip is non-looping, and should be held only while
+        // actual speech remains active. A thread-3 talk action already provides
+        // the same pose, so don't layer it twice.
+        let gesture_is_talk = animation_input
+            .gesture
+            .as_ref()
+            .is_some_and(|a| a.sequence.eq_ignore_ascii_case("talk"));
+        if animation_input.voice_talking
+            && !animation_input.dead
+            && !gesture_is_talk
+            && let Some(clip) = assets.rig.sequence("talk")
+            && clip.additive
+            && clip.duration.is_finite()
+            && clip.duration > 0.0
+        {
+            layers.push(Layer {
+                animation: clip,
+                time: (time.max(0.0) % f64::from(clip.duration)) as f32,
+                weight: 1.0,
+            });
+        }
         self.skipped.extend(skipped);
         // A foreign body need not borrow a punch/throw to use a stock tool.
         // Sample only the reference tool action's socket displacement, keeping
@@ -3238,6 +3263,50 @@ mod tests {
 
     /// UE2 links animation sets to a mesh: a body's archetype lists `animation_libraries` and the clips join the body's, keyed by
     /// their original names, matched without regard to case; the body's own clips win, and a missing library fails the body.
+    #[test]
+    fn speech_adds_the_body_talk_clip_without_changing_legs_or_doubling_chat() -> Result<()> {
+        let assets = crate::testing::avatar::assets()?;
+        let mut quiet = assets.mesh(assets.package.defaults.clone())?;
+        let mut voiced = assets.mesh(assets.package.defaults.clone())?;
+        let time = 0.1;
+        quiet.pose_with_animation(&assets, &player(), time, &Default::default())?;
+        let mut input = AvatarAnimationInput {
+            voice_talking: true,
+            ..Default::default()
+        };
+        voiced.pose_with_animation(&assets, &player(), time, &input)?;
+        assert_ne!(
+            quiet.world_node(&assets, "Head"),
+            voiced.world_node(&assets, "Head")
+        );
+        assert_eq!(
+            quiet.world_node(&assets, "RightLeg"),
+            voiced.world_node(&assets, "RightLeg")
+        );
+        input.gesture = Some(ActionAnimation {
+            sequence: "talk".into(),
+            started_at: 0.0,
+        });
+        let mut with_chat = assets.mesh(assets.package.defaults.clone())?;
+        let mut chat_only = assets.mesh(assets.package.defaults.clone())?;
+        with_chat.pose_with_animation(&assets, &player(), time, &input)?;
+        input.voice_talking = false;
+        chat_only.pose_with_animation(&assets, &player(), time, &input)?;
+        assert_eq!(
+            with_chat.world_node(&assets, "Head"),
+            chat_only.world_node(&assets, "Head")
+        );
+        input.dead = true;
+        quiet.pose_with_animation(&assets, &player(), time, &input)?;
+        input.voice_talking = true;
+        voiced.pose_with_animation(&assets, &player(), time, &input)?;
+        assert_eq!(
+            quiet.world_node(&assets, "Head"),
+            voiced.world_node(&assets, "Head")
+        );
+        Ok(())
+    }
+
     #[test]
     fn an_archetype_links_an_animation_library_by_original_names() -> Result<()> {
         let rig = crate::testing::avatar::rig();

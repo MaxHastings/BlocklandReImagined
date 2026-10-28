@@ -100,6 +100,7 @@ impl App {
         audio.set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
         let mut brick_debris = crate::brick_debris::BrickDebris::new();
         brick_debris.set_audio_policy(content.weapons.pack.effects.brick_debris_audio.as_ref());
+        let voice = crate::voice::VoiceClient::new(&saved);
         let platform = if cfg!(target_os = "macos") {
             Platform::MacOs
         } else {
@@ -187,6 +188,8 @@ impl App {
                 display_size: (1, 1),
             },
             audio,
+            voice,
+            voice_icons: Default::default(),
             ui,
             files: Saves {
                 saves: crate::saves::Store::new(state_dir, &content, Some(old_saves.clone())),

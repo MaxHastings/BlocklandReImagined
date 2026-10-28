@@ -6,7 +6,7 @@
 //!
 //! One list, `packages/default-addons.json`, names them in load order. This
 //! module, the release packagers and `tools/addon_bundle.py` all read it.
-//! An entry is one of two kinds:
+//! Each entry names exactly one source:
 //!
 //! - **Our own** (`path`): committed under the repository's `packages/<path>`.
 //! - **A bundled original** (`original`): a classic community Add-On, such
@@ -16,6 +16,9 @@
 //!   the private bundle the release builds carry, credited to its authors.
 //!   An original no copy is pinned for yet, or one `withdrawn` after its
 //!   author objected, is left out everywhere ([`list`]).
+//! - **Generated native content** (`generated`): a pinned recipe builds media
+//!   outside Git. The same private bundle carries the recordings, provenance
+//!   and companion policy, verified against that recipe before packaging.
 //!
 //! A content root holds each at `addons/<id>`, where the game keeps Add-Ons:
 //!
@@ -51,8 +54,8 @@ use std::sync::OnceLock;
 
 /// The list's name in the repository's `packages/` folder.
 pub const LIST_FILE: &str = "default-addons.json";
-/// The list's schema: 2 added bundled originals.
-pub const LIST_SCHEMA: u32 = 2;
+/// The list's schema: 3 adds generated native Add-Ons carried outside Git.
+pub const LIST_SCHEMA: u32 = 3;
 const LIST: &str = include_str!("../../../packages/default-addons.json");
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +76,9 @@ pub struct DefaultAddOn {
     /// A bundled original: the classic Add-On it is imported from.
     #[serde(default)]
     pub original: Option<Original>,
+    /// Native Add-On generated outside Git and carried in the release bundle.
+    #[serde(default)]
+    pub generated: Option<String>,
     /// False for one carried turned off: installed, never turned on for
     /// the player.
     #[serde(default = "starts_on")]
@@ -131,8 +137,11 @@ pub fn listed() -> &'static [DefaultAddOn] {
         );
         for addon in &list.addons {
             assert!(
-                addon.path.is_some() != addon.original.is_some(),
-                "{}: a default Add-On has a path (our own) or an original, not both",
+                usize::from(addon.path.is_some())
+                    + usize::from(addon.original.is_some())
+                    + usize::from(addon.generated.is_some())
+                    == 1,
+                "{}: a default Add-On needs exactly one path, original or generated recipe",
                 addon.id
             );
         }
@@ -599,6 +608,7 @@ mod tests {
                 "tool_duplicator-rules",
                 "brick_mirror",
                 "brick-destruction-audio",
+                "voice_chat",
                 "rule-workshop-toys"
             ]
         );
@@ -625,6 +635,7 @@ mod tests {
             [
                 "brick_mirror",
                 "brick-destruction-audio",
+                "voice_chat",
                 "rule-workshop-toys"
             ]
         );
@@ -656,6 +667,8 @@ mod tests {
                 "vehicle_stunt_plane",
                 "brick_mirror",
                 "brick-destruction-audio",
+                "voice_chat",
+                "npc_popculture",
                 "rule-workshop-toys",
                 "print_modter_default",
                 "map_arcticchallenge3",
@@ -679,8 +692,8 @@ mod tests {
                 "{} is listed twice",
                 addon.id
             );
-            match (&addon.path, &addon.original) {
-                (Some(path), None) => {
+            match (&addon.path, &addon.original, &addon.generated) {
+                (Some(path), None, None) => {
                     assert!(crate::path::problem(path).is_none(), "{path}");
                     let manifest = repo_packages().join(path).join(MANIFEST_FILE);
                     let info =
@@ -693,7 +706,7 @@ mod tests {
                     );
                     available.push((info.id.clone(), info.version.clone()));
                 }
-                (None, Some(original)) => {
+                (None, Some(original), None) => {
                     assert!(!original.title.is_empty() && !original.authors.is_empty());
                     assert!(Version::parse(&original.version).is_ok(), "{}", addon.id);
                     for sha in &original.sha256 {
@@ -705,7 +718,18 @@ mod tests {
                     }
                     available.push((addon.id.clone(), original.version.clone()));
                 }
-                _ => panic!("{} needs a path or an original", addon.id),
+                (None, None, Some(recipe)) => {
+                    assert!(
+                        !recipe.is_empty(),
+                        "generated Add-On needs a recipe identity"
+                    );
+                    assert!(
+                        !repo_packages().join(&addon.id).exists(),
+                        "generated media stays outside Git"
+                    );
+                    continue;
+                }
+                _ => panic!("{} needs exactly one source", addon.id),
             }
         }
         // Every dependency of our own is the base game or another default.
@@ -768,10 +792,41 @@ mod tests {
     }
 
     #[test]
+    fn generated_npc_recordings_and_policy_are_fresh_install_defaults() {
+        let addon = list()
+            .iter()
+            .find(|addon| addon.id == "npc_popculture")
+            .unwrap();
+        assert!(addon.enabled && addon.ships());
+        assert_eq!(addon.generated.as_deref(), Some("npc-reactions"));
+        let root = scratch("npc-generated-defaults");
+        for (id, template) in [
+            ("npc_popculture", "package.json"),
+            ("npc_popculture_rules", "rules-package.json"),
+        ] {
+            let destination = root.join("addons").join(id);
+            std::fs::create_dir_all(&destination).unwrap();
+            std::fs::copy(
+                repo_packages()
+                    .parent()
+                    .unwrap()
+                    .join("tools/npc_reactions")
+                    .join(template),
+                destination.join("package.json"),
+            )
+            .unwrap();
+        }
+        let on = installed(&root);
+        assert_eq!(ids(&on), ["npc_popculture", "npc_popculture_rules"]);
+        assert_eq!(on[1].side, crate::packages::Side::Server);
+    }
+
+    #[test]
     fn an_original_ships_once_pinned_and_until_withdrawn() {
         let original = |sha256: &[&str], withdrawn: Option<&str>| DefaultAddOn {
             id: "weapon_example".into(),
             path: None,
+            generated: None,
             original: Some(Original {
                 addon: "Weapon_Example".into(),
                 title: "Example".into(),
@@ -929,6 +984,7 @@ mod tests {
             [
                 "brick_mirror",
                 "brick-destruction-audio",
+                "voice_chat",
                 "rule-workshop-toys"
             ]
         );
@@ -941,6 +997,7 @@ mod tests {
                 "vehicle_stunt_plane",
                 "brick_mirror",
                 "brick-destruction-audio",
+                "voice_chat",
                 "rule-workshop-toys"
             ]
         );
@@ -952,7 +1009,11 @@ mod tests {
         let library = Library::scan(&root).unwrap();
         for addon in list() {
             let Some(entry) = library.get(&addon.id) else {
-                assert!(addon.original.is_some(), "{} is not installed", addon.id);
+                assert!(
+                    addon.original.is_some() || addon.generated.is_some(),
+                    "{} is not installed",
+                    addon.id
+                );
                 continue;
             };
             assert_eq!(entry.enabled, addon.enabled, "{}", addon.id);
@@ -1040,6 +1101,7 @@ mod tests {
                 "vehicle_stunt_plane",
                 "brick_mirror",
                 "brick-destruction-audio",
+                "voice_chat",
                 "rule-workshop-toys"
             ]
         );
@@ -1049,6 +1111,7 @@ mod tests {
             [
                 "brick_mirror",
                 "brick-destruction-audio",
+                "voice_chat",
                 "rule-workshop-toys"
             ]
         );

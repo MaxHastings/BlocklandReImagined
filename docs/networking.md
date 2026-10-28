@@ -132,6 +132,55 @@ router, probe it, and tell the host in plain words whether friends can reach
 them. No outside service is contacted. See
 [architecture/hosting.md](architecture/hosting.md).
 
+## Proximity voice chat
+
+Voice travels as QUIC datagrams beside the movement and state datagrams
+(`crates/net/src/voice.rs`). Every voice datagram starts with the marker byte
+0xC1, which MessagePack never uses, so readers tell voice apart from a
+movement or state datagram without decoding. The payload is opaque to the net
+crate: 20 ms mono Opus frames, targeting 24 kbit/s (at most 256 bytes including a one-byte talk-spurt marker).
+
+- Upstream carries `marker, direction, sequence (u16), payload`; downstream
+  adds the speaker's owner and position, stamped by the host from its own
+  world state, never believed from the client. All little endian.
+- The host relays each frame only to players within 48 world units of the
+  speaker (`voice::RANGE`), so a voice never reaches a player who could not
+  hear it.
+- Capture-clock sequence numbers advance through silence and lost capture frames.
+  Audio is limited to 60 frames/s, burst five; activity has its own 6/s allowance.
+  Replayed/duplicate upstream sequences are rejected. Voice never waits for space
+  in the shared simulation event queue. Captured, relayed and received audio older
+  than 100 ms is dropped. The 256-frame receive inbox also bounds memory.
+- QUIC encrypts and congestion-controls voice with the existing connection.
+  Voice sends leave 8 KiB of datagram queue space for movement/state traffic.
+  A two-frame initial playout buffer reorders packets before Opus decoding;
+  explicit talk-spurt markers reset both codec states; the following packet supplies in-band FEC when present, otherwise bounded PLC
+  conceals loss. A packet window of five frames prevents growing latency.
+- The mixer admits 32 sources (31 remote speakers at the requested server size).
+  Its linked limiter keeps crowded mixes finite without hard clipping. A local
+  or host mute purges already buffered audio and speaking state immediately.
+  Host moderation follows the verified principal through rename/reconnect for
+  the server session; disconnected owner IDs are removed. Local mutes belong
+  to the current connection and cannot affect an unrelated server.
+- Microphones default to push-to-talk. A disabled server, main-menu preview,
+  lost focus or host mute cannot transmit. Explicitly selected missing devices
+  never fall back to another input. Startup/teardown do not wait on a driver on
+  the game thread; missing/failed devices retry. Master volume and background
+  mute include received voice.
+- Capacity is bounded, not a bandwidth guarantee. At an average 60-byte Opus
+  payload, all 32 talking at once requires about 4.2 MB/s host application egress
+  before QUIC/IP overhead; ordinary conversations cost much less. Real Internet
+  and device quality remain human playtest checks. No acoustic echo cancellation
+  or noise suppression is currently applied; use headphones for voice activation.
+- Speech state rides separate `VoiceActivity` datagrams: upstream from a
+  client, downstream keyed by owner with an active-speaking boolean. The host
+  broadcasts them beyond proximity range so name tags can show who is talking,
+  and expires stale active states.
+- Wire changes are recorded in
+  `crates/net/protocol-changes/proximity-voice-chat.md` and
+  `crates/net/protocol-changes/voice-activity-indicator.md`; the client side
+  (capture, playback, options) lives in `crates/client/src/voice.rs`.
+
 ## Executable host
 
 ```powershell

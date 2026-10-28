@@ -135,7 +135,7 @@ fn bundled(root: &Path, addon: &str, namespace: &str) {
     .unwrap()
     .source
     .sha256;
-    let list = serde_json::json!({ "schema_version": 2, "addons": [{
+    let list = serde_json::json!({ "schema_version": bri_package::defaults::LIST_SCHEMA, "addons": [{
         "id": namespace, "enabled": false,
         "original": { "addon": addon, "title": addon, "authors": ["Tester"],
                       "version": "1.0.0", "sha256": [sha] } }] });

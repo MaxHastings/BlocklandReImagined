@@ -48,6 +48,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 Some(match capability {
                     Capability::Login => ui::AdminFeature::Login,
                     Capability::Kick => ui::AdminFeature::Kick,
+                    Capability::VoiceMute => ui::AdminFeature::VoiceMute,
                     Capability::Ban => ui::AdminFeature::Ban,
                     Capability::Unban => ui::AdminFeature::Unban,
                     Capability::ClearBricks => ui::AdminFeature::ClearBricks,
@@ -85,6 +86,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
                 persistent_identity: player.persistent_identity,
             })
             .collect(),
+        voice_muted: snapshot.voice_muted.clone(),
         options: snapshot.options.as_ref().map(options),
     }
 }
@@ -247,6 +249,18 @@ pub fn command(action: &ui::AdminAction, snapshot: &AdminSnapshot) -> Result<Opt
         ui::AdminAction::Kick { target } => (
             Capability::Kick,
             Action::Kick {
+                target: ConnectionId(*target),
+            },
+        ),
+        ui::AdminAction::MutePlayer { target } => (
+            Capability::VoiceMute,
+            Action::VoiceMute {
+                target: ConnectionId(*target),
+            },
+        ),
+        ui::AdminAction::UnmutePlayer { target } => (
+            Capability::VoiceMute,
+            Action::VoiceUnmute {
                 target: ConnectionId(*target),
             },
         ),
@@ -588,6 +602,7 @@ mod tests {
                 Capability::AdminPassword,
             ]
             .into(),
+            voice_muted: Default::default(),
             players: vec![],
             options: None,
         }

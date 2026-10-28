@@ -3,10 +3,10 @@
   "id": "npc_popculture",
   "version": "1.0.0",
   "api": 1,
-  "name": "NPC Pop-Culture Reactions (local audition)",
-  "description": "Optional positional NPC reactions from locally imported recordings. Bounded mixing, situational hooks and consistent vocal pitch per bot. Recordings have unverified redistribution rights and are not included in the repository.",
+  "name": "NPC Pop-Culture Reactions",
+  "description": "Positional NPC reactions from original recordings, with bounded mixing, situational hooks and consistent vocal pitch per bot. Source attribution and recording notices travel with the generated Add-On.",
   "authors": ["Blockland ReImagined"],
-  "license": "LicenseRef-Local-Audition-Only",
+  "license": "LicenseRef-Third-Party-Recordings",
   "provenance": {"source": "User-requested online recordings; see npc-reactions-generated.json for exact URLs, hashes and processing. Script code is original."},
   "companions": ["npc_popculture_rules"],
   "provides": [

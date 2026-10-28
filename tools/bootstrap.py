@@ -63,6 +63,10 @@ def check_prerequisites(need_dotnet):
         problems.append(('git', {'darwin': 'xcode-select --install',
                                  'win32': 'winget install --id Git.Git -e'}.get(
             sys.platform, linux_packages('git', 'git', 'git'))))
+    if not shutil.which('cmake'):
+        problems.append(('CMake (bundled Opus voice codec)', {'darwin': 'brew install cmake',
+                          'win32': 'winget install --id Kitware.CMake -e'}.get(
+            sys.platform, linux_packages('cmake', 'cmake', 'cmake'))))
     wanted = re.search(r'^rust-version\s*=\s*"([\d.]+)"',
                        (REPO / 'Cargo.toml').read_text(encoding='utf-8'), re.M).group(1)
     rustc = output('rustc', '--version') if shutil.which('cargo') else None
@@ -77,6 +81,12 @@ def check_prerequisites(need_dotnet):
         import PIL  # noqa: F401
     except ImportError:
         problems.append(('Pillow for Python', f'"{sys.executable}" -m pip install pillow'))
+    for module in ('numpy', 'scipy', 'soundfile'):
+        try:
+            __import__(module)
+        except ImportError:
+            problems.append(('NPC recording processing libraries', f'"{sys.executable}" -m pip install numpy scipy soundfile'))
+            break
     if sys.platform.startswith('linux'):
         if not (shutil.which('cc') or shutil.which('gcc') or shutil.which('clang')):
             problems.append(('a C compiler', linux_packages('build-essential', 'base-devel', 'gcc')))
