@@ -1030,6 +1030,10 @@ impl Client {
             }
             return match incoming {
                 Incoming::Reliable(message) => match *message {
+                    Message::VoiceRoutes(table) => {
+                        self.voice.set_routes(table)?;
+                        continue;
+                    }
                     Message::Update(delta) => {
                         let world_changed = !delta.bricks.is_empty() || delta.palette.is_some();
                         let changed_bricks = delta.bricks.keys().copied().collect();

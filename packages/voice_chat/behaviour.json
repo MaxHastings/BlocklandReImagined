@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "script": "voice.rhai",
+  "on_voice": true,
+  "settings": [
+    {
+      "key": "outside_mode",
+      "title": "Outside minigames",
+      "category": "Voice Chat",
+      "scope": "server",
+      "type": "list",
+      "default": "global",
+      "items": [
+        {
+          "value": "global",
+          "name": "Global"
+        },
+        {
+          "value": "proximity",
+          "name": "Proximity"
+        }
+      ]
+    },
+    {
+      "key": "outside_range",
+      "title": "Outside proximity distance",
+      "category": "Voice Chat",
+      "scope": "server",
+      "type": "int",
+      "default": 48,
+      "min": 4,
+      "max": 2000
+    },
+    {
+      "key": "mode",
+      "title": "Voice mode",
+      "category": "Voice Chat",
+      "scope": "minigame",
+      "type": "list",
+      "default": "proximity",
+      "items": [
+        {
+          "value": "proximity",
+          "name": "Proximity"
+        },
+        {
+          "value": "global",
+          "name": "Global"
+        },
+        {
+          "value": "team",
+          "name": "Team"
+        }
+      ]
+    },
+    {
+      "key": "range",
+      "title": "Proximity distance",
+      "category": "Voice Chat",
+      "scope": "minigame",
+      "type": "int",
+      "default": 48,
+      "min": 4,
+      "max": 2000
+    }
+  ]
+}

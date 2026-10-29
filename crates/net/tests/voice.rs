@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 const _: () = assert!(voice::RANGE < 95.0, "the far player is out of range");
 
 /// A host running voice chat: its Add-On installed before players join,
-/// as the game's defaults do. The package is empty — the engine owns the
+/// as the game's defaults do. The package supplies proximity policy; the engine owns the
 /// relay; turning it off is what stops one.
 fn voice_session() -> bri_sim::session::Session {
     use bri_package::packages::{PackageEntry, PackageSet, Side};
@@ -29,7 +29,23 @@ fn voice_session() -> bri_sim::session::Session {
     std::fs::write(
         dir.join("package.json"),
         r#"{"schema_version":1,"id":"voice_chat","version":"1.0.0","api":1,
-            "name":"Voice Chat","license":"CC0-1.0","provides":[]}"#,
+            "name":"Voice Chat","license":"CC0-1.0","capabilities":["voice"],"provides":[
+            {"kind":"behaviour","id":"voice_chat:behaviour/rules","file":"behaviour.json"},
+            {"kind":"script","id":"voice_chat:script/rules","file":"voice.rhai"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("behaviour.json"),
+        r#"{"schema_version":1,"script":"voice.rhai","on_voice":true}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("voice.rhai"),
+        r#"fn voice_routes(speaker, listeners) {
+        let out = []; for id in listeners { if id != speaker {
+            out.push(#{listener:id,spatial:true,range:48.0,label:"",priority:0});
+        }} out
+    }"#,
     )
     .unwrap();
     let set = PackageSet {
@@ -37,7 +53,7 @@ fn voice_session() -> bri_sim::session::Session {
         packages: vec![PackageEntry {
             id: "voice_chat".into(),
             version: "1.0.0".into(),
-            side: Side::Shared,
+            side: Side::Server,
             dir: "voice_chat".into(),
             role: None,
         }],
@@ -63,14 +79,22 @@ fn options() -> ServerOptions {
 }
 
 async fn connect(server: &server::ServerHandle, name: &str) -> Result<Client> {
-    Client::connect(
+    let mut client = Client::connect(
         server.address,
         &server.certificate,
         name.into(),
         Vec::new(),
         None,
     )
-    .await
+    .await?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while client.voice_link().routes().revision == 0 {
+            client.receive().await?;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    Ok(client)
 }
 
 /// Frames `link` hears over the next `wait`, stopping early at `want`.

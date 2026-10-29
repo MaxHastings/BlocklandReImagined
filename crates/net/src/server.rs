@@ -1485,10 +1485,97 @@ fn send_package_views(
         }
     }
 }
+
+#[derive(Default)]
+struct VoiceRouting {
+    sent: BTreeMap<OwnerId, crate::voice::RouteTable>,
+    context: Vec<(OwnerId, Option<u64>, bool)>,
+    refreshed: Option<std::time::Instant>,
+    muted: std::collections::BTreeSet<OwnerId>,
+    next_revision: u64,
+}
+impl VoiceRouting {
+    fn refresh(
+        &mut self,
+        session: &mut Session,
+        peers: &BTreeMap<OwnerId, Peer>,
+        now: std::time::Instant,
+    ) {
+        let context: Vec<_> = peers
+            .keys()
+            .map(|id| {
+                let (game, alive) = session.voice_context(*id);
+                (*id, game, alive)
+            })
+            .collect();
+        if self.context == context
+            && self.muted == *session.voice_mute_set()
+            && self
+                .refreshed
+                .is_some_and(|at| now.duration_since(at) < Duration::from_millis(200))
+        {
+            return;
+        }
+        self.context = context;
+        self.muted = session.voice_mute_set().clone();
+        self.refreshed = Some(now);
+        let owners: Vec<_> = peers.keys().copied().collect();
+        let mut routes = session.voice_routes(&owners);
+        self.sent.retain(|id, _| peers.contains_key(id));
+        for (id, peer) in peers {
+            let mut current = routes.remove(id).unwrap_or_default();
+            current.retain(|speaker, route| {
+                !session.is_voice_muted(*speaker)
+                    && (!route.spatial
+                        || session
+                            .voice_origin(*speaker)
+                            .zip(session.viewpoint(*id))
+                            .is_some_and(|(from, to)| crate::voice::audible(from, to, route.range)))
+            });
+            let old = self.sent.get(id);
+            if old.is_some_and(|t| {
+                t.routes.len() == current.len()
+                    && current
+                        .iter()
+                        .all(|(speaker, p)| t.routes.get(speaker).is_some_and(|r| &r.playback == p))
+            }) {
+                continue;
+            }
+            let mut routed = BTreeMap::new();
+            for (speaker, playback) in current {
+                let generation = if let Some(route) = old
+                    .and_then(|t| t.routes.get(&speaker))
+                    .filter(|r| r.playback == playback)
+                {
+                    route.generation
+                } else {
+                    self.next_revision += 1;
+                    self.next_revision
+                };
+                routed.insert(
+                    speaker,
+                    crate::voice::RouteState {
+                        generation,
+                        playback,
+                    },
+                );
+            }
+            self.next_revision += 1;
+            let table = crate::voice::RouteTable {
+                revision: self.next_revision,
+                routes: routed,
+            };
+            peer.send_message(Kind::Voice, &Message::VoiceRoutes(table.clone()));
+            self.sent.insert(*id, table);
+        }
+    }
+}
+
 /// Relay one voice frame to every other player within earshot of the speaker.
 /// The host's own view of where players stand decides who hears, and is
 /// stamped on the frame: a client cannot place its voice anywhere else.
 fn relay_voice(
+    routing: &VoiceRouting,
     session: &Session,
     peers: &BTreeMap<OwnerId, Peer>,
     traffic: &Traffic,
@@ -1500,18 +1587,25 @@ fn relay_voice(
     if session.is_voice_muted(speaker) {
         return;
     }
-    let Some(from) = session.viewpoint(speaker) else {
+    let Some(from) = session.voice_origin(speaker) else {
         return;
     };
-    let bytes = crate::voice::encode_downstream(speaker, from, sequence, payload);
+
     for (owner, peer) in peers {
         if *owner == speaker {
             continue;
         }
-        let Some(at) = session.viewpoint(*owner) else {
+        let Some(table) = routing.sent.get(owner) else {
             continue;
         };
-        if crate::voice::audible(from, at, crate::voice::RANGE)
+        let Some(route) = table.routes.get(&speaker) else {
+            continue;
+        };
+        let bytes = crate::voice::encode_routed(speaker, from, sequence, payload, route.generation);
+        if (!route.spatial
+            || session
+                .viewpoint(*owner)
+                .is_some_and(|at| crate::voice::audible(from, at, route.range)))
             && peer.connection.datagram_send_buffer_space() >= bytes.len() + 8 * 1024
             && peer.connection.send_datagram(bytes.clone().into()).is_ok()
         {
@@ -1519,18 +1613,28 @@ fn relay_voice(
         }
     }
 }
-/// Broadcast a compact speech-state update to every other connected player.
-/// It is intentionally not proximity-limited: the in-world name tag and pose
-/// should identify speakers even when their audio is out of range.
+/// Relay speech activity only to listeners with an eligible audible route.
 fn relay_voice_activity(
+    routing: &VoiceRouting,
     peers: &BTreeMap<OwnerId, Peer>,
     traffic: &Traffic,
     speaker: OwnerId,
     active: bool,
 ) {
-    let bytes = crate::voice::encode_downstream_activity(speaker, active);
     for (owner, peer) in peers {
-        if *owner != speaker && peer.connection.send_datagram(bytes.clone().into()).is_ok() {
+        let revision = routing
+            .sent
+            .get(owner)
+            .and_then(|t| t.routes.get(&speaker))
+            .map_or(0, |r| r.generation);
+        let bytes = crate::voice::encode_routed_activity(speaker, active, revision);
+        if *owner != speaker
+            && routing
+                .sent
+                .get(owner)
+                .is_some_and(|t| t.routes.contains_key(&speaker))
+            && peer.connection.send_datagram(bytes.clone().into()).is_ok()
+        {
             traffic.add(Kind::Voice, bytes.len(), 1);
         }
     }
@@ -1804,6 +1908,7 @@ async fn run(
     let mut vehicles = Vec::new();
     let mut time_scale = session.time_scale();
     let mut voice_muted = session.voice_mute_set().clone();
+    let mut voice_routing = VoiceRouting::default();
     let mut broken_shapes = session.broken_shapes();
     let mut targets = session.tutorial_targets();
     let mut map_lights = session.map_light_rules();
@@ -1863,6 +1968,7 @@ async fn run(
                 Ok((new,package_save))=>{
                     if let Some(host)=&options.map_loader{host.outgoing(&session);}
                     recorder.map_changed(&mut session,new,admin,&map,package_save)?;
+                    voice_routing.sent.clear(); voice_routing.refreshed=None; voice_active.clear();
                     // Players the new map could not place are let go with the reason.
                     close_admin_disconnects(&mut session,&mut recorder,&mut peers,&mut lobbies);
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
@@ -1999,13 +2105,14 @@ async fn run(
                     }
                 }
             },
-            Event::Voice{owner,generation,sequence,payload,received}=>{if received.elapsed()<=std::time::Duration::from_millis(100)&&session.voice_chat()&&peers.get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&session,&peers,&traffic,owner,sequence,&payload);}},
-            Event::VoiceActivity{owner,generation,active}=>{if session.voice_chat()&&!session.is_voice_muted(owner)&&peers.get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&peers,&traffic,owner,active);}}},
+            Event::Voice{owner,generation,sequence,payload,received}=>{if received.elapsed()<=std::time::Duration::from_millis(100)&&session.voice_chat()&&peers.get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&voice_routing,&session,&peers,&traffic,owner,sequence,&payload);}},
+            Event::VoiceActivity{owner,generation,active}=>{if session.voice_chat()&&!session.is_voice_muted(owner)&&peers.get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&voice_routing,&peers,&traffic,owner,active);}}},
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=recorder.seat_report(&mut session,owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=recorder.movement(&mut session,owner,sequence,input);}if let Some(camera)=movement.camera{let _=recorder.camera_report(&mut session,owner,camera);}}},
         }},
         _=ticker.tick()=>{
             players.store((peers.len()+lobbies.len()) as u32,std::sync::atomic::Ordering::Relaxed);
             let now=std::time::Instant::now();
+            voice_routing.refresh(&mut session, &peers, now);
             // A lost final state packet or a wedged client must not leave a
             // permanent talking indicator. Active clients refresh every 500 ms.
             let stale_speakers: Vec<_> = voice_active.iter()
@@ -2013,7 +2120,7 @@ async fn run(
                 .collect();
             for owner in stale_speakers {
                 voice_active.remove(&owner);
-                relay_voice_activity(&peers, &traffic, owner, false);
+                relay_voice_activity(&voice_routing,&peers, &traffic, owner, false);
             }
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             // Ticks the clock dropped still passed for every client.

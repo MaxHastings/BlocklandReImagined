@@ -21,12 +21,14 @@ pub const CAPABILITIES: &[&str] = &[
     "brick_events",
     "bots",
     "storage",
+    "voice",
 ];
 
 /// The plain-language line a player reads for `name`, completing
 /// "This Add-On can ...".
 pub fn describe(name: &str) -> Option<&'static str> {
     Some(match name {
+        "voice" => "choose who hears live voice and how it is played",
         // Remove bricks from the world.
         "world.edit" => "change the world's bricks",
         // Explosions and direct damage to players and bricks.

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "division": "Radio",
+  "binds": [
+    {
+      "name": "Transmit radio (with voice activation)",
+      "package": "sample-radio",
+      "command": "radio_transmit",
+      "hold": true,
+      "key": null
+    }
+  ]
+}

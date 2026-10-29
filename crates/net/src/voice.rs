@@ -7,13 +7,29 @@
 //! decoding. The payload is opaque here: the audio crate's frames.
 //!
 //! Upstream (client to host): marker, [`UPSTREAM`], sequence (u16), payload.
-//! Downstream (host to client): marker, [`DOWNSTREAM`], sequence (u16), the
-//! speaker's owner (u64), the speaker's position (three f32), payload. All
-//! little endian. The host sends a listener only the voices of players within
-//! [`RANGE`] of them, so a voice never reaches a player who could not hear it,
-//! and the speaker's place on the map is stamped by the host, never believed
-//! from the client.
+//! Downstream adds host-stamped speaker, position and per-route generation.
+//! Reliable private route tables select positional/global playback and range.
+//! Frames from revoked generations are rejected before entering the mixer.
 use anyhow::{Result, ensure};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RouteState {
+    pub generation: u64,
+    pub playback: bri_sim::session::VoicePlayback,
+}
+impl std::ops::Deref for RouteState {
+    type Target = bri_sim::session::VoicePlayback;
+    fn deref(&self) -> &Self::Target {
+        &self.playback
+    }
+}
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RouteTable {
+    pub revision: u64,
+    pub routes: BTreeMap<OwnerId, RouteState>,
+}
+
 use bri_world::OwnerId;
 use std::{
     sync::{Arc, Mutex, mpsc},
@@ -35,9 +51,9 @@ const DOWNSTREAM: u8 = 2;
 const UPSTREAM_ACTIVITY: u8 = 3;
 const DOWNSTREAM_ACTIVITY: u8 = 4;
 const ACTIVITY_UPSTREAM_LEN: usize = 3;
-const ACTIVITY_DOWNSTREAM_LEN: usize = 11;
+const ACTIVITY_DOWNSTREAM_LEN: usize = 19;
 const UPSTREAM_HEADER: usize = 4;
-const DOWNSTREAM_HEADER: usize = 4 + 8 + 12;
+const DOWNSTREAM_HEADER: usize = 4 + 8 + 12 + 8;
 /// Received voice frames waiting for the game; the newest are dropped when
 /// it falls behind.
 const INBOX: usize = 256;
@@ -85,6 +101,7 @@ pub fn decode_upstream(bytes: &[u8]) -> Option<(u16, &[u8])> {
 /// A voice frame as the host relays it to a listener.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Heard {
+    pub revision: u64,
     pub speaker: OwnerId,
     pub position: [f32; 3],
     pub sequence: u16,
@@ -104,8 +121,21 @@ pub fn encode_downstream(
     for axis in position {
         out.extend_from_slice(&axis.to_le_bytes());
     }
+    out.extend_from_slice(&0u64.to_le_bytes());
     out.extend_from_slice(payload);
     out
+}
+
+pub fn encode_routed(
+    speaker: OwnerId,
+    position: [f32; 3],
+    sequence: u16,
+    payload: &[u8],
+    revision: u64,
+) -> Vec<u8> {
+    let mut bytes = encode_downstream(speaker, position, sequence, payload);
+    bytes[24..32].copy_from_slice(&revision.to_le_bytes());
+    bytes
 }
 
 pub fn decode_downstream(bytes: &[u8]) -> Option<Heard> {
@@ -127,6 +157,7 @@ pub fn decode_downstream(bytes: &[u8]) -> Option<Heard> {
         return None;
     }
     Some(Heard {
+        revision: u64::from_le_bytes(bytes[24..32].try_into().ok()?),
         speaker,
         position,
         sequence,
@@ -140,6 +171,7 @@ pub fn decode_downstream(bytes: &[u8]) -> Option<Heard> {
 /// leave a speaker stuck in a talking pose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VoiceActivity {
+    pub revision: u64,
     pub speaker: OwnerId,
     pub active: bool,
 }
@@ -166,9 +198,15 @@ pub fn encode_downstream_activity(speaker: OwnerId, active: bool) -> Vec<u8> {
     out.extend_from_slice(&[MARKER, DOWNSTREAM_ACTIVITY]);
     out.extend_from_slice(&speaker.to_le_bytes());
     out.push(u8::from(active));
+    out.extend_from_slice(&0u64.to_le_bytes());
     out
 }
 
+pub fn encode_routed_activity(speaker: OwnerId, active: bool, revision: u64) -> Vec<u8> {
+    let mut bytes = encode_downstream_activity(speaker, active);
+    bytes[11..19].copy_from_slice(&revision.to_le_bytes());
+    bytes
+}
 pub fn decode_downstream_activity(bytes: &[u8]) -> Option<VoiceActivity> {
     if bytes.len() != ACTIVITY_DOWNSTREAM_LEN
         || bytes[0] != MARKER
@@ -182,7 +220,11 @@ pub fn decode_downstream_activity(bytes: &[u8]) -> Option<VoiceActivity> {
         1 => true,
         _ => return None,
     };
-    Some(VoiceActivity { speaker, active })
+    Some(VoiceActivity {
+        speaker,
+        active,
+        revision: u64::from_le_bytes(bytes[11..19].try_into().ok()?),
+    })
 }
 
 /// Whether a voice from `speaker` carries to `listener`.
@@ -211,6 +253,7 @@ pub struct VoiceLink {
     connection: quinn::Connection,
     heard: Arc<Mutex<mpsc::Receiver<(Instant, Heard)>>>,
     activity: Arc<Mutex<mpsc::Receiver<(Instant, VoiceActivity)>>>,
+    routes: Arc<Mutex<RouteTable>>,
 }
 
 impl VoiceLink {
@@ -223,7 +266,26 @@ impl VoiceLink {
             connection,
             heard: Arc::new(Mutex::new(heard)),
             activity: Arc::new(Mutex::new(activity)),
+            routes: Arc::new(Mutex::new(RouteTable::default())),
         }
+    }
+    pub(crate) fn set_routes(&self, table: RouteTable) -> Result<()> {
+        anyhow::ensure!(
+            table.routes.len() <= bri_admin::MAX_CONNECTIONS
+                && table.routes.values().all(|p| p.valid()),
+            "invalid voice routes"
+        );
+        let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        if table.revision > routes.revision {
+            *routes = table;
+        }
+        Ok(())
+    }
+    pub fn routes(&self) -> RouteTable {
+        self.routes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     /// Identifies a transport lifetime; local moderation/audio cannot leak
     /// across sessions that happen to reuse an owner number.
@@ -336,6 +398,7 @@ mod tests {
             assert_eq!(
                 decode_downstream_activity(&bytes),
                 Some(VoiceActivity {
+                    revision: 0,
                     speaker: u64::MAX - 9,
                     active,
                 })

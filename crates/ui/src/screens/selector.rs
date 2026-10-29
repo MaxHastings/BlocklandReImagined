@@ -1055,6 +1055,7 @@ mod tests {
             items: vec![],
             basis: None,
             name_tags: None,
+            speakers: None,
         });
         assert!(ui.core.building_off());
         for c in [

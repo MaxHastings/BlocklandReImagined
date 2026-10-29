@@ -5,17 +5,19 @@ use super::Session;
 use bri_world::OwnerId;
 use std::collections::BTreeSet;
 
-/// The id of the voice chat's Add-On package. A host runs it when the player
-/// has it turned on in Add-Ons, before any player joins; off, the host relays
-/// no voices and clients hide the mute controls.
-pub const VOICE_PACKAGE_ID: &str = "voice_chat";
-
 impl Session {
-    /// Whether this session runs voice chat at all (see [`VOICE_PACKAGE_ID`]).
+    /// Whether an enabled, authorized package supplies voice policy.
     pub fn voice_chat(&self) -> bool {
-        self.packages
-            .as_ref()
-            .is_some_and(|host| host.catalog.packages.contains_key(VOICE_PACKAGE_ID))
+        self.packages.as_ref().is_some_and(|host| {
+            host.catalog.behaviours().any(|(id, b)| {
+                b.on_voice
+                    && host.catalog.packages[id]
+                        .manifest
+                        .capabilities
+                        .iter()
+                        .any(|c| c == "voice")
+            })
+        })
     }
     /// An admin muted `owner`'s voice: the host relays none of it, and no
     /// speech state of theirs reaches anyone.
@@ -72,4 +74,46 @@ impl Session {
     pub fn voice_mute_set(&self) -> &BTreeSet<OwnerId> {
         &self.voice_muted
     }
+}
+
+/// Per-listener playback selected by authorized server packages.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoicePlayback {
+    pub spatial: bool,
+    pub range: f32,
+    pub label: String,
+}
+impl VoicePlayback {
+    pub fn valid(&self) -> bool {
+        self.range.is_finite()
+            && (1.0..=2000.0).contains(&self.range)
+            && self.label.len() <= 48
+            && !self.label.chars().any(char::is_control)
+    }
+}
+/// One route returned by `voice_routes` (higher priority replaces lower).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceRoute {
+    #[serde(default = "route_allowed")]
+    pub hear: bool,
+    pub listener: u64,
+    pub spatial: bool,
+    pub range: f32,
+    pub label: String,
+    pub priority: u8,
+}
+
+impl Session {
+    pub fn voice_context(&self, owner: OwnerId) -> (Option<u64>, bool) {
+        (
+            self.game_of(owner).map(|g| g.0),
+            self.peers.get(&owner).is_some_and(|p| p.combat.alive),
+        )
+    }
+}
+
+fn route_allowed() -> bool {
+    true
 }

@@ -3700,3 +3700,5 @@ mod input_drain_tests {
         assert!(seen.iter().all(|q| *q <= 2), "{seen:?}");
     }
 }
+
+pub use voice::{VoicePlayback, VoiceRoute};

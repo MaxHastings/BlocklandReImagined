@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "sample-radio",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Sample Radio",
+  "description": "Optional channel radio within the same minigame/building group. Hold its Controls binding plus ordinary voice activation; /radio_channel selects 1\u201316. No new audio assets.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "capabilities": [
+    "voice"
+  ],
+  "provides": [
+    {
+      "kind": "behaviour",
+      "id": "sample-radio:behaviour/rules",
+      "file": "behaviour.json"
+    },
+    {
+      "kind": "script",
+      "id": "sample-radio:script/rules",
+      "file": "radio.rhai"
+    }
+  ],
+  "companions": [
+    "sample-radio-controls"
+  ]
+}

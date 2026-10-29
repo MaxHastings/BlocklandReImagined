@@ -25,7 +25,8 @@
 //! * `$pref::Voice::Threshold` (default 0.02): the microphone level that
 //!   counts as a voice, 0 to 1 (the indicator and voice activity use it).
 //! * `$pref::Voice::MicVolume` (default 1): microphone gain, 0 to 4.
-//! * `$pref::Voice::Range` (default 48): the distance voices fade out at.
+//!
+//! Spatial range is selected by host packages, separately for each voice route.
 use bri_audio::{
     Listener, VoiceChat,
     voice::{Activation, Settings as VoiceSettings},
@@ -77,7 +78,7 @@ pub fn config_from(prefs: &BTreeMap<String, String>) -> Config {
             threshold: prefs.f32_or("$pref::Voice::Threshold", 0.02),
             mic_gain: prefs.f32_or("$pref::Voice::MicVolume", 1.0),
             volume: prefs.f32_or(VOICE_VOLUME, 1.0),
-            range: prefs.f32_or("$pref::Voice::Range", bri_net::voice::RANGE),
+            range: bri_net::voice::RANGE,
         }
         .sanitized(),
         mode,
@@ -106,6 +107,8 @@ pub struct VoiceClient {
     /// A session is on and voice chat is enabled: the HUD indicator shows.
     active: bool,
     session_link: Option<usize>,
+    routes: bri_net::voice::RouteTable,
+    hud_activity: BTreeMap<OwnerId, Instant>,
     focused: bool,
     server_blocked: bool,
     /// Options is open: the existing capture stream also feeds its input meter,
@@ -142,6 +145,8 @@ impl VoiceClient {
             talking: false,
             active: false,
             session_link: None,
+            routes: bri_net::voice::RouteTable::default(),
+            hud_activity: BTreeMap::new(),
             focused: true,
             server_blocked: false,
             preview_active: false,
@@ -295,6 +300,44 @@ impl VoiceClient {
     }
     /// How loudly each speaker is being heard right now, 0..=1: the name
     /// tag's blue shade follows it. Locally muted players are absent.
+    fn apply_routes(&mut self, routes: bri_net::voice::RouteTable) {
+        if self.routes != routes {
+            for (owner, old) in &self.routes.routes {
+                if routes.routes.get(owner) != Some(old) {
+                    if let Some(chat) = &self.chat {
+                        chat.forget(*owner);
+                    }
+                    self.remote_activity.remove(owner);
+                    self.hud_activity.remove(owner);
+                }
+            }
+            self.routes = routes;
+        }
+    }
+    pub fn speaking_labels(&self, local_owner: OwnerId) -> BTreeMap<u64, (String, f32)> {
+        let now = Instant::now();
+        let mut labels: BTreeMap<_, _> = self
+            .hud_activity
+            .iter()
+            .filter_map(|(id, at)| {
+                if self.muted.contains(id) || self.server_muted.contains(id) {
+                    return None;
+                }
+                let route = self.routes.routes.get(id)?;
+                let age = now.saturating_duration_since(*at).as_secs_f32();
+                (age < 0.4).then(|| {
+                    (
+                        *id,
+                        (route.label.clone(), (1.0 - age / 0.4).clamped(0.0, 1.0)),
+                    )
+                })
+            })
+            .collect();
+        if self.local_speaking() {
+            labels.insert(local_owner, (String::new(), 1.0));
+        }
+        labels
+    }
     pub fn speaking_levels(&self, local_owner: OwnerId) -> BTreeMap<OwnerId, f32> {
         let mut levels = self
             .chat
@@ -370,6 +413,7 @@ impl VoiceClient {
             self.opening = None;
             self.muted.clear();
             self.remote_activity.clear();
+            self.hud_activity.clear();
             self.speaking.clear();
             self.talking = false;
             self.sent_activity = None;
@@ -393,6 +437,7 @@ impl VoiceClient {
             self.opening = None;
             self.speaking.clear();
             self.remote_activity.clear();
+            self.hud_activity.clear();
             if transport.is_none() {
                 self.muted.clear();
                 self.server_muted.clear();
@@ -480,6 +525,8 @@ impl VoiceClient {
             }
         }
 
+        let routes = link.map_or_else(bri_net::voice::RouteTable::default, |l| l.routes());
+        self.apply_routes(routes);
         if let Some(chat) = &self.chat {
             chat.set_transmit_allowed(self.active && self.focused && !self.server_blocked);
         }
@@ -489,6 +536,14 @@ impl VoiceClient {
             self.activity_in.clear();
             link.take_activity(&mut self.activity_in);
             for activity in self.activity_in.drain(..) {
+                if self
+                    .routes
+                    .routes
+                    .get(&activity.speaker)
+                    .is_none_or(|r| r.generation != activity.revision)
+                {
+                    continue;
+                }
                 if activity.active {
                     self.remote_activity.insert(activity.speaker, now);
                 } else {
@@ -498,6 +553,11 @@ impl VoiceClient {
             self.remote_activity
                 .retain(|_, at| now.saturating_duration_since(*at) <= REMOTE_ACTIVITY_TIMEOUT);
 
+            for id in self.remote_activity.keys() {
+                self.hud_activity.insert(*id, now);
+            }
+            self.hud_activity
+                .retain(|_, at| now.saturating_duration_since(*at) < Duration::from_millis(400));
             let active = self.local_speaking();
             let refresh = active
                 && self
@@ -544,11 +604,18 @@ impl VoiceClient {
                 {
                     continue;
                 }
-                chat.hear(
+                let Some(route) = self.routes.routes.get(&voice.speaker) else {
+                    continue;
+                };
+                if voice.revision != route.generation {
+                    continue;
+                }
+                chat.hear_routed(
                     voice.speaker,
                     voice.position,
                     voice.sequence,
                     &voice.payload,
+                    route.spatial.then_some(route.range),
                 );
             }
             self.speaking = chat.speaking();
@@ -608,7 +675,11 @@ mod tests {
         assert_eq!(config.settings.threshold, 0.2);
         assert_eq!(config.settings.mic_gain, 4.0);
         assert_eq!(config.settings.volume, 1.0);
-        assert_eq!(config.settings.range, 20.0);
+        assert_eq!(
+            config.settings.range,
+            bri_net::voice::RANGE,
+            "local prefs cannot override server-selected route distance"
+        );
         let disabled = config_from(&prefs(&[("$pref::Voice::Mode", "2")]));
         assert_eq!(disabled.settings.activation, Activation::Disabled);
         assert!(
@@ -710,5 +781,38 @@ mod tests {
         // The slider's preview changes the volume at once.
         voice.set_volume(0.0);
         assert_eq!(voice.config.settings.volume, 0.0);
+    }
+    #[test]
+    fn voice_route_revocation_clears_activity_and_keeps_unchanged_speakers() {
+        let mut voice = VoiceClient::new(&Settings::default());
+        let route = |generation| bri_net::voice::RouteState {
+            generation,
+            playback: bri_sim::session::VoicePlayback {
+                spatial: false,
+                range: 48.0,
+                label: "Radio 1".into(),
+            },
+        };
+        voice.routes = bri_net::voice::RouteTable {
+            revision: 1,
+            routes: BTreeMap::from([(8, route(1)), (9, route(2))]),
+        };
+        voice.remote_activity = BTreeMap::from([(8, Instant::now()), (9, Instant::now())]);
+        voice.hud_activity = voice.remote_activity.clone();
+        voice.apply_routes(bri_net::voice::RouteTable {
+            revision: 2,
+            routes: BTreeMap::from([(9, route(2))]),
+        });
+        assert!(!voice.remote_activity.contains_key(&8));
+        assert!(!voice.hud_activity.contains_key(&8));
+        assert!(voice.remote_activity.contains_key(&9));
+        voice.apply_routes(bri_net::voice::RouteTable {
+            revision: 3,
+            routes: BTreeMap::from([(9, route(3))]),
+        });
+        assert!(
+            voice.remote_activity.is_empty(),
+            "same speaker on a new channel/map generation cannot retain old speech activity"
+        );
     }
 }

@@ -1576,7 +1576,23 @@ fn voice() -> Session {
     std::fs::write(
         dir.join("package.json"),
         r#"{"schema_version":1,"id":"voice_chat","version":"1.0.0","api":1,
-            "name":"Voice Chat","license":"CC0-1.0","provides":[]}"#,
+            "name":"Voice Chat","license":"CC0-1.0","capabilities":["voice"],"provides":[
+            {"kind":"behaviour","id":"voice_chat:behaviour/rules","file":"behaviour.json"},
+            {"kind":"script","id":"voice_chat:script/rules","file":"voice.rhai"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("behaviour.json"),
+        r#"{"schema_version":1,"script":"voice.rhai","on_voice":true}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("voice.rhai"),
+        r#"fn voice_routes(speaker, listeners) {
+        let out = []; for id in listeners { if id != speaker {
+            out.push(#{listener:id,spatial:true,range:48.0,label:"",priority:0});
+        }} out
+    }"#,
     )
     .unwrap();
     let set = PackageSet {
@@ -1584,7 +1600,7 @@ fn voice() -> Session {
         packages: vec![PackageEntry {
             id: "voice_chat".into(),
             version: "1.0.0".into(),
-            side: Side::Shared,
+            side: Side::Server,
             dir: "voice_chat".into(),
             role: None,
         }],

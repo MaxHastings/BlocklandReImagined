@@ -600,6 +600,9 @@ pub struct Behaviour {
     /// so it must be quick.
     #[serde(default)]
     pub on_ride: bool,
+    /// Read-only `voice_routes(speaker, listeners)`, at most five times/second.
+    #[serde(default)]
+    pub on_voice: bool,
     /// How mini-games' own settings start and how far they may go while
     /// these rules run.
     #[serde(default, skip_serializing_if = "Option::is_none")]

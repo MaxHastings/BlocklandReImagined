@@ -1,0 +1,1 @@
+Private reliable VoiceRoutes tables select playback/range/label per listener. Voice audio datagrams carry route revision; obsolete audio is rejected after policy transitions. Voice activity is recipient-filtered.

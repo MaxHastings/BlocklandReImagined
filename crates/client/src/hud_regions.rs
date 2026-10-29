@@ -384,6 +384,7 @@ impl HudRegions {
                 items,
                 basis: winner.layout.basis,
                 name_tags: winner.layout.name_tags.clone(),
+                speakers: winner.layout.speakers.clone(),
             });
         }
         self.blends = blends;

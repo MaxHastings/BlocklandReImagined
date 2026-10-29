@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "sample-radio-controls",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Radio Controls",
+  "description": "Held transmit binding for the sample radio; uses ordinary voice activation.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "dependencies": {
+    "sample-radio": "^1.0.0"
+  },
+  "provides": [
+    {
+      "kind": "binds",
+      "id": "sample-radio-controls:binds/radio",
+      "file": "binds.json"
+    }
+  ]
+}
