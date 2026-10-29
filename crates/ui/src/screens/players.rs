@@ -209,7 +209,7 @@ impl Players {
             .and_then(|n| self.view.selected(n))
             .and_then(|i| self.ids.get(i as usize))
             .copied();
-        let mut rows = core.players.iter().collect::<Vec<_>>();
+        let mut rows = core.players.iter().filter(|p| !p.bot).collect::<Vec<_>>();
         rows.sort_by(|a, b| {
             let order = match self.sort {
                 0 => (a.super_admin, a.admin).cmp(&(b.super_admin, b.admin)),
@@ -282,7 +282,7 @@ impl Players {
                 format!(
                     "{} - {}/{} Players",
                     core.server_name,
-                    core.players.len(),
+                    rows.len(),
                     core.max_players
                 ),
             );
@@ -322,7 +322,7 @@ impl Players {
         }
         // `NewPlayerListGui::clickList` trust and ignore blockers.
         let row = selected_id.and_then(|id| core.players.iter().find(|p| p.id == id));
-        let lan = core.players.iter().any(|p| p.trust == "LAN");
+        let lan = core.players.iter().any(|p| !p.bot && p.trust == "LAN");
         let trust = row.map_or("", |p| p.trust.as_str());
         let (invite_build, invite_full, remove_build, remove_full) = match trust {
             _ if lan || row.is_none() => (false, false, false, false),
@@ -598,6 +598,7 @@ mod tests {
         ui.core.players = vec![
             PlayerRow {
                 id: u64::MAX,
+                bot: false,
                 name: "Zed".into(),
                 score: 3,
                 admin: true,
@@ -609,6 +610,7 @@ mod tests {
             },
             PlayerRow {
                 id: 2,
+                bot: false,
                 name: "Ada".into(),
                 score: 8,
                 admin: false,
@@ -702,6 +704,7 @@ mod tests {
     fn three_players(ui: &mut Ui) {
         let row = |id: u64, name: &str| PlayerRow {
             id,
+            bot: false,
             ignoring: false,
             name: name.into(),
             score: 0,
@@ -712,6 +715,43 @@ mod tests {
             loading: false,
         };
         ui.core.players = vec![row(1, "Hosty"), row(7, "Guesty"), row(9, "Walker")];
+    }
+    #[test]
+    fn bots_are_hidden_without_losing_loading_humans_or_stale_selection() {
+        let mut ui = player_list_ui();
+        three_players(&mut ui);
+        ui.core.server_name = "Mixed".into();
+        ui.core.max_players = 8;
+        ui.core.voice_on_server = true;
+        ui.core.players[1].loading = true;
+        ui.core.players[1].bl_id = None;
+        ui.core.players[2].bot = true;
+        let mut s = Players::new(&ui.core);
+        let n = s.view.id("NPL_List").unwrap();
+        assert_eq!(s.ids, [7, 1]);
+        assert!(s.view.state(n).items[0].0.contains("Guesty (loading)"));
+        let w = s.view.id("NPL_Window").unwrap();
+        assert_eq!(s.view.text_of(w), "Mixed - 2/8 Players");
+        assert_eq!(ui.core.players.len(), 3, "team roster stays complete");
+        // A refreshed classification must clear a formerly selected row.
+        s.view.select(n, Some(0));
+        ui.core.players[1].bot = true;
+        s.on_update(&mut ui.core);
+        assert_eq!(s.ids, [1]);
+        assert_eq!(s.view.selected(n), None);
+        let mute = s.view.id("NativeVoiceMute").unwrap();
+        assert!(!s.view.node(mute).state.active);
+        s.on_event(
+            &ViewEvent {
+                node: mute,
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        assert!(ui.drain_actions().is_empty());
+        ui.core.players.retain(|p| !p.bot);
+        s.on_update(&mut ui.core);
+        assert_eq!(s.ids, [1]);
     }
     #[test]
     fn voice_on_widens_the_list_and_states_each_players_mute() {

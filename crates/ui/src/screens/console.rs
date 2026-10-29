@@ -155,7 +155,7 @@ pub fn registry(core: &Core) -> Registry<Core> {
         "List players on this server.",
         |core, _, out| {
             in_game(core)?;
-            for p in &core.players {
+            for p in core.players.iter().filter(|p| !p.bot) {
                 let role = if p.super_admin {
                     " (super admin)"
                 } else if p.admin {
@@ -168,7 +168,10 @@ pub fn registry(core: &Core) -> Registry<Core> {
                     p.name, p.score, p.trust
                 ));
             }
-            out.echo(format!("{} player(s).", core.players.len()));
+            out.echo(format!(
+                "{} player(s).",
+                core.players.iter().filter(|p| !p.bot).count()
+            ));
             Ok(())
         },
     );
@@ -514,7 +517,12 @@ fn admin(core: &mut Core, action: AdminAction) -> Result<RequestId, String> {
 fn player_names(core: &Core) -> Vec<String> {
     match &core.admin.snapshot {
         Some(s) => s.players.iter().map(|p| p.name.clone()).collect(),
-        None => core.players.iter().map(|p| p.name.clone()).collect(),
+        None => core
+            .players
+            .iter()
+            .filter(|p| !p.bot)
+            .map(|p| p.name.clone())
+            .collect(),
     }
 }
 

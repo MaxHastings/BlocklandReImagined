@@ -1390,13 +1390,12 @@ impl App {
                     }
                 }
             }
-            // Everyone's rank, from the host's administration list. Names
+            // Rank and bot classification from the host's administration list. Names
             // are unique on a server, so they pair the two lists.
-            let rank = |name: &str| {
+            let player = |name: &str| {
                 view.admin_snapshot
                     .as_ref()
                     .and_then(|s| s.players.iter().find(|p| p.name == name))
-                    .map(|p| p.role)
             };
             self.ui.apply_session(
                 a.id,
@@ -1415,15 +1414,17 @@ impl App {
                         )
                         .map(|(owner, name, loading)| PlayerRow {
                             id: owner,
+                            bot: player(name).is_some_and(|p| p.bot),
                             name: plain_chat(name),
                             score: view.vitals.get(&owner).map_or(0, |v| {
                                 v.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32
                             }),
-                            admin: rank(name).map_or(
+                            admin: player(name).map(|p| p.role).map_or(
                                 owner == view.owner && view.administrator,
                                 bri_admin::Role::is_admin,
                             ),
-                            super_admin: rank(name) == Some(bri_admin::Role::SuperAdmin),
+                            super_admin: player(name)
+                                .is_some_and(|p| p.role == bri_admin::Role::SuperAdmin),
                             bl_id: a
                                 .trust
                                 .get(&owner)

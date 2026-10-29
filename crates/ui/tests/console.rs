@@ -96,6 +96,40 @@ fn actions(u: &mut Ui) -> Vec<UiAction> {
 }
 
 #[test]
+fn player_listing_counts_only_humans_including_loading_connections() {
+    let mut u = ui();
+    u.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: true,
+        single_player: false,
+        admin: true,
+    }));
+    u.core.players = [false, false, true]
+        .into_iter()
+        .enumerate()
+        .map(|(i, bot)| PlayerRow {
+            id: i as u64,
+            bot,
+            name: format!("RosterListing{i}"),
+            score: 0,
+            admin: false,
+            super_admin: false,
+            bl_id: None,
+            trust: "-".into(),
+            ignoring: false,
+            loading: i == 1,
+        })
+        .collect();
+    tilde(&mut u);
+    submit(&mut u, "players");
+    assert!(log_has("  RosterListing0  score 0  trust -"));
+    assert!(log_has("  RosterListing1  score 0  trust -"));
+    assert!(!log_has("  RosterListing2  score 0  trust -"));
+    assert!(log_has("2 player(s)."));
+}
+
+#[test]
 fn tilde_toggles_the_console_and_releases_the_cursor() {
     let mut u = ui();
     u.apply(UiUpdate::Connection(ConnectionState::InGame {

@@ -75,6 +75,7 @@ pub fn state(snapshot: &AdminSnapshot) -> ui::AdminSnapshot {
         players: snapshot
             .players
             .iter()
+            .filter(|player| !player.bot)
             .map(|player| ui::AdminPlayer {
                 connection: player.connection,
                 name: plain(&player.name),
@@ -641,6 +642,52 @@ mod tests {
         let mapped = state(&s);
         assert!(!mapped.supported.contains(&ui::AdminFeature::Ban));
         assert!(!mapped.supported.contains(&ui::AdminFeature::HostOptions));
+        Ok(())
+    }
+    #[test]
+    fn administration_hides_bots_and_clears_their_selection() -> Result<()> {
+        let mut s = snapshot(Role::Admin);
+        let human = bri_sim::session::AdminPlayer {
+            connection: 9,
+            name: "Builder".into(),
+            identity_label: String::new(),
+            role: Role::Player,
+            owner: false,
+            local: false,
+            bot: false,
+            persistent_identity: false,
+        };
+        s.players = vec![
+            human.clone(),
+            bri_sim::session::AdminPlayer {
+                connection: 10,
+                name: "Bot".into(),
+                bot: true,
+                ..human
+            },
+        ];
+        let mapped = state(&s);
+        assert_eq!(
+            mapped
+                .players
+                .iter()
+                .map(|p| p.connection)
+                .collect::<Vec<_>>(),
+            [9]
+        );
+        let mut model = ui::AdminModel::default();
+        model
+            .apply(ui::AdminUpdate::State(mapped))
+            .map_err(anyhow::Error::msg)?;
+        model.selected_player = Some(9);
+        s.revision += 1;
+        s.players[0].bot = true;
+        model
+            .apply(ui::AdminUpdate::State(state(&s)))
+            .map_err(anyhow::Error::msg)?;
+        assert!(model.snapshot.as_ref().unwrap().players.is_empty());
+        assert_eq!(model.selected_player, None);
+        assert!(!model.allowed(&ui::AdminAction::Kick { target: 9 }));
         Ok(())
     }
     #[test]
