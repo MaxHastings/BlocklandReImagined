@@ -1004,10 +1004,29 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
     let items = &app.content.weapons.pack.items;
     let base = items.keys().filter(|id| !id.contains(':')).count();
     assert_eq!(base, base_weapon_items(&f.root)?);
-    let all = items.len();
-    assert_eq!(app.build.tool_ui.server_catalog().items.len(), all);
-    assert_eq!(app.content.datablocks["ItemData"].len(), all);
-    assert_eq!(app.content.item_physics.bounds.len(), all);
+    // Authored hidden items remain usable by scripts and physics, but are
+    // deliberately absent from player-facing item selectors.
+    let selectable: BTreeSet<_> = items
+        .iter()
+        .filter(|(_, item)| !item.hidden)
+        .map(|(id, _)| id.clone())
+        .collect();
+    assert_eq!(app.build.tool_ui.server_catalog().items, selectable);
+    assert_eq!(
+        app.content.datablocks["ItemData"]
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<BTreeSet<_>>(),
+        selectable
+    );
+    assert_eq!(
+        app.content
+            .item_physics
+            .bounds
+            .keys()
+            .collect::<BTreeSet<_>>(),
+        items.keys().collect::<BTreeSet<_>>()
+    );
     app.ui.core.request(UiAction::HostGame {
         map: "v20/add-ons/map_bedroom/bedroom.mis".into(),
         mode: ServerMode::SinglePlayer,
