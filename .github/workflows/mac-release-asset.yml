@@ -44,6 +44,8 @@ env:
   PUBLISH: ${{ inputs.publish }}
   GH_TOKEN: ${{ github.token }}
   SCCACHE_GHA_ENABLED: 'true'
+  # Long final links must not reset the compiler-cache daemon/counters.
+  SCCACHE_IDLE_TIMEOUT: '0'
   RUSTC_WRAPPER: sccache
 
 jobs:
@@ -65,6 +67,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           shared-key: release-mac
       - uses: mozilla-actions/sccache-action@v0.0.9
 
@@ -82,7 +85,16 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Build the game, Add-On importer and modder tools
-        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
+        run: python3 tools/release_build.py --system macos
+
+      - name: Retain build timing and resource evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-build-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release-build
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Verify release panic capture
         run: cargo test --release --locked -p bri-crash --test capture
