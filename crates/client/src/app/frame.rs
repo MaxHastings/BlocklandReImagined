@@ -527,15 +527,12 @@ impl App {
                 match riding {
                     Some((SeatRole::MouseDriver, heading, pitch, _)) => {
                         self.controls.set_vehicle_view(Some((heading, pitch)));
-                        self.mounts.mount_heading = Some(heading);
                     }
                     Some((SeatRole::Actor, ..)) => {
                         self.controls.set_vehicle_view(None);
-                        self.mounts.mount_heading = None;
                     }
                     None => {
                         self.controls.set_vehicle_view(None);
-                        self.mounts.mount_heading = None;
                     }
                     // Passengers and the Jeep's driver sit fixed in the seat:
                     // the mouse only tilts their view (`Player::processTick`
@@ -544,9 +541,8 @@ impl App {
                     Some((SeatRole::Passenger | SeatRole::StrafeDriver, heading, _, seat_yaw)) => {
                         self.controls.set_vehicle_view(None);
                         self.controls.set_seat_yaw(seat_yaw.or(Some(heading)));
-                        self.mounts.mount_heading = Some(heading);
                     }
-                    Some((SeatRole::Gunner, heading, ..)) => {
+                    Some((SeatRole::Gunner, ..)) => {
                         self.controls.set_vehicle_view(None);
                         // A new gunner takes control of an attached turret
                         // looking where it points, whichever seat they came
@@ -573,7 +569,6 @@ impl App {
                             // and lets the driver's turns drag the gun around.
                             _ => self.mounts.takes_turret = false,
                         }
-                        self.mounts.mount_heading = Some(heading);
                     }
                 }
                 // From the next move on, moves are shaped for this seat once
@@ -606,7 +601,6 @@ impl App {
                     && let Some(heading) = self.motion.presented().get(&ride.mount).map(|m| m.yaw)
                 {
                     self.controls.set_seat_yaw(Some(heading));
-                    self.mounts.mount_heading = Some(heading);
                 }
                 Self::pose_mounts(
                     &mut self.avatar.mount_meshes,

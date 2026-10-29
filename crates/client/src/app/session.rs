@@ -262,7 +262,6 @@ impl App {
         // Nothing is ridden any more, and the camera forgets the game's
         // eyes. The crosshair, wheel and overlay flags mirror what the UI
         // was told; the next frame's `update_held_weapon` settles them.
-        self.mounts.mount_heading = None;
         self.mounts.seated_on = None;
         self.mounts.takes_turret = false;
         self.mounts.seat_report = None;
