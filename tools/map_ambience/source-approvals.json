@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "requirement": "Maxwell 2026-10-29: hear every proposed recording source first; obtain source-specific approval before shipping adoption. Changed inputs or excerpts require a new audition.",
+  "sources": [
+    {
+      "id": "freesound-preview:cold-air",
+      "source": "https://freesound.org/people/klangfabrik/sounds/117504/",
+      "input_sha256": "21d58a65a60a3da3246ebd27575adedda6285c1f20ce483d3417dda2235c76e4",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:dry-air",
+      "source": "https://freesound.org/people/clement.bernardeau/sounds/718973/",
+      "input_sha256": "0980b38b04845b2ea9015ca92e9bb1ee33e5e3ad648ec2b27085655e20ac8e6d",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:fridge",
+      "source": "https://freesound.org/people/FOSSarts/sounds/740110/",
+      "input_sha256": "7dd555e405eb16f87e9649df36a7d6d16773c679f1f02fb9799bd1275e990e2a",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:leaves",
+      "source": "https://freesound.org/people/Nox_Sound/sounds/530908/",
+      "input_sha256": "b8962b2e82563d6a864c3215147e975633af5f27205f07cd2d3639584d6e715b",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:night",
+      "source": "https://freesound.org/people/Nox_Sound/sounds/637083/",
+      "input_sha256": "4ee4af53ef2d1c3315eb3adf4271404779e76d259b46014b62a7a0951849f5b0",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:night-alt",
+      "source": "https://freesound.org/people/timothyd4y/sounds/587907/",
+      "input_sha256": "d92efe2e2d73b30cdbc69db7f279af440b8172ea4aefe1f5151258df863b66e8",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:palms",
+      "source": "https://freesound.org/people/klangfabrik/sounds/423800/",
+      "input_sha256": "229af458d067a31250c40266465178a89d9d15b8e4f6a866be39b7b9b8982bea",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:rain",
+      "source": "https://freesound.org/people/pmstrain/sounds/348805/",
+      "input_sha256": "b5b5a1835b05676fc69ad6094b948fb6d443894e8ddad8ce279b2fc78f48566c",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:room",
+      "source": "https://freesound.org/people/visionear/sounds/565535/",
+      "input_sha256": "00b64b3566e5596f8c4905d95dc09212bc21a69ff62d1f02db2a3b0a145c8332",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "freesound-preview:shore",
+      "source": "https://freesound.org/people/SamsterBirdies/sounds/578524/",
+      "input_sha256": "fd505dbd43cb1c3508f884279bf5d3e060bb14f2bc3d9b4cce334eb7a75b5d7f",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-wav:room-master",
+      "source": "https://lasonotheque.org/atmosphere-sonore-maison-s2458.html",
+      "input_sha256": "e3eee75adbc4c13bcd5cf6c7bc398f49c9a8a5a4b211d3f3fa6b4392b23e6843",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-wav:fridge-master",
+      "source": "https://lasonotheque.org/refrigerateur-s1157.html",
+      "input_sha256": "c1f33f3508cab6330b66cc8948b9ddafdd8f203929303690bcef8f4f9639302a",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-wav:grass-master",
+      "source": "https://lasonotheque.org/vent-dans-les-herbes-hautes-s0908.html",
+      "input_sha256": "e45986e15436ea41af289fb929524df889c1f3204e263fd6b1231d4140b11da1",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-wav:robin",
+      "source": "https://lasonotheque.org/rouge-gorge-4-s1670.html",
+      "input_sha256": "02276115894a2ecda9e771b98f4b24be6d0946982d51425a37d41797d0cb46b4",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-wav:blackbird",
+      "source": "https://lasonotheque.org/merle-noir-30-s3503.html",
+      "input_sha256": "08536ceee045247753562c02cad63334ec50b6780220dd747351fdeb0eb2bee6",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-wav:cricket",
+      "source": "https://lasonotheque.org/grillon-champetre-male-s1020.html",
+      "input_sha256": "1a5d7f026c9fbc3bd56d2e4d4e4accfafdc6846db8e4698d896afc02744850f6",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-wav:sea-master",
+      "source": "https://lasonotheque.org/mer-vagues-s0266.html",
+      "input_sha256": "2959dc21f0ce519c97b4101086b6ea64ae4fdb96e57687b3b5507be8cbe27c1a",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-wav:air-foley",
+      "source": "https://lasonotheque.org/vent-s0595.html",
+      "input_sha256": "38452331ec079f5cc67e98d154642deeab13629ebf0e0ffd971bd4fdc25a2f71",
+      "state": "pending",
+      "approval_evidence": null,
+      "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
+    },
+    {
+      "id": "original-map:creek-frogs",
+      "author": "SolarFlare",
+      "source": "Bundled original Map_Creek.zip/sound/swamp_frogs_loop.wav",
+      "archive_sha256": "335751840111ef75446ad5ccc96ca6d033d3100213ad78de8750a370dbd6d098",
+      "input_sha256": "43a3ac2f48a2505ff71aa4a2e03ef16273d8f3671410e81caf0782960b5cadd9",
+      "state": "pending",
+      "approval_evidence": null,
+      "preview": "original-map-audio/creek-frogs.wav",
+      "preview_sha256": "bb6e0f5f14b4573786122d1d76722b414e0744b470c4531deb788aca30e979e6",
+      "seconds": 8.545215419501133,
+      "rate": 11025,
+      "channels": 1,
+      "gain_db": -9.362399518190825,
+      "quality": "Original map WAV, audition gain adjusted only; not a replacement recording",
+      "license": "Original map package provenance; not relabelled CC0"
+    },
+    {
+      "id": "original-map:creek-waterfall",
+      "author": "SolarFlare",
+      "source": "Bundled original Map_Creek.zip/sound/dam_water_loop.wav",
+      "archive_sha256": "335751840111ef75446ad5ccc96ca6d033d3100213ad78de8750a370dbd6d098",
+      "input_sha256": "c4a261782c94e133056bc0e70c408e895251800b838188434b8abaae9d4678fa",
+      "state": "pending",
+      "approval_evidence": null,
+      "preview": "original-map-audio/creek-waterfall.wav",
+      "preview_sha256": "62d459e991aa05964a17a809277967375d276d7548073dff6a73e3768e7cf260",
+      "seconds": 3.8090249433106576,
+      "rate": 44100,
+      "channels": 1,
+      "gain_db": -17.86267601049341,
+      "quality": "Original map WAV, audition gain adjusted only; not a replacement recording",
+      "license": "Original map package provenance; not relabelled CC0"
+    },
+    {
+      "id": "original-map:creek-shore",
+      "author": "SolarFlare",
+      "source": "Bundled original Map_Creek.zip/sound/shore.wav",
+      "archive_sha256": "335751840111ef75446ad5ccc96ca6d033d3100213ad78de8750a370dbd6d098",
+      "input_sha256": "fbbf167280e76952ad6ada9b3d2f9f025278162248d63fcb548a2f8bd3adc37a",
+      "state": "pending",
+      "approval_evidence": null,
+      "preview": "original-map-audio/creek-shore.wav",
+      "preview_sha256": "86596b5599957293b1f65e16b4101361ecc34c5184c263686d24dc812a6b41aa",
+      "seconds": 2.9723809523809526,
+      "rate": 22050,
+      "channels": 1,
+      "gain_db": -3.4114308489786915,
+      "quality": "Original map WAV, audition gain adjusted only; not a replacement recording",
+      "license": "Original map package provenance; not relabelled CC0"
+    },
+    {
+      "id": "original-map:forest-dark-crickets",
+      "author": "Tyler66",
+      "source": "Bundled original Map_Forest.zip/soundNight.wav",
+      "archive_sha256": "eb041482d7b007610677f1bac631f543f07eb583af7ec89ff469c2586a409052",
+      "input_sha256": "ef3ced0683bb60f0fe8ac87f3b112bc43ee8c76637c6fdfe4dec3c1335337127",
+      "state": "pending",
+      "approval_evidence": null,
+      "preview": "original-map-audio/forest-dark-crickets.wav",
+      "preview_sha256": "622c010639ca26b758abae1af0a739e038030064bb4a9e1cac6696794a319af6",
+      "seconds": 10.002244897959184,
+      "rate": 44100,
+      "channels": 1,
+      "gain_db": -15.689859301260983,
+      "quality": "Original map WAV, audition gain adjusted only; not a replacement recording",
+      "license": "Original map package provenance; not relabelled CC0"
+    }
+  ]
+}
