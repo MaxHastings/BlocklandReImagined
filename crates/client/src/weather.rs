@@ -195,23 +195,34 @@ fn with_sky_rain(
         .collect();
     // A picture the map packs already use is cut into the cells they cut it
     // into (v20's snow is four flakes); any other into Torque's defaults,
-    // four drops and two splashes a side.
-    let cells = |image: &bri_content::environment::Image, default: u32| {
-        manifest
-            .definitions
-            .iter()
-            .find_map(|d| {
-                let drop = manifest.textures.get(&d.drop_texture)?;
-                if drop.sha256 == image.sha256 {
-                    return Some(d.drops_per_side);
-                }
-                let splash = manifest.textures.get(d.splash_texture.as_ref()?)?;
-                (splash.sha256 == image.sha256).then_some(d.splashes_per_side)
-            })
-            .unwrap_or(default)
-    };
-    let drops_per_side = cells(rain.drop.0, 4);
-    let splashes_per_side = rain.splash.as_ref().map_or(2, |(image, _)| cells(image, 2));
+    // four drops and two splashes a side. Importers can encode identical
+    // pixels into different PNG bytes, so also compare decoded content.
+    let cells =
+        |image: &bri_content::environment::Image, texture: &WeatherTexture, default: u32| {
+            let rgba_sha256 = sha256(&texture.rgba);
+            let matches = |record: &TextureRecord| {
+                record.width == texture.width
+                    && record.height == texture.height
+                    && (record.sha256 == image.sha256 || record.rgba_sha256 == rgba_sha256)
+            };
+            manifest
+                .definitions
+                .iter()
+                .find_map(|d| {
+                    let drop = manifest.textures.get(&d.drop_texture)?;
+                    if matches(drop) {
+                        return Some(d.drops_per_side);
+                    }
+                    let splash = manifest.textures.get(d.splash_texture.as_ref()?)?;
+                    matches(splash).then_some(d.splashes_per_side)
+                })
+                .unwrap_or(default)
+        };
+    let drops_per_side = cells(rain.drop.0, &rain.drop.1, 4);
+    let splashes_per_side = rain
+        .splash
+        .as_ref()
+        .map_or(2, |(image, texture)| cells(image, texture, 2));
     let mut add =
         |name: &str, (image, texture): (&bri_content::environment::Image, WeatherTexture)| {
             let id = format!("{SKY_RAIN}-{name}");
@@ -278,6 +289,15 @@ mod tests {
 
     #[test]
     fn a_steam_skys_snow_replaces_the_maps_rain_until_unpicked() {
+        sky_snow(false);
+    }
+
+    #[test]
+    fn reencoded_sky_snow_keeps_whole_flakes() {
+        sky_snow(true);
+    }
+
+    fn sky_snow(reencoded: bool) {
         let base = bri_weather::testing::showcase_pack();
         let mut snow_record = base.manifest.textures["fixture/snow"].clone();
         snow_record.sha256 = "a".repeat(64);
@@ -303,11 +323,11 @@ mod tests {
             revision: 0,
         };
         weather.set_map("fixture/storm", vec![]).unwrap();
-        // v20's snow picture (the same file): cut into the same four flakes.
+        // Identical snow pixels must retain four whole flakes after PNG re-encoding.
         let image = bri_content::environment::Image {
             file: "snow.png".into(),
             source: "base/data/specialfx/snow.png".into(),
-            sha256: "a".repeat(64),
+            sha256: if reencoded { "b" } else { "a" }.repeat(64),
             width: 8,
             height: 8,
         };
@@ -332,7 +352,7 @@ mod tests {
         let rain = || SkyRain {
             sky: "add-ons/sky_spooky3/spooky3snow.dml",
             precipitation: &precipitation,
-            drop: (&image, bri_weather::testing::texture("", 8, 8, 255)),
+            drop: (&image, bri_weather::testing::texture("", 8, 8, 200)),
             splash: None,
         };
         assert!(weather.set_sky(Some(rain())).unwrap());
@@ -352,6 +372,30 @@ mod tests {
             .find(|d| d.id == SKY_RAIN)
             .unwrap();
         assert_eq!(definition.drops_per_side, 2);
+        if reencoded {
+            // A reused filename or byte sequence with a different shape must
+            // not borrow the atlas layout of a different picture.
+            for reshape in [false, true] {
+                let mut different = rain();
+                if reshape {
+                    different.drop.1.width = 4;
+                    different.drop.1.height = 16;
+                } else {
+                    different.drop.1.rgba[3] ^= 255;
+                }
+                let unmatched = with_sky_rain(&weather.base, "fixture/storm", different).unwrap();
+                assert_eq!(
+                    unmatched
+                        .manifest
+                        .definitions
+                        .last()
+                        .unwrap()
+                        .drops_per_side,
+                    4,
+                    "unmatched pixels or dimensions keep the default atlas"
+                );
+            }
+        }
         // The other map keeps its own.
         assert_eq!(pack.placements_for("fixture/winter").count(), 1);
         assert!(weather.set_sky(None).unwrap());
