@@ -5,6 +5,9 @@ use crate::building::SectionProbe;
 use crate::local_physics::{CollisionMotion, CollisionWindow, GRAVITY};
 use bri_sim::grid::Index;
 use std::collections::VecDeque;
+#[cfg(test)]
+mod interaction_tests;
+mod motion;
 mod partition;
 mod proxy;
 pub(super) mod shots;
@@ -14,6 +17,8 @@ pub(super) const MAX_VISIBLE: usize = bri_sim::presentation::MAX_SECTION_MEMBERS
 const MAX_CHUNKS: usize = 64;
 const WITNESSES: usize = 72;
 const MAX_PROXY_PARTS: usize = 2048;
+const MAX_CHUNK_MEMBERS: usize = 16;
+const MAX_CHUNK_SPAN: f32 = 6.;
 
 #[derive(Clone)]
 pub(super) struct SectionPiece {
@@ -46,8 +51,12 @@ struct Chunk {
     spin: Vec3,
     handle: Option<RigidBodyHandle>,
     collision: CollisionWindow,
-    recoil: Vec3,
     released: bool,
+    sweep: Option<crate::building::DebrisSweep>,
+    neighbors: Option<motion::Neighbors>,
+    sweep_dt: f32,
+    slide: u8,
+    debt: f32,
 }
 impl Chunk {
     fn pose(&self, world: &PhysicsWorld) -> (Vec3, Quat) {
@@ -58,15 +67,18 @@ impl Chunk {
                 Quat::from_array(rb.rotation().to_array()),
             )
         });
-        (center + self.recoil, turn)
+        (center, turn)
     }
     fn freeze(&mut self, world: &mut PhysicsWorld) {
         (self.center, self.turn) = self.pose(world);
         if let Some(h) = self.handle.take() {
+            let rb = &world.bodies[h];
+            self.velocity = Vec3::from_array(rb.linvel().to_array());
+            self.spin = Vec3::from_array(rb.angvel().to_array());
             world.remove_body_with_colliders(h, true);
         }
-        self.released = true;
-        self.recoil = Vec3::ZERO;
+        self.sweep = None;
+        self.neighbors = None;
         self.collision.reset();
     }
 }
@@ -92,7 +104,7 @@ pub(super) struct Section {
     impact_at: Option<f32>,
     probe_generation: u64,
     pub landed: bool,
-    shared_only: bool,
+    chunk_turn: usize,
     pending: VecDeque<(SectionProbe, f32, Vec3, Vec3)>,
     contact_point: Option<Vec3>,
     snap_told: bool,
@@ -152,7 +164,7 @@ impl Section {
             impact_at: None,
             probe_generation: 0,
             landed: false,
-            shared_only: false,
+            chunk_turn: 0,
             pending: VecDeque::new(),
             contact_point: None,
             snap_told: false,
@@ -409,17 +421,8 @@ impl Section {
         self.landed = self.impact_at.is_some_and(|at| self.age >= at);
         Ok(())
     }
-    fn keep_shared(&mut self) {
-        debug_assert!(self.chunks.iter().all(|c| c.handle.is_none()));
-        self.shared_only = true;
-        self.plan = None;
-        self.finishing = None;
-        self.chunks.clear();
-        self.assignment.fill(None);
-    }
-    fn partition(&mut self, quality: usize, slots: usize, work: &mut u32) {
+    fn partition(&mut self, work: &mut u32) {
         if !self.sealed
-            || self.shared_only
             || self.prepared != self.pieces.len()
             || self.pieces.len() < self.expected
             || (self.finishing.is_none() && !self.chunks.is_empty())
@@ -427,35 +430,14 @@ impl Section {
             return;
         }
         if self.plan.is_none() && self.finishing.is_none() {
-            if quality == 0 {
-                self.keep_shared();
-                return;
-            }
-            // Older debris can temporarily own every body slot. Keep the
-            // complete falling material, then plan breakup when a slot frees.
-            // This is not the user's deliberate Physics Quality Off policy.
-            if slots == 0 {
-                return;
-            }
-            let desired = ((self.pieces.len() as f32).sqrt() * (quality as f32 / 2048.).sqrt())
-                .ceil() as usize;
-            let target = self
-                .pieces
-                .len()
-                .div_ceil(desired.clamp(1, MAX_CHUNKS).min(slots))
-                .min(2048);
             self.plan = Some(Partition::new(
                 self.index.clone(),
                 std::mem::take(&mut self.remaining),
-                target,
+                MAX_CHUNK_MEMBERS,
             ));
         }
         if let Some(plan) = &mut self.plan {
             if !plan.step(work) {
-                return;
-            }
-            if plan.over_limit {
-                self.keep_shared();
                 return;
             }
             if !self.landed {
@@ -491,10 +473,7 @@ impl Section {
             }
             let local = (low + high) * 0.5;
             let (proxy, parts) = proxy::shape(&self.pieces, &members, self.origin + local);
-            if proxy.is_none() {
-                self.keep_shared();
-                return;
-            }
+            debug_assert!(proxy.is_some(), "bounded groups fit exact proxies");
             self.chunks.push(Chunk {
                 local,
                 half: (high - low) * 0.5,
@@ -506,8 +485,12 @@ impl Section {
                 spin: spin.clamp_length_max(3.),
                 handle: None,
                 collision: Default::default(),
-                recoil: Vec3::ZERO,
                 released: false,
+                sweep: None,
+                neighbors: None,
+                sweep_dt: 0.,
+                slide: 0,
+                debt: 0.,
             });
         }
         if self
@@ -520,6 +503,63 @@ impl Section {
     }
 }
 impl BrickDebris {
+    pub(super) fn blast_fallback(
+        &mut self,
+        origin: Vec3,
+        force: f32,
+        radius: f32,
+        normal: Option<Vec3>,
+    ) {
+        for c in self
+            .sections
+            .values_mut()
+            .flat_map(|s| &mut s.chunks)
+            .filter(|c| c.handle.is_none() && !c.released)
+        {
+            let Some(shape) = &c.proxy else {
+                continue;
+            };
+            let pose = Pose::from_parts(
+                Vector::from_array(c.center.to_array()),
+                Rotation::from_array(c.turn.to_array()),
+            );
+            let nearest = shape
+                .project_point(&pose, Vector::from_array(origin.to_array()), true)
+                .point;
+            let offset = Vec3::from_array(nearest.to_array()) - origin;
+            if offset.length() > radius {
+                continue;
+            }
+            let direction = (offset.normalize_or(Vec3::Y) + normal.unwrap_or(Vec3::ZERO) * 2.)
+                .normalize_or(Vec3::Y);
+            let speed =
+                (force * FORCE_TO_SPEED * (1. - offset.length() / radius).clamped(0.25, 1.))
+                    .min(MAX_SPEED);
+            let mut kick = direction * speed;
+            if normal.is_some() {
+                kick.y = kick.y.max((speed * 0.45).min(8.));
+            }
+            c.velocity = (c.velocity + kick).clamp_length_max(12.);
+            c.sweep = None;
+            c.neighbors = None;
+        }
+    }
+    pub(super) fn fallback_bounds(
+        &self,
+    ) -> impl Iterator<Item = rapier3d::parry::bounding_volume::Aabb> + '_ {
+        self.sections
+            .values()
+            .flat_map(|s| &s.chunks)
+            .filter(|c| c.handle.is_none() && !c.released)
+            .filter_map(|c| {
+                c.proxy.as_ref().map(|shape| {
+                    shape.compute_aabb(&Pose::from_parts(
+                        Vector::from_array(c.center.to_array()),
+                        Rotation::from_array(c.turn.to_array()),
+                    ))
+                })
+            })
+    }
     pub(super) fn retire_section(&mut self, key: (u64, u64)) {
         if let Some(mut section) = self.sections.remove(&key) {
             for chunk in &mut section.chunks {
@@ -623,9 +663,19 @@ impl BrickDebris {
         Ok(())
     }
     pub(super) fn advance_sections(&mut self, dt: f32, building: &Building) -> Result<()> {
+        let scene = motion::RubbleScene::new(self);
+        let frame = motion::Frame {
+            dt,
+            building,
+            dead: &self.dead,
+            actors: &self.section_pushers,
+            scene: &scene,
+        };
         let mut contacts = 4096;
         let mut planning = 4096;
         let mut collision = 512 * crate::local_physics::COLLISION_QUERY_COST;
+        let mut fallback = collision / 2;
+        collision -= fallback;
         let mut material = 256;
         let mut recovery = 256;
         let mut available = self
@@ -652,10 +702,8 @@ impl BrickDebris {
             s.recover(key, building, &mut recovery);
             s.prepare_members(&mut material);
             s.recoil *= (-6. * dt).exp();
-            for c in &mut s.chunks {
-                c.recoil *= (-6. * dt).exp();
-            }
             if s.source_generation != building.damage_generation() {
+                let mut changed = BTreeMap::<usize, Vec<usize>>::new();
                 for (i, piece) in s.pieces.iter_mut().enumerate() {
                     if piece.active
                         && building.section_source_retired_after(
@@ -665,16 +713,40 @@ impl BrickDebris {
                         )
                     {
                         piece.active = false;
-                        if let Some(chunk) = s.assignment[i] {
+                        if let Some(chunk) = s.assignment[i]
+                            && let std::collections::btree_map::Entry::Vacant(entry) =
+                                changed.entry(chunk)
+                        {
                             s.chunks[chunk].freeze(&mut self.world);
+                            entry.insert(Vec::new());
                         }
                     }
                 }
                 s.source_generation = building.damage_generation();
+                // Retired members must leave both physical representations.
+                for (i, _) in s.pieces.iter().enumerate().filter(|(_, p)| p.active) {
+                    if let Some(members) = s.assignment[i].and_then(|chunk| changed.get_mut(&chunk))
+                    {
+                        members.push(i);
+                    }
+                }
+                for (chunk, members) in changed {
+                    let c = &mut s.chunks[chunk];
+                    c.released = members.is_empty();
+                    if !c.released {
+                        (c.proxy, c.parts) = proxy::shape(&s.pieces, &members, s.origin + c.local);
+                    }
+                }
             }
             s.staging_age += dt;
-            if s.sealed && s.gpu_ready && (s.landed || s.confirmed >= s.age + dt) {
-                s.age += dt;
+            if s.sealed && s.gpu_ready {
+                // Consume confirmed partial time too. Requiring an entire
+                // dt can strand age one rounding bit below a known impact.
+                s.age = if s.landed {
+                    s.age + dt
+                } else {
+                    (s.age + dt).min(s.confirmed)
+                };
             }
             if s.age >= SOLID_SECONDS + FADE_SECONDS {
                 for c in &mut s.chunks {
@@ -728,34 +800,22 @@ impl BrickDebris {
                     });
                 }
             }
-            s.partition(self.limit, available, &mut planning);
+            s.partition(&mut planning);
             if s.finishing.is_some() {
                 continue;
             }
-            if !s.chunks.is_empty()
-                && s.chunks.iter().all(|c| c.handle.is_none())
-                && (s.chunks.len() > available
-                    || s.chunks.iter().map(|c| c.parts).sum::<usize>() > part_slots)
-            {
-                // Capacity may change while a section falls or its partition
-                // is prepared. Retain the completed plan until all its bodies
-                // and exact proxy parts can be admitted together.
-                if s.chunks.len() > self.limit.min(MAX_CHUNKS)
-                    || s.chunks.iter().map(|c| c.parts).sum::<usize>() > MAX_PROXY_PARTS
-                {
-                    // Intrinsic quality/proxy ceilings are different from
-                    // temporary occupancy by older debris.
-                    s.keep_shared();
-                }
-                continue;
-            }
-            for c in &mut s.chunks {
+            let count = s.chunks.len();
+            let start = s.chunk_turn;
+            s.chunk_turn = s.chunk_turn.wrapping_add(1);
+            for i in 0..count {
+                let c = &mut s.chunks[(i + start) % count];
                 if c.released {
                     continue;
                 }
                 if c.handle.is_none()
                     && (available == 0 || c.parts > part_slots || c.proxy.is_none())
                 {
+                    c.advance_fallback(&frame, (key.0, key.1, (i + start) % count), &mut fallback)?;
                     continue;
                 }
                 // Rapier already makes sleeping bodies cheap. Keep their hit
@@ -789,10 +849,18 @@ impl BrickDebris {
                     |id| self.dead.contains(&id),
                 )?;
                 if let Some(handle) = c.handle {
-                    self.world.bodies[handle].set_enabled(ready);
-                    continue;
+                    if ready {
+                        self.world.bodies[handle].set_enabled(true);
+                        continue;
+                    }
+                    // Release the resident slot, preserving pose and velocity.
+                    // A collision-cache shortage must not disable visible art.
+                    c.freeze(&mut self.world);
+                    available += 1;
+                    part_slots += c.parts;
                 }
                 if !ready {
+                    c.advance_fallback(&frame, (key.0, key.1, (i + start) % count), &mut fallback)?;
                     continue;
                 }
                 let body = RigidBodyBuilder::dynamic()
@@ -819,6 +887,9 @@ impl BrickDebris {
                     ));
                 let (handle, _) = self.world.insert(body, collider);
                 c.handle = Some(handle);
+                c.sweep = None;
+                c.neighbors = None;
+                c.debt = 0.;
                 super::foley::configure(&mut self.world, handle, self.foley.policy.as_deref());
                 self.foley.born(handle, 0.12);
                 available -= 1;
@@ -1013,7 +1084,7 @@ mod tests {
         assert!(section.landed);
         assert_eq!(d.instances().count(), 2, "retain every member");
         assert!(
-            !section.shared_only,
+            !section.chunks.is_empty(),
             "temporary pressure must not permanently remove breakup"
         );
         assert_eq!(
@@ -1088,7 +1159,7 @@ mod tests {
         assert!(section.landed);
         assert_eq!(section.chunks.len(), 1, "retain the exact prepared proxy");
         assert!(section.chunks[0].handle.is_none());
-        assert!(!section.shared_only);
+        assert!(!section.chunks.is_empty());
         assert_eq!(d.bodies.len(), 1, "older debris must still occupy capacity");
         assert_eq!(d.len(), 1, "do not exceed capacity while waiting");
         run(&mut d, &b, 90);
@@ -1129,9 +1200,15 @@ mod tests {
         assert!(maximum > 0 && maximum <= 8);
         assert_eq!(s.assignment.iter().filter(|a| a.is_some()).count(), 1500);
         assert!(
-            s.chunks.len() < 20,
-            "large connected groups, not one body per member"
+            s.chunks.len() > MAX_CHUNKS,
+            "breakup geometry remains independent of the resident body pool"
         );
+        for chunk in 0..s.chunks.len() {
+            assert!(
+                s.assignment.iter().filter(|a| **a == Some(chunk)).count() <= MAX_CHUNK_MEMBERS
+            );
+            assert!(s.chunks[chunk].half.max_element() * 2. <= MAX_CHUNK_SPAN + 0.001);
+        }
         // Every group can be reached over member faces; no disconnected art is glued together.
         for group in 0..s.chunks.len() {
             let ids: BTreeSet<_> = s
@@ -1572,6 +1649,9 @@ mod lifecycle_regressions {
             }]);
         }
         assert_eq!(d.diagnostics.projectile_hits, 1);
+        for _ in 0..12 {
+            d.advance(1. / 60., &b)?;
+        }
         let after = d.instances().next().unwrap().1.transform.w_axis.truncate();
         assert!(after.distance(before) > 0.2);
         assert_eq!(
@@ -1762,28 +1842,49 @@ mod recovery_regressions {
 mod overload_regressions {
     use super::*;
     #[test]
-    fn too_many_disconnected_landing_groups_keep_one_visible_shared_assembly() -> Result<()> {
+    fn disconnected_groups_keep_independent_collision_motion_beyond_the_body_pool() -> Result<()> {
         let (b, _) = super::super::tests::building(&[]);
         let mut d = BrickDebris::new();
         let mut pieces: Vec<_> = (0..100)
-            .map(|i| super::landing_regressions::piece(i + 1, Vec3::new(i as f32 * 3., 3.3, 0.)))
+            .map(|i| {
+                super::landing_regressions::piece(
+                    i + 1,
+                    Vec3::new((i % 10) as f32 * 2., 3.3, (i / 10) as f32 * 2.),
+                )
+            })
             .collect();
         for p in &mut pieces {
             p.members = 100;
-            p.origin = Vec3::new(148.5, 3.3, 0.);
-            p.section_half = Vec3::new(150., 0.3, 0.5);
-            p.pivot = Vec3::new(148.5, 3., 0.);
+            p.origin = Vec3::new(9., 3.3, 9.);
+            p.section_half = Vec3::new(9.5, 0.3, 9.5);
+            p.pivot = Vec3::new(9., 3., 9.);
         }
         d.add_section((0, 1), pieces, &b)?;
         d.sections.get_mut(&(0, 1)).unwrap().sealed = true;
-        for _ in 0..30 {
+        for _ in 0..180 {
             d.advance(1. / 60., &b)?;
         }
         let section = &d.sections[&(0, 1)];
-        assert!(section.shared_only);
-        assert!(section.chunks.is_empty());
+        assert!(
+            section.landed,
+            "flight must reach floor: age={} shown={} confirmed={} prepared={} pending={} impact={:?}",
+            section.age,
+            section.shown,
+            section.confirmed,
+            section.prepared,
+            section.pending.len(),
+            section.impact_at
+        );
+        assert_eq!(section.chunks.len(), 100);
         assert_eq!(d.instances().count(), 100);
-        assert_eq!(d.len(), 0);
+        assert!(d.chunk_handles().count() <= MAX_CHUNKS);
+        assert!(section.chunks.iter().all(|c| c.center.is_finite()));
+        assert!(section.landed);
+        assert!(
+            d.instances()
+                .all(|(_, t)| (0.2..1.5).contains(&t.transform.w_axis.y)),
+            "every disconnected group falls independently onto the floor"
+        );
         Ok(())
     }
 }

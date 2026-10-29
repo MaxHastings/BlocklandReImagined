@@ -271,6 +271,7 @@ pub struct BrickDebris {
     recent_blasts: std::collections::VecDeque<CosmeticBlast>,
     accumulator: f32,
     pushers: Pushers,
+    section_pushers: Vec<(Pusher, Vec3)>,
     shots: Shots,
     /// The player's limit (Physics Quality or `$pref::Physics::MaxBricks`).
     limit: usize,
@@ -309,6 +310,7 @@ impl BrickDebris {
             recent_blasts: std::collections::VecDeque::new(),
             accumulator: 0.0,
             pushers: Pushers::default(),
+            section_pushers: Vec::new(),
             shots: Shots::default(),
             limit: DEFAULT_LIMIT,
             ghosts: Vec::new(),
@@ -957,17 +959,69 @@ impl BrickDebris {
     /// Only those near debris take part; they are kinematic, so debris
     /// moves out of their way and never moves them.
     pub fn push(&mut self, pushers: &[Pusher]) {
-        let centers: Vec<Vec3> = self
+        let mut bounds: Vec<_> = self
             .bodies
             .values()
             .map(|b| b.handle)
             .chain(self.chunk_handles())
-            .map(|h| Vec3::from_array(self.world.bodies[h].translation().to_array()))
+            .filter_map(|h| {
+                self.world.bodies[h]
+                    .colliders()
+                    .first()
+                    .map(|c| self.world.colliders[*c].compute_aabb())
+            })
+            .collect();
+        bounds.extend(self.fallback_bounds());
+        let distance = |p: &Pusher| {
+            bounds
+                .iter()
+                .map(|b| {
+                    let lo = Vec3::from_array(b.mins.to_array());
+                    let hi = Vec3::from_array(b.maxs.to_array());
+                    p.center.distance(p.center.clamp(lo, hi))
+                })
+                .min_by(f32::total_cmp)
+                .unwrap_or(f32::INFINITY)
+        };
+        let mut actors: Vec<_> = pushers
+            .iter()
+            .filter(|p| {
+                p.center.is_finite()
+                    && p.rotation.is_finite()
+                    && p.half.is_finite()
+                    && p.half.cmpgt(Vec3::ZERO).all()
+                    && distance(p) < PUSHER_REACH + p.half.max_element()
+            })
+            .collect();
+        actors.sort_by(|a, b| distance(a).total_cmp(&distance(b)).then(a.id.cmp(&b.id)));
+        actors.dedup_by_key(|p| p.id);
+        self.section_pushers = actors
+            .into_iter()
+            .take(crate::local_physics::MAX_PUSHERS)
+            .map(|p| {
+                let movement = self
+                    .section_pushers
+                    .iter()
+                    .find(|(old, _)| old.id == p.id)
+                    .map_or(Vec3::ZERO, |(old, _)| p.center - old.center);
+                (
+                    p.clone(),
+                    if movement.length() <= 5. {
+                        movement
+                    } else {
+                        Vec3::ZERO
+                    },
+                )
+            })
             .collect();
         let world = &mut self.world;
         self.pushers.update(world, pushers, |p| {
             let reach = PUSHER_REACH + p.half.max_element();
-            centers.iter().any(|c| c.distance(p.center) < reach)
+            bounds.iter().any(|b| {
+                let lo = Vec3::from_array(b.mins.to_array());
+                let hi = Vec3::from_array(b.maxs.to_array());
+                p.center.distance(p.center.clamp(lo, hi)) < reach
+            })
         });
     }
     /// Projectiles as drawn this frame. Each pushes every body it passes
@@ -1028,6 +1082,7 @@ impl BrickDebris {
         {
             return;
         }
+        self.blast_fallback(origin, force, radius, normal);
         let handles: Vec<_> = self
             .bodies
             .values()

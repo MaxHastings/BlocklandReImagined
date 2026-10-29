@@ -177,14 +177,32 @@ advances through checked time rather than accumulating a delayed jump.
 Contact remains a cosmetic approximation, not a structural collision solver.
 
 Face-neighbor planning shares 4096 work units/frame and incrementally finalizes
-landing groups of at most 2048 members. Available body slots and Physics Quality
-choose coarser groups. At most 64 bodies share the ordinary debris body budget.
-Compound proxies merge only exact rectangular face neighbors, preserving gaps;
-they allow 64 boxes/body and 2048 boxes globally. Non-box shapes keep the existing
-bounding-proxy approximation. If disconnected groups or proxy/body needs exceed
-the envelope before allocation, the section keeps one visible shared assembly.
-Already moving bodies are never reassembled; budget eviction freezes their
-current poses without losing members. Physics Off retains the shared visual.
+connected landing groups of at most16 members and six world units per axis.
+These are initial gameplay tuning values, independent of Physics Quality and
+temporary body occupancy. A single authored member larger than that span stays
+whole; it is not welded to neighbors or silently remeshed. No general secondary
+material fracture is introduced. Complete sections separate into these groups
+at first contact, rather than becoming permanent hundred-brick bodies.
+
+At most64 resident chunk bodies still share the ordinary debris body budget,
+with2048 resident proxy boxes globally. Exact rectangular face merging preserves
+gaps. Groups beyond that pool retain their compound shapes and use resumable
+translation sweeps against real map, terrain, bricks and other rubble, plus
+shape-based player/vehicle contacts. Physics Off uses this contact path without
+allocating dynamic bodies. The cheaper path holds angular orientation rather
+than running simultaneous angular constraints; it does not implement crushing
+damage or gameplay obstruction. Full solver admission resumes from the current
+pose and velocity. Eviction and collision-cache pressure return a group to
+checked motion, not a permanently frozen render transform. Source retirement
+rebuilds only affected proxies so removed material leaves both representations.
+
+The existing512-query-equivalent section collision budget is split between
+resident window preparation and overflow contacts. Metadata cursor visits cost
+one unit; real shape casts cost16. Both work paths remain resumable and chunks
+take turns. Overflow contact snapshots share source shapes and use a spatial
+index; no rigid body is allocated per visual group. Extreme demand can still
+reduce update frequency; these bounds do not promise instantaneous simulation
+of arbitrary skyscrapers. The ordinary visual lifetime remains unchanged.
 
 Ordinary debris and section chunks use one collision-window mechanism: prepare
 swept oriented surroundings ahead while retaining the previous safe window.
@@ -200,8 +218,9 @@ than a half-second angular sphere. Genuine nearby resource pressure can still
 delay cosmetic motion.
 
 Shots use the displayed projectile path. Allocated bodies receive a mass-scaled
-local impulse and wake; preparing, frozen and shared assemblies also have bounded
-source-box hit queries and restrained recoil. Gaps remain queryable gaps rather
+local impulse and wake; preparing/shared assemblies also have bounded source-box
+queries. Overflow chunks receive velocity changes followed by checked motion,
+rather than an unchecked render offset. Gaps remain queryable gaps rather
 than one giant sail bounding box. This is a local visual response: authoritative
 projectiles continue through rubble and trigger no extra gameplay explosion.
 First observed segments cover one fixed step; terminal-only unseen trajectories
