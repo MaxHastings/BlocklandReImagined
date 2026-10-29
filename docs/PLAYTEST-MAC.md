@@ -21,6 +21,10 @@ is different on a Mac.
    from there, because an app must not change itself. It takes a few seconds.
 4. When you host or join, macOS may ask to let the game find devices on your
    local network. Allow it, or LAN games won't show up.
+5. For voice chat, allow microphone access when macOS asks. Check the input
+   meter in **Options → Audio**, then hold **V** to talk with the default
+   push-to-talk setting. If access was denied, enable Blockland ReImagined in
+   **System Settings → Privacy & Security → Microphone**.
 
 ## Where things are
 

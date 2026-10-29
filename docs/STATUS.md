@@ -15,8 +15,13 @@ Published release: [v0.4.1 Alpha](https://github.com/MaxHastings/BlocklandReImag
 published October 28, 2026 at 11:59:59 PM America/Chicago, from
 `4db7796916d8b023aa512374334973a5574ef040`. Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives and SHA256SUMS are available.
-The public downloads match the tested platform archives, and published tags
-and assets stay immutable.
+The source tag remains fixed. On October 29, Maxwell authorized replacing the
+Mac ZIP on this release to add the missing microphone permission description
+and renew the app signatures. Its executable code and content are unchanged;
+Windows/Linux assets retain their original hashes. SHA256SUMS and the public
+release note identify the corrected Mac package. See the
+[Mac correction receipt](progress/2026-10-29-macos-microphone-permission.md).
+Published tags and assets otherwise stay immutable.
 
 This release integrates the four active work streams: package-owned voice
 conversations and speaker HUD, independent tank gunner aim, human-only ordinary
