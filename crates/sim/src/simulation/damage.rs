@@ -18,6 +18,23 @@ struct Family {
 }
 
 impl Simulation {
+    /// Timed restoration cannot make an original solid inside a live body.
+    /// Inspect its saved collision policy without retiring any family/section.
+    pub(crate) fn damage_restore_occupied(&self, id: BrickId) -> bool {
+        let Some(brick) = self.state().bricks.get(&id) else {
+            return false;
+        };
+        if self.damage_flags(id).is_some_and(|flags| !flags[2])
+            || self
+                .definitions
+                .get(brick)
+                .is_ok_and(|d| d.special == Special::Water)
+        {
+            return false;
+        }
+        self.engulfs_body(brick, true)
+    }
+
     pub(crate) fn damage_parent(&self, id: BrickId) -> Option<BrickId> {
         self.damage.parents.get(&id).copied()
     }

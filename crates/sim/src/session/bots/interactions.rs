@@ -1838,9 +1838,13 @@ impl Session {
 
     /// On-demand route-start evidence for headless reports. This does not
     /// spend the live planner's budget or alter its searches/controls.
-    pub fn bot_drive_diagnostic(&self, bot: OwnerId) -> Option<String> {
+    pub fn bot_navigation_diagnostic(&self, bot: OwnerId) -> Option<String> {
         let brain = self.bots.brains.get(&bot)?;
-        let (feet, body) = self.bot_vehicle_body(bot)?;
+        let state = self.peers.get(&bot)?.player.state();
+        let driving = self.bot_vehicle_body(bot);
+        let (feet, body) = driving
+            .clone()
+            .or_else(|| Some((Vec3::from(state.feet), brain.path_body.clone()?)))?;
         let terrain = |o, d, r| self.simulation.terrain_ray(o, d, r);
         let waters = self.simulation.liquids();
         let ground = Ground {
@@ -1856,15 +1860,24 @@ impl Session {
         nav.unmetered();
         let node = nav.node_at(&ground, &body, feet);
         let neighbors = nav.closed_in(&ground, &body, feet);
-        let departure = brain
-            .goal
-            .and_then(|g| self.bot_vehicle_departure(bot, feet, &body, g.point(brain.home)));
+        let departure = if driving.is_some() {
+            brain
+                .goal
+                .and_then(|g| self.bot_vehicle_departure(bot, feet, &body, g.point(brain.home)))
+        } else {
+            self.bot_stranded_step(bot, feet, &body, state, self.simulation.state().tick)
+        };
+        let support = ground.ray(feet + Vec3::Y * 0.5, Vec3::NEG_Y, body.drop + 0.5);
         Some(format!(
-            "feet={feet:?} width={} height={} bottom={} fits={} node={node:?} neighbors={neighbors} retained={:?} proposed={departure:?}",
+            "feet={feet:?} width={} height={} bottom={} drop={} fits={} crouch_fits={} node={node:?} neighbors={neighbors} settled={} stopped={:?} support={support:?} retained={:?} proposed={departure:?}",
             body.width,
             body.height,
             body.bottom,
+            body.drop,
             ground.fits(&body, feet, false),
+            ground.fits(&body, feet, true),
+            brain.settled,
+            brain.path_stop,
             brain.drive_departure
         ))
     }

@@ -1532,6 +1532,12 @@ impl Simulation {
     }
     /// Whether `brick` would stand inside a player's or a bot's body.
     fn engulfs_character(&self, brick: &Brick) -> bool {
+        self.engulfs_body(brick, false)
+    }
+    /// Exact placement penetration, optionally including physical vehicles.
+    /// Timed restoration uses the same contact tolerance as ordinary planting;
+    /// touching/supporting a body is distinct from materializing inside it.
+    pub(crate) fn engulfs_body(&self, brick: &Brick, vehicles: bool) -> bool {
         let Ok(definition) = self.definitions.get(brick) else {
             return true;
         };
@@ -1540,7 +1546,10 @@ impl Simulation {
         self.physics
             .query_pipeline()
             .intersect_aabb_conservative(aabb)
-            .filter(|(_, body)| is_character(body.user_data))
+            .filter(|(_, body)| {
+                (is_character(body.user_data) || vehicles && body.user_data >> 64 == 2)
+                    && (!vehicles || !body.is_sensor())
+            })
             .any(|(_, body)| {
                 rapier3d::parry::query::contact(
                     &placement,
