@@ -413,6 +413,7 @@ pub struct Core {
     /// The players heard speaking right now, by owner id; the F2 list's Voice
     /// column shows them as "On".
     pub voice_speaking: BTreeSet<u64>,
+    pub voice_speakers: Vec<crate::api::VoiceSpeaker>,
     pub admin: crate::models::admin::AdminModel,
     /// The host's environment and the Environment window's draft.
     pub environment: crate::models::environment::EnvironmentModel,
@@ -632,6 +633,7 @@ impl Core {
         self.voice_muted.clear();
         self.server_voice_muted.clear();
         self.voice_speaking.clear();
+        self.voice_speakers.clear();
         self.minigames = MiniGameUiState::default();
         self.report = None;
         self.panel = None;
@@ -1687,6 +1689,7 @@ impl Ui {
             voice_muted: BTreeSet::new(),
             server_voice_muted: BTreeSet::new(),
             voice_speaking: BTreeSet::new(),
+            voice_speakers: Vec::new(),
             admin: Default::default(),
             environment: Default::default(),
             minigames: MiniGameUiState::default(),

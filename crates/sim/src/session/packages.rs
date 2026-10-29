@@ -4791,3 +4791,5 @@ mod sound_tests {
         assert_eq!(contact.decal.as_ref().map(|d| d.color), Some([1.0; 4]));
     }
 }
+
+mod voice;

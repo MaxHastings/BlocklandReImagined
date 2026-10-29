@@ -74,9 +74,11 @@ pub enum Region {
     /// building keys and wheel, so a game that has no building shows none
     /// of Blockland's build HUD and nothing of its binds.
     Building,
+    /// Live eligible voice speakers, independently replaceable from chat.
+    Voice,
 }
 impl Region {
-    pub const ALL: [Region; 17] = [
+    pub const ALL: [Region; 18] = [
         Region::TopLeft,
         Region::TopCenter,
         Region::TopRight,
@@ -94,6 +96,7 @@ impl Region {
         Region::Tools,
         Region::NameTags,
         Region::Building,
+        Region::Voice,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -114,6 +117,7 @@ impl Region {
             Region::Tools => "tools",
             Region::NameTags => "name_tags",
             Region::Building => "building",
+            Region::Voice => "voice",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -123,7 +127,9 @@ impl Region {
     /// edge the region's box touches, else the middle.
     pub fn anchor(self) -> Anchor {
         match self {
-            Region::TopLeft | Region::Left | Region::BottomLeft | Region::Chat => Anchor::Left,
+            Region::TopLeft | Region::Left | Region::BottomLeft | Region::Chat | Region::Voice => {
+                Anchor::Left
+            }
             Region::TopRight
             | Region::Right
             | Region::BottomRight
@@ -145,6 +151,7 @@ impl Region {
             Region::Tools => Some("tool bar"),
             Region::NameTags => Some("player names"),
             Region::Building => Some("building interface and keys"),
+            Region::Voice => Some("voice speakers"),
             _ => None,
         }
     }
@@ -172,6 +179,7 @@ impl Region {
             Region::BottomPrint => [0.0, 400.0, w, 80.0],
             Region::Ammo => [w - 240.0, 400.0, 240.0, 80.0],
             Region::Chat => [0.0, 0.0, 320.0, 120.0],
+            Region::Voice => [0.0, 0.0, 320.0, 100.0],
             Region::Tools => [w - 64.0, 0.0, 64.0, HEIGHT],
             Region::NameTags | Region::Building => [0.0, 0.0, w, HEIGHT],
         }
@@ -255,8 +263,19 @@ pub struct Layout {
     /// claim. Left out, the claim hides them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_tags: Option<NameTagStyle>,
+    /// Native live speaker rows; absent on a voice claim hides the stock list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speakers: Option<SpeakerStyle>,
 }
 
+/// Style/position for the native live voice list in a `voice` region.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeakerStyle {
+    pub rect: [f32; 4],
+    pub color: [f32; 4],
+    pub rows: u8,
+}
 /// Names over other players' heads, as a game shows them: whose, when,
 /// and in what colour.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1428,6 +1447,26 @@ impl Layout {
         ids(&self.when.body, "body")?;
         ids(&self.when.holding, "holding")?;
         ids(&self.when.vehicle, "vehicle")?;
+        if let Some(style) = &self.speakers {
+            ensure!(
+                self.region == Region::Voice,
+                "speakers belongs in the voice region"
+            );
+            ensure!(
+                style
+                    .rect
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 4096.0)
+                    && style.rect[2] >= 32.0
+                    && style.rect[3] >= 16.0
+                    && (1..=6).contains(&style.rows)
+                    && style
+                        .color
+                        .iter()
+                        .all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
+                "invalid speaker style"
+            );
+        }
         if let Some(style) = &self.name_tags {
             ensure!(
                 self.region == Region::NameTags,

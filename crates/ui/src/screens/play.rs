@@ -73,7 +73,8 @@ fn chat_text(core: &Core) -> String {
 /// `newChatText` spans the screen width and, like Torque's ML text, grows
 /// to the height of its reflowed lines.
 fn chat_rect(core: &Core, chat: &str) -> Rect {
-    let (x, y) = CHAT_TOP_LEFT;
+    let (x, mut y) = CHAT_TOP_LEFT;
+    y += voice_list_height(core);
     let w = (core.logical.0 - x).max(1);
     let h = View::ml_height(&core.pack, &chat_profile(core), chat, w);
     Rect::new(x, y, w, h)
@@ -729,6 +730,7 @@ fn hud(core: &Core) -> View {
     // paged up (newChatHud_UpdateIndicatorPosition).
     // chatWhosTalkingText above it: " name name" (WhoTalkSO::Display).
     add_typing_names(&mut v, core);
+    add_voice_names(&mut v, core);
     add_chat(&mut v, core);
     if let Some(r) = mouse_tip_rect(core) {
         let tip = format!(
@@ -745,6 +747,91 @@ fn add_typing_names(v: &mut View, core: &Core) {
     if !core.talking.is_empty() {
         let names: String = core.talking.iter().map(|n| format!(" {n}")).collect();
         named_text(v, "MM_LeftProfile", Rect::new(-1, 0, w - 10, 18), &names);
+    }
+}
+fn voice_style(core: &Core) -> Option<bri_content::hud::SpeakerStyle> {
+    if let Some(claim) = core
+        .hud_regions
+        .iter()
+        .find(|r| r.region == bri_content::hud::Region::Voice)
+    {
+        return claim.speakers.clone().map(|mut style| {
+            let (unit, [x, y]) = bri_content::hud::placement(
+                claim.region,
+                claim.basis,
+                core.logical.0 as f32,
+                core.logical.1 as f32,
+            );
+            style.rect = [
+                (x + style.rect[0]) * unit,
+                (y + style.rect[1]) * unit,
+                style.rect[2] * unit,
+                style.rect[3] * unit,
+            ];
+            style
+        });
+    }
+    Some(bri_content::hud::SpeakerStyle {
+        rect: [4.0, 18.0, 300.0, 72.0],
+        color: [0.7, 0.85, 1.0, 1.0],
+        rows: 3,
+    })
+}
+fn voice_list_height(core: &Core) -> i32 {
+    if core.hud_claimed(bri_content::hud::Region::Voice) || core.voice_speakers.is_empty() {
+        return 0;
+    }
+    (core.voice_speakers.len().min(3) as i32 + i32::from(core.voice_speakers.len() > 3)) * 18
+}
+fn add_voice_names(v: &mut View, core: &Core) {
+    let Some(style) = voice_style(core) else {
+        return;
+    };
+    let count = core.voice_speakers.len().min(usize::from(style.rows));
+    for (row, speaker) in core.voice_speakers.iter().take(count).enumerate() {
+        let label = if speaker.label.is_empty() {
+            speaker.name.clone()
+        } else {
+            format!("{} · {}", speaker.name, speaker.label)
+        };
+        let rect = Rect::new(
+            style.rect[0] as i32,
+            style.rect[1] as i32 + row as i32 * 18,
+            style.rect[2] as i32,
+            18,
+        );
+        // Plain text never interprets player names as ML markup.
+        icon(
+            v,
+            Rect::new(rect.x, rect.y + 1, 14, 14),
+            &IconRef::External(crate::api::VOICE_ICON_MICROPHONE),
+            [180, 218, 255, (255.0 * speaker.alpha) as u8],
+        );
+        let node = v.add(
+            v.root,
+            text(
+                "MM_LeftProfile",
+                Rect::new(rect.x + 19, rect.y, rect.w - 19, rect.h),
+                &label,
+            ),
+        );
+        v.state(node).text_color = Some(style.color.map(|c| (c * 255.0) as u8));
+        if let Some(tint) = &mut v.state(node).text_color {
+            tint[3] = (f32::from(tint[3]) * speaker.alpha) as u8;
+        }
+    }
+    if core.voice_speakers.len() > count {
+        named_text(
+            v,
+            "MM_LeftProfile",
+            Rect::new(
+                style.rect[0] as i32,
+                style.rect[1] as i32 + count as i32 * 18,
+                style.rect[2] as i32,
+                18,
+            ),
+            &format!("+{} speaking", core.voice_speakers.len() - count),
+        );
     }
 }
 /// NewChatHud's text, and the "VVV" indicator on its last line while
@@ -1277,5 +1364,70 @@ mod round_clip_tests {
             clip_slices([10.0, 20.0, 60.0, 90.0], false),
             [Rect::new(10, 20, 50, 70)]
         );
+    }
+}
+
+#[cfg(test)]
+mod voice_speaker_tests {
+    use super::*;
+    use crate::{
+        api::{Settings, VoiceSpeaker},
+        binds::Platform,
+        schema::UiPack,
+        ui::{Ui, UiConfig},
+    };
+    use std::rc::Rc;
+    #[test]
+    fn voice_names_are_bounded_plain_text_and_can_be_hidden_by_a_hud_claim() {
+        let mut ui = Ui::new(
+            Rc::new(Pack::from_parts(UiPack::default(), Default::default())),
+            UiConfig {
+                size: (640, 480),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings::default(),
+        );
+        ui.core.voice_speakers = (0..5)
+            .map(|i| VoiceSpeaker {
+                name: format!("<color:ff0000>Player{i}"),
+                label: if i == 0 {
+                    "Radio 1".into()
+                } else {
+                    String::new()
+                },
+                alpha: 0.5,
+            })
+            .collect();
+        let mut v = View::new(&ctrl(
+            "GuiControl",
+            "GuiDefaultProfile",
+            Rect::new(0, 0, 640, 480),
+        ));
+        add_voice_names(&mut v, &ui.core);
+        let labels: Vec<_> = v
+            .nodes
+            .iter()
+            .filter_map(|n| n.ctrl.text.as_deref())
+            .collect();
+        assert!(labels.iter().any(|t| t.contains("Player0 · Radio 1")));
+        assert!(labels.contains(&"+2 speaking"));
+        assert!(!labels.iter().any(|t| t.contains("Player3")));
+        assert_eq!(voice_list_height(&ui.core), 72);
+        assert!(
+            v.nodes
+                .iter()
+                .any(|n| n.state.text_color.is_some_and(|c| c[3] == 127))
+        );
+        ui.core.hud_regions.push(crate::api::HudRegionDraw {
+            region: bri_content::hud::Region::Voice,
+            pixelated: false,
+            items: vec![],
+            basis: None,
+            name_tags: None,
+            speakers: None,
+        });
+        assert!(voice_style(&ui.core).is_none());
+        assert_eq!(voice_list_height(&ui.core), 0);
     }
 }

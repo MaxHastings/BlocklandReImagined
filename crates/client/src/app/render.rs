@@ -1405,6 +1405,18 @@ impl App {
             water_eyes,
             fog_end.clamped(1., FAR_PLANE),
         )?;
+        self.ui.core.voice_speakers = self
+            .voice
+            .speaking_labels(view.owner)
+            .into_iter()
+            .filter_map(|(id, (label, alpha))| {
+                view.names.get(&id).map(|name| bri_ui::api::VoiceSpeaker {
+                    name: name.clone(),
+                    label,
+                    alpha,
+                })
+            })
+            .collect();
         let mut speaking = self.voice.speaking_owners(view.owner);
         speaking.extend(self.audio.speaking_owners());
         self.ui.core.name_tags = name_tags(

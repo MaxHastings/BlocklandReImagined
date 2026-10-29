@@ -33,6 +33,8 @@ pub const DEFAULT_RANGE: f32 = 48.0;
 const FULL_VOLUME_DISTANCE: f32 = 3.0;
 /// Most speakers mixed at once; the rest are not heard.
 pub const MAX_SPEAKERS: usize = 32;
+/// Received speech is 50% louder at the existing default slider position.
+pub const PLAYBACK_GAIN: f32 = 1.5;
 /// Frames held before a speaker starts to play (the jitter buffer).
 const PREBUFFER_FRAMES: usize = 2;
 /// Most frames held for one speaker; older audio is dropped to stay current.
@@ -419,6 +421,7 @@ fn newer(old: u16, new: u16) -> bool {
 }
 
 struct Speaker {
+    playback: Option<f32>,
     position: Vec3,
     buffer: VecDeque<f32>,
     playing: bool,
@@ -442,6 +445,7 @@ struct Speaker {
 impl Speaker {
     fn new(position: Vec3) -> Self {
         Self {
+            playback: Some(DEFAULT_RANGE),
             position,
             buffer: VecDeque::with_capacity(FRAME_SAMPLES),
             playing: false,
@@ -546,7 +550,22 @@ impl Mixer {
             .entry(speaker)
             .or_insert_with(|| Speaker::new(position));
         entry.position = position;
+        entry.playback = Some(load(&self.shared.range));
         entry.jitter.push(sequence, payload);
+    }
+    /// Server-selected spatial range, or None for centered steady-volume speech.
+    pub fn hear_routed(
+        &mut self,
+        speaker: u64,
+        position: Vec3,
+        sequence: u16,
+        payload: &[u8],
+        range: Option<f32>,
+    ) {
+        self.hear(speaker, position, sequence, payload);
+        if let Some(s) = self.speakers.get_mut(&speaker) {
+            s.playback = range;
+        }
     }
     /// The gain a voice `distance` away is heard at.
     pub fn gain_at(distance: f32, range: f32) -> f32 {
@@ -575,14 +594,22 @@ impl Mixer {
     /// Fill `out` (interleaved, `channels` wide) with the mix; one or two
     /// channels get the voices panned, more carry them on the first two.
     pub fn render(&mut self, out: &mut [f32], channels: usize, sample_rate: u32) {
+        self.render_with_gain(out, channels, sample_rate, PLAYBACK_GAIN);
+    }
+    fn render_with_gain(
+        &mut self,
+        out: &mut [f32],
+        channels: usize,
+        sample_rate: u32,
+        playback_gain: f32,
+    ) {
         out.fill(0.0);
         let channels = channels.max(1);
         let frames = out.len() / channels;
         if frames == 0 || sample_rate == 0 {
             return;
         }
-        let volume = load(&self.shared.volume);
-        let range = load(&self.shared.range);
+        let volume = load(&self.shared.volume) * playback_gain;
         let step = SAMPLE_RATE as f32 / sample_rate as f32;
         let forget = (FORGET_AFTER_SECONDS * sample_rate as f32) as u64;
         let listener = self.listener;
@@ -591,8 +618,15 @@ impl Mixer {
         let decay = (frames as f32 / (0.5 * sample_rate as f32)).clamped(0.0, 1.0);
         for speaker in self.speakers.values_mut() {
             let distance = length(sub(speaker.position, listener.position));
-            let gain = Self::gain_at(distance, range) * volume;
-            let (left, right) = pan_gains(&listener, speaker.position);
+            let gain = speaker.playback.map_or(1.0, |r| Self::gain_at(distance, r)) * volume;
+            let (left, right) = if speaker.playback.is_some() {
+                pan_gains(&listener, speaker.position)
+            } else {
+                (
+                    std::f32::consts::FRAC_1_SQRT_2,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                )
+            };
             let target = if channels == 1 {
                 (gain, gain)
             } else {
@@ -873,6 +907,37 @@ mod tests {
         assert_eq!(mixer.speaking(48_000), vec![7]);
     }
 
+    #[test]
+    fn global_voice_is_centered_and_audible_beyond_local_range() {
+        let shared = Arc::new(Shared::new(Settings::default()));
+        let mut mixer = Mixer::new(shared);
+        speak(&mut mixer, 7, [500.0, 0.0, 0.0], 8, 0);
+        mixer.speakers.get_mut(&7).unwrap().playback = None;
+        let mut out = vec![0.0; 4800 * 2];
+        mixer.render(&mut out, 2, 48_000);
+        let left = energy(&out, 2, 0);
+        let right = energy(&out, 2, 1);
+        assert!(left > 0.1 && (left - right).abs() < 0.001);
+        // Compare the exact same decoded/timed signal with the old unity
+        // playback gain; Opus and the startup ramp need not reproduce a raw sine peak.
+        let mut reference = Mixer::new(Arc::new(Shared::new(Settings::default())));
+        speak(&mut reference, 7, [500.0, 0.0, 0.0], 8, 0);
+        reference.speakers.get_mut(&7).unwrap().playback = None;
+        let mut unity = vec![0.0; out.len()];
+        reference.render_with_gain(&mut unity, 2, 48_000, 1.0);
+        assert!(
+            out.iter()
+                .zip(&unity)
+                .all(|(new, old)| (new - old * 1.5).abs() < 1e-5),
+            "default received voice is exactly 50% louder below the limiter"
+        );
+        mixer.forget(7);
+        mixer.render(&mut out, 2, 48_000);
+        assert!(
+            out.iter().all(|v| v.abs() < 1e-6),
+            "revocation removes buffered audio and its tail"
+        );
+    }
     #[test]
     fn voices_fade_with_distance_and_end_at_the_range() {
         let range = DEFAULT_RANGE;

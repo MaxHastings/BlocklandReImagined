@@ -820,7 +820,7 @@ fn require(op: INT) -> Fallible<()> {
 fn permit_write(i: &mut Invocation) -> Fallible<()> {
     if i.read_only {
         i.write_attempted = true;
-        return fail("objective discovery is read-only");
+        return fail("this query is read-only");
     }
     Ok(())
 }
@@ -4700,6 +4700,12 @@ impl Runtime {
                 ast.iter_functions()
                     .any(|f| f.name == name && f.params.len() == arity)
             };
+            if behaviour.on_voice && !package.manifest.capabilities.iter().any(|c| c == "voice") {
+                problems.push(
+                    Diagnostic::error("voice.capability", "on_voice requires the voice capability")
+                        .at(id.clone()),
+                );
+            }
             let mut need = |name: String, arity: usize, why: &str| {
                 if !has(&name, arity) {
                     problems.push(
@@ -4870,6 +4876,9 @@ impl Runtime {
             }
             if behaviour.double_tap_seconds.is_some() {
                 need("on_double_tap".into(), 2, "double_tap_seconds");
+            }
+            if behaviour.on_voice {
+                need("voice_routes".into(), 2, "on_voice");
             }
             if behaviour.on_volume {
                 need("on_volume".into(), 1, "on_volume");
@@ -5106,7 +5115,7 @@ impl Runtime {
         if read_only && (invocation.write_attempted || !invocation.output.is_empty()) {
             return Err(Diagnostic::error(
                 "script.read_only",
-                "objective discovery attempted a state/operation/output write",
+                "read-only query attempted a state/operation/output write",
             )
             .at(package));
         }

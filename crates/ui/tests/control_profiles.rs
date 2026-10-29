@@ -137,6 +137,7 @@ fn a_building_hud_claim_keeps_admin_camera_bindings_available() {
         items: vec![],
         basis: None,
         name_tags: None,
+        speakers: None,
     });
     assert!(u.core.building_off());
     assert_eq!(

@@ -132,7 +132,7 @@ router, probe it, and tell the host in plain words whether friends can reach
 them. No outside service is contacted. See
 [architecture/hosting.md](architecture/hosting.md).
 
-## Proximity voice chat
+## Live voice chat
 
 Voice travels as QUIC datagrams beside the movement and state datagrams
 (`crates/net/src/voice.rs`). Every voice datagram starts with the marker byte
@@ -141,11 +141,10 @@ movement or state datagram without decoding. The payload is opaque to the net
 crate: 20 ms mono Opus frames, targeting 24 kbit/s (at most 256 bytes including a one-byte talk-spurt marker).
 
 - Upstream carries `marker, direction, sequence (u16), payload`; downstream
-  adds the speaker's owner and position, stamped by the host from its own
-  world state, never believed from the client. All little endian.
-- The host relays each frame only to players within 48 world units of the
-  speaker (`voice::RANGE`), so a voice never reaches a player who could not
-  hear it.
+  adds the speaker's owner, position and route generation, stamped by the host
+  from its own state, never believed from the client. All little endian.
+- Packages choose eligible listeners and positional/global playback. Spatial
+  routes also enforce their server-selected distance limit when relaying.
 - Capture-clock sequence numbers advance through silence and lost capture frames.
   Audio is limited to 60 frames/s, burst five; activity has its own 6/s allowance.
   Replayed/duplicate upstream sequences are rejected. Voice never waits for space
@@ -307,3 +306,5 @@ runs, not WAN, frame-rate,64-player or platform-portability evidence.
 Action timeouts currently require client teardown/reconnect because their outcome
 can be unknown. Imported provenance is retained server-side but unsupported rows
 need an explicit UI metadata path. Full multiplayer acceptance remains unchecked.
+
+Voice policy updates: enabled authorized packages select recipients and positional/global playback through a bounded read-only hook. Each listener receives private reliable `VoiceRoutes` state, and audio/activity datagrams carry a per-route generation. Revocation purges buffered speech and rejects older packets; unchanged routes retain continuity. See [voice policy](modding/voice.md).

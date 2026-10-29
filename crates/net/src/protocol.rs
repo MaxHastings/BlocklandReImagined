@@ -1537,6 +1537,8 @@ impl WeaponDelta {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
+    /// Private authoritative voice eligibility/playback; never broadcast.
+    VoiceRoutes(crate::voice::RouteTable),
     /// First answer to a `JoinBegin`. The listing lets a probe (the join
     /// list, the host's reachability check) learn about the server over the
     /// game port and stop here.

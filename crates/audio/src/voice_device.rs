@@ -154,6 +154,16 @@ impl VoiceChat {
     pub fn hear(&self, speaker: u64, position: Vec3, sequence: u16, payload: &[u8]) {
         lock(&self.mixer).hear(speaker, position, sequence, payload);
     }
+    pub fn hear_routed(
+        &self,
+        speaker: u64,
+        position: Vec3,
+        sequence: u16,
+        payload: &[u8],
+        range: Option<f32>,
+    ) {
+        lock(&self.mixer).hear_routed(speaker, position, sequence, payload, range);
+    }
     pub fn forget(&self, speaker: u64) {
         lock(&self.mixer).forget(speaker);
     }
