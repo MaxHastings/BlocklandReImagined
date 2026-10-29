@@ -669,6 +669,7 @@ mod tests {
                 "brick-destruction-audio",
                 "voice_chat",
                 "npc_popculture",
+                "map_ambience",
                 "rule-workshop-toys",
                 "print_modter_default",
                 "map_arcticchallenge3",
