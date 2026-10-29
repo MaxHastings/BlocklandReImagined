@@ -1,6 +1,6 @@
 # Status
 
-Current release and engineering decisions. Reviewed 2026-10-28. Players should
+Current release and engineering decisions. Reviewed 2026-10-29. Players should
 start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 [known issues](KNOWN-ISSUES.md). Dated development receipts are in
 [progress/](progress/README.md); older history is in [progress.md](progress.md).
@@ -11,28 +11,26 @@ Use the [latest published release](https://github.com/MaxHastings/BlocklandReIma
 for downloads, its exact source tag and release notes. Repository source
 can be ahead of that build; source checks alone are not a new publication.
 
-Published release: [v0.4.0 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.0),
-published October 28, 2026 at 7:49 PM America/Chicago, from
-`37611e924d7a39ac1a38536d0491937de8aa8935`. Windows x86-64,
+Published release: [v0.4.1 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.1),
+published October 28, 2026 at 11:59:59 PM America/Chicago, from
+`4db7796916d8b023aa512374334973a5574ef040`. Windows x86-64,
 Apple silicon macOS and Linux x86-64 archives and SHA256SUMS are available.
-Its public release notes describe the shipped version; earlier notes remain
-historical. Published tags and assets stay immutable.
+The public downloads match the tested platform archives, and published tags
+and assets stay immutable.
 
-Maxwell authorized merging the four active work streams and publishing v0.4.1
-on October 28. The [v0.4.1 notes](releases/v0.4.1.md) describe the candidate:
-package-owned voice conversations and speaker HUD, independent tank gunner aim,
-human-only player/admin lists with bot team assignment preserved, and physical
-collapse recovery after temporary capacity pressure. Publication is pending
-integrated release checks and verified packages; see the
-[coordination receipt](progress/2026-10-28-v041-release-coordination.md).
+This release integrates the four active work streams: package-owned voice
+conversations and speaker HUD, independent tank gunner aim, human-only ordinary
+player/admin lists with bot team assignment preserved, and physical collapse
+recovery after temporary capacity pressure. Release checks also corrected
+missing NPC voice state and declared server companion interfaces during joins.
+See the [release notes](releases/v0.4.1.md) and
+[publication receipt](progress/2026-10-29-v041-public-release.md) for the full gate, matching CI,
+23-save coverage, performance budgets, actual archive/startup checks and public
+asset digests. Full alpha and interactive acceptance remain open.
 
-The [publication receipt](progress/2026-10-23-v036-public-release.md) records
-the full gate, Windows CI, platform build, actual archive/startup checks and
-published asset digests. AA2 work and private preview delivery remain separate
-from this public bot/menu release. Main remains available for separately
-verified integration; the release tag stays fixed. The
-[v0.3.5 receipt](progress/2026-10-23-v035-public-release.md) preserves the
-preceding release's evidence. Open PR count is not an acceptance criterion.
+Earlier [v0.3.6](progress/2026-10-23-v036-public-release.md) and
+[v0.3.5](progress/2026-10-23-v035-public-release.md) receipts remain historical.
+Private AA/Halo/GMod playtests retain their separate acceptance boundaries.
 
 An independent [actual v0.3.4 package audit](progress/2026-10-23-v034-release-package-resource-audit.md)
 confirmed doubled animation-resource paths and omitted menu background photos.

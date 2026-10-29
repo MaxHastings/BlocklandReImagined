@@ -38,3 +38,8 @@ was reopened for those corrections and is included. It preserves Cargo's
 target set, optimization and scheduling; staged scheduling experiments remain
 excluded. Publication is still pending the corrected candidate's checks and
 verified packages. No full-alpha or interactive acceptance is claimed.
+
+Completed: corrected source `4db7796916d8` passed the extended release gate,
+all 23 fixed saves and all three native package checks, reached main and was
+published as v0.4.1. The [publication receipt](2026-10-29-v041-public-release.md) preserves final
+evidence and the earlier failures/flaky history; full alpha acceptance stays open.

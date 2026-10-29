@@ -65,3 +65,8 @@ Next: validate the corrected combined commit, refresh only generated inputs
 whose verified recipes changed, rerun the release gate including real content,
 fixed save corpus and performance checks, verify matching CI and all three
 packages, then merge/tag/publish within Maxwell's explicit authorization.
+
+Completed: corrected source `4db7796916d8` passed the extended release gate,
+all 23 fixed saves and all three native package checks, reached main and was
+published as v0.4.1. The [publication receipt](2026-10-29-v041-public-release.md) preserves final
+evidence and the earlier failures/flaky history; full alpha acceptance stays open.
