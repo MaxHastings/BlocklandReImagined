@@ -427,8 +427,14 @@ impl Section {
             return;
         }
         if self.plan.is_none() && self.finishing.is_none() {
-            if quality == 0 || slots == 0 {
+            if quality == 0 {
                 self.keep_shared();
+                return;
+            }
+            // Older debris can temporarily own every body slot. Keep the
+            // complete falling material, then plan breakup when a slot frees.
+            // This is not the user's deliberate Physics Quality Off policy.
+            if slots == 0 {
                 return;
             }
             let desired = ((self.pieces.len() as f32).sqrt() * (quality as f32 / 2048.).sqrt())
@@ -731,7 +737,17 @@ impl BrickDebris {
                 && (s.chunks.len() > available
                     || s.chunks.iter().map(|c| c.parts).sum::<usize>() > part_slots)
             {
-                s.keep_shared();
+                // Capacity may change while a section falls or its partition
+                // is prepared. Retain the completed plan until all its bodies
+                // and exact proxy parts can be admitted together.
+                if s.chunks.len() > self.limit.min(MAX_CHUNKS)
+                    || s.chunks.iter().map(|c| c.parts).sum::<usize>() > MAX_PROXY_PARTS
+                {
+                    // Intrinsic quality/proxy ceilings are different from
+                    // temporary occupancy by older debris.
+                    s.keep_shared();
+                }
+                continue;
             }
             for c in &mut s.chunks {
                 if c.released {
@@ -937,6 +953,149 @@ mod tests {
         run(&mut d, &b, 800);
         assert_eq!(d.instances().count(), 0);
         assert_eq!(d.world.bodies.len(), 0);
+        Ok(())
+    }
+    #[test]
+    fn a_later_collapse_recovers_breakup_after_earlier_shot_debris_expires() -> Result<()> {
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        d.set_limit(1);
+        // The first hit leaves ordinary flying debris. The later hit detaches
+        // a connected section while that earlier debris owns the body slot.
+        d.cues(
+            &[super::super::tests::kill(
+                1,
+                100,
+                [-4., 0.3, 0.],
+                [-4., 0.3, 0.],
+                10.,
+                1.,
+            )],
+            &b,
+        )?;
+        let frames = ((SOLID_SECONDS + FADE_SECONDS - 0.2) * 60.) as usize;
+        run(&mut d, &b, frames);
+        assert_eq!(d.bodies.len(), 1);
+        d.cues(
+            &[
+                cue(
+                    10,
+                    [4., 3.3, 0.],
+                    2,
+                    [0.5, 0.6, 0.5],
+                    [4., 3.6, 0.],
+                    [4., 3., 0.],
+                ),
+                cue(
+                    11,
+                    [4., 3.9, 0.],
+                    2,
+                    [0.5, 0.6, 0.5],
+                    [4., 3.6, 0.],
+                    [4., 3., 0.],
+                ),
+                Cue {
+                    id: 12,
+                    tick: 1,
+                    position: [0.; 3],
+                    kind: CueKind::BrickSectionReady {
+                        started: 0,
+                        group: 7,
+                        members: 2,
+                    },
+                },
+            ],
+            &b,
+        )?;
+        run(&mut d, &b, 120);
+        let section = &d.sections[&(0, 7)];
+        assert!(d.bodies.is_empty(), "the earlier hit must have expired");
+        assert!(section.landed);
+        assert_eq!(d.instances().count(), 2, "retain every member");
+        assert!(
+            !section.shared_only,
+            "temporary pressure must not permanently remove breakup"
+        );
+        assert_eq!(
+            d.chunk_handles().count(),
+            1,
+            "landed members regain physical interaction"
+        );
+        assert!(d.len() <= d.limit());
+        let handle = d.chunk_handles().next().unwrap();
+        let before = Vec3::from_array(d.world.bodies[handle].translation().to_array());
+        for frame in 0..60 {
+            d.push(&[Pusher {
+                id: 1,
+                center: Vec3::new(before.x - 2. + frame as f32 / 15., 1.2, before.z),
+                rotation: Quat::IDENTITY,
+                half: Vec3::new(0.5, 1.2, 0.5),
+                shape: None,
+            }]);
+            d.advance(1. / 60., &b)?;
+        }
+        let after = Vec3::from_array(d.world.bodies[handle].translation().to_array());
+        assert!(
+            after.x > before.x + 0.25,
+            "walking into the recovered debris must push it: {before} -> {after}"
+        );
+        Ok(())
+    }
+    #[test]
+    fn a_prepared_landing_waits_for_temporary_capacity_without_losing_its_plan() -> Result<()> {
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        d.set_limit(1);
+        d.cues(
+            &[
+                cue(
+                    10,
+                    [4., 3.3, 0.],
+                    2,
+                    [0.5, 0.6, 0.5],
+                    [4., 3.6, 0.],
+                    [4., 3., 0.],
+                ),
+                cue(
+                    11,
+                    [4., 3.9, 0.],
+                    2,
+                    [0.5, 0.6, 0.5],
+                    [4., 3.6, 0.],
+                    [4., 3., 0.],
+                ),
+            ],
+            &b,
+        )?;
+        run(&mut d, &b, 1);
+        assert!(d.sections[&(0, 7)].plan.is_some());
+        // Capacity can be consumed after planning, before the landing commits
+        // dynamic bodies. An older piece still has two seconds left to live.
+        d.cues(
+            &[super::super::tests::kill(
+                20,
+                100,
+                [-4., 0.3, 0.],
+                [-4., 0.3, 0.],
+                10.,
+                1.,
+            )],
+            &b,
+        )?;
+        d.bodies.values_mut().next().unwrap().age = SOLID_SECONDS + FADE_SECONDS - 2.;
+        run(&mut d, &b, 90);
+        let section = &d.sections[&(0, 7)];
+        assert!(section.landed);
+        assert_eq!(section.chunks.len(), 1, "retain the exact prepared proxy");
+        assert!(section.chunks[0].handle.is_none());
+        assert!(!section.shared_only);
+        assert_eq!(d.bodies.len(), 1, "older debris must still occupy capacity");
+        assert_eq!(d.len(), 1, "do not exceed capacity while waiting");
+        run(&mut d, &b, 90);
+        assert!(d.bodies.is_empty());
+        assert_eq!(d.chunk_handles().count(), 1);
+        assert_eq!(d.instances().count(), 2);
+        assert!(d.len() <= d.limit());
         Ok(())
     }
     #[test]
