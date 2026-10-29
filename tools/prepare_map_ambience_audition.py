@@ -105,7 +105,17 @@ def build(cache, output, content, download=False):
         source = content / row['reference']
         if sha(source.read_bytes()) != row['reference_sha256']:
             raise ValueError(f"{row['name']}: reference image differs from inspected input")
-        image = f'references/{index:02}.jpg'
+        label = 'Packaged map preview'
+        if row.get('supplemental_reference'):
+            supplemental = HERE.parent.parent / row['supplemental_reference']
+            if supplemental.is_file():
+                if sha(supplemental.read_bytes()) != row['supplemental_reference_sha256']:
+                    raise ValueError(f"{row['name']}: supplemental reference changed")
+                source = supplemental
+                label = row['supplemental_reference_label']
+            else:
+                label += '; supplemental overview unavailable in this checkout'
+        image = f'references/{index:02}{source.suffix}'
         shutil.copyfile(source, output / image)
         layers = []
         for key in row['candidates']:
@@ -113,7 +123,8 @@ def build(cache, output, content, download=False):
             layers.append(f'<p>{html.escape(recording["title"])} — {html.escape(recording["author"])}'
                           f' · CC0 · <a href="{html.escape(recording["source"])}">source/original download</a><br>'
                           f'<audio controls preload="none" loop src="loops/{key}.wav"></audio></p>')
-        cards.append(f'<article><img src="{image}" alt="{html.escape(row["name"])} packaged reference">'
+        cards.append(f'<article><img src="{image}" alt="{html.escape(row["name"])} visual reference">'
+                     f'<small>{html.escape(label)}</small>'
                      f'<h2>{html.escape(row["name"])}</h2><p>{html.escape(row["visual_assessment"])}</p>'
                      + ''.join(layers) + ('<p>Original authored sound or deliberate quiet; see assessment.</p>' if not layers else '')
                      + '</article>')

@@ -164,11 +164,14 @@
       "shipped_enabled": true,
       "reference": "ui-pack-005/images/add-ons/map_tutorial/tutorial.jpg",
       "reference_sha256": "e7a6c8099d7c5b5818dbfe8b7b25cb6477d85f2ef5ce2ed536c534e9b0701196",
-      "visual_assessment": "Wood-framed instructional interior. Keep teaching/UI cues clear; the thumbnail does not establish the full outdoor route.",
+      "visual_assessment": "Maxwell supplied an overhead gameplay capture on 2026-10-29: open roof framing, exposed walkways and teaching areas within grassy surrounding slopes. Use a very quiet outdoor breeze as the baseline, with only local partial shelter behind walls. Do not classify roof beams or the whole instructional structure as a sealed indoor room. Preserve teaching/UI cue intelligibility; occasional distant outdoor details require separate source selection.",
       "candidates": [
-        "room"
+        "dry-air"
       ],
-      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance.",
+      "supplemental_reference": "artifacts/map-ambience/inputs/tutorial-user-overview.png",
+      "supplemental_reference_sha256": "3b19c358430e9e861eca065aa004bdae2047cd4f7e5c254e756086e80cd578b6",
+      "supplemental_reference_label": "Maxwell-supplied Tutorial gameplay overview, 2026-10-29"
     },
     {
       "id": "map_arcticchallenge3:map/map_arcticchallenge3",
