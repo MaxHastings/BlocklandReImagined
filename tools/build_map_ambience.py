@@ -47,7 +47,7 @@ def encode_bed(raw):
         executable=imageio_ffmpeg.get_ffmpeg_exe()
     encoded=subprocess.run([executable,'-hide_banner','-loglevel','error','-fflags','+bitexact',
                             '-i','pipe:0','-map_metadata','-1','-vn','-sn','-dn','-c:a','libvorbis',
-                            '-q:a','6','-flags:a','+bitexact','-threads','1','-f','ogg','pipe:1'],
+                            '-q:a','6','-flags:a','+bitexact','-threads','1','-fflags','+bitexact','-f','ogg','pipe:1'],
                            input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout
     decoded,decoded_rate=sf.read(io.BytesIO(encoded),always_2d=True,dtype='float32')
     if decoded_rate!=rate or decoded.shape!=pcm.shape or not np.isfinite(decoded).all() or np.abs(decoded).max()>=1:
