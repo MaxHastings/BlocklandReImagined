@@ -311,7 +311,7 @@ mod tests {
             );
             authoritative.bricks = world.bricks.clone();
             let floor = rapier3d::prelude::ColliderBuilder::cuboid(30., 0.5, 30.)
-                .translation(rapier3d::na::Vector3::new(0., -0.5, 0.));
+                .translation(Vec3::new(0., -0.5, 0.));
             let sim = Simulation::new(authoritative, definitions, vec![floor]).unwrap();
             let mut session = Session::new(sim);
             session.set_lan_host(true);

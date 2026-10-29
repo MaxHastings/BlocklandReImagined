@@ -90,7 +90,7 @@ impl Fixture {
 
     fn session(&self, map: &str) -> Session {
         let floor = rapier3d::prelude::ColliderBuilder::cuboid(2000., 1., 2000.)
-            .translation(rapier3d::na::Vector3::new(0., 80., 0.));
+            .translation(Vec3::new(0., 80., 0.));
         let sim = Simulation::new(
             bri_world::World::new("Ambience fixture".into(), map.into(), vec![[1.; 4]]),
             Definitions::default(),
