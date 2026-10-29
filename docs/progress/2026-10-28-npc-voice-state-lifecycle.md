@@ -42,5 +42,4 @@ from this lane.
   -p test_generated_addons.py` (2 pass), `python tools/check_docs.py` and
   `git diff --check` pass.
 - Focused clippy: `cargo clippy --profile playtest --locked -p bri-package-runtime
-  --test npc_reactions -- -D warnings` is running at PR creation; its actual
-  outcome will be handed to the coordinator before integration approval.
+  --test npc_reactions -- -D warnings` passes warning-free (1m27s).
