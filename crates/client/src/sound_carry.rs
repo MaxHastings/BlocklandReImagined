@@ -310,6 +310,13 @@ mod tests {
                 world.palette.clone(),
             );
             authoritative.bricks = world.bricks.clone();
+            authoritative.next_brick_id = authoritative
+                .bricks
+                .keys()
+                .next_back()
+                .copied()
+                .unwrap_or(0)
+                + 1;
             let floor = rapier3d::prelude::ColliderBuilder::cuboid(30., 0.5, 30.)
                 .translation(Vec3::new(0., -0.5, 0.));
             let sim = Simulation::new(authoritative, definitions, vec![floor]).unwrap();
