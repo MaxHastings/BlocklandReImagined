@@ -6,16 +6,16 @@
       "id": "freesound-preview:cold-air",
       "source": "https://freesound.org/people/klangfabrik/sounds/117504/",
       "input_sha256": "21d58a65a60a3da3246ebd27575adedda6285c1f20ce483d3417dda2235c76e4",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply 2026-10-29 to focused eight-source audition question call_9e34395cfe4b41298a5494266a6e68e9: \"Approve these eight recordings\" (room, dry-air, cold-air, leaves, shore, rain, bird-robin, bird-blackbird), including disclosed six MP3-preview beds and two original-WAV birds. Source choice approved; integrated game mix remains pending.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {
       "id": "freesound-preview:dry-air",
       "source": "https://freesound.org/people/clement.bernardeau/sounds/718973/",
       "input_sha256": "0980b38b04845b2ea9015ca92e9bb1ee33e5e3ad648ec2b27085655e20ac8e6d",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply 2026-10-29 to focused eight-source audition question call_9e34395cfe4b41298a5494266a6e68e9: \"Approve these eight recordings\" (room, dry-air, cold-air, leaves, shore, rain, bird-robin, bird-blackbird), including disclosed six MP3-preview beds and two original-WAV birds. Source choice approved; integrated game mix remains pending.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {
@@ -30,8 +30,8 @@
       "id": "freesound-preview:leaves",
       "source": "https://freesound.org/people/Nox_Sound/sounds/530908/",
       "input_sha256": "b8962b2e82563d6a864c3215147e975633af5f27205f07cd2d3639584d6e715b",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply 2026-10-29 to focused eight-source audition question call_9e34395cfe4b41298a5494266a6e68e9: \"Approve these eight recordings\" (room, dry-air, cold-air, leaves, shore, rain, bird-robin, bird-blackbird), including disclosed six MP3-preview beds and two original-WAV birds. Source choice approved; integrated game mix remains pending.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {
@@ -62,24 +62,24 @@
       "id": "freesound-preview:rain",
       "source": "https://freesound.org/people/pmstrain/sounds/348805/",
       "input_sha256": "b5b5a1835b05676fc69ad6094b948fb6d443894e8ddad8ce279b2fc78f48566c",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply 2026-10-29 to focused eight-source audition question call_9e34395cfe4b41298a5494266a6e68e9: \"Approve these eight recordings\" (room, dry-air, cold-air, leaves, shore, rain, bird-robin, bird-blackbird), including disclosed six MP3-preview beds and two original-WAV birds. Source choice approved; integrated game mix remains pending.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {
       "id": "freesound-preview:room",
       "source": "https://freesound.org/people/visionear/sounds/565535/",
       "input_sha256": "00b64b3566e5596f8c4905d95dc09212bc21a69ff62d1f02db2a3b0a145c8332",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply 2026-10-29 to focused eight-source audition question call_9e34395cfe4b41298a5494266a6e68e9: \"Approve these eight recordings\" (room, dry-air, cold-air, leaves, shore, rain, bird-robin, bird-blackbird), including disclosed six MP3-preview beds and two original-WAV birds. Source choice approved; integrated game mix remains pending.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {
       "id": "freesound-preview:shore",
       "source": "https://freesound.org/people/SamsterBirdies/sounds/578524/",
       "input_sha256": "fd505dbd43cb1c3508f884279bf5d3e060bb14f2bc3d9b4cce334eb7a75b5d7f",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply 2026-10-29 to focused eight-source audition question call_9e34395cfe4b41298a5494266a6e68e9: \"Approve these eight recordings\" (room, dry-air, cold-air, leaves, shore, rain, bird-robin, bird-blackbird), including disclosed six MP3-preview beds and two original-WAV birds. Source choice approved; integrated game mix remains pending.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {
@@ -110,16 +110,16 @@
       "id": "original-wav:robin",
       "source": "https://lasonotheque.org/rouge-gorge-4-s1670.html",
       "input_sha256": "02276115894a2ecda9e771b98f4b24be6d0946982d51425a37d41797d0cb46b4",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply 2026-10-29 to focused eight-source audition question call_9e34395cfe4b41298a5494266a6e68e9: \"Approve these eight recordings\" (room, dry-air, cold-air, leaves, shore, rain, bird-robin, bird-blackbird), including disclosed six MP3-preview beds and two original-WAV birds. Source choice approved; integrated game mix remains pending.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {
       "id": "original-wav:blackbird",
       "source": "https://lasonotheque.org/merle-noir-30-s3503.html",
       "input_sha256": "08536ceee045247753562c02cad63334ec50b6780220dd747351fdeb0eb2bee6",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply 2026-10-29 to focused eight-source audition question call_9e34395cfe4b41298a5494266a6e68e9: \"Approve these eight recordings\" (room, dry-air, cold-air, leaves, shore, rain, bird-robin, bird-blackbird), including disclosed six MP3-preview beds and two original-WAV birds. Source choice approved; integrated game mix remains pending.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {

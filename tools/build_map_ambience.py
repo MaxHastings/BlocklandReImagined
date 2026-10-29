@@ -46,7 +46,7 @@ def selection(repo=REPO):
     catalog = {r['key']: r for r in json.loads((here / 'candidates.json').read_text())['clips']}
     masters = {r['key']: r for r in json.loads((here / 'masters.json').read_text())}
     selected = {k: dict(catalog[k], kind='bed', source_id='freesound-preview:'+k) for k in chosen_beds}
-    selected.update({k: dict(masters[DETAILS[k]], kind='detail', source_id='original-wav:'+DETAILS[k]) for k in chosen_details})
+    selected.update({k: dict(masters[DETAILS[k]], key=k, kind='detail', source_id='original-wav:'+DETAILS[k]) for k in chosen_details})
     return palette, selected
 
 
