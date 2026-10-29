@@ -11,8 +11,7 @@ The actual active scopes, despite older chat titles, are:
 - Voice policy/routing, optional radio samples, speaker HUD and 50% received
   voice gain: `codex/voice-policy` in `plastic-destruction-playtest`.
 - Collapse breakup recovery after temporary physics capacity pressure:
-  `codex/two-hit-collapse-interaction` in `voip-review`, PR #392. Its separate
-  unfinished build-speed experiments are excluded from this release.
+  `codex/two-hit-collapse-interaction` in `voip-review`, PR #392.
 - Gunner world heading independent of turning hull: `codex/tank-world-aim`
   in `tank-world-aim`.
 - Human-only ordinary player/admin views, retaining bot team assignment:
@@ -30,8 +29,12 @@ Starting main: `f891e5aa8`. Published v0.4.0 source:
 The existing STATUS release paragraph is older; refresh it after verified
 v0.4.1 publication. Existing published tags/assets remain immutable.
 
-Pending: all four scoped handoffs, combined conflict/authority review,
-history/protocol validation, matching platform CI, current generated content
-and imported bundle validation, final extended release gate, platform packages,
-independent archive/startup verification, tag and public release verification.
-This entry records authorization and setup, not passing checks or publication.
+All four scoped handoffs passed and the first combined candidate's CI passed.
+The extended release run found additional blockers; their corrections and
+remaining validation are recorded in
+[the correction receipt](2026-10-28-v041-release-gate-corrections.md).
+The cache/diagnostic tooling in PR #397 became CI-green while the candidate
+was reopened for those corrections and is included. It preserves Cargo's
+target set, optimization and scheduling; staged scheduling experiments remain
+excluded. Publication is still pending the corrected candidate's checks and
+verified packages. No full-alpha or interactive acceptance is claimed.
