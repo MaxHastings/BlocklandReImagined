@@ -505,6 +505,8 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 variants: Vec::new(),
                 sustain: None,
                 file: rel,
+                spatial: None,
+                environment: None,
                 volume,
                 looping: flag("islooping", false),
                 local: !flag("is3d", true),

@@ -290,3 +290,4 @@ The earlier dated 192/193 counts above remain historical. The new registered
 seam since v0.4.0 is package voice routing and the speaker HUD; declared server
 companion interface resolution extends the existing companion loader. These
 source checks do not establish interactive acceptance.
+| Listener shelter and authored ambient profiles | Optional SoundDef spatial distances and exterior/interior intent; live physical-map/brick exposure probes and smoothed per-handle gain/low-pass; authored region acoustics retained | Map ambience lane with root integration (`codex/map-ambience`) | Candidate: 17 rays at most every 250 ms on movement/query revision; pure filter check passes, mixed playback/live brick checks pending; no serialized operation changes or automatic fallback reverb | no: branch candidate, original emitter conversion/package consumer and human listening remain open |

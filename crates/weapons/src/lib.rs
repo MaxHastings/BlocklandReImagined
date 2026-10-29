@@ -785,6 +785,14 @@ fn is_one(v: &f32) -> bool {
 pub struct SoundDef {
     /// A `.wav` or `.ogg` file, relative to the folder `weapons.json` is in.
     pub file: String,
+    /// Explicit authored distances. Ambient playback preserves these instead
+    /// of synthesizing a reference distance from its legacy range argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<SoundSpatial>,
+    /// Optional acoustic intent; absent sounds do not follow shelter blending.
+    /// Ordinary positional obstruction remains independent of this choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<SoundEnvironment>,
     /// Optional weighted choices of other, single-clip profiles in this pack.
     /// Chosen once per one-shot playback. `file` remains the authored fallback.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -822,6 +830,18 @@ pub struct SoundDef {
     /// check compares it with the file and refuses a different length.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds: Option<f32>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoundSpatial {
+    pub reference_distance: f32,
+    pub max_distance: f32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoundEnvironment {
+    Exterior,
+    Interior,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4984,10 +5004,22 @@ impl Pack {
                         && target.is_some_and(|t| t.variants.is_empty()
                             && !t.looping
                             && !t.music
-                            && t.local == sound.local),
+                            && t.local == sound.local
+                            && t.spatial == sound.spatial
+                            && t.environment == sound.environment),
                     "Invalid sound {key}: variants need distinct single-clip profiles with matching placement and positive weights"
                 );
             }
+            ensure!(
+                sound
+                    .spatial
+                    .is_none_or(|s| s.reference_distance.is_finite()
+                        && s.max_distance.is_finite()
+                        && s.reference_distance >= 0.01
+                        && s.reference_distance <= s.max_distance
+                        && s.max_distance <= 20_000.0),
+                "Invalid sound {key}: spatial distances must be finite, 0.01 <= reference <= max <= 20000"
+            );
             let lower = sound.file.to_ascii_lowercase();
             ensure!(
                 key == &key.to_ascii_lowercase()

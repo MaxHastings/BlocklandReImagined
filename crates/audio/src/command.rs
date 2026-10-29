@@ -96,6 +96,10 @@ pub(crate) enum Command {
         handle: SoundHandle,
         hearing: crate::spatial::Hearing,
     },
+    SetVoiceAcoustics {
+        handle: SoundHandle,
+        acoustics: crate::acoustics::Acoustics,
+    },
     /// The room sound effects ring in.
     SetReverb(crate::reverb::Room),
     SetListener(Listener),

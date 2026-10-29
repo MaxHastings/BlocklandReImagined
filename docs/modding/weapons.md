@@ -919,3 +919,23 @@ An archetype binds this profile with `"sounds": {"jet":"your-id:thruster"}`
 ([content-kinds.md](content-kinds.md)). Accepted jetting state, alive/unmounted
 eligibility and ordinary positional playback drive it, rather than raw input or
 animation restarts. The base Blockhead profile uses this path; Horse opts out.
+
+### Authored sound distances and environmental intent
+
+A sound profile may explicitly opt into `"spatial": {"reference_distance": 80,
+"max_distance": 300}`. Distances must be finite and satisfy
+`0.01 <= reference_distance <= max_distance <= 20000`. These intrinsic distances
+also govern positional `play_ambient`: an explicit sound profile takes precedence
+over that call's legacy `range`. Without the new profile field, ambient playback
+keeps its existing reference distance of 25% of `range`; ordinary bank ranges do
+not opt into the new behavior. Listener-relative playback remains nonpositional.
+
+Optional `"environment": "exterior"` makes the listener's current physical shelter
+soften and muffle this sound. `"interior"` blends an indoor bed toward enclosed
+spaces. Omit the field for unaffected shelter-bed behavior; positional obstruction
+is still independent. Use it only for a sound that actually belongs outdoors or
+indoors. Music, dialogue, UI sounds and special-purpose nonpositional beds should
+not acquire environmental intent merely because they are sounds. Ambient loops
+keep their current handles, cursors and fades while acoustics change. This is a
+bounded local geometry approximation; authored map regions remain authoritative
+for room reverberation. These fields do not create a new serialized rule operation.

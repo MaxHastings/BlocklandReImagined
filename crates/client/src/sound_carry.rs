@@ -4,6 +4,108 @@
 use bri_audio::{Hearing, Room};
 use bri_content::regions::{RegionMap, SoundCarry, ZoneSteps};
 
+/// Bounded listener exposure from current physical map/brick shapes. This is
+/// a local approximation, not a room classifier or an acoustic simulation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Exposure {
+    pub cover: f32,
+    pub enclosure: f32,
+}
+
+#[derive(Default)]
+pub struct EnclosureProbe {
+    last: Option<(std::time::Instant, [f32; 3], u64)>,
+    exposure: Exposure,
+}
+
+impl EnclosureProbe {
+    pub const RAYS: usize = 17;
+    pub const REACH: f32 = 96.0;
+
+    pub fn sample(
+        &mut self,
+        listener: [f32; 3],
+        revision: u64,
+        blocked: impl FnMut([f32; 3]) -> bool,
+    ) -> Exposure {
+        self.sample_at(std::time::Instant::now(), listener, revision, blocked)
+    }
+
+    fn sample_at(
+        &mut self,
+        now: std::time::Instant,
+        listener: [f32; 3],
+        revision: u64,
+        mut blocked: impl FnMut([f32; 3]) -> bool,
+    ) -> Exposure {
+        if let Some((last, position, old_revision)) = self.last {
+            let movement = listener
+                .iter()
+                .zip(position)
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>();
+            if now.duration_since(last).as_secs_f32() < 0.25
+                || (movement < 0.25 && old_revision == revision)
+            {
+                return self.exposure;
+            }
+        }
+        let roof = [
+            [0., 1., 0.],
+            [0.5, 1., 0.5],
+            [-0.5, 1., 0.5],
+            [0.5, 1., -0.5],
+            [-0.5, 1., -0.5],
+            [0.8, 0.6, 0.],
+            [-0.8, 0.6, 0.],
+            [0., 0.6, 0.8],
+            [0., 0.6, -0.8],
+        ];
+        let sides = [
+            [1., 0., 0.],
+            [-1., 0., 0.],
+            [0., 0., 1.],
+            [0., 0., -1.],
+            [1., 0., 1.],
+            [-1., 0., 1.],
+            [1., 0., -1.],
+            [-1., 0., -1.],
+        ];
+        let cover = roof.into_iter().filter(|d| blocked(*d)).count() as f32 / 9.0;
+        let surround = sides.into_iter().filter(|d| blocked(*d)).count() as f32 / 8.0;
+        self.exposure = Exposure {
+            cover,
+            enclosure: surround * (0.35 + 0.65 * cover),
+        };
+        self.last = Some((now, listener, revision));
+        self.exposure
+    }
+}
+
+impl Exposure {
+    pub fn acoustics(
+        self,
+        intent: Option<bri_weapons::SoundEnvironment>,
+        blocked: bool,
+    ) -> bri_audio::Acoustics {
+        let mut acoustic = match intent {
+            Some(bri_weapons::SoundEnvironment::Exterior) => bri_audio::Acoustics {
+                gain: 1.0 - 0.25 * self.cover - 0.65 * self.enclosure,
+                muffle: 0.05 * self.cover + 0.9 * self.enclosure,
+            },
+            Some(bri_weapons::SoundEnvironment::Interior) => bri_audio::Acoustics {
+                gain: 0.1 + 0.9 * self.enclosure,
+                muffle: 0.0,
+            },
+            None => bri_audio::Acoustics::CLEAR,
+        };
+        if blocked {
+            acoustic.muffle = acoustic.muffle.max(0.7);
+        }
+        acoustic
+    }
+}
+
 /// The map's sound rules with the region steps worked out once.
 pub struct SoundCarryModel {
     carry: SoundCarry,
@@ -62,6 +164,156 @@ pub fn room(regions: &RegionMap, listener: [f32; 3]) -> Room {
 mod tests {
     use super::*;
     use bri_content::regions::{Region, RegionReverb};
+
+    #[test]
+    fn live_brick_shapes_distinguish_roof_only_rooms_windows_and_open_rafters() {
+        use crate::building::Building;
+        use bri_content::collision::{CollisionBody, Part};
+        use bri_sim::definitions::{Definition, Definitions};
+        use bri_world::{Brick, ContentRef};
+        use glam::Vec3;
+        let box_part = |center, size| Part::Box { center, size };
+        let definition = |id: &str, footprint, plates, parts| {
+            let collision = CollisionBody {
+                id: id.into(),
+                parts,
+            };
+            let shape = bri_physics::content::collider(&collision)
+                .unwrap()
+                .build()
+                .shared_shape()
+                .clone();
+            Definition {
+                mesh: bri_content::brick::Brick {
+                    schema_version: 1,
+                    id: id.into(),
+                    footprint_studs: footprint,
+                    height_plates: plates,
+                    attachment_rows: vec![],
+                    collision_boxes: vec![],
+                    needs_external_collision: false,
+                    coverage: None,
+                    quads: vec![],
+                },
+                collision,
+                shape,
+                indestructible: false,
+                special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.; 4],
+                bot: None,
+            }
+        };
+        let definitions = Definitions {
+            entries: [
+                (
+                    "wall".into(),
+                    definition("wall", [16, 1], 20, vec![box_part([0.; 3], [8., 4., 0.5])]),
+                ),
+                (
+                    "roof".into(),
+                    definition("roof", [16, 16], 1, vec![box_part([0.; 3], [8., 0.2, 8.])]),
+                ),
+                (
+                    "window".into(),
+                    definition(
+                        "window",
+                        [16, 1],
+                        20,
+                        vec![
+                            box_part([-3., 0., 0.], [2., 4., 0.5]),
+                            box_part([3., 0., 0.], [2., 4., 0.5]),
+                            box_part([0., 1.75, 0.], [4., 0.5, 0.5]),
+                            box_part([0., -1.75, 0.], [4., 0.5, 0.5]),
+                        ],
+                    ),
+                ),
+                (
+                    "rafters".into(),
+                    definition(
+                        "rafters",
+                        [16, 16],
+                        1,
+                        [-3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5]
+                            .into_iter()
+                            .map(|x| box_part([x, 0., 0.], [0.2, 0.2, 8.]))
+                            .collect(),
+                    ),
+                ),
+            ]
+            .into(),
+        };
+        let mut building = Building::new(definitions, vec![]).unwrap();
+        let mut world = bri_net::protocol::PublicWorld {
+            name: "acoustic fixture".into(),
+            map_id: "fixture".into(),
+            palette: vec![[1.; 4]],
+            bricks: Default::default(),
+        };
+        let ear = Vec3::new(0., 2., 0.);
+        let sample = |probe: &mut EnclosureProbe, building: &Building, now| {
+            probe.sample_at(now, ear.to_array(), building.query_generation(), |d| {
+                building
+                    .solid_segment(ear, ear + Vec3::from(d).normalize() * EnclosureProbe::REACH)
+                    .unwrap()
+                    .is_some()
+            })
+        };
+        building.sync_world(&world).unwrap();
+        let mut probe = EnclosureProbe::default();
+        let mut now = std::time::Instant::now();
+        assert_eq!(sample(&mut probe, &building, now).cover, 0.0);
+        world.bricks.insert(
+            1,
+            Brick::new(ContentRef::Resolved("roof".into()), [0., 4.1, 0.], 0),
+        );
+        building.sync_world(&world).unwrap();
+        now += std::time::Duration::from_millis(250);
+        let roof = sample(&mut probe, &building, now);
+        assert_eq!(roof.cover, 1.0);
+        assert_eq!(roof.enclosure, 0.0);
+        for (id, at, turn) in [
+            (2, [0., 2., 4.], 0),
+            (3, [0., 2., -4.], 0),
+            (4, [4., 2., 0.], 1),
+            (5, [-4., 2., 0.], 1),
+        ] {
+            let mut brick = Brick::new(ContentRef::Resolved("wall".into()), at, 0);
+            brick.quarter_turns = turn;
+            world.bricks.insert(id, brick);
+        }
+        building.sync_world(&world).unwrap();
+        now += std::time::Duration::from_millis(250);
+        assert_eq!(sample(&mut probe, &building, now).enclosure, 1.0);
+        world.bricks.get_mut(&2).unwrap().definition = ContentRef::Resolved("window".into());
+        building.sync_world(&world).unwrap();
+        now += std::time::Duration::from_millis(250);
+        let window = sample(&mut probe, &building, now);
+        assert!(window.enclosure < 1.0 && window.enclosure > 0.0);
+        world.bricks.get_mut(&1).unwrap().definition = ContentRef::Resolved("rafters".into());
+        building.sync_world(&world).unwrap();
+        now += std::time::Duration::from_millis(250);
+        let rafters = sample(&mut probe, &building, now);
+        assert!(rafters.cover < 0.25 && rafters.enclosure < window.enclosure);
+        // This tests the live query's removal invalidation; actual weapon
+        // destruction integration is separately required, not inferred here.
+        world.bricks.remove(&4);
+        building.sync_world(&world).unwrap();
+        now += std::time::Duration::from_millis(250);
+        assert!(sample(&mut probe, &building, now).enclosure < rafters.enclosure);
+        let mut traced = 0;
+        probe.sample_at(
+            now + std::time::Duration::from_millis(10),
+            ear.to_array(),
+            building.query_generation(),
+            |_| {
+                traced += 1;
+                false
+            },
+        );
+        assert_eq!(traced, 0, "cadence caps probes even after edits");
+    }
 
     /// A wall at x = 0: region 1 in front, region 2 behind, joined (or not) as asked.
     fn rooms(connected: bool) -> RegionMap {
