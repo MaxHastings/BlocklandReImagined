@@ -63,6 +63,7 @@ import ci_content  # noqa: E402
 import content_packs  # noqa: E402
 import generated_addons  # noqa: E402
 import imported_addons  # noqa: E402
+from map_ambience.approvals import original_map_problems  # noqa: E402
 
 LIST_SCHEMA = 3
 # 4: imported Add-Ons carry importer/port identity and output inventories.
@@ -577,6 +578,7 @@ def problems(directory, addon, repo=REPO, recipe=None):
             out.append(f"{manifest_path} does not credit {', '.join(original['authors'])}")
     if addon.get('generated'):
         out += generated_addons.problems(repo, directory, addon['generated'])
+    out += original_map_problems(repo, directory)
     for companion in manifest.get('companions', []):
         out += companion_problems(directory.parent / companion, companion, addon['id'])
     return out
