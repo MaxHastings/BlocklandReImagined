@@ -877,6 +877,21 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher(
     let content = f.root.clone();
     let (tank_id, _) = vehicles(f);
     let tank = definition(f, tank_id)?;
+    if !f.content {
+        // This test now drives, rather than only changing seats. The small
+        // fixture room let the tank drive off its finite floor while the
+        // two clients caught up. Give its bounded turns a driving surface.
+        let mut rooms =
+            bri_content::testing::map_bundle::rooms_for(bri_client::content::LOADABLE_MAPS);
+        let room = rooms
+            .iter_mut()
+            .find(|r| r.id == SLATE)
+            .context("Slate fixture")?;
+        room.half += tank.max_speed * 20.0; // two turns, each budgeted ten seconds
+        let dir = bri_package::packages::PackageSet::load_root(&f.root)?
+            .role_dir(&f.root, "map_bundle")?;
+        bri_content::testing::map_bundle::write_bundle(&dir, &rooms)?;
+    }
     let scratch = f.state()?;
     let state = scratch.path().to_path_buf();
     let mut host = app(&content, &state, "Host")?;
@@ -1002,43 +1017,49 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher(
             .rotation;
         held(&mut host, HeldControl::Forward, true)?;
         held(&mut host, turn, true)?;
-        let mut turned = 0.0_f32;
-        for _ in 0..120 {
-            // Mouse steering preferences must also produce an actual turn.
-            request(
-                &mut host,
-                UiAction::Game(GameAction::Look {
-                    yaw: if turn == HeldControl::Left {
-                        -0.025
-                    } else {
-                        0.025
-                    },
-                    pitch: 0.0,
-                }),
-            )?;
-            run_for(&mut [&mut host, &mut guest], 1.0 / 60.0)?;
-            ensure!(
-                wrap(guest.controls.yaw - fixed_yaw).abs() < 1e-4,
-                "driver's {turn:?} turn dragged gunner aim from {fixed_yaw} to {}",
-                guest.controls.yaw
-            );
-            ensure!(
-                (guest.controls.pitch - fixed_pitch).abs() < 1e-4,
-                "driving changed gunner pitch"
-            );
-            let pose = host
-                .network_view()
-                .context("host view")?
-                .vehicle_poses
-                .values()
-                .next()
-                .context("host tank")?;
-            turned =
-                turned.max(Quat::from_array(start).angle_between(Quat::from_array(pose.rotation)));
-        }
+        // Wait for the observed turn, rather than sending a fixed count of
+        // frames: slow clients otherwise drive much farther in server time.
+        until(
+            &mut [&mut host, &mut guest],
+            "driver turns the hull",
+            10,
+            |apps| {
+                request(
+                    apps[0],
+                    UiAction::Game(GameAction::Look {
+                        yaw: if turn == HeldControl::Left {
+                            -0.025
+                        } else {
+                            0.025
+                        },
+                        pitch: 0.0,
+                    }),
+                )?;
+                ensure!(
+                    wrap(apps[1].controls.yaw - fixed_yaw).abs() < 1e-4,
+                    "driver's {turn:?} turn dragged gunner aim from {fixed_yaw} to {}",
+                    apps[1].controls.yaw
+                );
+                ensure!(
+                    (apps[1].controls.pitch - fixed_pitch).abs() < 1e-4,
+                    "driving changed gunner pitch"
+                );
+                let pose = apps[0]
+                    .network_view()
+                    .context("host view")?
+                    .vehicle_poses
+                    .values()
+                    .next()
+                    .context("host tank")?;
+                let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
+                let before = Quat::from_array(start) * Vec3::NEG_Z;
+                let turned = wrap(forward.x.atan2(-forward.z) - before.x.atan2(-before.z));
+                let sign = if turn == HeldControl::Left { -1.0 } else { 1.0 };
+                Ok(turned * sign > 0.15 && pose.wheel_contact.iter().any(|c| *c))
+            },
+        )?;
         held(&mut host, turn, false)?;
         held(&mut host, HeldControl::Forward, false)?;
-        ensure!(turned > 0.15, "driver never turned the hull: {turned}");
         run_for(&mut [&mut host, &mut guest], 0.5)?;
         for app in [&host, &guest] {
             let pose = app
