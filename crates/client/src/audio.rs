@@ -2758,63 +2758,64 @@ mod recorded_brick_tests {
         assert!(audio.take_capture().iter().all(|s| s.abs() < 1e-5));
         Ok(())
     }
-}
-#[test]
-fn authored_ambient_profile_reaches_existing_handles_and_queue_pressure_retries() -> Result<()> {
-    let fx = Pack::synthetic()?;
-    let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
-    let pack: bri_weapons::Pack = serde_json::from_value(serde_json::json!({
-        "schema_version":1, "id":"ambience-probe", "sounds": {
-            "test:exterior": {"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,
-                "spatial":{"reference_distance":80.0,"max_distance":300.0},"environment":"exterior"},
-            "test:neutral": {"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true}
+    #[test]
+    fn authored_ambient_profile_reaches_existing_handles_and_queue_pressure_retries() -> Result<()>
+    {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let pack: bri_weapons::Pack = serde_json::from_value(serde_json::json!({
+            "schema_version":1, "id":"ambience-probe", "sounds": {
+                "test:exterior": {"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,
+                    "spatial":{"reference_distance":80.0,"max_distance":300.0},"environment":"exterior"},
+                "test:neutral": {"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true}
+            }
+        }))?;
+        audio.set_pack_sounds(&pack, &fx.root);
+        assert_eq!(
+            audio.pack_sounds["test:exterior"]
+                .0
+                .authored_spatial
+                .unwrap()
+                .reference_distance,
+            80.0
+        );
+        for (key, track) in [("outside", "test:exterior"), ("unaffected", "test:neutral")] {
+            audio.play_ambient(&bri_sim::session::AmbientPlay {
+                key: key.into(),
+                track: Some(track.into()),
+                volume: 1.0,
+                fade: 0.0,
+                at: None,
+                range: 100.0,
+            });
         }
-    }))?;
-    audio.set_pack_sounds(&pack, &fx.root);
-    assert_eq!(
-        audio.pack_sounds["test:exterior"]
-            .0
-            .authored_spatial
-            .unwrap()
-            .reference_distance,
-        80.0
-    );
-    for (key, track) in [("outside", "test:exterior"), ("unaffected", "test:neutral")] {
-        audio.play_ambient(&bri_sim::session::AmbientPlay {
-            key: key.into(),
-            track: Some(track.into()),
-            volume: 1.0,
-            fade: 0.0,
-            at: None,
-            range: 100.0,
-        });
+        audio.tick(0.05, Listener::default());
+        let h = audio.rule_ambient["outside"].handle;
+        assert_eq!(audio.acoustic_voices.len(), 1);
+        audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
+        audio.tick(0.01, Listener::default());
+        audio.exposure = crate::sound_carry::Exposure {
+            cover: 1.0,
+            enclosure: 1.0,
+        };
+        while audio.runtime.set_listener(Listener::default()).is_ok() {}
+        audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
+        assert_eq!(audio.acoustic_voices[&h].sent, Some(Acoustics::CLEAR));
+        audio.tick(0.01, Listener::default());
+        audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
+        let sheltered = audio.acoustic_voices[&h].sent.unwrap();
+        assert!(sheltered.gain < 0.2 && sheltered.muffle > 0.9);
+        assert_eq!(audio.rule_ambient["outside"].handle, h);
+        assert_eq!(audio.stats().started, 2);
+        audio.clear();
+        assert!(audio.acoustic_voices.is_empty());
+        assert_eq!(
+            audio
+                .enclosure_probe
+                .sample([0.; 3], 0, |_| false)
+                .enclosure,
+            0.0
+        );
+        Ok(())
     }
-    audio.tick(0.05, Listener::default());
-    let h = audio.rule_ambient["outside"].handle;
-    assert_eq!(audio.acoustic_voices.len(), 1);
-    audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
-    audio.tick(0.01, Listener::default());
-    audio.exposure = crate::sound_carry::Exposure {
-        cover: 1.0,
-        enclosure: 1.0,
-    };
-    while audio.runtime.set_listener(Listener::default()).is_ok() {}
-    audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
-    assert_eq!(audio.acoustic_voices[&h].sent, Some(Acoustics::CLEAR));
-    audio.tick(0.01, Listener::default());
-    audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
-    let sheltered = audio.acoustic_voices[&h].sent.unwrap();
-    assert!(sheltered.gain < 0.2 && sheltered.muffle > 0.9);
-    assert_eq!(audio.rule_ambient["outside"].handle, h);
-    assert_eq!(audio.stats().started, 2);
-    audio.clear();
-    assert!(audio.acoustic_voices.is_empty());
-    assert_eq!(
-        audio
-            .enclosure_probe
-            .sample([0.; 3], 0, |_| false)
-            .enclosure,
-        0.0
-    );
-    Ok(())
 }
