@@ -23,6 +23,10 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 use std::{collections::BTreeMap, sync::Arc};
 
+#[path = "building_debris.rs"]
+mod debris;
+pub(crate) use debris::DebrisSweep;
+
 const SLOTS: usize = 10;
 const DEPLOY_REACH: f32 = 15.0;
 
