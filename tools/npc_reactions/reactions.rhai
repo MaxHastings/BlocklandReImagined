@@ -7,7 +7,8 @@ fn roll(n) {
 }
 fn voice(p) {
     let v = get_player(p.id, "voice");
-    if v.len() > 0 { return v; }
+    // Live bots can appear before a spawn hook has populated player state.
+    if v != () && v.len() > 0 { return v; }
     #{next:0, combat:0, health:p.health, vy:p.vy, grounded:p.grounded,
       mounted:p.mounted, kills:0, last_kill:0, idle:tick() + 3600 + roll(3600)}
 }
