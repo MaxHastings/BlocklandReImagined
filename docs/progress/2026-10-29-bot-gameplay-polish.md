@@ -12,7 +12,7 @@ Do not open more seeds, general AI rewrites or unrelated audits. Human feel and
 the full alpha contract remain separate and incomplete.
 
 Production source is frozen after the completed bounded matrix and scoped
-checks below. Remaining work: final warm build/startup receipt, branch push,
+checks below. The updated warm preview is delivered. Remaining work: branch push,
 current-head platform/history CI and coordinator-serialized merge. The active
 goal stays incomplete until those deliveries finish. PR 404 remains draft until
 its final evidence is published: https://github.com/MaxHastings/BlocklandReImagined/pull/404
@@ -190,4 +190,27 @@ work is integrated. Release remains owned by the coordinator across four lanes.
 Maxwell alone performs interactive testing. Local heavy work stopped whenever
 a normal game was active, resuming only on explicit pause or observed exit.
 
-Final updated-preview, exact-head CI and serialized merge receipts follow here.
+The delivered update is `E:/Downloads/Bot-Gameplay-Polish-20261029-r3`,
+`v0.4.1-bot-polish3 (1802a16b3)`, source commit
+`1802a16b34a27c0b3722277f28b0486af31720c5`. All five executables build with
+`BRI_VERSION=v0.4.1-bot-polish3 cargo build --profile playtest --bin bri-client
+--bin bri-server --bin bri-import-addon --bin bri-addon-check --bin bri-addon-run`.
+The packaged client's `--version` matches and its `--check <content> <fresh-state>`
+exits zero without a window. The server does not support `--version` (usage/exit 1);
+that attempted companion version query is not a startup pass. The uniform build
+receipt and executable hashes identify all companions.
+
+Its manifest has 13,427 entries, SHA256
+`240bc3ea0a0642bf3f6f7ce56c2494083a55fde8dbb996c20a309f0ee33c3b2c`.
+All unchanged copied files were checked against the published manifest; the
+eight intentional executable/config/handoff metadata changes were verified
+against the new manifest. Matched startup retains the two declared Butterfly
+Knife warnings and 151 existing fallback records. `BOT-PLAYTEST.txt` names the
+three saves, known limits and concrete anomaly-report details. Maxwell was
+given the new launcher and local heavy work is finished.
+
+Final CI and merge receipts belong to PR 404's current-head checks/merge metadata
+and the coordinator's release checkpoint; root will preserve a private
+`merge-receipt.json` with the exact merge SHA. No main mutation occurs before
+passing current-head CI and coordinator serialization. Human acceptance and
+full alpha completion are not inferred from this engineering handoff.
