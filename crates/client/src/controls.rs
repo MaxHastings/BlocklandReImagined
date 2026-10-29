@@ -830,12 +830,6 @@ impl Controls {
             }
         }
     }
-    /// Turn the view with the vehicle it rides.
-    pub fn carry_yaw(&mut self, turn: f32) {
-        if turn.is_finite() {
-            self.yaw = wrap(self.yaw + turn);
-        }
-    }
     fn axis(&self, positive: HeldControl, negative: HeldControl) -> f32 {
         u8::from(self.held(positive)) as f32 - u8::from(self.held(negative)) as f32
     }

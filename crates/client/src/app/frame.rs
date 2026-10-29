@@ -429,7 +429,7 @@ impl App {
                     self.net.steering_sent = None;
                 }
                 // The view rides along: it faces the seat, follows a
-                // mouse-steered vehicle, turns with the hull for a gunner, and
+                // mouse-steered vehicle, keeps a gunner's world heading, and
                 // stays put on a mount facing the look.
                 let riding = mounted.and_then(|(vehicle, seat)| {
                     let info = view.vehicles.get(&vehicle)?;
@@ -566,15 +566,12 @@ impl App {
                                 self.controls.take_turret(yaw, pitch);
                             }
                             (true, Some(None)) => {}
-                            _ => {
-                                self.mounts.takes_turret = false;
-                                if let Some(previous) = self.mounts.mount_heading {
-                                    let turn = (heading - previous + std::f32::consts::PI)
-                                        .rem_euclid(std::f32::consts::TAU)
-                                        - std::f32::consts::PI;
-                                    self.controls.carry_yaw(turn);
-                                }
-                            }
+                            // Once control is handed over, only the gunner
+                            // changes the world aim. Both the host and local
+                            // barrel prediction subtract the current hull
+                            // heading; carrying it here defeats that mapping
+                            // and lets the driver's turns drag the gun around.
+                            _ => self.mounts.takes_turret = false,
                         }
                         self.mounts.mount_heading = Some(heading);
                     }
