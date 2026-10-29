@@ -123,6 +123,27 @@ fn guns(app: &App) -> usize {
         t.slots.iter().filter(|s| s.as_deref() == Some(GUN)).count()
     })
 }
+fn free_slots(app: &App) -> usize {
+    let v = app.network_view().unwrap();
+    v.tools[&v.owner]
+        .slots
+        .iter()
+        .filter(|s| s.is_none())
+        .count()
+}
+/// Use ordinary controls to make room; do not replace the host's loadout.
+fn drop_tool(apps: &mut [&mut App], slot: usize) -> Result<()> {
+    act(apps[0], UiAction::UseTool { slot })?;
+    until(apps, "tool in hand", Duration::from_secs(5), |a| {
+        let v = a[0].network_view().unwrap();
+        v.tools[&v.owner].selected == Some(slot)
+    })?;
+    act(apps[0], UiAction::Game(GameAction::DropTool))?;
+    until(apps, "tool thrown", Duration::from_secs(5), |a| {
+        let v = a[0].network_view().unwrap();
+        v.tools[&v.owner].slots[slot].is_none()
+    })
+}
 fn spawned(app: &App, brick: u64) -> Option<StaticItem> {
     app.network_view()?
         .weapons
@@ -561,8 +582,9 @@ fn ghost_cycle(
         "third person: ghost and solid item look alike ({third_diff} px)"
     );
 
-    // Throw the first gun away from the brick: the last test needs two free
-    // slots (five tools, `maxTools`).
+    // Throw the first gun away from the brick, then reserve two free slots:
+    // one for the next pickup and one for its immediate pickup on respawn.
+    // Native Add-Ons can supply more starting tools than the synthetic root.
     look_at(apps[0], item + out * 6.)?;
     let slot = {
         let v = apps[0].network_view().unwrap();
@@ -573,15 +595,30 @@ fn ghost_cycle(
             .context("no gun to drop")?
     };
     let carried = guns(apps[0]);
-    act(apps[0], UiAction::UseTool { slot })?;
-    until(apps, "gun in hand", Duration::from_secs(5), |a| {
-        let v = a[0].network_view().unwrap();
-        v.tools[&v.owner].selected == Some(slot)
-    })?;
-    act(apps[0], UiAction::Game(GameAction::DropTool))?;
-    until(apps, "gun thrown", Duration::from_secs(5), |a| {
-        guns(a[0]) < carried
-    })?;
+    drop_tool(apps, slot)?;
+    ensure!(guns(apps[0]) < carried, "the first gun was not thrown");
+    let capacity = {
+        let v = apps[0].network_view().unwrap();
+        v.tools[&v.owner].slots.len()
+    };
+    for _ in 0..capacity {
+        if free_slots(apps[0]) >= 2 {
+            break;
+        }
+        let slot = {
+            let v = apps[0].network_view().unwrap();
+            v.tools[&v.owner]
+                .slots
+                .iter()
+                .rposition(Option::is_some)
+                .context("no tool to drop for the two pickups")?
+        };
+        drop_tool(apps, slot)?;
+    }
+    ensure!(
+        free_slots(apps[0]) >= 2,
+        "two pickups need two free tool slots"
+    );
     // Available again: the next touch picks it up and fades it for the
     // brick's 8 s (960 ticks at 120 Hz).
     let guns_before = guns(apps[0]);
@@ -604,6 +641,10 @@ fn ghost_cycle(
     })?;
     // `canPickup = 0`: the player stays in contact with the ghost and takes
     // nothing until `fadeIn`, then takes it at once. Judged in sim ticks.
+    ensure!(
+        free_slots(apps[0]) >= 1,
+        "the returned item needs a free tool slot"
+    );
     let holding = guns(apps[0]);
     let taken = std::cell::Cell::new(None);
     until(
