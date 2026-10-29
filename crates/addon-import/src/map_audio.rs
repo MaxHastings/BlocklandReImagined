@@ -754,13 +754,16 @@ mod tests {
             session
         };
         let beds = |s: &mut bri_sim::session::Session, owner| {
-            s.take_private_notices()
+            let mut beds = s
+                .take_private_notices()
                 .into_iter()
                 .filter_map(|(who, notice)| match notice {
                     bri_sim::session::Notice::Ambient(play) if who == owner => Some(play),
                     _ => None,
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            beds.sort_by(|a, b| a.key.cmp(&b.key));
+            beds
         };
         let mut s = session("audio:map/test");
         let a = s
