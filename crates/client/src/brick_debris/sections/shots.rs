@@ -145,7 +145,8 @@ impl Queries {
                                 section.recoil =
                                     (section.recoil + query.push).clamp_length_max(0.7);
                             } else if let Some(c) = section.chunks.get_mut(chunk) {
-                                c.recoil = (c.recoil + query.push).clamp_length_max(0.7);
+                                c.velocity = (c.velocity + query.push * 8.).clamp_length_max(12.);
+                                c.sweep = None;
                             }
                             self.struck.insert(query.hit);
                             *hits += 1;

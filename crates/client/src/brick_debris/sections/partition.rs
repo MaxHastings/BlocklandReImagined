@@ -15,8 +15,8 @@ pub(super) struct Partition {
     scan: Option<(Bounds, QueryCursor)>,
     seed: [i32; 3],
     target: usize,
+    extent: Option<Bounds>,
     pub groups: Vec<Vec<usize>>,
-    pub over_limit: bool,
 }
 pub(super) fn bounds(p: &SectionPiece) -> Bounds {
     let half = (p.turn * Vec3::X).abs() * p.half.x
@@ -42,19 +42,13 @@ impl Partition {
             scan: None,
             seed: [0; 3],
             target: target.max(1),
+            extent: None,
             groups: Vec::new(),
-            over_limit: false,
         }
     }
     pub fn step(&mut self, work: &mut u32) -> bool {
         while *work > 0 {
             *work -= 1;
-            if self.groups.len() >= MAX_CHUNKS
-                && (!self.remaining.is_empty() || !self.current.is_empty())
-            {
-                self.over_limit = true;
-                return true;
-            }
             if let Some((own, scan)) = &mut self.scan {
                 match scan.step(&self.index) {
                     None => self.scan = None,
@@ -83,6 +77,7 @@ impl Partition {
                 || (self.frontier.is_empty() && !self.current.is_empty())
             {
                 self.groups.push(std::mem::take(&mut self.current));
+                self.extent = None;
                 self.frontier.clear();
                 self.queued.clear();
             }
@@ -95,11 +90,26 @@ impl Partition {
                 self.queued.insert(id);
             }
             let Reverse((_, id)) = self.frontier.pop().unwrap();
+            let own = self.index.bounds(id as u64);
+            let extent = self.extent.map_or(own, |old| {
+                let min = std::array::from_fn(|a| old.min[a].min(own.min[a]));
+                Bounds {
+                    min,
+                    size: std::array::from_fn(|a| old.max()[a].max(own.max()[a]) - min[a]),
+                }
+            });
+            // A single authored member may be larger. Never weld its neighbors
+            // into an even larger slab, and never change its visible geometry.
+            if !self.current.is_empty()
+                && (0..3).any(|a| extent.size[a] as f32 * bri_sim::grid::CELL[a] > MAX_CHUNK_SPAN)
+            {
+                continue;
+            }
             if !self.remaining.remove(&id) {
                 continue;
             }
             self.current.push(id);
-            let own = self.index.bounds(id as u64);
+            self.extent = Some(extent);
             self.scan = Some((own, QueryCursor::new(own.expanded(1))));
         }
         false
