@@ -28,5 +28,40 @@ Only this task's test file was transferred to a dedicated worktree and restored
 in the shared warm checkout; other-thread edits were preserved. Work continues
 on `codex/tank-world-aim` from origin/main `f891e5aa8`.
 
-Validation and private handoff results will be appended before completion.
+## Validation and handoff
+
+- Client formatting and `git diff --check` pass.
+- `cargo build --profile playtest -p bri-client --bin bri-client` passes
+  (13m35s cold after worktree isolation).
+- Subprocess-waited `bri-client --check` against the main checkout's generated
+  content exits zero: 21 maps, 1,396 bricks, 35/35 save pictures and 14 prepared
+  lighting parameter maps. Its existing 227 fallbacks and two Butterfly Knife
+  health warnings remain; no content was changed. The first direct GUI-subsystem
+  shell invocation closed its output pipe prematurely; waiting through Python
+  corrected the invocation and produced the complete exit-zero result.
+- The extended two-App test initially failed its *actual hull motion* condition.
+  Diagnostic authoritative poses established that its fixed frame-count driving
+  left the small synthetic map's finite floor (y=-4,902, no wheel contact), rather
+  than exposing a turret-aim failure. It now gives only this temporary synthetic
+  Slate fixture driving ground sized from max_speed and the two ten-second turn
+  budgets, and waits for observed signed hull turns over 0.15 rad with wheel
+  support. Aim assertions were preserved. The corrected synthetic test passes
+  (1/1, 42.81s). Logs: ignored `artifacts/tank-regression-*.log`.
+
+Commands for the corrected test (same `playtest` profile):
+
+```powershell
+cargo test --profile playtest -p bri-client --test vehicle_first_person the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher::synthetic -- --exact --nocapture
+# The generated-content variant uses BRI_CONTENT pointed at existing native content:
+cargo test --profile playtest -p bri-client --test vehicle_first_person the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher::release_content -- --exact --ignored --nocapture
+cargo test --profile playtest -p bri-client --lib --locked
+cargo clippy --profile playtest -p bri-client --all-targets --locked -- -D warnings
+```
+
+Generated-content regression, unit and Clippy results are pending as this test
+correction is committed; final evidence belongs to PR #393 and the release
+coordinator's receipt. Maxwell's other chat explicitly authorized coordination
+and owns the combined v0.4.1 merge/publication. This thread dispatches no release
+workflow and does not independently merge main. No interactive game was launched
+or controlled; the two-App test is offscreen.
 Maxwell owns interactive acceptance; the full alpha contract remains open.
