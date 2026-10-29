@@ -11,6 +11,9 @@
 //! Hookshot's pull, the Grapple Rope's rope, the Fill Can's fill) must do
 //! it through the client. Made-up base game (`bri_net::testing`), no
 //! original game assets.
+#[path = "common/python.rs"]
+mod python;
+
 use anyhow::{Context, Result, bail};
 use bri_net::{
     client::{Client, ClientEvent},
@@ -84,18 +87,6 @@ fn bundled_originals() -> Vec<(String, String)> {
     out
 }
 
-fn python() -> &'static str {
-    ["python3", "python"]
-        .into_iter()
-        .find(|p| {
-            std::process::Command::new(p)
-                .arg("--version")
-                .output()
-                .is_ok_and(|o| o.status.success())
-        })
-        .expect("Python 3 runs tools/addon_bundle.py")
-}
-
 /// The release's path for the originals: a stand-in checkout whose default
 /// list pins each stand-in, `addon_bundle.py build` against this game's
 /// content, and `install` into it, where a release holds its Add-Ons.
@@ -137,7 +128,7 @@ fn install_bundle(root: &Path, originals: &[(String, String)]) {
     std::fs::create_dir_all(checkout.join("v20/Add-Ons")).unwrap();
     let path = |p: &Path| p.to_str().unwrap().to_owned();
     let run = |args: &[&str]| {
-        let out = std::process::Command::new(python())
+        let out = std::process::Command::new(python::supported())
             .arg(repo().join("tools/addon_bundle.py"))
             .args(args)
             .arg("--repo")
