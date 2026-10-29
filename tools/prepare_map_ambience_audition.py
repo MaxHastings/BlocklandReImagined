@@ -142,6 +142,27 @@ def build(cache, output, content, download=False):
             details += (f'<p><strong>{html.escape(row["file"].replace(".wav", "").replace("-", " "))}</strong>'
                         f' · {row["seconds"]:.1f}s<br><audio controls preload="none" src="details/{row["file"]}"></audio><br>'
                         f'{html.escape(row["treatment"])} Sources: {credits}</p>')
+    originals = ''
+    approvals = json.loads((HERE / 'source-approvals.json').read_text(encoding='utf-8'))
+    for row in approvals['sources']:
+        if not row['id'].startswith('original-map:'):
+            continue
+        preview = output / row['preview']
+        if not preview.is_file():
+            continue
+        if sha(preview.read_bytes()) != row['preview_sha256']:
+            raise ValueError(f"{row['id']}: original-map audition changed")
+        title = row['id'].split(':', 1)[1].replace('-', ' ')
+        originals += (f'<p><strong>{html.escape(title)}</strong> — {html.escape(row["author"])}'
+                      f' · {row["seconds"]:.1f}s · approval {html.escape(row["state"])}<br>'
+                      f'<audio controls preload="none" loop src="{html.escape(row["preview"])}"></audio><br>'
+                      f'{html.escape(row["quality"])}. {html.escape(row["license"])}.</p>')
+    if originals:
+        originals = ('<h2>Original map recordings proposed for restoration</h2>'
+                     '<p>Creek has localized frogs, waterfall and shore emitters; Forest Dark has its authored cricket bed. '
+                     'These recordings were present in their original map archives but missing from the converted game. '
+                     'Listen before approving restoration. Preview gains are for audition only; these controls do not demonstrate in-game distances.</p>'
+                     + originals)
     document = ('<!doctype html><meta charset="utf-8"><title>Map ambience audition</title>'
                 '<style>body{background:#171c22;color:#e8edf2;font:17px system-ui;max-width:1200px;margin:40px auto;padding:20px}'
                 'a{color:#97d5ff}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:24px}'
@@ -151,11 +172,13 @@ def build(cache, output, content, download=False):
                 '<p>21 shipped map variants. These are candidate recordings, not accepted game mixes. '
                 'The continuous-bed candidates below come from public Freesound HQ MP3 previews, decoded to WAV for editing; '
                 'those beds are not lossless originals. The separate new detail previews use original PCM WAVs. '
-                'CC0 source pages and exact input/output hashes are in the accompanying provenance files.</p>'
+                'CC0 source pages and exact input/output hashes are in the accompanying provenance files. '
+                'Original-map recordings retain their map-package provenance and are not labelled CC0. '
+                'Every proposed source remains pending your individual approval.</p>'
                 '<p>Start at your ordinary game volume. Beds are intentionally subtle. Play one card at a time; '
                 'several candidates on a card show proposed layers, without pretending their spatial treatment is implemented. '
                 'No audio plays automatically. This report does not change your installed game.</p>'
-                + details + '<h2>Map bed candidates</h2><main>' + ''.join(cards) + '</main><h2>Loop joins and alternatives</h2>'
+                + originals + details + '<h2>Map bed candidates</h2><main>' + ''.join(cards) + '</main><h2>Loop joins and alternatives</h2>'
                 '<p>These 25-second excerpts deliberately cross each full loop boundary twice. '
                 'Reject audible pulses, clicks, voices, traffic, repeated calls or masking noise. '
                 'Palms is an alternative with reported preview artifacts; night alternatives must not overlap Forest Dark’s original crickets.</p>'
