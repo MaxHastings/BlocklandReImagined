@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "map_ambience",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Map Ambience",
+  "description": "Subtle map beds and sparse localized environmental details. Original map emitters remain in their map packages.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "LicenseRef-CC0-Recordings",
+  "provenance": {
+    "source": "See map-ambience-generated.json for recording authors, direct sources, quality, hashes and approvals."
+  },
+  "capabilities": [
+    "effects"
+  ],
+  "provides": [
+    {
+      "kind": "weapons",
+      "id": "map_ambience:weapons/palette",
+      "file": "assets/weapons.json"
+    },
+    {
+      "kind": "script",
+      "id": "map_ambience:script/policy",
+      "file": "ambience.rhai"
+    },
+    {
+      "kind": "behaviour",
+      "id": "map_ambience:behaviour/policy",
+      "file": "behaviour.json"
+    }
+  ]
+}

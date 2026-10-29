@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "script": "ambience.rhai",
+  "modules": [
+    "palette.rhai"
+  ],
+  "tick_interval": 120,
+  "on_join": true,
+  "state": {
+    "global": {
+      "started": {
+        "default": false,
+        "persist": false
+      },
+      "rng": {
+        "default": 581324,
+        "persist": false
+      },
+      "next": {
+        "default": 0,
+        "persist": false
+      },
+      "last_clip": {
+        "default": "",
+        "persist": false
+      },
+      "last_anchor": {
+        "default": -1,
+        "persist": false
+      }
+    }
+  }
+}
