@@ -20,10 +20,14 @@ impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("map_ambience");
+        let rules = dir.path().join("map_ambience_rules");
         std::fs::create_dir_all(out.join("assets")).unwrap();
+        std::fs::create_dir_all(&rules).unwrap();
         let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/map_ambience");
-        for file in ["package.json", "behaviour.json", "ambience.rhai"] {
-            std::fs::copy(here.join(file), out.join(file)).unwrap();
+        std::fs::copy(here.join("package.json"), out.join("package.json")).unwrap();
+        std::fs::copy(here.join("rules-package.json"), rules.join("package.json")).unwrap();
+        for file in ["behaviour.json", "ambience.rhai"] {
+            std::fs::copy(here.join(file), rules.join(file)).unwrap();
         }
         let palette: Value =
             serde_json::from_slice(&std::fs::read(here.join("palette.json")).unwrap()).unwrap();
@@ -50,7 +54,7 @@ impl Fixture {
             }
         }
         script.push_str("#{beds:[],details:[],anchors:[]}\n}\n");
-        std::fs::write(out.join("palette.rhai"), script).unwrap();
+        std::fs::write(rules.join("palette.rhai"), script).unwrap();
         let mut wav = Vec::new();
         wav.extend(b"RIFF");
         wav.extend(164u32.to_le_bytes());
@@ -73,12 +77,22 @@ impl Fixture {
         )
         .unwrap();
         std::fs::write(out.join("assets/weapons.json"), &data).unwrap();
-        let check = bri_package_runtime::check::check(&out);
+        let check = bri_package_runtime::check::check(&rules);
         assert!(check.ok, "{check}");
         let set = serde_json::from_value(json!({"schema_version":1,"packages":[{
             "id":"map_ambience","version":"1.0.0","side":"shared","dir":"map_ambience"
-        }]}))
+        },{"id":"map_ambience_rules","version":"1.0.0","side":"server","dir":"map_ambience_rules"}]}))
         .unwrap();
+        let environment = bri_package::environment::Environment::load(dir.path(), &set).unwrap();
+        assert_eq!(
+            environment
+                .client_packages()
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["map_ambience"],
+            "join payload includes shared audio only, never server policy"
+        );
         let catalog = Arc::new(bri_package_runtime::Catalog::load(dir.path(), &set, true).unwrap());
         Self {
             _dir: dir,

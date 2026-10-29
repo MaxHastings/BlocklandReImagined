@@ -18,7 +18,7 @@ RECIPES = {
                    'tools/map_ambience/approvals.py', 'tools/map_ambience/source-approvals.json',
                    'tools/map_ambience/candidates.json', 'tools/map_ambience/masters.json',
                    'tools/map_ambience/maps.json', 'tools/map_ambience/palette.json',
-                   'tools/map_ambience/package.json', 'tools/map_ambience/behaviour.json',
+                   'tools/map_ambience/package.json', 'tools/map_ambience/rules-package.json', 'tools/map_ambience/behaviour.json',
                    'tools/map_ambience/ambience.rhai'],
     },
     'npc-reactions': {

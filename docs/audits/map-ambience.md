@@ -91,6 +91,14 @@ Maxwell explicitly required balancing against the rest of the game on October29.
 
 Finite acoustics cases: outdoors, sealed brick room, roof-only shelter, doorway/window/open rafters, actual brick-edit/destruction opening, positional source without RegionMap, smooth gain/filter and loop/stream continuity. Required lifecycle checks include initial/late join, map change/cleanup and queue/resource pressure. The original four map recordings now have playable controls in the audition report with original-package provenance and pending approval labels. New media stays out of shipping adoption until source-specific approval.
 
+### Private preview listening handoff
+
+Deliver the actual packaged folder and exact source/content identity before asking for game-mix acceptance. The HTML auditions are source-choice evidence, not that preview. Maxwell performs all interactive checks at his ordinary game volume; retain his existing volume settings. Use a small representative listening pass over the selected layers: Tutorial (open-air breeze), Bedroom (room), The Slopes (cold air), Slate Sea Revised (shore), Slate Storm Revised (rain), Forest near its authored trees (foliage and sparse birds), Creek (original local emitters) and Forest Dark (original crickets). Automated map-selection coverage must separately cover all21 variants; this representative pass does not claim every map has been interactively accepted.
+
+During that pass, walk/jump/land, place/remove bricks and use the ordinary tools/weapons available in the build; include NPC dialogue and voice chat where available. Check the combined ambience leaves these cues clear, has headroom in the loudest legitimate overlap and does not call attention to loop boundaries or repetitive calls. Allow at least two minutes near Forest trees to hear the35–85s detail spacing; silence away from those fixed sources is intentional. Re-entering areas and joining later must not duplicate beds.
+
+For shelter, compare exposed ground, open Tutorial rafters, roof-only cover and a closed ordinary brick room. Approach an opening, then remove a wall/roof with an ordinary supported tool. Outside sounds should change smoothly without stopping/restarting the loop or making a doorway act like an abrupt volume switch. A missing cue, masking, abrupt/pumping transition, repetitive recording or inappropriate environment is a specific correction against the fixed palette, not permission for a new source campaign. Record technical checks, source approval and Maxwell's mix acceptance separately; do not check off unavailable NPC/voice-chat combinations by inference.
+
 ## Completion evidence still required
 
 - Original emitter conversion plus actual rule consumer verified for Creek and Forest Dark; preserve exact input/resource provenance and diagnose unsupported semantics.

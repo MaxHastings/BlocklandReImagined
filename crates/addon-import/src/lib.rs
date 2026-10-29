@@ -392,6 +392,15 @@ fn import_map(opts: &Options, src: &source::Source) -> Result<Report> {
         .map(|(mission, map)| format!("map {map} from {mission}"))
         .collect();
     report.diagnostics.extend(made.audio_diagnostics);
+    if let Some(rules) = made.audio_rules {
+        report.ports.push(crate::ports::Applied {
+            addon:src.name.clone(),port:"literal-map-audio".into(),status:"partial".into(),applied:true,
+            copy:"unlisted".into(),covers:vec![],values:BTreeMap::new(),files_changed:vec!["assets/weapons.json".into()],
+            rules:Some(rules),reason:None,
+            notes:"Bounded literal AudioEmitter adaptation; unsupported semantics remain explicit diagnostics.".into(),
+            handled:Default::default(),prefs:Default::default(),replaces:vec![],
+        });
+    }
     for (mission, map) in made.missions.iter().zip(&made.map_ids) {
         let provide = manifest["provides"]
             .as_array()

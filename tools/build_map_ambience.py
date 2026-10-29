@@ -26,6 +26,11 @@ def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def approval_receipt(registry, source_hash):
+    row = next((r for r in registry['sources'] if r['input_sha256'] == source_hash), None)
+    return None if row is None else {k:row[k] for k in ['id','input_sha256','state','approval_evidence']}
+
+
 def selection(repo=REPO):
     here = Path(repo) / 'tools/map_ambience'
     palette = json.loads((here / 'palette.json').read_text(encoding='utf-8'))
@@ -92,14 +97,25 @@ def build(cache, output, content, download=False, audition_only=False):
                 sound['spatial'] = {'reference_distance':12.0,'max_distance':160.0}
             sounds['map_ambience:'+key] = sound
             receipts.append(dict(row, file='assets/clips/'+key+'.wav', processed_sha256=sha(raw),
+                                 source_approval=approval_receipt(registry,row['input_sha256']),
                                  processing=bed_rows[key]['processing'] if is_bed else detail_rows[key]))
         (output / 'assets/weapons.json').write_text(json.dumps({'schema_version':5,'id':'map_ambience','sounds':sounds},indent=2)+'\n')
-        for name in ['package.json','behaviour.json','ambience.rhai']:
-            shutil.copyfile(HERE / name, output / name)
-        (output / 'palette.rhai').write_text(policy(palette),encoding='utf-8')
+        shutil.copyfile(HERE / 'package.json', output / 'package.json')
+        rules = output.parent / 'map_ambience_rules'
+        if rules.exists() and json.loads((rules/'package.json').read_text())['id'] != 'map_ambience_rules':
+            raise ValueError('refusing to overwrite unrelated rules package')
+        rules.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(HERE/'rules-package.json',rules/'package.json')
+        for name in ['behaviour.json','ambience.rhai']:
+            shutil.copyfile(HERE/name,rules/name)
+        (rules/'palette.rhai').write_text(policy(palette),encoding='utf-8')
+        # Remove only the known files of the invalid combined prototype.
+        for name in ['behaviour.json','ambience.rhai','palette.rhai']:
+            (output/name).unlink(missing_ok=True)
         files = {p.relative_to(output).as_posix():sha(p.read_bytes()) for p in output.rglob('*') if p.is_file() and p.name != 'map-ambience-generated.json'}
+        rules_files = {p.relative_to(rules).as_posix():sha(p.read_bytes()) for p in rules.rglob('*') if p.is_file()}
         receipt = {'schema_version':1,'recipe_sha256':generated_addons.recipe_hash(REPO,'map-ambience'),
-                   'audition_only':audition_only,'clips':receipts,'maps':palette['maps'],'files':files,
+                   'audition_only':audition_only,'clips':receipts,'maps':palette['maps'],'files':files,'rules_files':rules_files,
                    'mix_acceptance':'Pending ordinary-game listening with footsteps/tools/weapons/NPC/voice; solo source approval does not accept the mix.'}
         (output / 'map-ambience-generated.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
         if audition_only:
@@ -141,20 +157,31 @@ def problems(repo, directory):
             if r['input_sha256'] != pinned['input_sha256'] or r['source_id'] != pinned['source_id']:
                 out.append(r['key']+': recording differs from pinned source')
             out.extend(source_problems(registry,pinned['input_sha256']))
+            if r.get('source_approval') != approval_receipt(registry,pinned['input_sha256']):
+                out.append(r['key']+': packaged source approval evidence differs from the registry')
             clip = directory / 'assets/clips' / (r['key']+'.wav')
             if sha(clip.read_bytes()) != r['processed_sha256']:
                 out.append(r['key']+': processed recording missing or changed')
-        expected_policy = {'palette.rhai':policy(palette).encode()}
-        expected_policy.update({name:(Path(repo) / 'tools/map_ambience' / name).read_bytes() for name in ['package.json','behaviour.json','ambience.rhai']})
+        expected_policy = {'package.json':(Path(repo)/'tools/map_ambience/package.json').read_bytes()}
         for name, wanted in expected_policy.items():
             if (directory / name).read_bytes().replace(b'\r\n',b'\n') != wanted.replace(b'\r\n',b'\n'):
                 out.append(name+': generated policy changed')
         actual = {p.relative_to(directory).as_posix():sha(p.read_bytes()) for p in directory.rglob('*') if p.is_file() and p.name != 'map-ambience-generated.json'}
-        required = set(expected_policy) | {'assets/weapons.json'} | {'assets/clips/'+key+'.wav' for key in selected}
+        required = {'package.json','assets/weapons.json'} | {'assets/clips/'+key+'.wav' for key in selected}
         if set(actual) != required:
             out.append('Generated ambience has missing or unexpected files')
         if actual != receipt['files']:
             out.append('Generated ambience files differ from complete receipt')
+        rules=directory.parent/'map_ambience_rules'
+        expected_rules={'palette.rhai':policy(palette).encode()}
+        expected_rules.update({name:(Path(repo)/'tools/map_ambience'/source).read_bytes() for name,source in [
+            ('package.json','rules-package.json'),('behaviour.json','behaviour.json'),('ambience.rhai','ambience.rhai')]})
+        rules_actual={p.relative_to(rules).as_posix():sha(p.read_bytes()) for p in rules.rglob('*') if p.is_file()}
+        if set(rules_actual)!=set(expected_rules) or rules_actual!=receipt['rules_files']:
+            out.append('Generated ambience server companion missing or changed')
+        for name,wanted in expected_rules.items():
+            if (rules/name).read_bytes().replace(b'\r\n',b'\n')!=wanted.replace(b'\r\n',b'\n'):
+                out.append(name+': generated server policy changed')
         return out
     except (OSError,ValueError,KeyError,TypeError) as error:
         return [f'Incomplete generated ambience: {error}']

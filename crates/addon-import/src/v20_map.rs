@@ -34,6 +34,7 @@ pub struct Imported {
     /// Exact instances covered by emitted audio assets and host rules.
     pub audio_nodes: std::collections::BTreeMap<String, std::collections::BTreeSet<usize>>,
     pub audio_diagnostics: Vec<String>,
+    pub audio_rules: Option<crate::ports::RulesPackage>,
 }
 
 /// A scratch folder removed when dropped.
@@ -363,7 +364,14 @@ pub fn import(opts: &Options) -> Result<Imported> {
         .iter()
         .map(|(id, _, file)| json!({ "kind": "map", "id": id, "file": file }))
         .collect();
-    let audio = crate::map_audio::export(&input, &opts.out, &ns, &audio_scenes, &mut provides)?;
+    let audio = crate::map_audio::export(
+        &input,
+        &opts.out,
+        &ns,
+        &opts.version,
+        &audio_scenes,
+        &mut provides,
+    )?;
     files += audio.files;
     let manifest = json!({
         "schema_version": 1,
@@ -376,7 +384,7 @@ pub fn import(opts: &Options) -> Result<Imported> {
         "license": "proprietary",
         "provenance": { "source": format!("Blockland map Add-On {stem}, missions {}", chosen.join(", ")), "notes": "Imported by bri-import-addon map. Set the licence of the original map." },
         "dependencies": {},
-        "capabilities": if audio.covered.is_empty() { vec![] } else { vec!["effects"] },
+        "companions": audio.rules.iter().map(|r|r.id.clone()).collect::<Vec<_>>(),
         "provides": provides,
     });
     std::fs::write(
@@ -384,7 +392,15 @@ pub fn import(opts: &Options) -> Result<Imported> {
         serde_json::to_vec_pretty(&manifest)?,
     )?;
     if !audio.covered.is_empty() {
-        let check = bri_package_runtime::check::check(&opts.out);
+        let check = bri_package_runtime::check::check(
+            &opts.out.parent().context("map output has no parent")?.join(
+                &audio
+                    .rules
+                    .as_ref()
+                    .context("audio has no rules consumer")?
+                    .dir,
+            ),
+        );
         ensure!(
             check.ok,
             "Native map-audio assets/consumer failed validation: {check}"
@@ -396,6 +412,7 @@ pub fn import(opts: &Options) -> Result<Imported> {
         files: files + 1,
         audio_nodes: audio.covered,
         audio_diagnostics: audio.diagnostics,
+        audio_rules: audio.rules,
     })
 }
 

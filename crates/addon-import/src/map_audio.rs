@@ -14,6 +14,7 @@ pub struct Export {
     pub covered: BTreeMap<String, BTreeSet<usize>>,
     pub diagnostics: Vec<String>,
     pub files: usize,
+    pub rules: Option<crate::ports::RulesPackage>,
 }
 
 fn number(fields: &BTreeMap<String, String>, key: &str, default: f32) -> Result<f32> {
@@ -222,6 +223,7 @@ pub fn export(
     input: &Path,
     out: &Path,
     namespace: &str,
+    version: &str,
     maps: &[(String, String, Value)],
     provides: &mut Vec<Value>,
 ) -> Result<Export> {
@@ -361,20 +363,52 @@ pub fn export(
             ));
         }
         script.push_str("[]\n}\nfn start_beds() {\nif get(\"started\") { return; }\nfor bed in map_beds() {\nlet options = #{fade:0.25};\nif bed.at != () { options.at = bed.at; }\nplay_ambient_all(bed.key, bed.track, options);\n}\nset(\"started\",true);\n}\nfn on_join(p) { start_beds(); }\nfn on_tick() { start_beds(); }\n");
-        std::fs::write(out.join("map-audio.rhai"), script)?;
+        let rules_id = format!("{namespace}_ambience_rules");
+        let rules = out
+            .parent()
+            .context("map output has no parent")?
+            .join(&rules_id);
+        if rules.exists() {
+            let prior: Value = serde_json::from_slice(&std::fs::read(rules.join("package.json"))?)?;
+            ensure!(
+                prior["id"] == rules_id && prior["provenance"]["generator"] == "literal-map-audio",
+                "refusing to overwrite an unrelated rules package"
+            );
+        }
+        std::fs::create_dir_all(&rules)?;
+        std::fs::write(rules.join("map-audio.rhai"), script)?;
         std::fs::write(
-            out.join("map-audio-behaviour.json"),
+            rules.join("map-audio-behaviour.json"),
             serde_json::to_vec_pretty(&json!({
                 "schema_version":1,"script":"map-audio.rhai","on_join":true,"tick_interval":120,
                 "state":{"global":{"started":{"default":false,"persist":false}}},
             }))?,
         )?;
-        provides.extend([
-            json!({"kind":"weapons","id":format!("{namespace}:weapons/map-audio"),"file":"assets/weapons.json"}),
-            json!({"kind":"script","id":format!("{namespace}:script/map-audio"),"file":"map-audio.rhai"}),
-            json!({"kind":"behaviour","id":format!("{namespace}:behaviour/map-audio"),"file":"map-audio-behaviour.json"}),
-        ]);
-        result.files += 3;
+        std::fs::write(
+            rules.join("package.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version":1,"id":rules_id,"version":version,"api":1,
+                "name":"Authored map ambience policy","authors":["Blockland ReImagined"],"license":"CC0-1.0",
+                "provenance":{"source":"original native policy generated from literal mission emitters","generator":"literal-map-audio"},
+                "dependencies":{namespace:format!("={version}")},"capabilities":["effects"],
+                "provides":[
+                    {"kind":"script","id":format!("{rules_id}:script/map-audio"),"file":"map-audio.rhai"},
+                    {"kind":"behaviour","id":format!("{rules_id}:behaviour/map-audio"),"file":"map-audio-behaviour.json"}
+                ]
+            }))?,
+        )?;
+        provides.push(json!({"kind":"weapons","id":format!("{namespace}:weapons/map-audio"),"file":"assets/weapons.json"}));
+        result.rules = Some(crate::ports::RulesPackage {
+            id: rules_id.clone(),
+            dir: rules_id.clone(),
+            packages_json_entry: json!({"id":rules_id,"version":version,"side":"server","dir":format!("addons/{rules_id}")}),
+            files: vec![
+                "package.json".into(),
+                "map-audio.rhai".into(),
+                "map-audio-behaviour.json".into(),
+            ],
+        });
+        result.files += 4;
     }
     std::fs::write(
         out.join("map-audio-provenance.json"),
@@ -454,7 +488,7 @@ mod tests {
             json!({"schema_version":1,"id":"audio:map/test","name":"Audio fixture","nodes":[a,b,c,d]}),
         )];
         let mut provides = Vec::new();
-        let result = export(&input, &out, "audio", &maps, &mut provides).unwrap();
+        let result = export(&input, &out, "audio", "1.0.0", &maps, &mut provides).unwrap();
         assert_eq!(result.covered["audio:map/test"], BTreeSet::from([0, 1]));
         assert!(result.diagnostics.iter().any(|s| s.contains("non-neutral")));
         assert!(
@@ -486,16 +520,27 @@ mod tests {
         }
         std::fs::write(out.join("package.json"), serde_json::to_vec(&json!({
             "schema_version":1,"id":"audio","version":"1.0.0","api":1,"name":"Audio fixture",
-            "authors":["synthetic fixture"],"license":"CC0-1.0","capabilities":["effects"],"provides":provides,
+            "authors":["synthetic fixture"],"license":"CC0-1.0","companions":["audio_ambience_rules"],"provides":provides,
         })).unwrap()).unwrap();
-        let check = bri_package_runtime::check::check(&out);
+        let rules = result.rules.as_ref().unwrap();
+        let check = bri_package_runtime::check::check(&temp.path().join(&rules.dir));
         assert!(check.ok, "{check}");
         let set = serde_json::from_value(json!({"schema_version":1,"packages":[{
             "id":"audio","version":"1.0.0","side":"shared","dir":"native"
-        }]}))
+        },{"id":rules.id,"version":"1.0.0","side":"server","dir":rules.dir}]}))
         .unwrap();
         let catalog = std::sync::Arc::new(
             bri_package_runtime::Catalog::load(temp.path(), &set, true).unwrap(),
+        );
+        let environment = bri_package::environment::Environment::load(temp.path(), &set).unwrap();
+        assert_eq!(
+            environment
+                .client_packages()
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["audio"],
+            "join payload must contain original assets, never server policy"
         );
         let session = |map: &str| {
             let simulation = bri_sim::simulation::Simulation::new(
