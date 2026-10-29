@@ -1169,6 +1169,39 @@ impl VehiclesWorld {
         v.controls[seat] = input;
         Ok(())
     }
+    /// Whether the ordinary authored exit search has a clear point, without
+    /// relying on its last-point fallback. Autonomous occupants can check this
+    /// before deciding to leave a trapped or partly buried vehicle.
+    pub fn has_clear_exit(&self, world: &PhysicsWorld, occupant: OccupantId) -> bool {
+        let Some(&(id, seat)) = self.occupied.get(&occupant) else {
+            return false;
+        };
+        let v = &self.instances[&id];
+        let d = &self.catalog[&v.spawn.definition];
+        if d.family == Family::Tumble {
+            return false;
+        }
+        if simple_dismount(d) {
+            return true;
+        }
+        let mounted = effective_seat_pose(&world.bodies[v.body], d, v, seat);
+        let queries = world.query_pipeline_with_filter(
+            QueryFilter::default()
+                .exclude_rigid_body(v.body)
+                .exclude_sensors(),
+        );
+        dismount_offsets(mounted.rotation, v.spawn.scale)
+            .into_iter()
+            .any(|offset| {
+                exit_clear(
+                    &queries,
+                    mounted.position.into(),
+                    offset,
+                    v.seats[seat].unwrap().body,
+                )
+            })
+    }
+
     /// Uses the authored exit search and v20's last-point fallback.
     pub fn dismount(
         &mut self,
@@ -1192,10 +1225,7 @@ impl VehiclesWorld {
         let body_velocity = v.velocity(d, b);
         // `doSimpleDismount` (the skis and the tumble body, and any Add-On
         // that sets it): out in place with the vehicle's velocity.
-        let simple = matches!(d.family, Family::Skis | Family::Tumble)
-            || d.authored.get("dosimpledismount").is_some_and(|v| {
-                !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "")
-            });
+        let simple = simple_dismount(d);
         if simple {
             if d.weapon_seat() == Some(seat) {
                 v.cancel_charge(id, d, &mut self.intents);
@@ -1221,14 +1251,7 @@ impl VehiclesWorld {
         // it), then 3 up, 3 down, 3 along world +X and -X, all times the
         // vehicle's scale. The first clear point is taken, with its offset
         // as an impulse (per unit of mass, so a change of velocity).
-        let offsets = [
-            Quat::from_array(mounted.rotation).normalize() * Vec3::Y * 2.2,
-            Vec3::Y * 3.,
-            -Vec3::Y * 3.,
-            Vec3::X * 3.,
-            -Vec3::X * 3.,
-        ]
-        .map(|offset| offset * v.spawn.scale);
+        let offsets = dismount_offsets(mounted.rotation, v.spawn.scale);
         let exit = offsets.into_iter().find_map(|offset| {
             exit_clear(&queries, start, offset, passenger.body).then_some((start + offset, offset))
         });
@@ -3125,6 +3148,24 @@ fn mass_properties(d: &Definition, scale: f32) -> MassProperties {
         ) * (d.mass / 12.),
     )
 }
+fn simple_dismount(d: &Definition) -> bool {
+    matches!(d.family, Family::Skis | Family::Tumble)
+        || d.authored
+            .get("dosimpledismount")
+            .is_some_and(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | ""))
+}
+
+fn dismount_offsets(rotation: [f32; 4], scale: f32) -> [Vec3; 5] {
+    [
+        Quat::from_array(rotation).normalize() * Vec3::Y * 2.2,
+        Vec3::Y * 3.0,
+        -Vec3::Y * 3.0,
+        Vec3::X * 3.0,
+        -Vec3::X * 3.0,
+    ]
+    .map(|offset| offset * scale)
+}
+
 /// Torque `Player::checkDismountPoint`: the rider's own box, feet at the
 /// exit point, must be empty, and the way there from the seat unblocked.
 fn exit_clear(queries: &QueryPipeline, start: Vec3, offset: Vec3, body: [f32; 2]) -> bool {

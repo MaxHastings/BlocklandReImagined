@@ -1778,6 +1778,23 @@ impl Search {
         self.limit = limit.min(MAX_EXPANSIONS);
         self
     }
+    /// Continue a budget-limited search whose partial route made no headway.
+    /// Keep its frontier rather than rediscovering the same dead end. Ordinary
+    /// per-tick work limits still apply, with the navigation cache's existing
+    /// node bound as a hard ceiling for this exceptional detour investigation.
+    pub fn resume(&mut self) -> bool {
+        if self.pending.is_none()
+            || self.came.len() >= MAX_SAMPLES
+            || self.limit >= MAX_SAMPLES as u32
+        {
+            return false;
+        }
+        self.limit = self
+            .limit
+            .saturating_add(MAX_EXPANSIONS)
+            .min(MAX_SAMPLES as u32);
+        true
+    }
     /// Whether this search takes swim legs for `body`.
     fn swims(&self, body: &Body) -> bool {
         body.swims && self.costs.swim.is_some()
@@ -1826,6 +1843,10 @@ impl Search {
     /// Reach `to` the way `came` says, if that is cheaper than before.
     fn relax(&mut self, to: Node, came: Came) {
         if self.came.get(&to).is_some_and(|old| old.cost <= came.cost) {
+            return;
+        }
+        if self.limit != u32::MAX && self.came.len() >= MAX_SAMPLES && !self.came.contains_key(&to)
+        {
             return;
         }
         self.came.insert(to, came);
@@ -2132,6 +2153,9 @@ impl Search {
                 return Some(self.finish(ground, body, true));
             }
             if self.expanded >= self.limit {
+                // This node has not been expanded. A no-headway consumer may
+                // resume from exactly here on its next bounded planning turn.
+                self.pending = Some(node);
                 return Some(self.finish(ground, body, false));
             }
             if nav.expansions == 0 {
@@ -2400,6 +2424,111 @@ mod tests {
         match found {
             Found::Path(p) => p,
             other => panic!("no path: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_exhausted_graph_does_not_resume_as_if_it_only_ran_out_of_work() {
+        let physics = world(&[
+            (Vec3::new(-4.0, -1.0, -4.0), Vec3::new(4.0, 0.0, 4.0)),
+            (Vec3::new(-0.2, 0.0, -4.0), Vec3::new(0.2, 10.0, 4.0)),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+            solid: &all_solid,
+        };
+        let body = body();
+        let mut nav = Nav::default();
+        let mut search = Search::new(Vec3::new(-1.0, 0.0, 0.0), Vec3::X, 12.0).limited(1);
+        let mut continued = false;
+        loop {
+            nav.begin_tick();
+            if let Some(found) = search.step(&mut nav, &ground, &body) {
+                assert!(
+                    matches!(found, Found::Partial(_)),
+                    "the solid partition cannot be crossed"
+                );
+                if search.resume() {
+                    continued = true;
+                } else {
+                    break;
+                }
+            }
+        }
+        assert!(continued, "the first limit allowed only one expansion");
+        assert!(search.came.len() <= MAX_SAMPLES);
+        assert!(
+            !search.resume(),
+            "an exhausted graph remains a bounded failure"
+        );
+    }
+
+    #[test]
+    fn bounded_segments_can_retreat_from_a_dead_end_to_take_a_detour() {
+        // The goal is just across a wall. Getting there requires walking
+        // farther away first; the closest explored cell is a dead end.
+        for mirrored in [false, true] {
+            let sign = if mirrored { -1.0 } else { 1.0 };
+            let physics = world(&[
+                (Vec3::new(-6.0, -1.0, -10.0), Vec3::new(6.0, 0.0, 10.0)),
+                (Vec3::new(-0.2, 0.0, -8.0), Vec3::new(0.2, 10.0, 8.0)),
+            ]);
+            let ground = Ground {
+                physics: &physics,
+                terrain: &no_terrain,
+                passages: &NO_PASSAGES,
+                waters: &[],
+                bodies: &[],
+                motions: &[],
+                solid: &all_solid,
+            };
+            let body = body();
+            let mut nav = Nav::default();
+            let mut at = Vec3::new(-2.0 * sign, 0.0, 0.0);
+            let to = Vec3::new(2.0 * sign, 0.0, 0.0);
+            let mut arrived = false;
+            for _ in 0..12 {
+                let mut search = Search::new(at, to, 24.0).limited(256);
+                let found = loop {
+                    nav.begin_tick();
+                    if let Some(found) = search.step(&mut nav, &ground, &body) {
+                        if matches!(&found, Found::Partial(route)
+                            if route.last().is_none_or(|end| at.distance(end.feet) <= CELL))
+                            && search.resume()
+                        {
+                            continue;
+                        }
+                        break found;
+                    }
+                };
+                let route = match found {
+                    Found::Path(route) => {
+                        arrived = true;
+                        route
+                    }
+                    Found::Partial(route) => route,
+                    Found::Nowhere => panic!("a supported floor must remain searchable"),
+                };
+                let end = route.last().expect("a reachable segment").feet;
+                assert!(ground.clear(&body, end, false), "every endpoint fits");
+                assert!(
+                    arrived || at.distance(end) > 0.5,
+                    "a bounded segment must not repeatedly return the same dead end: {at:?} -> {end:?}"
+                );
+                at = end;
+                if arrived {
+                    break;
+                }
+            }
+            assert!(
+                arrived && at.distance(to) < 1.0,
+                "bounded detour ended at {at:?}"
+            );
         }
     }
 

@@ -1056,6 +1056,79 @@ fn an_alternative_weapon_cannot_replace_a_live_charge_during_a_real_range_excurs
     );
 }
 
+#[test]
+fn a_persistently_unusable_charge_yields_to_an_available_close_attack_without_releasing() {
+    let mut weapons = pack();
+    let image = weapons.images.get_mut("tactics:image/zenith").unwrap();
+    image.bot.get_or_insert_with(Default::default).near = Some(6.0);
+    for state in &mut image.states {
+        if state.script.eq_ignore_ascii_case("oncharge") {
+            state.ticks = 240;
+        }
+    }
+    let (mut s, human, bot, mut seq) = game_scene_kind(
+        weapons,
+        &[C],
+        Vec3::new(-25.0, 0.05, 35.0),
+        [-24.75, 0.1, 47.25],
+        vec![],
+        Some(bri_sim::bot_kind::BotKind {
+            id: fixture::BOT.into(),
+            name: "Adaptable unfamiliar fighter".into(),
+            aim_error_degrees: 0.0,
+            reaction_seconds: 0.05,
+            behaviours: [
+                ("chase".into(), 0.0),
+                ("wander".into(), 0.0),
+                ("fly".into(), 0.0),
+            ]
+            .into(),
+            ..Default::default()
+        }),
+    );
+    wait_for_charge(&mut s, human, bot, &mut seq);
+    s.give_tool(bot, D, false).unwrap();
+    let mut close = false;
+    let mut switched = false;
+    let before = s.vitals()[&human].health;
+    for _ in 0..120 * 12 {
+        seq += 1;
+        let to = feet(&s, bot) - feet(&s, human);
+        s.movement(
+            human,
+            seq,
+            MoveInput {
+                yaw: to.x.atan2(-to.z),
+                forward: if to.length() > 1.8 { 1.0 } else { 0.0 },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+        close |= feet(&s, human).distance(feet(&s, bot)) < 3.0;
+        let inv = &s.tool_inventories()[&bot];
+        switched |= inv.selected.and_then(|slot| inv.slots[slot].as_deref()) == Some(D);
+        assert!(
+            !s.weapon_view()
+                .fired()
+                .any(|p| p.source.0 == bot && p.definition == "tactics:projectile/zenith"),
+            "putting away an unusable charge must not release its attack"
+        );
+        if switched && s.vitals()[&human].health < before {
+            break;
+        }
+    }
+    assert!(
+        close,
+        "ordinary target controls reached the close encounter"
+    );
+    assert!(
+        switched && s.vitals()[&human].health < before,
+        "a real alternative must equip and land an attack: {:?}",
+        s.bot_thoughts()
+    );
+}
+
 /// The image a bot holds in its hand, if any.
 fn held_image(s: &Session, bot: u64) -> Option<String> {
     s.weapon_view()

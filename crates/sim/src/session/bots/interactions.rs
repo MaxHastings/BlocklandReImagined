@@ -2489,8 +2489,12 @@ impl Session {
     /// Gets `bot` out of its seat for `why`, counted for the reports
     /// ([`Session::bot_seat_leaves`]).
     fn bot_leave_seat(&mut self, bot: OwnerId, why: Leave) {
-        *self.bots.leaves.entry(why.name()).or_default() += 1;
-        let _ = self.dismount_vehicle(bot);
+        if self.vehicles.world.as_ref().is_some_and(|world| {
+            world.has_clear_exit(&self.simulation.physics, bri_vehicles::OccupantId(bot))
+        }) && self.dismount_vehicle(bot).is_ok()
+        {
+            *self.bots.leaves.entry(why.name()).or_default() += 1;
+        }
     }
 }
 

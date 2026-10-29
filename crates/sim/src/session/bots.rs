@@ -2184,6 +2184,15 @@ impl Session {
                 let nav = &mut bots_navs[at].1;
                 let brain = brains.get_mut(&bot).unwrap();
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
+                    // A lookahead limit is not proof that the way ends here.
+                    // Where even its best partial endpoint makes no headway,
+                    // retain the existing search frontier through the detour
+                    // instead of discarding it and blacklisting the objective.
+                    let no_headway = matches!(&found, Found::Partial(path)
+                        if path.last().is_none_or(|end| feet.distance(end.feet) <= crate::nav::CELL));
+                    if no_headway && brain.search.as_mut().unwrap().resume() {
+                        return None;
+                    }
                     let explored = brain.search.as_ref().map_or(0, Search::explored);
                     brain.search = None;
                     if let Found::Partial(path) = &found
@@ -2297,8 +2306,9 @@ impl Session {
                 };
                 if reached {
                     brain.plan.remove(0);
-                    // Reaching a waypoint is getting somewhere.
-                    brain.progress.reset();
+                    // Waypoints may be re-created under the same stationary
+                    // body after a replan. Only observed physical movement
+                    // counts as headway; consuming one must not erase stalls.
                 } else {
                     break;
                 }
@@ -4729,6 +4739,55 @@ mod hop_tests {
 #[cfg(test)]
 mod navigation_body_tests {
     use super::*;
+
+    #[test]
+    fn replanned_underfoot_waypoints_cannot_erase_a_stationary_walk() {
+        for moving in [false, true] {
+            let sim = crate::simulation::Simulation::new(
+                bri_world::World::new("Waypoint headway".into(), "fixture".into(), vec![[1.0; 4]]),
+                crate::testing::definitions(),
+                vec![],
+            )
+            .unwrap();
+            let mut s = Session::new(sim);
+            let bot = s.join("Walker".into(), Vec3::ZERO, true).unwrap();
+            let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
+            brain.set_goal(Some(Goal::Objective(Vec3::X * 30.0)));
+            s.bots.brains.insert(bot, brain);
+            let body = Body::of(s.peers[&bot].player.tuning(), 1.0);
+            let state = s.peers[&bot].player.state().clone();
+            let mut stalls = 0;
+            for tick in 0..360 {
+                let feet = if moving {
+                    Vec3::X * (tick as f32 / 120.0) * 6.0
+                } else {
+                    Vec3::ZERO
+                };
+                if tick % 12 == 0 {
+                    s.bots.brains.get_mut(&bot).unwrap().plan =
+                        vec![Waypoint::walk(feet), Waypoint::walk(Vec3::X * 30.0)];
+                }
+                let next = s.bot_path(bot, feet, &body, Default::default(), None, &state, tick);
+                assert!(
+                    next.is_some(),
+                    "there is a proposed walk after the underfoot waypoint"
+                );
+                stalls += usize::from(
+                    s.bots
+                        .brains
+                        .get_mut(&bot)
+                        .unwrap()
+                        .progress
+                        .stalled(feet, 6.0, 120.0, tick),
+                );
+            }
+            assert_eq!(
+                stalls == 0,
+                moving,
+                "only real displacement satisfies the walk"
+            );
+        }
+    }
 
     #[test]
     fn changing_search_targets_cannot_erase_failed_physical_headway() {

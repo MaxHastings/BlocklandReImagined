@@ -677,10 +677,9 @@ pub(super) fn choose(
             .filter(|s| Some(*s) != selected),
     );
     for slot in slots.take(tactics::MAX_CANDIDATES) {
-        if (!turn || charge_continuation.is_some()) && Some(slot) != selected {
-            // A live wind-up belongs to the unchanged participant/equipment.
-            // A transient range/intercept miss may keep it tracking, but may
-            // not hand its trigger sequence to another inventory choice.
+        if !turn && Some(slot) != selected {
+            // Reconsider all equipment on the ordinary fair planning turn,
+            // including when an unusable wind-up has been held for too long.
             continue;
         }
         let Some(item) = actor.inventory[slot]
@@ -1022,6 +1021,21 @@ pub(super) fn choose(
             return Decision::Pending;
         }
     }
+    // Preserve the investment in an ordinary wind-up through one authored
+    // attack cycle plus the shared hold interval. An indefinitely unsafe
+    // charge must not prevent a genuinely usable alternative from being
+    // weighed. With no alternative, its existing safe hold still applies.
+    let charge_protected = charge_continuation.is_some_and(|choice| {
+        tick < state
+            .usable
+            .saturating_add(u64::from(choice.capability.cadence_ticks))
+            .saturating_add(ticks(session.bots.brains[&bot].kind.hold().seconds))
+    });
+    if charge_protected
+        && selected.is_none_or(|held| !candidates.iter().any(|c| usize::from(c.slot) == held))
+    {
+        candidates.clear();
+    }
     match tactics::select(&candidates) {
         Ok(Some(selection)) => {
             use super::surprise::{AIM_TORSO, Choice, Domain};
@@ -1043,7 +1057,7 @@ pub(super) fn choose(
                 .chosen(Domain::Weapon)
                 .filter(|s| viable(*s))
                 .map_or(usize::from(selection.slot), |s| s as usize);
-            if turn && charge_continuation.is_none() {
+            if turn && !charge_protected {
                 let ask = Choice {
                     domain: Domain::Weapon,
                     options: &scores,

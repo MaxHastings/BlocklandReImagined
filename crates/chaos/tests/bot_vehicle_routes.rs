@@ -68,7 +68,15 @@ fn saved_match_vehicle_routes() -> Result<()> {
     let build = bri_world::build::decode(&std::fs::read(path)?)?;
     let world_name = build.world.name.clone();
     let bricks = build.world.bricks.len();
-    let mut saved = build.minigame.context("save needs its mini-game")?;
+    // A build without saved rules can be exercised with an explicitly authored
+    // session setup. Never replace rules that the build already carries.
+    let mut saved = match build.minigame {
+        Some(saved) => saved,
+        None => serde_json::from_slice(&std::fs::read(
+            std::env::var_os("BRI_DRIVE_MINIGAME")
+                .context("save has no mini-game; set BRI_DRIVE_MINIGAME to an explicit setup")?,
+        )?)?,
+    };
     let principal = build
         .world
         .owners
@@ -78,6 +86,7 @@ fn saved_match_vehicle_routes() -> Result<()> {
         .principal
         .clone();
     saved["owner"] = serde_json::json!(principal);
+    let initial_minigame = saved.clone();
     let mut key = [0_u8; 32];
     for (i, byte) in key.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&principal[i * 2..i * 2 + 2], 16)?;
@@ -122,6 +131,8 @@ fn saved_match_vehicle_routes() -> Result<()> {
     let mut reaction_cues = Vec::new();
     let mut step_micros = Vec::with_capacity(seconds * 120);
     let nav_detail = std::env::var_os("BRI_DRIVE_NAV_DETAIL").is_some();
+    let rule_detail = std::env::var_os("BRI_DRIVE_RULE_SAMPLES").is_some();
+    let mut rule_samples = Vec::new();
     for i in 0..seconds * 120 {
         let began = std::time::Instant::now();
         s.step()?;
@@ -183,6 +194,10 @@ fn saved_match_vehicle_routes() -> Result<()> {
             );
         }
         if i % 120 == 0 {
+            if rule_detail {
+                rule_samples.push(serde_json::json!({"second": i / 120,
+                    "rules": s.package_store(), "games": s.minigame_views()}));
+            }
             let thoughts = s.bot_thoughts();
             let motion = s.motion_states();
             let vitals = s.vitals();
@@ -194,6 +209,7 @@ fn saved_match_vehicle_routes() -> Result<()> {
                     .map(|(p, _)| p);
                 bot_samples.push(serde_json::json!({
                     "second": i / 120, "id": t.bot, "state": state, "vitals": vitals.get(&t.bot),
+                    "body": state.map(|p| &s.archetypes().resolve(p.archetype).id),
                     "behaviour": t.behaviour, "leg": t.leg, "visible": t.visible,
                     "remembered": format!("{:?}", t.remembered), "task": format!("{:?}", t.task),
                     "goal": t.goal, "next": t.next, "route_end": t.route_end,
@@ -266,7 +282,7 @@ fn saved_match_vehicle_routes() -> Result<()> {
     std::fs::write(
         output,
         serde_json::to_vec_pretty(
-            &serde_json::json!({"timing": timing, "breach": breach, "world": world_name, "bricks": bricks, "seconds": seconds, "bot_step_failures": failures, "samples": samples, "bot_samples": bot_samples, "projectiles": projectiles, "damage": damage, "deaths": deaths, "rounds": rounds, "reaction_cues": reaction_cues, "games": s.minigame_views(), "packages": packages, "rules_state": s.package_store(), "host": "passive owner, saved rules preserved", "chat": format!("{:?}", s.chat())}),
+            &serde_json::json!({"timing": timing, "breach": breach, "world": world_name, "bricks": bricks, "seconds": seconds, "bot_step_failures": failures, "samples": samples, "bot_samples": bot_samples, "rule_samples": rule_samples, "projectiles": projectiles, "damage": damage, "deaths": deaths, "rounds": rounds, "reaction_cues": reaction_cues, "initial_minigame": initial_minigame, "games": s.minigame_views(), "packages": packages, "rules_state": s.package_store(), "host": "passive owner; saved rules or explicit missing-game setup", "chat": format!("{:?}", s.chat())}),
         )?,
     )?;
     Ok(())
