@@ -201,3 +201,67 @@ that missing objective dependency or guarantee every passing carrier fights.
 The next investigation should isolate those with full geometry/control traces,
 not increase combat weights on map or content names. Human feel and full alpha
 acceptance remain open.
+
+## Interim private preview; goal and merge remain blocked on gameplay evidence
+
+The five executables build with `BRI_VERSION=v0.4.1-bot-polish2` and
+`cargo build --profile playtest --bin bri-client --bin bri-server
+--bin bri-import-addon --bin bri-addon-check --bin bri-addon-run`.
+The delivered folder is `E:/Downloads/Bot-Gameplay-Polish-20261029`, code
+`9cca5bf9a`, with its own manifest, executable hashes, provenance and
+`BOT-PLAYTEST.txt`. Packaged `--version` reports that code/version; packaged
+`--check <content> <fresh-state>` exits zero without a window. Add-On health
+reports no problems; the existing 226 content fallbacks remain explicit.
+
+The installed v0.4.1 folder's `content/packages.json` differs from its published
+manifest; all other 13,425 published files match. That installed selection was
+left untouched. The public Windows archive was downloaded and independently
+verified SHA256 `22ecb974e73eeba84b50da275f6d531edd089f2221907929d1dd3ac12a7655b7`.
+The separate clean extraction retained by the release chat supplied preview
+content; all 13,426 published source files passed size/SHA256 verification,
+all copied unchanged files were checked again, and only the five executables
+were replaced. No original source installation or freshness receipt changed.
+
+Exact code `9cca5bf9a` completed five 180-second ordinary-control traces:
+
+| Case | Control-step failures | Living unmounted below-floor samples | Stationary foot candidates | Stationary vehicle candidates |
+| --- | ---: | ---: | ---: | ---: |
+| Afghan saved CTF | 0 | 0 | 0 | 1 |
+| Afghan Zombies saved CTF | 0 | 0 | 2 | 0 |
+| ACM explicit CTF | 0 | 0 | 0 | 0 |
+| Afghan gun-kit TDM | 0 | 0 | 0 | 0 |
+| ACM gun-kit CTF | 0 | 0 | 0 | 0 |
+
+Those counts do NOT establish goal acceptance. Both Zombie foot candidates are
+one bot, 9, on the same incarnation, hung at `[-9.919, 5.338, -45.302]` after
+a jet leg. From seconds 121 through 179 it has zero velocity, is ungrounded,
+has full energy, is unmounted, and repeatedly has no route/next control while
+trying to approach a flag pickup. This is not the earlier 60-second objective
+failure exclusion (the provider plan remains present). Investigate the actual
+collision and the stationary-air recovery's clearance/grounding assumptions.
+The repeated actual Afghan tank 6 sinks below its road at second 46 and remains
+there through 179; exit admission prevents rider loss but is not a contact fix.
+The next supported correction must explain and address these persistent states
+before root is satisfied with this increment. Do not merge merely on tests/build.
+
+The earlier bounded-drop checkpoint (`2a67d3597`, before authored-rise support)
+also completed 600 Zombie seconds with no unmounted below-floor samples and
+seven short stationary vehicle candidates. Canonical state shows 96 soldier
+carriage samples doing objectives, with one three-second navigation interruption;
+a zombie-kind carrier separately spends 25 samples fighting/chasing/returning
+without an objective plan. Its CTF interaction/kind policy needs classification;
+do not silently turn all zombies into soldiers or claim its chase is delivery.
+The prior short-retry checkpoint recorded one actual capture and 204 objective
+carriage samples with no excluded interval over three sampled seconds. Counts
+and differing combat trajectories are evidence, not a deterministic capture-rate
+or performance claim.
+
+Maxwell authorized coordination with release chat
+`01a1857e-2792-76f3-bb89-9a45627b6e6c`, which owns v0.4.2 integration/publication.
+Root reported that this goal is NOT complete, PR 404 remains draft, and no main
+merge is planned until the remaining gameplay blockers are addressed and final
+CI passes. No separate release/tag/publication is authorized for this lane.
+Maxwell's original v0.4.1 client was observed running from 17:01:33; local builds,
+match probes and heavy validation are idle while he playtests. Only source/log
+investigation and cloud CI work continue. The private preview is an interim
+human feedback build, not human acceptance or full alpha completion.
