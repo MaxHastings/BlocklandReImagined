@@ -78,13 +78,6 @@ fn clips(event) { [#{id:"fixture",profile:"npc_popculture:sound/fixture",
                 ..Default::default()
             })
             .collect();
-        for id in 1..=40 {
-            state
-                .players
-                .entry(PlayerKey::session(id))
-                .or_default()
-                .insert("voice".into(), json!({}));
-        }
         Self {
             runtime,
             state,
@@ -266,4 +259,46 @@ fn npc_reactions_do_not_celebrate_a_credited_teammate_kill() {
             .contains_key("kill")
     );
     assert_eq!(p.state.players[&PlayerKey::session(2)]["voice"]["kills"], 0);
+}
+
+#[test]
+fn npc_reactions_initialize_new_bots_and_reset_observations_on_respawn() {
+    let mut p = Policy::new();
+    // Bots may enter after package initialization. Neither a missing player
+    // namespace nor an existing namespace without voice has a default map yet.
+    p.state.players.entry(PlayerKey::session(2)).or_default();
+    p.call("on_tick", vec![]);
+    for id in 1..=40 {
+        assert_eq!(
+            p.state.players[&PlayerKey::session(id)]["voice"]["health"],
+            100.0
+        );
+    }
+    p.snapshot.tick = 31;
+    p.snapshot.bots[0].health = 60.0;
+    p.state.global.insert("rng".into(), json!(2));
+    p.call("on_tick", vec![]);
+    assert_eq!(p.state.global["by_event"]["heavy_damage"], 1);
+    assert!(
+        p.state.players[&PlayerKey::session(1)]["voice"]["next"]
+            .as_u64()
+            .unwrap()
+            > 31
+    );
+    p.snapshot.bots[0].alive = false;
+    p.call("on_death", vec![1_i64.into(), 2_i64.into()]);
+    p.snapshot.tick = 61;
+    p.snapshot.bots[0].alive = true;
+    p.snapshot.bots[0].health = 100.0;
+    p.call("on_spawn", vec![1_i64.into()]);
+    p.call("on_tick", vec![]);
+    let voice = &p.state.players[&PlayerKey::session(1)]["voice"];
+    assert_eq!(voice["health"], 100.0);
+    assert_eq!(voice["combat"], 0);
+    assert_eq!(voice["next"], 0);
+    assert_eq!(voice["kills"], 0);
+    assert!(
+        p.state.global["eligible"].get("healed").is_none(),
+        "respawn is not healing"
+    );
 }
