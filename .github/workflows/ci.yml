@@ -30,6 +30,8 @@ env:
   # which sccache cannot cache, so each shard builds only its own share of
   # them (tools/gate.py --ci-test --shard).
   SCCACHE_GHA_ENABLED: 'true'
+  # PR-only entries cannot warm main and compete with releases in the cache quota.
+  SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
   # The shards build first and test for up to half an hour; a server that
   # outlives its idle limit reports nothing at the end of the job.
   SCCACHE_IDLE_TIMEOUT: '0'
@@ -47,6 +49,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.event_name != 'pull_request' }}
           shared-key: linux-wheel
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Compile Linux backends and check legacy X11 wheel routing headlessly
@@ -64,6 +67,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: History check (push)
@@ -92,6 +96,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Build
@@ -118,6 +123,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.event_name != 'pull_request' }}
           cache-on-failure: true
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Provision software graphics for offscreen tests
@@ -149,6 +155,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.event_name != 'pull_request' }}
           shared-key: linux-test
           cache-on-failure: true
       - uses: mozilla-actions/sccache-action@v0.0.9

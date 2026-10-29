@@ -42,6 +42,8 @@ env:
   # sccache keeps the workspace's own crates between release builds, as in
   # ci.yml; rust-cache keeps only the crates.io dependencies.
   SCCACHE_GHA_ENABLED: 'true'
+  # Long final links must not reset the compiler-cache daemon/counters.
+  SCCACHE_IDLE_TIMEOUT: '0'
   RUSTC_WRAPPER: sccache
 
 jobs:
@@ -80,6 +82,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           shared-key: release
       - uses: mozilla-actions/sccache-action@v0.0.9
 
@@ -98,7 +101,16 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Build the game, Add-On importer, dedicated server and modder tools
-        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server -p bri-package-runtime --bin bri-addon-check -p bri-sim --bin bri-addon-run
+        run: python tools/release_build.py --system windows
+
+      - name: Retain build timing and resource evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-build-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/release-build
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: No Visual C++ Redistributable needed
         run: python tools/check_windows_imports.py target/release/bri-client.exe target/release/bri-server.exe target/release/bri-import-addon.exe target/release/bri-addon-check.exe target/release/bri-addon-run.exe
