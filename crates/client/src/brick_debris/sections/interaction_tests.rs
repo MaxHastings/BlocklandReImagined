@@ -142,6 +142,22 @@ fn a_player_at_the_end_of_a_large_body_is_admitted() -> Result<()> {
         1,
         "end contact is not a center-distance query"
     );
+    let mut crowd: Vec<_> = (0..32)
+        .map(|id| {
+            let mut p = actor(Vec3::new(0., 5.8, 0.));
+            p.id = id;
+            p
+        })
+        .collect();
+    let mut near = actor(Vec3::new(11.5, 1.2, 0.));
+    near.id = 999;
+    crowd.push(near);
+    d.push(&crowd);
+    assert!(
+        d.pushers.handle(999).is_some(),
+        "nearby actor must not lose its resident contact to farther low IDs"
+    );
+    assert_eq!(d.pushers.len(), 32);
     Ok(())
 }
 

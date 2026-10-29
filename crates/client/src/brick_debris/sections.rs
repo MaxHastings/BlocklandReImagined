@@ -458,8 +458,14 @@ impl Section {
             if groups.front().unwrap().len() > *work as usize {
                 break;
             }
-            let members = groups.pop_front().unwrap();
+            let mut members = groups.pop_front().unwrap();
             *work -= members.len() as u32;
+            // Sources may retire while delivery/planning is pending. Charge
+            // the planned work, but never recreate their invisible collision.
+            members.retain(|&i| self.pieces[i].active);
+            if members.is_empty() {
+                continue;
+            }
             let mut low = Vec3::splat(f32::INFINITY);
             let mut high = Vec3::splat(f32::NEG_INFINITY);
             for &i in &members {
@@ -1777,6 +1783,37 @@ mod recovery_regressions {
         assert_eq!(d.instances().count(), 1);
         assert!(!d.sections[&(0, 7)].pieces[0].active);
         assert!(d.sections[&(0, 7)].pieces[1].active);
+        // Retirement before the Ready barrier must also affect the eventual
+        // physics proxy, not just suppress the visible member while staged.
+        d.cues(
+            &[Cue {
+                id: 100,
+                tick: 11,
+                position: [0.; 3],
+                kind: CueKind::BrickSectionReady {
+                    started: 0,
+                    group: 7,
+                    members: 2,
+                },
+            }],
+            &b,
+        )?;
+        for _ in 0..120 {
+            d.advance(1. / 60., &b)?;
+        }
+        let section = &d.sections[&(0, 7)];
+        let chunk =
+            &section.chunks[section.assignment[1].expect("remaining material gets contact motion")];
+        let retired_point = Vector::from_array((section.pieces[0].offset - chunk.local).to_array());
+        assert!(
+            !chunk
+                .proxy
+                .as_ref()
+                .unwrap()
+                .contains_point(&Pose::IDENTITY, retired_point),
+            "late breakup must not reintroduce retired material as invisible collision"
+        );
+        assert_eq!(d.instances().count(), 1);
         Ok(())
     }
 

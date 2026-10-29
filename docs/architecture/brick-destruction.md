@@ -195,6 +195,10 @@ damage or gameplay obstruction. Full solver admission resumes from the current
 pose and velocity. Eviction and collision-cache pressure return a group to
 checked motion, not a permanently frozen render transform. Source retirement
 rebuilds only affected proxies so removed material leaves both representations.
+Both paths share the same bounded set of32 nearest eligible actors. Spatial
+distance is measured once per actor before selection; sorting does not rescan
+every chunk per comparison. Extent-aware admission covers the ends of long
+members, and farther low-ID actors do not displace a closer actor's contact.
 
 The existing512-query-equivalent section collision budget is split between
 resident window preparation and overflow contacts. Metadata cursor visits cost

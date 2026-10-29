@@ -990,15 +990,19 @@ impl BrickDebris {
                     && p.rotation.is_finite()
                     && p.half.is_finite()
                     && p.half.cmpgt(Vec3::ZERO).all()
-                    && distance(p) < PUSHER_REACH + p.half.max_element()
             })
+            .map(|p| (distance(p), p))
+            .filter(|(d, p)| *d < PUSHER_REACH + p.half.max_element())
             .collect();
-        actors.sort_by(|a, b| distance(a).total_cmp(&distance(b)).then(a.id.cmp(&b.id)));
-        actors.dedup_by_key(|p| p.id);
+        // Cache the spatial measurement once per actor, not once per sort
+        // comparison over every chunk in a large collapse.
+        actors.sort_by(|(ad, a), (bd, b)| ad.total_cmp(bd).then(a.id.cmp(&b.id)));
+        let mut seen = BTreeSet::new();
+        actors.retain(|(_, p)| seen.insert(p.id));
         self.section_pushers = actors
             .into_iter()
             .take(crate::local_physics::MAX_PUSHERS)
-            .map(|p| {
+            .map(|(_, p)| {
                 let movement = self
                     .section_pushers
                     .iter()
@@ -1014,15 +1018,12 @@ impl BrickDebris {
                 )
             })
             .collect();
-        let world = &mut self.world;
-        self.pushers.update(world, pushers, |p| {
-            let reach = PUSHER_REACH + p.half.max_element();
-            bounds.iter().any(|b| {
-                let lo = Vec3::from_array(b.mins.to_array());
-                let hi = Vec3::from_array(b.maxs.to_array());
-                p.center.distance(p.center.clamp(lo, hi)) < reach
-            })
-        });
+        let selected: Vec<_> = self
+            .section_pushers
+            .iter()
+            .map(|(p, _)| p.clone())
+            .collect();
+        self.pushers.update(&mut self.world, &selected, |_| true);
     }
     /// Projectiles as drawn this frame. Each pushes every body it passes
     /// through once, and flies on as if the debris were not there.

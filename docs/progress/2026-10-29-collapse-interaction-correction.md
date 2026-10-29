@@ -103,11 +103,64 @@ late delivery, restoration and reset through existing checks.
 No interactive game was launched or automated. On release-root notice of an
 active v0.4.1 playtest, existing tests had completed and new heavy work paused;
 work resumed only after Maxwell told the release chat playtesting had finished
-or paused. This lane does not publish a release. Root coordinates the three
+or paused. This lane does not publish a release. Root coordinates the
 v0.4.2 lanes and final combined release checks. Technical completion, main merge
 and Maxwell's later gameplay acceptance must remain distinct.
 
 Implementation and scoped technical acceptance are satisfied. Next: commit,
 history/protocol checks, exact-head platform CI and coordinated guarded main
 merge. Maxwell still owns perceptual gameplay acceptance; the existing broader
-alpha contract and root's three-lane release gate remain open.
+alpha contract and root's release gate remain open.
+
+## Final actor-selection review
+
+Review of the new selection code found repeated all-rubble distance scans in
+the sort comparator. It now measures each actor once and sorts cached values.
+Resident and overflow paths share the same32 selected actors; the resident
+path previously reran its old ID-first truncation and could exclude a touching
+actor in favor of farther low IDs. The existing endpoint regression now adds
+a32-actor farther crowd and requires the nearby high-ID actor to keep contact.
+No new body, pusher or query limits are added. Original head `1c1ebda82` passed
+the committed-tree scoped gate (tool tests7s, docs1s, focused154s); that receipt
+and its CI are historical, not validation of this follow-up.
+
+The coordinator owns release-wide lane selection and final packaging.
+This lane still owns only client debris/contact code. A read-only audit of the
+authoritative restoration path was handed to root; bots own the independently
+proven occupied-space restore correction. No authority/audio edits were made
+here. Main mutations remain serialized by root.
+
+The selection follow-up passed focused checks (759 units,78 existing ignores,
+warning-free all-target Clippy and synthetic host/joiner restoration,166s;
+`artifacts/collapse-selection-focused.log`). A bounded control against1c1's
+actor path fails the new crowd-contact assertion, then restores the updated
+implementation byte-for-byte (`artifacts/collapse-selection-failing-before.log`).
+
+Extending the existing removed-fragment check through a delayed Ready barrier
+also exposed an actual collider lifetime bug: an already inactive member could
+be included in a proxy constructed later. The test fails on actual shape point
+containment (`artifacts/collapse-staged-retirement-failing-before.log`), not a
+render flag. Finalizing a group now filters retired members after charging its
+original planned work; no invisible material or free unbounded scanning is
+introduced. This is still client presentation retirement, independent of the
+bot lane's authoritative occupied-space restoration correction.
+
+Final follow-up verification: `python tools/check.py focused --crates bri-client
+--tests bri-client:brick_respawn` passes formatting, warning-free all-target
+Clippy,759 client units (78 existing ignores) and synthetic QUIC host/joiner
+restoration in300s. The generated-content integration variant is explicitly
+ignored as before. Log: `artifacts/collapse-followup-focused-final.log`.
+The earlier native startup/content result is reused: these two follow-ups do
+not touch startup, content or packaging. Fresh-head platform CI still must
+build the shipping executables before merge. Source is frozen after these two
+supported final-review corrections; no further audit campaign is part of this task.
+
+Finite delivery is merged PR405 plus the verified technical handoff to the
+release coordinator, who owns the combined playable package. After the package
+contains this correction, Maxwell's concrete feel checks are: make an ordinary
+wall/floor hole; sever a large mast/roof after leaving older debris active and
+walk into its pieces/ends; repeat at low Physics Quality, hit the rubble again,
+and observe restore/reset. Expect bounded breakup, continued gravity/contact,
+and no restored invisible proxy. These human checks are not marked accepted
+by the native/unit evidence above. General fracture, arbitrary-size/FPS promises
+and unrelated physics changes remain outside this finite correction.
