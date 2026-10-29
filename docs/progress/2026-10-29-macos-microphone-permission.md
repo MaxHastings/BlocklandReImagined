@@ -76,6 +76,11 @@ Corrected Mac ZIP: 224,895,391 bytes; SHA256
 bf62a9be0ab648a4d54697243233a9c80eb4df4134f0c258ab4aba57f76de0c2.
 SHA256SUMS digest:
 207af92ec08ebc39dd45f2f0917222f5242e8324115a2aab01c0c84dda8d025d.
-Actual public re-download verification is in progress below. Live microphone,
-permission prompting and gameplay acceptance remain Maxwell's. Source patch
-will be submitted separately; publication does not move the v0.4.1 tag.
+Downloaded the published Mac ZIP and SHA256SUMS again. Both actual downloads
+match the locally verified files byte-for-byte by SHA256; the public ZIP
+contains the microphone purpose string. git ls-remote confirms v0.4.1 still
+resolves to 4db7796916d8b023aa512374334973a5574ef040. The documentation unit
+suite passed all 11 tests. Source changes were committed and pushed through
+the enabled pre-push hook on codex/macos-microphone-permission for a separate
+PR; no main merge or new release tag was performed. Live microphone,
+permission prompting and gameplay acceptance remain Maxwell's.
