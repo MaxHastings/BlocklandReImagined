@@ -3,6 +3,9 @@
 //! credited, while the repository lists only their names, authors and the
 //! hashes of the copies it may bundle. Run on the synthetic shotgun the
 //! port tests use, in a stand-in checkout, so it needs no original.
+#[path = "common/python.rs"]
+mod python;
+
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -13,18 +16,6 @@ fn repo() -> PathBuf {
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports")
-}
-
-fn python() -> &'static str {
-    ["python3", "python"]
-        .into_iter()
-        .find(|p| {
-            Command::new(p)
-                .arg("--version")
-                .output()
-                .is_ok_and(|o| o.status.success())
-        })
-        .expect("Python 3 runs tools/addon_bundle.py")
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -79,7 +70,7 @@ impl Checkout {
     }
     fn run(&self, args: &[&str]) -> Output {
         let root = self.root.to_str().unwrap();
-        let mut command = Command::new(python());
+        let mut command = Command::new(python::supported());
         command
             .arg(repo().join("tools/addon_bundle.py"))
             .args(args)

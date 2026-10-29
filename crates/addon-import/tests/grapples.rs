@@ -4,6 +4,9 @@
 //! function shapes with their own numbers) and played through the
 //! authoritative session with their host rules. Each asserts what the v20
 //! script does, with the stand-in's numbers.
+#[path = "common/python.rs"]
+mod python;
+
 use bri_addon_import::{Options, import};
 use bri_package::{library::Library, packages::PackageSet};
 use bri_package_runtime::Catalog;
@@ -164,17 +167,9 @@ fn bundled(root: &Path, addon: &str, namespace: &str) {
     }
     std::fs::create_dir_all(checkout.join("v20/base")).unwrap();
     std::fs::create_dir_all(checkout.join("v20/Add-Ons")).unwrap();
-    let python = ["python3", "python"]
-        .into_iter()
-        .find(|p| {
-            std::process::Command::new(p)
-                .arg("--version")
-                .output()
-                .is_ok_and(|o| o.status.success())
-        })
-        .expect("Python 3 runs tools/addon_bundle.py");
+
     let run = |args: &[&str]| {
-        let out = std::process::Command::new(python)
+        let out = std::process::Command::new(python::supported())
             .arg(repo.join("tools/addon_bundle.py"))
             .args(args)
             .arg("--repo")
