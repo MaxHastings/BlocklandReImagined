@@ -1034,6 +1034,7 @@ fn open_admin(u: &mut Ui, screen: ScreenId) {
 fn players(u: &mut Ui) {
     let row = |id: u64, name: &str, trust: &str| PlayerRow {
         id,
+        bot: false,
         ignoring: false,
         name: name.into(),
         score: 0,

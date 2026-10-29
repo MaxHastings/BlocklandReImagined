@@ -242,6 +242,7 @@ fn main() -> Result<()> {
                 rows: (1..=32)
                     .map(|id| PlayerRow {
                         id,
+                        bot: false,
                         name: format!("Blockhead {id:02}"),
                         score: id as i32,
                         admin: id == 1,
@@ -566,6 +567,7 @@ fn main() -> Result<()> {
         ui.apply(UiUpdate::Players {
             rows: vec![PlayerRow {
                 id: 1,
+                bot: false,
                 name: "Blockhead".into(),
                 score: 0,
                 admin: true,

@@ -1823,6 +1823,50 @@ fn players_have_direct_access_and_assign_only_authoritative_team_ids() {
 }
 
 #[test]
+fn bots_remain_available_in_both_team_assignment_sections() {
+    for target in [31, 32] {
+        let mut ui = test_ui();
+        let mut state = addon_state();
+        state.games[0].members.push(MiniGameTeamMember {
+            id: MiniGamePlayerId(31),
+            name: "Playing bot".into(),
+            team: None,
+        });
+        ui.core.players = [31, 32]
+            .into_iter()
+            .map(|id| PlayerRow {
+                id,
+                bot: true,
+                name: format!("Bot {id}"),
+                ignoring: false,
+                score: 0,
+                admin: false,
+                super_admin: false,
+                bl_id: None,
+                trust: "-".into(),
+                loading: false,
+            })
+            .collect();
+        ui.apply(UiUpdate::MiniGames(state));
+        ui.core.push(ScreenId::MiniGameSettings);
+        ui.update(0);
+        tab(&mut ui, 3);
+        for id in [31, 32] {
+            let name = format!("AOS_P{id}_Team");
+            assert!(addon_view(&mut ui).id(&name).is_some());
+        }
+        let name = format!("AOS_P{target}_Team");
+        assert!(addon_view(&mut ui).id(&name).is_some());
+        let expected = target;
+        select_addon(&mut ui, &name, 1);
+        assert!(ui.drain_actions().iter().any(|(_, a)| matches!(a,
+            UiAction::SetMiniGameTeam { game: MiniGameId(42), target, team: Some(1) }
+            if target.0 == expected
+        )));
+    }
+}
+
+#[test]
 fn dependent_hidden_values_and_focused_text_are_preserved_on_listing_refresh() {
     let mut ui = test_ui();
     let mut state = addon_state();

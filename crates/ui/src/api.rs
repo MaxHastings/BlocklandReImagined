@@ -1277,6 +1277,8 @@ pub enum PlantError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerRow {
     pub id: u64,
+    /// Host-classified bot: kept for team management, hidden from human lists.
+    pub bot: bool,
     /// This viewer ignores the player's trust invites.
     pub ignoring: bool,
     pub name: String,
