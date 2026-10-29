@@ -1,4 +1,5 @@
 //! Per-voice cosmetic acoustics, independent of placement, loop phase and fades.
+use bri_console::Clamp;
 
 /// Listener-side gain and low-pass blend. No serialized game/wire state.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,12 +18,12 @@ impl Acoustics {
     fn sanitized(self) -> Self {
         Self {
             gain: if self.gain.is_finite() {
-                self.gain.clamp(0.0, 1.0)
+                self.gain.clamped(0.0, 1.0)
             } else {
                 1.0
             },
             muffle: if self.muffle.is_finite() {
-                self.muffle.clamp(0.0, 1.0)
+                self.muffle.clamped(0.0, 1.0)
             } else {
                 0.0
             },
