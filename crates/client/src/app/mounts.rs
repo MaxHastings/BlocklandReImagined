@@ -3,8 +3,6 @@ use super::*;
 
 /// Seats and riders: what the local player sits on and how riders are posed.
 pub(super) struct Mounts {
-    /// Heading of the vehicle the local player rides, last frame.
-    pub(super) mount_heading: Option<f32>,
     /// The vehicle seat the local player sat in last frame.
     pub(super) seated_on: Option<(u64, u8)>,
     /// Sat down in a gunner's seat and not yet looking along its turret:

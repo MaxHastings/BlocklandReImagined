@@ -391,7 +391,6 @@ impl App {
             vehicle_assets,
             vehicles: Default::default(),
             mounts: Mounts {
-                mount_heading: None,
                 seated_on: None,
                 takes_turret: false,
                 seat_report: None,

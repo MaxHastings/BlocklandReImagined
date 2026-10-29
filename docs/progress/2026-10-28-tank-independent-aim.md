@@ -8,7 +8,8 @@ The client added every change of hull heading to the gunner's world yaw in
 `App::tick`. Both authoritative `Session::vehicle_input` and immediate local
 `ClientVehicles::aim_locally` already subtract the hull heading when deriving
 turret-relative yaw, so the extra carry undid that independence. Remove the
-carry and its otherwise unused `Controls::carry_yaw` API. Keep initial barrel
+carry, its otherwise unused `Controls::carry_yaw` API, and the now write-only
+last-hull-heading bookkeeping. Keep initial barrel
 handover and old-seat input rejection. Hull pitch/roll, physical turret mounts,
 aim limits and unoccupied turret behavior retain their existing mechanisms;
 this correction stabilizes the controlled turret's heading, not its complete
