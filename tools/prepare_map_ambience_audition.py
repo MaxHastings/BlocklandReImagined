@@ -133,6 +133,15 @@ def build(cache, output, content, download=False):
                            f'<audio controls preload="none" src="joins/{row["key"]}.wav"></audio>'
                            f' {row["processing"]["loop_seconds"]:.1f}s full loop; '
                            f'{row["processing"]["rms_dbfs"]:.1f} dBFS RMS</p>' for row in receipt)
+    details = ''
+    detail_receipt = output / 'details/details-provenance.json'
+    if detail_receipt.is_file():
+        details = '<h2>New: individual details and a spaced outdoor example</h2><p>These six previews use original PCM WAV recordings by Joseph Sardin, CC0. They demonstrate candidate layers and spacing; in-game scheduling and enclosure acceptance remain pending.</p>'
+        for row in json.loads(detail_receipt.read_text(encoding='utf-8')):
+            credits = ', '.join(f'<a href="{html.escape(v["source"])}">{html.escape(v["source_key"])}</a>' for v in row['inputs'])
+            details += (f'<p><strong>{html.escape(row["file"].replace(".wav", "").replace("-", " "))}</strong>'
+                        f' · {row["seconds"]:.1f}s<br><audio controls preload="none" src="details/{row["file"]}"></audio><br>'
+                        f'{html.escape(row["treatment"])} Sources: {credits}</p>')
     document = ('<!doctype html><meta charset="utf-8"><title>Map ambience audition</title>'
                 '<style>body{background:#171c22;color:#e8edf2;font:17px system-ui;max-width:1200px;margin:40px auto;padding:20px}'
                 'a{color:#97d5ff}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:24px}'
@@ -140,12 +149,13 @@ def build(cache, output, content, download=False):
                 'audio{width:100%;margin-top:8px}p{line-height:1.5}</style>'
                 '<h1>Blockland ReImagined · map ambience audition</h1>'
                 '<p>21 shipped map variants. These are candidate recordings, not accepted game mixes. '
-                'Every new recording here comes from a public Freesound HQ MP3 preview, decoded to WAV for editing; '
-                'none is a lossless original. CC0 source pages and exact input/output hashes are in provenance.json.</p>'
+                'The continuous-bed candidates below come from public Freesound HQ MP3 previews, decoded to WAV for editing; '
+                'those beds are not lossless originals. The separate new detail previews use original PCM WAVs. '
+                'CC0 source pages and exact input/output hashes are in the accompanying provenance files.</p>'
                 '<p>Start at your ordinary game volume. Beds are intentionally subtle. Play one card at a time; '
                 'several candidates on a card show proposed layers, without pretending their spatial treatment is implemented. '
                 'No audio plays automatically. This report does not change your installed game.</p>'
-                '<main>' + ''.join(cards) + '</main><h2>Loop joins and alternatives</h2>'
+                + details + '<h2>Map bed candidates</h2><main>' + ''.join(cards) + '</main><h2>Loop joins and alternatives</h2>'
                 '<p>These 25-second excerpts deliberately cross each full loop boundary twice. '
                 'Reject audible pulses, clicks, voices, traffic, repeated calls or masking noise. '
                 'Palms is an alternative with reported preview artifacts; night alternatives must not overlap Forest Dark’s original crickets.</p>'
