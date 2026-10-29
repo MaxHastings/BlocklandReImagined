@@ -244,7 +244,7 @@ mod tests {
             ]
             .into(),
         };
-        let mut building = Building::new(definitions, vec![]).unwrap();
+        let mut building = Building::new(definitions.clone(), vec![]).unwrap();
         let mut world = bri_net::protocol::PublicWorld {
             name: "acoustic fixture".into(),
             map_id: "fixture".into(),
@@ -286,6 +286,120 @@ mod tests {
         building.sync_world(&world).unwrap();
         now += std::time::Duration::from_millis(250);
         assert_eq!(sample(&mut probe, &building, now).enclosure, 1.0);
+        // Exercise an ordinary authoritative hammer swing, then feed its real
+        // world state through the same client geometry sync as a replica update.
+        // A manual map removal alone cannot establish this destruction seam.
+        {
+            use bri_sim::{
+                player::{MoveInput, PlayerState, PlayerTuning},
+                session::{ActionAim, Command, Session},
+                simulation::Simulation,
+            };
+            let mut authoritative = bri_world::World::new(
+                world.name.clone(),
+                world.map_id.clone(),
+                world.palette.clone(),
+            );
+            authoritative.bricks = world.bricks.clone();
+            let floor = rapier3d::prelude::ColliderBuilder::cuboid(30., 0.5, 30.)
+                .translation(rapier3d::na::Vector3::new(0., -0.5, 0.));
+            let sim = Simulation::new(authoritative, definitions, vec![floor]).unwrap();
+            let mut session = Session::new(sim);
+            session.set_lan_host(true);
+            session
+                .set_weapon_pack(bri_weapons::testing::pack())
+                .unwrap();
+            let owner = session
+                .join("Builder".into(), Vec3::new(2., 0.05, 0.), true)
+                .unwrap();
+            let hammer = bri_weapons::testing::HAMMER;
+            let slot = session.tool_inventories()[&owner]
+                .slots
+                .iter()
+                .position(|item| item.as_deref() == Some(hammer))
+                .unwrap_or_else(|| session.give_item(owner, hammer).unwrap());
+            session
+                .command(owner, 1, Command::EquipTool { slot: Some(slot) })
+                .unwrap();
+            for _ in 0..30 {
+                session.step().unwrap();
+            }
+            let player = session
+                .snapshot()
+                .players
+                .into_iter()
+                .find(|p| p.owner == owner)
+                .unwrap();
+            let target = Vec3::new(4., 2., 0.);
+            let flat = target - Vec3::from(player.feet);
+            let yaw = flat.x.atan2(-flat.z);
+            let facing = PlayerState { yaw, ..player };
+            let delta = target - facing.eye(&PlayerTuning::default());
+            let aim = ActionAim {
+                yaw,
+                pitch: delta.y.atan2(Vec3::new(delta.x, 0., delta.z).length()),
+            };
+            session
+                .movement(
+                    owner,
+                    1,
+                    MoveInput {
+                        yaw: aim.yaw,
+                        pitch: aim.pitch,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            session.take_cues();
+            session
+                .command_with_aim(owner, 2, Command::WeaponTrigger { down: true }, Some(aim))
+                .unwrap();
+            for _ in 0..8 {
+                session.step().unwrap();
+            }
+            session
+                .command_with_aim(owner, 3, Command::WeaponTrigger { down: false }, Some(aim))
+                .unwrap();
+            for _ in 0..52 {
+                session.step().unwrap();
+            }
+            assert!(
+                !session.simulation().state().bricks.contains_key(&4),
+                "ordinary hammer failed to open the wall"
+            );
+            assert!(
+                session.take_cues().iter().any(|cue| matches!(
+                    cue.kind,
+                    bri_sim::presentation::CueKind::BrickKill { brick: 4, .. }
+                )),
+                "no authoritative destruction cue"
+            );
+            let mut damaged = world.clone();
+            damaged.bricks = session.simulation().state().bricks.clone();
+            assert!(
+                building
+                    .solid_segment(ear, Vec3::new(8., 2., 0.))
+                    .unwrap()
+                    .is_some()
+            );
+            building.sync_world(&damaged).unwrap();
+            now += std::time::Duration::from_millis(250);
+            let opened = sample(&mut probe, &building, now);
+            assert!(
+                opened.enclosure < 1.0,
+                "stationary listener did not observe the destruction opening"
+            );
+            assert!(
+                building
+                    .solid_segment(ear, Vec3::new(8., 2., 0.))
+                    .unwrap()
+                    .is_none(),
+                "removed wall still obstructs source"
+            );
+            building.sync_world(&world).unwrap();
+            now += std::time::Duration::from_millis(250);
+            assert_eq!(sample(&mut probe, &building, now).enclosure, 1.0);
+        }
         world.bricks.get_mut(&2).unwrap().definition = ContentRef::Resolved("window".into());
         building.sync_world(&world).unwrap();
         now += std::time::Duration::from_millis(250);
