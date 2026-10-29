@@ -8,7 +8,7 @@ use crate::{client::HostPin, codec, protocol::*};
 use anyhow::{Context, Result, bail, ensure};
 use bri_package::{
     environment::{Environment, PackageRef},
-    packages::{PackageSet, package_dir},
+    packages::{PackageEntry, PackageSet, package_dir},
     sync::{Cache, Listing},
 };
 use bri_progress::{Progress, Stage, Unit};
@@ -176,6 +176,54 @@ pub struct Fetched {
     pub dir: PathBuf,
     /// Bytes this fetch downloaded for it (0 when the cache already held it).
     pub downloaded: u64,
+}
+
+/// List host-only references declared by downloaded client data without
+/// downloading or executing their server code. Server bindings can target a
+/// companion (imported tools), not just a dependency. Existing downloaded or
+/// locally listed packages retain their real side and directory.
+///
+/// These placeholders are exclusively for `Catalog`'s client-side validation;
+/// commands still travel to, and are authorized by, the actual host runtime.
+pub fn declare_host_references(dirs: &mut Vec<(PathBuf, PackageEntry)>, fetched: &[Fetched]) {
+    let mut needs = std::collections::BTreeSet::new();
+    for f in fetched {
+        let Ok(file) = std::fs::File::open(f.dir.join("package.json")) else {
+            continue;
+        };
+        let limit = bri_package::library::MAX_MANIFEST_BYTES;
+        let mut text = Vec::new();
+        if std::io::Read::read_to_end(&mut std::io::Read::take(file, limit + 1), &mut text).is_err()
+            || text.len() as u64 > limit
+        {
+            continue;
+        }
+        // Parse the same bounded manifest the catalog validates, rather than
+        // treating arbitrary JSON fields as permission to invent a target.
+        let Ok(manifest) = bri_package_runtime::manifest::Manifest::parse(&text, &f.package.id)
+        else {
+            continue;
+        };
+        needs.extend(manifest.dependencies.into_keys());
+        needs.extend(manifest.companions);
+    }
+    for id in needs {
+        if bri_package::id::namespace_problem(&id).is_some()
+            || dirs.iter().any(|(_, entry)| entry.id == id)
+        {
+            continue;
+        }
+        dirs.push((
+            PathBuf::from("."),
+            PackageEntry {
+                id: id.clone(),
+                version: "0.0.0".into(),
+                side: bri_package::packages::Side::Server,
+                dir: id,
+                role: None,
+            },
+        ));
+    }
 }
 
 /// Fetch every shared and client package the server at `address` offers

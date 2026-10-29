@@ -88,7 +88,7 @@ async fn connect(server: &server::ServerHandle, name: &str) -> Result<Client> {
     )
     .await?;
     tokio::time::timeout(Duration::from_secs(3), async {
-        while client.voice_link().routes().revision == 0 {
+        while client.replica.voice_chat && client.voice_link().routes().revision == 0 {
             client.receive().await?;
         }
         anyhow::Ok(())
@@ -121,6 +121,11 @@ async fn a_host_without_the_voice_addon_relays_nothing() -> Result<()> {
             .await
             .is_empty(),
         "no voice without the Add-On"
+    );
+    assert_eq!(
+        listen.routes().revision,
+        0,
+        "a host without voice sends no unnecessary empty routing table"
     );
     server.stop().await?;
     Ok(())

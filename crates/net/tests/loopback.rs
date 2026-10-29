@@ -3168,7 +3168,7 @@ async fn a_resume_over_kept_bricks_downloads_only_the_changes() -> Result<()> {
     .await?;
     let full = {
         let before = server.traffic.sample();
-        let fresh = Client::connect(
+        let mut fresh = Client::connect(
             server.address,
             &server.certificate,
             "Fresh".into(),
@@ -3177,6 +3177,19 @@ async fn a_resume_over_kept_bricks_downloads_only_the_changes() -> Result<()> {
         )
         .await?;
         let sent = server.traffic.sample().since(&before);
+        // Advance metadata while A deliberately remains unread. A chat
+        // update changes the stream cursor, not a single kept-world brick.
+        fresh
+            .command(Command::Chat("resume metadata checkpoint".into()))
+            .await?;
+        wait(&mut fresh, |c| {
+            c.replica
+                .chat
+                .iter()
+                .any(|l| l.text == "resume metadata checkpoint")
+        })
+        .await?;
+        assert!(fresh.replica.cursor > a.replica.cursor);
         fresh.close();
         sent
     };
@@ -3199,7 +3212,21 @@ async fn a_resume_over_kept_bricks_downloads_only_the_changes() -> Result<()> {
     let sent = server.traffic.sample().since(&before);
     assert_eq!(resumed.owner, owner);
     assert_eq!(resumed.replica.world, a.replica.world);
-    assert_eq!(resumed.replica.cursor, a.replica.cursor);
+    assert!(
+        resumed
+            .replica
+            .chat
+            .iter()
+            .any(|l| l.text == "resume metadata checkpoint"),
+        "resume checkpoint includes the newer non-brick state while preserving the exact world"
+    );
+    // A can be one or more ordinary state updates behind while it is not
+    // being read. The resumed checkpoint must cover all changes A observed,
+    // not have the same cursor as an independently sampled stale client.
+    assert!(
+        resumed.replica.cursor >= a.replica.cursor,
+        "resumed checkpoint must include every update already observed by A"
+    );
     assert_eq!(
         sent.messages(Kind::World),
         2,
