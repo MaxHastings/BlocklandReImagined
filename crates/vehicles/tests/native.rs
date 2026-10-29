@@ -493,7 +493,7 @@ fn a_blocked_dismount_takes_the_last_point_without_a_push(f: &Fixture) {
         ColliderBuilder::cuboid(10., 10., 10.),
     );
     w.detect_collisions(&(), &());
-    assert!(!v.has_clear_exit(&w, OccupantId(20)),
+    assert!(v.clear_exit(&w, OccupantId(20)).is_none(),
         "the autonomous exit check must reject the blocked fallback");
     v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
     assert!(v.snapshot(&w).vehicles[0].seats[0].occupant.is_none());
@@ -519,7 +519,7 @@ fn the_first_dismount_point_is_up_the_tilted_seat(f: &Fixture) {
     w.detect_collisions(&(), &());
     mount(&mut v, &w, 0);
     let seat = Vec3::from_array(v.snapshot(&w).vehicles[0].seats[0].transform.position);
-    assert!(v.has_clear_exit(&w, OccupantId(20)), "the ordinary tilted exit is usable");
+    assert!(v.clear_exit(&w, OccupantId(20)).is_some(), "the ordinary tilted exit is usable");
     v.dismount(&w, OwnerId(10), OccupantId(20), false).unwrap();
     let (at, velocity) = dismounted(&mut v);
     let up = roll * Vec3::Y * 2.2;

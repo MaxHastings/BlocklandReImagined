@@ -1169,22 +1169,20 @@ impl VehiclesWorld {
         v.controls[seat] = input;
         Ok(())
     }
-    /// Whether the ordinary authored exit search has a clear point, without
+    /// The first clear point in the ordinary authored exit search, without
     /// relying on its last-point fallback. Autonomous occupants can check this
     /// before deciding to leave a trapped or partly buried vehicle.
-    pub fn has_clear_exit(&self, world: &PhysicsWorld, occupant: OccupantId) -> bool {
-        let Some(&(id, seat)) = self.occupied.get(&occupant) else {
-            return false;
-        };
+    pub fn clear_exit(&self, world: &PhysicsWorld, occupant: OccupantId) -> Option<Transform> {
+        let &(id, seat) = self.occupied.get(&occupant)?;
         let v = &self.instances[&id];
         let d = &self.catalog[&v.spawn.definition];
         if d.family == Family::Tumble {
-            return false;
-        }
-        if simple_dismount(d) {
-            return true;
+            return None;
         }
         let mounted = effective_seat_pose(&world.bodies[v.body], d, v, seat);
+        if simple_dismount(d) {
+            return Some(mounted);
+        }
         let queries = world.query_pipeline_with_filter(
             QueryFilter::default()
                 .exclude_rigid_body(v.body)
@@ -1192,13 +1190,17 @@ impl VehiclesWorld {
         );
         dismount_offsets(mounted.rotation, v.spawn.scale)
             .into_iter()
-            .any(|offset| {
+            .find_map(|offset| {
                 exit_clear(
                     &queries,
                     mounted.position.into(),
                     offset,
                     v.seats[seat].unwrap().body,
                 )
+                .then_some(Transform {
+                    position: (Vec3::from(mounted.position) + offset).to_array(),
+                    rotation: mounted.rotation,
+                })
             })
     }
 

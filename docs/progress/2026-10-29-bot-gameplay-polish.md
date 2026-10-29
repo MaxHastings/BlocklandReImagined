@@ -37,6 +37,9 @@ Original saves/installations are read only.
   with matching flag colors and tanks. Maxwell authorized session-only team
   setup. `acm-minigame.json` uses the ordinary Afghan CTF settings/loadout,
   eight slots per side and those colors. The source build is unchanged.
+  A separate `ACM City Bot CTF.world.json` was added alongside the original for
+  Maxwell's playtest; only its minigame header changes and its compressed brick
+  payload is byte-identical. No existing save was overwritten.
 
 The existing `bot_vehicle_routes` diagnostic executes normal brains, rules,
 weapons and movement without injected AI goals/controls. Its new optional
@@ -100,12 +103,23 @@ No full gate, GPU suite or interactive game was launched.
 - An ordinary Afghan candidate exposed tank occupants leaving a partly buried,
   obstructed chassis and subsequently falling below the map. The vehicle's
   original last-point dismount fallback can choose a blocked point. A shared
-  read-only `has_clear_exit` query reuses its exact authored exits and rider
-  clearance. Bots check it before leaving and count actual successful exits.
+  read-only exit query reuses its exact authored exits and rider clearance.
+  The first overlap-only query did NOT close the actual Afghan reproduction:
+  252 living unmounted below-floor samples remained. Returning the exact exit
+  and checking a landing also left 258 such samples. Neither is accepted as
+  a fix on isolated test evidence; the actual exit/control chain is being
+  traced. Bots count actual successful exits.
   The manual/forced source behavior is retained in its existing tests, augmented
   with blocked/clear query controls. This is an exit-admission correction, not
   a claim that chassis contact or all tight turns are solved; actual rerun and
-  final vehicle checks are pending.
+  The final cause of the false landing was a remote bottom surface 507 units
+  below the exit, accepted by an unbounded query for bodies without fall damage.
+  Exit admission now shares foot navigation's bounded drop policy, actual body
+  scale, and fixed support/water semantics. The 180-second `bounded-afghan`
+  rerun has zero living below-floor samples (previous candidates: 252/258),
+  and both affected bots continue play. A regression includes the remote bottom
+  floor, ordinary nearby landing, empty space, and the departing dynamic hull.
+  This closes the observed exit loss, not the underlying hull contact defect.
 
 ## Gameplay and verification checkpoints
 
@@ -135,3 +149,21 @@ inferred from contended headless timings.
 
 The final source checks, rerun results, private playable handoff and merge/CI
 receipts will be recorded below. Human feel and full alpha acceptance remain open.
+
+## Packaging boundary
+
+The initial official `package_playtest.ps1 -ValidateOnly` passed before vehicle
+runtime edits. After them the original bundle's freshness check correctly
+refuses packaging: its importer dependency stamp includes vehicle runtime
+sources. No receipt is restamped and the published content remains unchanged.
+For the requested private engine preview, the handoff may reuse the published
+v0.4.1 portable folder after checking every published manifest hash, replacing
+only the five built executables and writing new executable hashes/provenance.
+This is an engine preview with unchanged verified content, not a newly
+source-regenerated release or a claim that the official freshness gate passed.
+
+Windows `cargo fmt --all` exceeds the command-line length limit; changed files
+are checked directly with rustfmt. A probe relink initially failed LNK1104 while
+its executable was running; subsequent probes run from private executable copies.
+Temporary debug instrumentation also caused an E0382 compile failure, corrected
+before rerunning checks. These are recorded failures, not retries labeled clean.

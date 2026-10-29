@@ -2489,12 +2489,39 @@ impl Session {
     /// Gets `bot` out of its seat for `why`, counted for the reports
     /// ([`Session::bot_seat_leaves`]).
     fn bot_leave_seat(&mut self, bot: OwnerId, why: Leave) {
-        if self.vehicles.world.as_ref().is_some_and(|world| {
-            world.has_clear_exit(&self.simulation.physics, bri_vehicles::OccupantId(bot))
-        }) && self.dismount_vehicle(bot).is_ok()
+        let exit = self.vehicles.world.as_ref().and_then(|world| {
+            world.clear_exit(&self.simulation.physics, bri_vehicles::OccupantId(bot))
+        });
+        if exit.is_some_and(|exit| self.bot_exit_supported(bot, exit.position.into()))
+            && self.dismount_vehicle(bot).is_ok()
         {
             *self.bots.leaves.entry(why.name()).or_default() += 1;
         }
+    }
+
+    fn bot_exit_supported(&self, bot: OwnerId, feet: Vec3) -> bool {
+        let tuning = self.peers[&bot].player.tuning();
+        let body = Body::of(tuning, self.peers[&bot].player.state().scale);
+        let terrain = |o, d, r| self.simulation.terrain_ray(o, d, r);
+        let waters = self.simulation.liquids();
+        let ground = Ground {
+            physics: &self.simulation.physics,
+            terrain: &terrain,
+            passages: self.simulation.passages(),
+            waters: &waters,
+            bodies: &[],
+            motions: &[],
+            solid: &crate::nav::all_solid,
+        };
+        // Empty space below a floor can pass overlap checks while providing
+        // no usable landing. Use the same drop policy as foot navigation,
+        // including for bodies without fall damage: a remote bottom boundary
+        // does not make a void a useful exit. The departing hull is not ground.
+        let reach = body.drop + 0.1;
+        body.swims && ground.floats(&body, feet).is_some()
+            || ground
+                .ray(feet + Vec3::Y * 0.1, Vec3::NEG_Y, reach)
+                .is_some_and(|(_, normal)| normal.y > 0.5)
     }
 }
 
@@ -2717,6 +2744,25 @@ mod driving_collision_tests {
             .vehicle_snapshot(&s.simulation.physics, VehicleId(1))
             .unwrap();
         (s, bot, v)
+    }
+
+    #[test]
+    fn a_vehicle_exit_needs_a_landing_below_it_not_a_floor_above_it() {
+        let floor = ColliderBuilder::cuboid(30.0, 0.5, 30.0).translation(Vec3::new(0.0, -0.5, 0.0));
+        let (s, bot, _) = tapered_chassis(vec![floor]);
+        assert!(s.bot_exit_supported(bot, Vec3::new(10.0, 1.0, 0.0)));
+        assert!(!s.bot_exit_supported(bot, Vec3::new(10.0, -2.0, 0.0)));
+        assert!(!s.bot_exit_supported(bot, Vec3::new(40.0, 1.0, 0.0)));
+        let distant_floor =
+            ColliderBuilder::cuboid(30.0, 0.5, 30.0).translation(Vec3::new(0.0, -512.5, 0.0));
+        let (s, bot, _) = tapered_chassis(vec![distant_floor]);
+        assert!(s.bot_exit_supported(bot, Vec3::new(10.0, -511.0, 0.0)));
+        assert!(!s.bot_exit_supported(bot, Vec3::new(10.0, -2.0, 0.0)));
+        let (s, bot, _) = tapered_chassis(vec![]);
+        assert!(
+            !s.bot_exit_supported(bot, Vec3::new(0.0, 4.0, 0.0)),
+            "the departing hull is not a landing"
+        );
     }
 
     #[test]
