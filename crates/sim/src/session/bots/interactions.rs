@@ -2517,7 +2517,14 @@ impl Session {
         // no usable landing. Use the same drop policy as foot navigation,
         // including for bodies without fall damage: a remote bottom boundary
         // does not make a void a useful exit. The departing hull is not ground.
-        let reach = body.drop + 0.1;
+        // An authored upward exit lifts a fall-free rider before it lands;
+        // that rise must not make an ordinary low seat seem too high to leave.
+        let rise = if tuning.fall.is_none() {
+            (feet.y - self.peers[&bot].player.state().feet[1]).max(0.0)
+        } else {
+            0.0
+        };
+        let reach = body.drop + rise + 0.1;
         body.swims && ground.floats(&body, feet).is_some()
             || ground
                 .ray(feet + Vec3::Y * 0.1, Vec3::NEG_Y, reach)

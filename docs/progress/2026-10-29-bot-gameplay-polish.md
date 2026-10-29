@@ -167,3 +167,37 @@ are checked directly with rustfmt. A probe relink initially failed LNK1104 while
 its executable was running; subsequent probes run from private executable copies.
 Temporary debug instrumentation also caused an E0382 compile failure, corrected
 before rerunning checks. These are recorded failures, not retries labeled clean.
+
+The first strictly bounded landing guard failed the existing pedestrian-gap
+abandonment integration: an authored upward exit pushed a low seat's landing
+just beyond the ordinary drop budget. Fall-free bodies now include that exact
+authored rise above their actual seated feet; fall-damage bodies retain the
+harmless-drop limit from the exit. The unchanged integration passes afterward;
+no assertion or timeout was relaxed.
+
+At this final source checkpoint, actual commands/results are:
+
+- `cargo test --profile playtest -p bri-sim --lib`: 478 pass, 5 ignored.
+- `cargo test --profile playtest -p bri-vehicles --lib`: 35 pass, 3 ignored.
+- `cargo test --profile playtest -p bri-chaos --test bot_interactions`:
+  24 pass after the authored-rise correction.
+- `cargo test --profile playtest -p bri-vehicles --test native dismount`:
+  5 pass, 5 original-content cases ignored, 63 filtered out.
+- `cargo clippy --profile playtest -p bri-sim -p bri-vehicles -p bri-chaos
+  --all-targets -- -D warnings`: passes warning-free.
+- `python -m unittest discover -s tools -p test_analyze_bot_match.py`: 2 pass.
+- `python tools/gate.py --history-range origin/main HEAD`: passes; fetched
+  origin/main remains `030b43a03`. No wire/save schema changed.
+
+The other 53 bot integration cases passed at `7d2d117` before the exit query
+refinement; the changed exit behavior's direct interaction suite was rerun as
+above. These are scoped checks, not a full workspace or GPU matrix pass.
+
+Remaining work is explicit: hull contact/penetration and tighter vehicle turns;
+some close/chase/breach movement stalls; compound jump/crouch execution under
+dynamic obstruction; and grounding own-flag-carrier recovery priority in provider
+semantics. The closer-target correction improves observation but does not invent
+that missing objective dependency or guarantee every passing carrier fights.
+The next investigation should isolate those with full geometry/control traces,
+not increase combat weights on map or content names. Human feel and full alpha
+acceptance remain open.
