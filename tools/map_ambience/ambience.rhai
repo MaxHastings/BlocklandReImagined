@@ -14,7 +14,6 @@ fn start() {
     later();
     set("started",true);
 }
-fn on_join(player) { start(); }
 fn on_tick() {
     start();
     if tick() < get("next") { return; }

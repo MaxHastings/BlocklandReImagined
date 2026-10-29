@@ -7,9 +7,11 @@ The shipping path requires explicit hear-first source decisions before writing.
 import argparse
 import hashlib
 import html
+import io
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 
 import generated_addons
@@ -29,6 +31,34 @@ def sha(raw):
 def approval_receipt(registry, source_hash):
     row = next((r for r in registry['sources'] if r['input_sha256'] == source_hash), None)
     return None if row is None else {k:row[k] for k in ['id','input_sha256','state','approval_evidence']}
+
+
+def clip_file(row):
+    return row['key'] + ('.ogg' if row['kind']=='bed' else '.wav')
+
+
+def encode_bed(raw):
+    import numpy as np
+    import soundfile as sf
+    pcm,rate=sf.read(io.BytesIO(raw),always_2d=True,dtype='float32')
+    executable=shutil.which('ffmpeg')
+    if not executable:
+        import imageio_ffmpeg
+        executable=imageio_ffmpeg.get_ffmpeg_exe()
+    encoded=subprocess.run([executable,'-hide_banner','-loglevel','error','-fflags','+bitexact',
+                            '-i','pipe:0','-map_metadata','-1','-vn','-sn','-dn','-c:a','libvorbis',
+                            '-q:a','6','-flags:a','+bitexact','-threads','1','-f','ogg','pipe:1'],
+                           input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout
+    decoded,decoded_rate=sf.read(io.BytesIO(encoded),always_2d=True,dtype='float32')
+    if decoded_rate!=rate or decoded.shape!=pcm.shape or not np.isfinite(decoded).all() or np.abs(decoded).max()>=1:
+        raise ValueError('Vorbis encoding changed duration/channels/rate or produced invalid PCM')
+    if len(encoded)>8*1024*1024:
+        raise ValueError('bed still exceeds the existing8MiB track budget')
+    return encoded,{'codec':'Ogg Vorbis q6','encoder_sha256':sha(Path(executable).read_bytes()),
+                    'audition_pcm_sha256':sha(raw),'rate':rate,'frames':len(pcm),
+                    'channels':pcm.shape[1],'bytes':len(encoded),'decoded_peak':float(np.abs(decoded).max()),
+                    'decoded_rms':float(np.sqrt(np.mean(decoded*decoded))),
+                    'note':'Same approved PCM excerpt, frames and level; encoding only. No runtime budget increase.'}
 
 
 def selection(repo=REPO):
@@ -81,22 +111,27 @@ def build(cache, output, content, download=False, audition_only=False):
         output.mkdir(parents=True, exist_ok=True)
         clips_dir = output / 'assets/clips'
         clips_dir.mkdir(parents=True, exist_ok=True)
-        for old in clips_dir.glob('*.wav'):
-            if old.stem not in selected:
+        expected_names={clip_file(row) for row in selected.values()}
+        for old in clips_dir.iterdir():
+            if old.suffix in {'.wav','.ogg'} and old.name not in expected_names:
                 old.unlink()  # Only generator-owned WAV names within this clip folder.
         sounds, receipts = {}, []
         for key, row in sorted(selected.items()):
             is_bed = row['kind'] == 'bed'
             source = staged / ('loops' if is_bed else 'details') / (key+'.wav')
             raw = source.read_bytes()
-            (clips_dir / (key+'.wav')).write_bytes(raw)
-            sound = {'file':'clips/'+key+'.wav','volume':1.0,'looping':is_bed,'music':is_bed}
+            encoding=None
+            if is_bed:
+                raw,encoding=encode_bed(raw)
+            file=clip_file(row)
+            (clips_dir/file).write_bytes(raw)
+            sound = {'file':'clips/'+file,'volume':1.0,'looping':is_bed,'music':is_bed}
             if key != 'room':
                 sound['environment'] = 'exterior'
             if not is_bed:
                 sound['spatial'] = {'reference_distance':12.0,'max_distance':160.0}
             sounds['map_ambience:'+key] = sound
-            receipts.append(dict(row, file='assets/clips/'+key+'.wav', processed_sha256=sha(raw),
+            receipts.append(dict(row, file='assets/clips/'+file, processed_sha256=sha(raw),encoding=encoding,
                                  source_approval=approval_receipt(registry,row['input_sha256']),
                                  processing=bed_rows[key]['processing'] if is_bed else detail_rows[key]))
         (output / 'assets/weapons.json').write_text(json.dumps({'schema_version':5,'id':'map_ambience','sounds':sounds},indent=2)+'\n')
@@ -159,7 +194,9 @@ def problems(repo, directory):
             out.extend(source_problems(registry,pinned['input_sha256']))
             if r.get('source_approval') != approval_receipt(registry,pinned['input_sha256']):
                 out.append(r['key']+': packaged source approval evidence differs from the registry')
-            clip = directory / 'assets/clips' / (r['key']+'.wav')
+            clip = directory / 'assets/clips' / clip_file(pinned)
+            if r.get('file') != 'assets/clips/'+clip_file(pinned):
+                out.append(r['key']+': packaged clip path differs')
             if sha(clip.read_bytes()) != r['processed_sha256']:
                 out.append(r['key']+': processed recording missing or changed')
         expected_policy = {'package.json':(Path(repo)/'tools/map_ambience/package.json').read_bytes()}
@@ -167,7 +204,7 @@ def problems(repo, directory):
             if (directory / name).read_bytes().replace(b'\r\n',b'\n') != wanted.replace(b'\r\n',b'\n'):
                 out.append(name+': generated policy changed')
         actual = {p.relative_to(directory).as_posix():sha(p.read_bytes()) for p in directory.rglob('*') if p.is_file() and p.name != 'map-ambience-generated.json'}
-        required = {'package.json','assets/weapons.json'} | {'assets/clips/'+key+'.wav' for key in selected}
+        required = {'package.json','assets/weapons.json'} | {'assets/clips/'+clip_file(row) for row in selected.values()}
         if set(actual) != required:
             out.append('Generated ambience has missing or unexpected files')
         if actual != receipt['files']:

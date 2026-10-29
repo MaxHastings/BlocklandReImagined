@@ -9,6 +9,204 @@ use std::{
     path::Path,
 };
 
+/// Refresh only audio on a private copy of a verified native map import.
+/// The seed's source/geometry identity remains intact; this does not stamp a
+/// new whole-import generation receipt or run terrain/lighting conversion.
+pub fn refresh(input: &Path, out: &Path) -> Result<()> {
+    let src = crate::source::read(input)?;
+    let manifest_path = out.join("package.json");
+    let report_path = out.join("import-report.json");
+    let old_manifest = std::fs::read(&manifest_path)?;
+    let old_report = std::fs::read(&report_path)?;
+    let mut manifest: Value = serde_json::from_slice(&old_manifest)?;
+    let mut report: Value = serde_json::from_slice(&old_report)?;
+    let namespace = crate::namespace_for(&src.name)?;
+    ensure!(
+        manifest["id"] == namespace
+            && report["package"]["id"] == namespace
+            && report["source"]["sha256"] == src.sha256,
+        "native map identity/archive hash does not match this original"
+    );
+    let version = manifest["version"]
+        .as_str()
+        .context("map version missing")?
+        .to_owned();
+    let root = out.canonicalize()?;
+    let child = |base: &Path, name: &str| -> Result<std::path::PathBuf> {
+        ensure!(
+            !name.is_empty()
+                && Path::new(name)
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_))),
+            "unsafe native map path"
+        );
+        let path = base.join(name).canonicalize()?;
+        ensure!(
+            path.starts_with(&root),
+            "native map path escapes its package"
+        );
+        Ok(path)
+    };
+    let mut maps = Vec::new();
+    let mut seeds = Vec::new();
+    for provide in manifest["provides"]
+        .as_array()
+        .context("map providers missing")?
+        .iter()
+        .filter(|p| p["kind"] == "map")
+    {
+        let id = provide["id"].as_str().context("map id missing")?;
+        let bundle_path = child(
+            out,
+            provide["file"]
+                .as_str()
+                .context("map bundle path missing")?,
+        )?;
+        let bundle: Value = serde_json::from_slice(&std::fs::read(&bundle_path)?)?;
+        let entry = bundle["maps"]
+            .as_array()
+            .context("native bundle maps missing")?
+            .iter()
+            .find(|m| m["id"] == id)
+            .context("map absent from native bundle")?;
+        let scene_path = child(
+            bundle_path.parent().unwrap(),
+            entry["file"]
+                .as_str()
+                .context("native scene path missing")?,
+        )?;
+        let raw = std::fs::read(&scene_path)?;
+        let scene: Value = serde_json::from_slice(&raw)?;
+        ensure!(scene["id"] == id, "native scene identity mismatch");
+        let prefix = format!("map {id} from ");
+        let missions = report["diagnostics"]
+            .as_array()
+            .context("original import mission evidence missing")?
+            .iter()
+            .filter_map(|v| v.as_str()?.strip_prefix(&prefix))
+            .collect::<Vec<_>>();
+        ensure!(
+            missions.len() == 1 && src.get(missions[0]).is_some(),
+            "source mission identity missing/ambiguous"
+        );
+        seeds.push(json!({"map":id,"scene":scene_path.strip_prefix(&root)?.to_string_lossy(),"scene_sha256":crate::source::hash(&raw),"mission":missions[0]}));
+        maps.push((id.to_owned(), missions[0].to_owned(), scene));
+    }
+    ensure!(!maps.is_empty(), "native map package has no maps");
+    let mut provides = manifest["provides"].as_array().unwrap().clone();
+    let result = export(input, out, &namespace, &version, &maps, &mut provides)?;
+    let rules = result
+        .rules
+        .as_ref()
+        .context("no supported audio emitters found")?;
+    manifest["provides"] = json!(provides);
+    let companions = manifest
+        .as_object_mut()
+        .unwrap()
+        .entry("companions")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .context("invalid map companions")?;
+    ensure!(
+        !companions.iter().any(|v| v == &json!(rules.id)),
+        "audio companion already attached"
+    );
+    companions.push(json!(rules.id));
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+    let check = bri_package_runtime::check::check(
+        &out.parent()
+            .context("map output has no parent")?
+            .join(&rules.dir),
+    );
+    ensure!(
+        check.ok,
+        "refreshed map audio failed native admission: {check}"
+    );
+    let prefixes = maps
+        .iter()
+        .flat_map(|(map, mission, _)| {
+            result
+                .covered
+                .get(map)
+                .into_iter()
+                .flatten()
+                .map(move |index| {
+                    format!("Map {map} from {mission}, node {index}, class audioemitter,")
+                })
+        })
+        .collect::<Vec<_>>();
+    report["unsupported"]
+        .as_array_mut()
+        .context("unsupported report missing")?
+        .retain(|f| {
+            !f["detail"]
+                .as_str()
+                .is_some_and(|d| prefixes.iter().any(|p| d.starts_with(p)))
+        });
+    report["summary"]["unsupported"] = json!(report["unsupported"].as_array().unwrap().len());
+    report["diagnostics"]
+        .as_array_mut()
+        .unwrap()
+        .extend(result.diagnostics.iter().map(|s| json!(s)));
+    report["diagnostics"].as_array_mut().unwrap().push(json!("Audio-only refresh: original geometry and whole-import generation identity retained; see map-audio-refresh.json."));
+    report["ports"]
+        .as_array_mut()
+        .context("ports report missing")?
+        .push(serde_json::to_value(applied(&src, rules.clone()))?);
+    let weapons: Value = serde_json::from_slice(&std::fs::read(out.join("assets/weapons.json"))?)?;
+    let files = report["package"]["files"]
+        .as_array_mut()
+        .context("package file inventory missing")?;
+    for name in [
+        "assets/weapons.json",
+        "map-audio-provenance.json",
+        "map-audio-refresh.json",
+    ] {
+        files.push(json!(name));
+    }
+    for sound in weapons["sounds"]
+        .as_object()
+        .context("sound inventory missing")?
+        .values()
+    {
+        files.push(json!(format!(
+            "assets/{}",
+            sound["file"].as_str().context("sound file missing")?
+        )));
+    }
+    std::fs::write(&report_path, serde_json::to_vec_pretty(&report)?)?;
+    std::fs::write(
+        out.join("map-audio-refresh.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version":1,"source_archive_sha256":src.sha256,"seed_manifest_sha256":crate::source::hash(&old_manifest),
+            "seed_import_report_sha256":crate::source::hash(&old_report),"scenes":seeds,"covered":result.covered,
+            "note":"Audio-only augmentation of a private verified seed. Original geometry/source and whole-import generation receipt are not restamped."
+        }))?,
+    )?;
+    if out.join("IMPORT-REPORT.md").is_file() {
+        use std::io::Write;
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(out.join("IMPORT-REPORT.md"))?,
+            "\n## Audio-only refresh\nSupported AudioEmitter findings above are superseded by current import-report.json and map-audio-refresh.json. Original geometry generation identity is retained."
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn applied(
+    src: &crate::source::Source,
+    rules: crate::ports::RulesPackage,
+) -> crate::ports::Applied {
+    crate::ports::Applied {
+        addon:src.name.clone(),port:"literal-map-audio".into(),status:"partial".into(),applied:true,
+        copy:"unlisted".into(),covers:vec![],values:BTreeMap::new(),files_changed:vec!["assets/weapons.json".into()],
+        rules:Some(rules),reason:None,notes:"Bounded literal AudioEmitter adaptation; unsupported semantics remain explicit diagnostics.".into(),
+        handled:Default::default(),prefs:Default::default(),replaces:vec![],
+    }
+}
+
 #[derive(Default)]
 pub struct Export {
     pub covered: BTreeMap<String, BTreeSet<usize>>,
@@ -362,7 +560,7 @@ pub fn export(
                 serde_json::to_string(&map)?
             ));
         }
-        script.push_str("[]\n}\nfn start_beds() {\nif get(\"started\") { return; }\nfor bed in map_beds() {\nlet options = #{fade:0.25};\nif bed.at != () { options.at = bed.at; }\nplay_ambient_all(bed.key, bed.track, options);\n}\nset(\"started\",true);\n}\nfn on_join(p) { start_beds(); }\nfn on_tick() { start_beds(); }\n");
+        script.push_str("[]\n}\nfn start_beds() {\nif get(\"started\") { return; }\nfor bed in map_beds() {\nlet options = #{fade:0.25};\nif bed.at != () { options.at = bed.at; }\nplay_ambient_all(bed.key, bed.track, options);\n}\nset(\"started\",true);\n}\nfn on_tick() { start_beds(); }\n");
         let rules_id = format!("{namespace}_ambience_rules");
         let rules = out
             .parent()
@@ -380,7 +578,7 @@ pub fn export(
         std::fs::write(
             rules.join("map-audio-behaviour.json"),
             serde_json::to_vec_pretty(&json!({
-                "schema_version":1,"script":"map-audio.rhai","on_join":true,"tick_interval":120,
+                "schema_version":1,"script":"map-audio.rhai","tick_interval":120,
                 "state":{"global":{"started":{"default":false,"persist":false}}},
             }))?,
         )?;
@@ -568,7 +766,9 @@ mod tests {
         let a = s
             .join("First".into(), glam::Vec3::new(0., 4., 0.), true)
             .unwrap();
-        s.step().unwrap();
+        for _ in 0..121 {
+            s.step().unwrap();
+        }
         let first = beds(&mut s, a);
         assert_eq!(first.len(), 2, "{:?}", s.package_diagnostics());
         assert!(first.iter().all(|bed| bed.at == Some([2., 3., -4.])));

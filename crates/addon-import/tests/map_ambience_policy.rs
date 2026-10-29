@@ -138,7 +138,9 @@ fn fixed_inventory_beds_join_late_join_and_unknown_map_have_actual_consumers() {
         let a = s
             .join("First".into(), Vec3::new(0., 84., 0.), true)
             .unwrap();
-        s.step().unwrap();
+        for _ in 0..121 {
+            s.step().unwrap();
+        }
         let first = beds(&mut s, a);
         let expected = m["beds"]
             .as_array()

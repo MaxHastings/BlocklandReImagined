@@ -14,6 +14,7 @@ pub mod gltf;
 mod help;
 mod hole_bots;
 mod map_audio;
+pub use map_audio::refresh as refresh_map_audio;
 mod player_types;
 pub mod porting;
 pub mod ports;

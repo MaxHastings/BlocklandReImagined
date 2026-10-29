@@ -39,6 +39,17 @@ lightmaps, through the converter that makes v20's own maps. `--v20` names a
 Blockland v20 folder for the textures and models the map borrows from it.";
 
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("map-audio") {
+        let args = std::env::args_os().skip(2).collect::<Vec<_>>();
+        if args.len() != 2 {
+            bail!(
+                "Usage: bri-import-addon map-audio ORIGINAL_MAP(.zip|folder) PRIVATE_NATIVE_MAP_COPY"
+            );
+        }
+        bri_addon_import::refresh_map_audio(&PathBuf::from(&args[0]), &PathBuf::from(&args[1]))?;
+        println!("Original map audio refreshed; geometry generation identity retained.");
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("gltf") {
         return gltf(std::env::args().skip(2));
     }

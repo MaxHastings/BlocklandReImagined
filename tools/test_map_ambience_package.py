@@ -31,10 +31,11 @@ class Palette(unittest.TestCase):
             sounds={}
             for key,row in selected.items():
                 raw=b'synthetic file-integrity sample'
-                (out/'assets/clips'/f'{key}.wav').write_bytes(raw)
-                clips.append(dict(row,processed_sha256=build_map_ambience.sha(raw),
+                name=build_map_ambience.clip_file(row)
+                (out/'assets/clips'/name).write_bytes(raw)
+                clips.append(dict(row,file='assets/clips/'+name,processed_sha256=build_map_ambience.sha(raw),
                                   source_approval=build_map_ambience.approval_receipt(registry,row['input_sha256'])))
-                sounds['map_ambience:'+key]={'file':f'clips/{key}.wav'}
+                sounds['map_ambience:'+key]={'file':'clips/'+name}
             (out/'assets/weapons.json').write_text(json.dumps({'schema_version':5,'id':'map_ambience','sounds':sounds}))
             files=lambda p:{f.relative_to(p).as_posix():build_map_ambience.sha(f.read_bytes()) for f in p.rglob('*') if f.is_file()}
             receipt={'schema_version':1,'audition_only':False,
