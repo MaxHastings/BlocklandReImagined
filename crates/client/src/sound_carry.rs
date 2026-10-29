@@ -173,7 +173,7 @@ mod tests {
         use bri_world::{Brick, ContentRef};
         use glam::Vec3;
         let box_part = |center, size| Part::Box { center, size };
-        let definition = |id: &str, footprint, plates, parts| {
+        let definition = |id: &str, footprint: [u8; 2], plates: u16, parts| {
             let collision = CollisionBody {
                 id: id.into(),
                 parts,
@@ -184,17 +184,14 @@ mod tests {
                 .shared_shape()
                 .clone();
             Definition {
-                mesh: bri_content::brick::Brick {
-                    schema_version: 1,
-                    id: id.into(),
-                    footprint_studs: footprint,
-                    height_plates: plates,
-                    attachment_rows: vec![],
-                    collision_boxes: vec![],
-                    needs_external_collision: false,
-                    coverage: None,
-                    quads: vec![],
-                },
+                mesh: bri_sim::testing::definition(
+                    id,
+                    footprint,
+                    plates,
+                    Default::default(),
+                    false,
+                )
+                .mesh,
                 collision,
                 shape,
                 indestructible: false,
@@ -210,6 +207,15 @@ mod tests {
                 (
                     "wall".into(),
                     definition("wall", [16, 1], 20, vec![box_part([0.; 3], [8., 4., 0.5])]),
+                ),
+                (
+                    "sidewall".into(),
+                    definition(
+                        "sidewall",
+                        [14, 1],
+                        20,
+                        vec![box_part([0.; 3], [7., 4., 0.5])],
+                    ),
                 ),
                 (
                     "roof".into(),
@@ -273,14 +279,17 @@ mod tests {
         let roof = sample(&mut probe, &building, now);
         assert_eq!(roof.cover, 1.0);
         assert_eq!(roof.enclosure, 0.0);
-        for (id, at, turn) in [
-            (2, [0., 2., 4.], 0),
-            (3, [0., 2., -4.], 0),
-            (4, [4., 2., 0.], 1),
-            (5, [-4., 2., 0.], 1),
+        // One-stud-thick panels have quarter-unit center offsets. The shorter
+        // sides abut the front/back panels without overlapping corner cells.
+        for (id, at, turn, name) in [
+            (2, [0., 2., 3.75], 0, "wall"),
+            (3, [0., 2., -3.75], 0, "wall"),
+            (4, [3.75, 2., 0.], 1, "sidewall"),
+            (5, [-3.75, 2., 0.], 1, "sidewall"),
         ] {
-            let mut brick = Brick::new(ContentRef::Resolved("wall".into()), at, 0);
+            let mut brick = Brick::new(ContentRef::Resolved(name.into()), at, 0);
             brick.quarter_turns = turn;
+            bri_sim::grid::Bounds::new(&brick, &definitions.entries[name].mesh).unwrap();
             world.bricks.insert(id, brick);
         }
         building.sync_world(&world).unwrap();
@@ -330,7 +339,7 @@ mod tests {
                 .into_iter()
                 .find(|p| p.owner == owner)
                 .unwrap();
-            let target = Vec3::new(4., 2., 0.);
+            let target = Vec3::from(world.bricks[&4].position);
             let flat = target - Vec3::from(player.feet);
             let yaw = flat.x.atan2(-flat.z);
             let facing = PlayerState { yaw, ..player };
