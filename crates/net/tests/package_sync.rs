@@ -1,7 +1,7 @@
 //! Stress campaign category 3 (multiplayer distribution): a clean client
 //! fetches a modded server's packages before joining. Every test builds its
 //! packages on disk from the literal files below, so each run is replayable.
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use bri_net::{
     codec,
     packages::{PackageShelf, fetch_missing},
@@ -1325,6 +1325,146 @@ async fn a_late_load_fallback_reports_previously_prepared_shared_packages_as_una
     assert_eq!(
         report.rejected, 1,
         "only the extra shared package's first Hello was refused"
+    );
+    Ok(())
+}
+
+/// Downloaded client controls can name host-only companion commands. The
+/// declaration is metadata, never a download/execute permission for rules.
+#[test]
+fn downloaded_companion_bindings_keep_host_rules_metadata_without_loading_code() -> Result<()> {
+    use bri_net::packages::{Fetched, declare_host_references};
+    use bri_package::environment::PackageRef;
+    use bri_package::packages::{PackageEntry, Side};
+    let root = tempfile::tempdir()?;
+    let dir = root.path().join("tool");
+    std::fs::create_dir(&dir)?;
+    std::fs::write(dir.join("package.json"),serde_json::json!({"schema_version":1,"id":"tool","version":"1.0.0","api":1,"name":"Tool","license":"CC0-1.0","companions":["tool-rules","tool-ui"],"dependencies":{"other-rules":"*"},"provides":[{"kind":"binds","id":"tool:binds/main","file":"binds.json"}]}).to_string())?;
+    std::fs::write(
+        dir.join("binds.json"),
+        r#"{"schema_version":1,"division":"Tool","binds":[{"name":"Copy","package":"tool-rules","command":"copy","hold":false}]}"#,
+    )?;
+    let entry = PackageEntry {
+        id: "tool".into(),
+        version: "1.0.0".into(),
+        side: Side::Client,
+        dir: "tool".into(),
+        role: None,
+    };
+    let fetched = Fetched {
+        package: PackageRef {
+            id: "tool".into(),
+            version: "1.0.0".into(),
+            side: Side::Client,
+            hash: "ab".repeat(32),
+            size: 1,
+        },
+        dir: dir.clone(),
+        downloaded: 0,
+    };
+    let ui = PackageEntry {
+        id: "tool-ui".into(),
+        version: "1.0.0".into(),
+        side: Side::Client,
+        dir: "client-ui".into(),
+        role: None,
+    };
+    let mut dirs = vec![
+        (dir.clone(), entry),
+        (root.path().join("client-ui"), ui.clone()),
+    ];
+    let (_, before) = bri_package_runtime::Catalog::load_dirs_skipping(&dirs, false);
+    assert!(
+        before.iter().any(|d| d.code == "set.binds.package"),
+        "fixture must expose the missing companion metadata"
+    );
+    declare_host_references(&mut dirs, std::slice::from_ref(&fetched));
+    assert_eq!(
+        dirs.iter().find(|(_, e)| e.id == "tool-ui").unwrap().1,
+        ui,
+        "an actual client companion is never shadowed as server-only"
+    );
+    for id in ["tool-rules", "other-rules"] {
+        assert!(
+            dirs.iter()
+                .any(|(_, e)| e.id == id && e.side == Side::Server)
+        );
+    }
+    let catalog = bri_package_runtime::Catalog::load_dirs(&dirs, false)
+        .map_err(|d| anyhow::anyhow!("{d:#?}"))?;
+    assert_eq!(catalog.packages.len(), 1);
+    assert!(!catalog.packages.contains_key("tool-rules"));
+    // No arbitrary target is invented unless the downloaded manifest declares it.
+    std::fs::write(
+        dir.join("binds.json"),
+        r#"{"schema_version":1,"division":"Tool","binds":[{"name":"Copy","package":"undeclared-rules","command":"copy","hold":false}]}"#,
+    )?;
+    let (_, problems) = bri_package_runtime::Catalog::load_dirs_skipping(&dirs, false);
+    assert!(problems.iter().any(|d| d.code == "set.binds.package"));
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires generated ToolNewDuplicator content; run with BRI_CONTENT"]
+fn downloaded_newduplicator_controls_resolve_the_actual_server_companion() -> Result<()> {
+    use bri_net::packages::{Fetched, declare_host_references};
+    use bri_package::environment::PackageRef;
+    use bri_package::packages::{PackageEntry, Side};
+    let root = std::env::var_os("BRI_CONTENT")
+        .map(std::path::PathBuf::from)
+        .context("set BRI_CONTENT to generated content")?;
+    let dir = root.join("addons/tool_newduplicator");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("package.json"))?)?;
+    ensure!(
+        manifest["companions"]
+            .as_array()
+            .is_some_and(|c| c.iter().any(|v| v == "tool_newduplicator-rules")),
+        "test actual imported companion declaration"
+    );
+    let fetched = Fetched {
+        package: PackageRef {
+            id: "tool_newduplicator".into(),
+            version: "1.0.0".into(),
+            side: Side::Shared,
+            hash: "ab".repeat(32),
+            size: 1,
+        },
+        dir: dir.clone(),
+        downloaded: 0,
+    };
+    let mut dirs = vec![(
+        dir,
+        PackageEntry {
+            id: "tool_newduplicator".into(),
+            version: "1.0.0".into(),
+            side: Side::Shared,
+            dir: "addons/tool_newduplicator".into(),
+            role: None,
+        },
+    )];
+    declare_host_references(&mut dirs, &[fetched]);
+    let catalog = bri_package_runtime::Catalog::load_dirs(&dirs, false)
+        .map_err(|d| anyhow::anyhow!("{d:#?}"))?;
+    let binds: Vec<_> = catalog.packages["tool_newduplicator"]
+        .binds
+        .values()
+        .flat_map(|b| &b.binds)
+        .collect();
+    ensure!(
+        !binds.is_empty()
+            && binds
+                .iter()
+                .all(|b| b.package == "tool_newduplicator-rules"),
+        "real controls target the host companion"
+    );
+    ensure!(
+        !catalog.packages.contains_key("tool_newduplicator-rules"),
+        "no host-only rules loaded on client"
+    );
+    eprintln!(
+        "validated {} actual ToolNewDuplicator companion bindings",
+        binds.len()
     );
     Ok(())
 }

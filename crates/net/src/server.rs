@@ -1533,6 +1533,11 @@ impl VoiceRouting {
                             .is_some_and(|(from, to)| crate::voice::audible(from, to, route.range)))
             });
             let old = self.sent.get(id);
+            // A host without voice has no routing state to announce. Keep
+            // revocation messages when a previously active table is cleared.
+            if current.is_empty() && old.is_none() && !session.voice_chat() {
+                continue;
+            }
             if old.is_some_and(|t| {
                 t.routes.len() == current.len()
                     && current
