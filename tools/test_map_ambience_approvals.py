@@ -24,7 +24,8 @@ class Approvals(unittest.TestCase):
                 'test:map/sound/river': {'file': 'map-audio/test.wav'}}}))
             receipt_path = package / 'map-audio-provenance.json'
             receipt = {'schema_version': 1, 'sources': [
-                {'profile': 'test:map/sound/river', 'sha256': sha}]}
+                {'profile': 'test:map/sound/river', 'sha256': sha,
+                 'ambient_key':'map_audio/'+hashlib.sha256(b'test:map/sound/river').hexdigest()[:20]}]}
             receipt_path.write_text(json.dumps(receipt))
             registry = {'schema_version': 1, 'sources': [
                 {'id': 'test:river', 'input_sha256': sha, 'state': 'pending', 'approval_evidence': None}]}
@@ -36,6 +37,12 @@ class Approvals(unittest.TestCase):
             registry['sources'][0]['approval_evidence'] = 'Synthetic test-only explicit source choice'
             registry_path.write_text(json.dumps(registry))
             self.assertEqual(original_map_problems(root, package), [])
+            valid_key=receipt['sources'][0]['ambient_key']
+            receipt['sources'][0]['ambient_key']='x'*33
+            receipt_path.write_text(json.dumps(receipt))
+            self.assertIn('stale bounded ambient key',';'.join(original_map_problems(root,package)))
+            receipt['sources'][0]['ambient_key']=valid_key
+            receipt_path.write_text(json.dumps(receipt))
             (clips / 'test.wav').write_bytes(b'unapproved replacement')
             self.assertIn('differs from its source receipt', ';'.join(original_map_problems(root, package)))
             (clips / 'test.wav').write_bytes(raw)

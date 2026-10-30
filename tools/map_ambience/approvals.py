@@ -46,6 +46,9 @@ def original_map_problems(repo, directory):
             return ['Unsupported ambience approval registry schema']
         out = []
         for key, row in expected.items():
+            wanted_key='map_audio/'+hashlib.sha256(key.encode()).hexdigest()[:20]
+            if row.get('ambient_key')!=wanted_key:
+                out.append(f'{key}: missing or stale bounded ambient key; refresh with the current map-audio converter')
             relative = Path(restored[key]['file'])
             assets = (directory / 'assets').resolve()
             clip = (assets / relative).resolve()
