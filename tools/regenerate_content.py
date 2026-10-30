@@ -84,7 +84,10 @@ STEP_INPUTS = {
     'brick_materials': ([], CONVERT, ['docs/vanilla-inventory.json'], 1),
     'avatar': (['geometry', 'ui_pack'], CONVERT, [], 1),
     'effects': ([], CONVERT, ['docs/vanilla-inventory.json'], 1),
-    'weapons': ([], [('cargo', 'bri-weapons-import')], ['assets/blockhead-footsteps', 'assets/blockhead-jets'], 2),
+    'weapons': ([], [('cargo', 'bri-weapons-import')],
+                ['assets/blockhead-footsteps', 'assets/blockhead-jets',
+                 'tools/prepare_tool_swishes.py', 'tools/tool_swishes/sources.json',
+                 'tools/tool_swishes/policy.json'], 3),
     'weapon_debris': (['weapons'], [('manifest', WEAPON_DEBRIS)], [], 1),
     'effects_runtime': (['effects', 'weapons'],
                         [('cargo', 'bri-fx-import'), ('manifest', WEAPON_EFFECTS)], [], 1),
@@ -616,6 +619,8 @@ class Pipeline:
 
     def weapons(self):
         run(self.bin('bri-weapons-import'), self.v20, CORE, DAMAGE_TYPES, self.pack('weapons'))
+        run(sys.executable, REPO / 'tools/prepare_tool_swishes.py',
+            '--augment-weapons', self.pack('weapons'), '--download')
 
     def weapon_debris(self):
         run(self.bin('bri-weapon-debris-import'), self.v20, self.pack('weapons') / 'weapons.json',
