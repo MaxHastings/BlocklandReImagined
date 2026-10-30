@@ -35,6 +35,14 @@ the ZIP is corrupt. A map can require original sky or terrain files absent
 from its ZIP; that needs the correct source assets or a converter correction,
 not a rewrite of the map in Rhai.
 
+Old map paths `~/data/...` refer to vanilla `base/data/...`; paths such as
+`~/Map_Slate/...` still refer to Add-Ons. Automatic map imports can reuse an
+exact matching vanilla sky from the installed game's native map bundle,
+checking its original image hashes and dimensions. The imported map keeps
+its own fog, solid sky colour, texture flag and cloud motion. This does not
+substitute another sky when resources are absent, or supply unrelated missing
+terrain textures, models or scripted map behaviour.
+
 Many v20 Add-Ons keep part of what they do in scripts: a shotgun's spread,
 a slash command. The report lists each such function under **Needs
 behaviour**. When someone has made a native **port** of that Add-On, the

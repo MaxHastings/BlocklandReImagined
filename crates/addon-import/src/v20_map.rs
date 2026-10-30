@@ -91,7 +91,12 @@ fn borrowed(input: &Path, stem: &str) -> Result<Vec<String>> {
         let starts = lower
             .match_indices("add-ons/")
             .map(|(at, m)| at + m.len())
-            .chain(lower.match_indices("~/").map(|(at, m)| at + m.len()));
+            .chain(
+                lower
+                    .match_indices("~/")
+                    .filter(|(at, _)| !lower[*at..].starts_with("~/data/"))
+                    .map(|(at, m)| at + m.len()),
+            );
         for start in starts {
             let name: String = text[start..]
                 .chars()
@@ -108,6 +113,10 @@ fn borrowed(input: &Path, stem: &str) -> Result<Vec<String>> {
 }
 
 pub fn import(opts: &Options) -> Result<Imported> {
+    import_with_installed(opts, None)
+}
+
+pub(crate) fn import_with_installed(opts: &Options, installed: Option<&Path>) -> Result<Imported> {
     ensure!(
         !opts.out.exists(),
         "{} already exists; give a new folder",
@@ -264,13 +273,25 @@ pub fn import(opts: &Options) -> Result<Imported> {
     let mut files = 0;
     for (k, mission) in chosen.iter().enumerate() {
         let bundle_dir = scratch.0.join(format!("bundle{k}"));
-        bri_convert::map_bundle::run(vec![
+        let mut args = vec![
             root.to_string_lossy().into_owned(),
             converted.to_string_lossy().into_owned(),
             bundle_dir.to_string_lossy().into_owned(),
             "--stand-in-missing-terrain-textures".into(),
             mission.clone(),
-        ])
+        ];
+        if let Some(content) = installed {
+            let set = bri_package::packages::PackageSet::load_root(content)?;
+            if set
+                .packages
+                .iter()
+                .any(|p| p.role.as_deref() == Some("map_bundle"))
+            {
+                let bundle = set.role_dir(content, "map_bundle")?;
+                args.extend(["--sky-bundle".into(), bundle.to_string_lossy().into_owned()]);
+            }
+        }
+        bri_convert::map_bundle::run(args)
         .with_context(|| {
             format!(
                 "packaging {mission}{}",

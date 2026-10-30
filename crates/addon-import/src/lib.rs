@@ -350,16 +350,19 @@ fn is_map_addon(src: &source::Source) -> bool {
 /// `--reference` as the v20 install its missions borrow from; its report
 /// names the maps it made.
 fn import_map(opts: &Options, src: &source::Source) -> Result<Report> {
-    let made = v20_map::import(&v20_map::Options {
-        input: opts.input.clone(),
-        out: opts.out.clone(),
-        v20: opts.reference.clone(),
-        mission: None,
-        // The package id every import gives an Add-On: its whole name.
-        id: Some(namespace_for(&src.name)?),
-        name: None,
-        version: opts.version.clone(),
-    })?;
+    let made = v20_map::import_with_installed(
+        &v20_map::Options {
+            input: opts.input.clone(),
+            out: opts.out.clone(),
+            v20: opts.reference.clone(),
+            mission: None,
+            // The package id every import gives an Add-On: its whole name.
+            id: Some(namespace_for(&src.name)?),
+            name: None,
+            version: opts.version.clone(),
+        },
+        opts.installed.as_deref(),
+    )?;
     // The release bundle verifies the same pinned source identity for maps
     // as for every other imported Add-On, independently of the report.
     let manifest_path = opts.out.join("package.json");
