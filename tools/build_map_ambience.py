@@ -17,6 +17,7 @@ import tempfile
 import generated_addons
 from map_ambience.approvals import source_problems
 from map_ambience.processing import recessed_loop
+from map_ambience.sources import ensure_master
 import prepare_map_ambience_audition as beds
 import prepare_map_ambience_details as details
 
@@ -144,8 +145,9 @@ def build(cache, output, content, download=False, audition_only=False):
         raise ValueError('refusing to overwrite a folder not owned by this generator')
     with tempfile.TemporaryDirectory(prefix='bri-ambience-') as folder:
         staged = Path(folder)
-        bed_rows = beds.build(cache, staged, content, download)
-        detail_rows = details.build(cache, staged / 'details')
+        needed_beds={r['prepared_key'] for r in selected.values() if r['kind']=='bed'}
+        bed_rows = beds.build(cache, staged, content, download, selected_keys=needed_beds)
+        detail_rows = details.build(cache, staged / 'details',selected_only=True,download=download)
         bed_rows = {r['key']: r for r in bed_rows}
         detail_rows = {r['file'][:-4]: r for r in detail_rows}
         output.mkdir(parents=True, exist_ok=True)
@@ -160,7 +162,7 @@ def build(cache, output, content, download=False, audition_only=False):
             is_bed = row['kind'] in {'bed','local'}
             source = staged / ('loops' if is_bed else 'details') / (row.get('prepared_key',key)+'.wav')
             if row['kind'] == 'local':
-                original = (cache/row['input']).read_bytes()
+                original = ensure_master(row,cache,download).read_bytes()
                 if sha(original) != row['input_sha256']:
                     raise ValueError('fridge source changed')
                 raw,_,processing = beds.prepare(original,-35)

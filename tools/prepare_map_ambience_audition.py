@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import shutil
 from urllib.request import urlopen
+from urllib.error import URLError
 
 HERE = Path(__file__).resolve().parent / 'map_ambience'
 LEVELS = {'room': -40, 'fridge': -35, 'dry-air': -36, 'cold-air': -34,
@@ -69,7 +70,7 @@ def prepare(raw, target_db):
     }
 
 
-def build(cache, output, content, download=False):
+def build(cache, output, content, download=False, selected_keys=None):
     catalog = json.loads((HERE / 'candidates.json').read_text(encoding='utf-8'))
     maps = json.loads((HERE / 'maps.json').read_text(encoding='utf-8'))['maps']
     output.mkdir(parents=True, exist_ok=True)
@@ -78,6 +79,8 @@ def build(cache, output, content, download=False):
         (output / sub).mkdir(exist_ok=True)
     receipt = []
     for row in catalog['clips']:
+        if selected_keys is not None and row['key'] not in selected_keys:
+            continue
         path = cache / row['input']
         if not path.exists():
             if not download:
@@ -85,8 +88,11 @@ def build(cache, output, content, download=False):
             url = row['preview_url']
             if not url.startswith('https://cdn.freesound.org/previews/'):
                 raise ValueError('unexpected preview origin')
-            with urlopen(url, timeout=45) as response:
-                raw = response.read(32 * 1024 * 1024 + 1)
+            try:
+                with urlopen(url, timeout=45) as response:
+                    raw = response.read(32 * 1024 * 1024 + 1)
+            except URLError as error:
+                raise ValueError(f"{row['key']}: approved source download unavailable ({error}); provide pinned cache file {path}, SHA256 {row['input_sha256']}. No alternate source was adopted.") from error
             if len(raw) > 32 * 1024 * 1024:
                 raise ValueError('preview exceeds 32MiB')
             if sha(raw) != row['input_sha256']:
@@ -119,6 +125,8 @@ def build(cache, output, content, download=False):
         shutil.copyfile(source, output / image)
         layers = []
         for key in row['candidates']:
+            if key not in by_key:
+                continue
             recording = by_key[key]
             layers.append(f'<p>{html.escape(recording["title"])} — {html.escape(recording["author"])}'
                           f' · CC0 · <a href="{html.escape(recording["source"])}">source/original download</a><br>'

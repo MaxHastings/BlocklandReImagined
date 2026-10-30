@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from map_ambience.sources import ensure_master
 
 HERE = Path(__file__).resolve().parent / 'map_ambience'
 RATE = 48000
@@ -17,7 +18,7 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def build(cache, output):
+def build(cache, output, selected_only=False, download=False):
     import numpy as np
     import soundfile as sf
     from scipy.signal import butter, sosfilt, resample_poly
@@ -30,7 +31,7 @@ def build(cache, output):
 
     def source(key, seconds=None, rms_db=-34, mono=False):
         row = by_key[key]
-        path = cache / row['input']
+        path = ensure_master(row,cache,download)
         if sha(path) != row['input_sha256']:
             raise ValueError(f'{key}: original recording changed')
         pcm, rate = sf.read(path, dtype='float64', always_2d=True)
@@ -68,11 +69,13 @@ def build(cache, output):
 
     robin, r = source('robin', rms_db=-29, mono=True)
     blackbird, b = source('blackbird', rms_db=-29, mono=True)
+    write('bird-robin', robin, [r], 'Whole original call, mono, gentle edge fades; no pitch change.')
+    write('bird-blackbird', blackbird, [b], 'Whole original call, mono, gentle edge fades; no pitch change.')
+    if selected_only:
+        return receipts
     cricket, c = source('cricket', seconds=7, rms_db=-33, mono=True)
     grass, g = source('grass-master', seconds=18, rms_db=-36)
     fridge, f = source('fridge-master', seconds=14, rms_db=-35, mono=True)
-    write('bird-robin', robin, [r], 'Whole original call, mono, gentle edge fades; no pitch change.')
-    write('bird-blackbird', blackbird, [b], 'Whole original call, mono, gentle edge fades; no pitch change.')
     write('cricket-phrase', cricket, [c], 'First7s excerpt, mono, gentle edge fades; alternative detail, never stacked over Forest Dark original crickets.')
     write('grass-movement', grass, [g], 'First18s excerpt, stereo; foliage-local texture candidate.')
     write('fridge-local', fridge, [f], 'First14s excerpt, mono; localized appliance candidate, not a map-wide bed.')

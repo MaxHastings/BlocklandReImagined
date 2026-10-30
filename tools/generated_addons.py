@@ -19,6 +19,7 @@ RECIPES = {
                    'tools/map_ambience/followup-selections.json',
                    'tools/map_ambience/priority-slots.json',
                    'tools/map_ambience/processing.py',
+                   'tools/map_ambience/sources.py',
                    'tools/map_ambience/candidates.json', 'tools/map_ambience/masters.json',
                    'tools/map_ambience/maps.json', 'tools/map_ambience/palette.json',
                    'tools/map_ambience/package.json', 'tools/map_ambience/rules-package.json', 'tools/map_ambience/behaviour.json',
