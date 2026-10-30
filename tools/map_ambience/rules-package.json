@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "map_ambience_rules",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Map Ambience Policy",
+  "description": "Server-only universal indoor/outdoor base selection with the Storm exception and a measured local fridge; no random environmental details.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "dependencies": {
+    "map_ambience": "^1.0.0"
+  },
+  "capabilities": [
+    "effects"
+  ],
+  "provides": [
+    {
+      "kind": "behaviour",
+      "id": "map_ambience_rules:behaviour/policy",
+      "file": "behaviour.json"
+    },
+    {
+      "kind": "script",
+      "id": "map_ambience_rules:script/policy",
+      "file": "ambience.rhai"
+    },
+    {
+      "kind": "script",
+      "id": "map_ambience_rules:script/palette",
+      "file": "palette.rhai"
+    }
+  ]
+}

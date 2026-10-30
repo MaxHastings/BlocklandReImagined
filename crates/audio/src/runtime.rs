@@ -330,6 +330,16 @@ impl AudioRuntime {
         self.send(Command::SetVoiceHearing { handle, hearing })
     }
 
+    /// Smooth listener-side gain/muffling on the existing voice, without
+    /// replacing its clip, cursor, playback envelope or authored placement.
+    pub fn set_voice_acoustics(
+        &mut self,
+        handle: SoundHandle,
+        acoustics: crate::acoustics::Acoustics,
+    ) -> Result<(), AudioError> {
+        self.send(Command::SetVoiceAcoustics { handle, acoustics })
+    }
+
     /// The room sound effects ring in: how much reverb returns and how long
     /// the tail lasts. The engine glides to a new room; [`Room::DRY`] ends it.
     pub fn set_reverb(&mut self, room: crate::reverb::Room) -> Result<(), AudioError> {

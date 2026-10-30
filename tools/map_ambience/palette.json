@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "status": "Two user-selected universal bases; Storm retained; only localized fridge/waterfall/shore extras",
+  "detail_gap_seconds": [
+    35,
+    85
+  ],
+  "maps": [
+    {
+      "map": "v20/add-ons/map_bedroom/bedroom.mis",
+      "name": "Bedroom",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_bedroomdark/bedroomdark.mis",
+      "name": "Bedroom - Dark",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_construct/construct.mis",
+      "name": "Construct",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_destruct/destruct.mis",
+      "name": "Destruct",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_halloween_slate/halloweenslate.mis",
+      "name": "Halloween Slate",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_kitchen/kitchen.mis",
+      "name": "Kitchen",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": [
+        {
+          "clip": "fridge-loop",
+          "at": [
+            -382.75,
+            170.284,
+            288.171
+          ],
+          "evidence": {
+            "scene_sha256": "3312866bced2b2dcb3cd57de106b7a8aaacaf143b7f982677b1de770270ee928",
+            "interior_sha256": "2a364c0ef311a2199308fa6cda7e2f284cfdfc13c51998fe5c352a3d6c34da9f",
+            "material": "FRIDGE1",
+            "surface_source_index": 2131,
+            "method": "Area-weighted authored triangle centroids on largest FRIDGE1 surface, transformed by native interior matrix."
+          }
+        }
+      ]
+    },
+    {
+      "map": "v20/add-ons/map_kitchendark/kitchendark.mis",
+      "name": "Kitchen - Dark",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": [
+        {
+          "clip": "fridge-loop",
+          "at": [
+            -382.75,
+            170.284,
+            288.171
+          ],
+          "evidence": {
+            "scene_sha256": "d2d3a7be9e868294b8d4188882dc532139782c8b85b562da5f4f5e0ab81f3209",
+            "interior_sha256": "2a364c0ef311a2199308fa6cda7e2f284cfdfc13c51998fe5c352a3d6c34da9f",
+            "material": "FRIDGE1",
+            "surface_source_index": 2131,
+            "method": "Area-weighted authored triangle centroids on largest FRIDGE1 surface, transformed by native interior matrix."
+          }
+        }
+      ]
+    },
+    {
+      "map": "v20/add-ons/map_skylands/skylands.mis",
+      "name": "Skylands",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_slate/slate.mis",
+      "name": "Slate",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_slate_desert/slatedesert.mis",
+      "name": "Slate Desert",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
+      "name": "Slate Sea Revised",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
+      "name": "Slate Storm Revised",
+      "beds": [
+        "rain"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_slopes/slopes.mis",
+      "name": "The Slopes",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "v20/add-ons/map_tutorial/tutorial.mis",
+      "name": "Tutorial",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "map_arcticchallenge3:map/map_arcticchallenge3",
+      "name": "Arctic Challenge v3",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "map_creek:map/map_creek",
+      "name": "Creek",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "map_emeraldisles4:map/map_emeraldisles4",
+      "name": "Emerald Isles 4",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "map_forest:map/forest",
+      "name": "Forest",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "anchor_evidence": {
+        "reference": "addons/map_forest/map/forest/f3b7280895e208bf1aa35989fe6b91aa1689da60af58bb09434188d2b8ea8a8e.scene.json",
+        "sha256": "b6106a2ea10ecf07fc6faff22c5172167b85def9500634aa9540dba98b07fc70",
+        "selection": "Exact authored native translations of oak static models; no guessed position/height offsets."
+      },
+      "locals": []
+    },
+    {
+      "map": "map_forest:map/forestnight",
+      "name": "Forest - Dark",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "map_paradise:map/gsf_paradise",
+      "name": "GSF Paradise",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    },
+    {
+      "map": "map_paradise:map/gsf_paradise_night",
+      "name": "GSF Paradise-Night",
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
+      "details": [],
+      "anchors": [],
+      "locals": []
+    }
+  ]
+}

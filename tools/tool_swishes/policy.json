@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "profile": "bri:foley/tools/swing",
+  "targets": [
+    {
+      "image": "v20.image.hammerimage",
+      "state": "Fire"
+    },
+    {
+      "image": "v20.image.wrenchimage",
+      "state": "Fire"
+    }
+  ],
+  "volume": 1.0,
+  "variants": [
+    {
+      "profile": "bri:foley/tools/tool-swish-a",
+      "weight": 1.0
+    },
+    {
+      "profile": "bri:foley/tools/tool-swish-b",
+      "weight": 1.0
+    },
+    {
+      "profile": "bri:foley/tools/tool-swish-c",
+      "weight": 1.0
+    }
+  ]
+}

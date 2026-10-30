@@ -1,37 +1,41 @@
 # Status
 
-Current release and engineering decisions. Reviewed 2026-10-29. Players should
+Current release and engineering decisions. Reviewed 2026-10-30. Players should
 start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 [known issues](KNOWN-ISSUES.md). Dated development receipts are in
 [progress/](progress/README.md); older history is in [progress.md](progress.md).
 
 ## Release state
 
+Published release: [v0.4.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.2),
+published October 30, 2026 at 04:22:56 AM America/Chicago, from
+`93c1439dacea2c6bce19ca735195bb0f6b944daa`. Windows x86-64,
+Apple-silicon macOS and Linux x86-64 ZIPs and SHA256SUMS are public. Every
+public download matches its tested artifact, the tag names the tested source,
+and the latest-release endpoint returns v0.4.2. Published assets stay immutable.
+
+This release integrates bot/navigation recovery, brick destruction contact,
+approved indoor/outdoor map ambience and tool swings, the accepted small
+original-texture water glare change, and bounded Add-On/map import compatibility
+fixes. Maxwell approved the combined warm playtest and final ambience mix.
+PRs #403-#410 are merged. The exact-source full release gate passed all 528
+test binaries without retries, the actual 23-save corpus and both performance
+budgets; all three native platform package/startup jobs passed. See the
+[release notes](releases/v0.4.2.md) and
+[publication receipt](progress/2026-10-30-v042-public-release.md) for actual
+commands, source/content provenance, retained failures, archive hashes and
+cleanup evidence. Full alpha remains incomplete; compatibility warnings still
+describe unsupported legacy scripts and map objects.
+
 Use the [latest published release](https://github.com/MaxHastings/BlocklandReImagined/releases/latest)
 for downloads, its exact source tag and release notes. Repository source
 can be ahead of that build; source checks alone are not a new publication.
 
-Published release: [v0.4.1 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.1),
-published October 28, 2026 at 11:59:59 PM America/Chicago, from
-`4db7796916d8b023aa512374334973a5574ef040`. Windows x86-64,
-Apple silicon macOS and Linux x86-64 archives and SHA256SUMS are available.
-The source tag remains fixed. On October 29, Maxwell authorized replacing the
-Mac ZIP on this release to add the missing microphone permission description
-and renew the app signatures. Its executable code and content are unchanged;
-Windows/Linux assets retain their original hashes. SHA256SUMS and the public
-release note identify the corrected Mac package. See the
-[Mac correction receipt](progress/2026-10-29-macos-microphone-permission.md).
-Published tags and assets otherwise stay immutable.
-
-This release integrates the four active work streams: package-owned voice
-conversations and speaker HUD, independent tank gunner aim, human-only ordinary
-player/admin lists with bot team assignment preserved, and physical collapse
-recovery after temporary capacity pressure. Release checks also corrected
-missing NPC voice state and declared server companion interfaces during joins.
-See the [release notes](releases/v0.4.1.md) and
-[publication receipt](progress/2026-10-29-v041-public-release.md) for the full gate, matching CI,
-23-save coverage, performance budgets, actual archive/startup checks and public
-asset digests. Full alpha and interactive acceptance remain open.
+Previous [v0.4.1 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.1)
+remains unchanged at `4db7796916d8b023aa512374334973a5574ef040`.
+Its [release notes](releases/v0.4.1.md) and
+[publication receipt](progress/2026-10-29-v041-public-release.md) retain that
+release's feature, validation and cleanup history.
 
 Earlier [v0.3.6](progress/2026-10-23-v036-public-release.md) and
 [v0.3.5](progress/2026-10-23-v035-public-release.md) receipts remain historical.

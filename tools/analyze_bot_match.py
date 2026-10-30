@@ -120,7 +120,11 @@ def summarize(report):
             # Deliberate combat strafing and observation pauses are not stuck travel.
             travelling = s["behaviour"] in ("objective", "chase", "search", "interact", "explore", "return")
             no_route = not s.get("next") and not s.get("searching") and travelling
-            candidate = not vital.get("mounted") and (walking or no_route) and s.get("visible") is None and s.get("goal") is not None and point is not None
+            # A visible enemy does not explain stalled objective travel: a
+            # committed delivery still walks its route while firing back.
+            # Retain that evidence; deliberate fighting/strafe is excluded by
+            # the selected behaviour rather than by visibility alone.
+            candidate = not vital.get("mounted") and travelling and (walking or no_route) and s.get("goal") is not None and point is not None
             candidate = candidate and horizontal(point, s["goal"]) > 3
             detail = s.get("objective_detail")
             candidate = candidate and not s.get("goof") and not (isinstance(detail, dict) and detail.get("phase") == "waiting")
@@ -133,6 +137,7 @@ def summarize(report):
                         "first_second": s["second"], "last_second": s["second"],
                         "position": point, "behaviour": s["behaviour"], "goal": s["goal"],
                         "short": s.get("short"), "objective_diagnostic": s.get("objective_diagnostic"),
+                        "visible": s.get("visible"), "acted": s.get("acted"),
                         "intent": "walking" if walking else "no route",
                     }
                 else:

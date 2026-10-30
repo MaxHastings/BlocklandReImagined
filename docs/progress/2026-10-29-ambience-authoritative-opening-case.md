@@ -1,0 +1,7 @@
+# 2026-10-29 Authoritative brick opening acceptance case
+
+Extended the existing live geometry enclosure test through an actual synthetic-content Session hammer swing. A sealed room is copied to authoritative simulation; the ordinary equipped hammer trigger targets a wall; the case requires its real deletion and BrickKill cue, then syncs resulting brick state into the same client Building query. A stationary enclosure probe must observe the opening and the positional source path must clear. Restoring the fixture must close the enclosure again before the existing window/rafter tests continue. No production gameplay/destruction code or limits changed.
+
+This closes the previous test-plan gap where direct PublicWorld deletion only tested geometry invalidation. The new assertion is **uncompiled/unrun** until root brokers it; it is not actual source-game fidelity or interactive acceptance. Existing bounded filter: `cargo test -p bri-client --lib -- sound_carry` (root warm capacity only). Local rustfmt and diff check pass. No cold Cargo target or GPU/play session launched.
+
+Also corrected the earlier client fixture-scope mistake in7328f474: the actual consumer test now resides inside audio::tests with its private Pack fixture. Root is currently validating that immutable source; new opening-test source can follow in the consolidated remaining validation. Twelve-source palette remains frozen.

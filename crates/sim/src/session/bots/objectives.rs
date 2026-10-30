@@ -778,6 +778,10 @@ impl State {
     /// delivery for a minute makes a carrier abandon it to chase enemies.
     pub(super) fn navigation_failed(&mut self, tick: u64, reason: &'static str) {
         self.fail_for(tick, reason, UNREACHED_TICKS);
+        // Revisit alternatives on the ordinary planning cadence, while the
+        // failed approach is still excluded. Waiting until its exclusion
+        // expires makes the same cheaper unreachable action win every turn.
+        self.next = tick.saturating_add(REPLAN_TICKS);
     }
     fn fail_for(&mut self, tick: u64, reason: &'static str, retry: u64) {
         self.paused = false;

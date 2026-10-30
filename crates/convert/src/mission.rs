@@ -45,7 +45,9 @@ fn transform(p: &BTreeMap<String, String>) -> Result<[f32; 16]> {
     )
     .to_cols_array())
 }
-pub(crate) fn reference(source: &str, path: &str) -> Result<String> {
+/// Resolve an authored mission path without searching other packages.
+/// Older missions retain core `~/data/...` paths as well as `~/Map_...`.
+pub(crate) fn asset_path(source: &str, path: &str) -> Result<String> {
     let path = path.replace('\\', "/");
     let resolved = if let Some(local) = path.strip_prefix("./") {
         format!(
@@ -56,6 +58,11 @@ pub(crate) fn reference(source: &str, path: &str) -> Result<String> {
                 .0,
             local
         )
+    } else if path
+        .get(..7)
+        .is_some_and(|p| p.eq_ignore_ascii_case("~/data/"))
+    {
+        format!("base/{}", &path[2..])
     } else if let Some(local) = path.strip_prefix("~/") {
         // Torque's tilde is the script's mod root, e.g. Add-Ons for a map.
         format!(
@@ -77,7 +84,11 @@ pub(crate) fn reference(source: &str, path: &str) -> Result<String> {
                 .all(|s| !s.is_empty() && s != ".." && s != "."),
         "Unsafe mission asset reference"
     );
-    Ok(format!("v20/{}", resolved.to_lowercase()))
+    Ok(resolved)
+}
+
+pub(crate) fn reference(source: &str, path: &str) -> Result<String> {
+    Ok(format!("v20/{}", asset_path(source, path)?.to_lowercase()))
 }
 struct Parser {
     tokens: Vec<Token>,
@@ -358,5 +369,14 @@ mod tests {
             "v20/add-ons/map_slate/slate.dif"
         );
         assert!(reference("Add-Ons/Map_Test/test.mis", "~/../escape.dif").is_err());
+        assert_eq!(
+            reference(
+                "Add-Ons/Map_Test/test.mis",
+                "~/data/skies/Shared/resource.dml"
+            )
+            .unwrap(),
+            "v20/base/data/skies/shared/resource.dml"
+        );
+        assert!(reference("Add-Ons/Map_Test/test.mis", "~/data/../../escape.dif").is_err());
     }
 }

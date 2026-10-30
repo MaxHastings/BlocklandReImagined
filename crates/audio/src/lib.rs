@@ -9,6 +9,7 @@
 //!
 //! Coordinates are native right-handed Y-up world units. See the crate README.
 
+pub mod acoustics;
 pub mod bank;
 pub mod command;
 pub mod decode;
@@ -25,6 +26,7 @@ pub mod voice;
 mod voice_device;
 pub mod wav;
 
+pub use acoustics::Acoustics;
 pub use bank::{BankOptions, ClipData, SoundAsset, SoundBank, Sustain};
 pub use command::{AudioEvent, CullReason, EntityKey, Placement, SoundHandle, VolumeControl};
 pub use engine::{EngineConfig, VoicePolicy};

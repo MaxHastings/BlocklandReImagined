@@ -4,8 +4,8 @@
 //! proves the cues are emitted; a cue the client cannot resolve is the
 //! "missing sound or particle" a player notices.
 use anyhow::Result;
-use bri_audio::{BankOptions, SoundBank};
-use bri_client::weapon_effects::WeaponEffects;
+use bri_audio::{BankOptions, OutputKind, SoundBank};
+use bri_client::{audio::ClientAudio, weapon_effects::WeaponEffects};
 use std::{path::Path, sync::Arc};
 
 fn content(role: &str) -> std::path::PathBuf {
@@ -25,12 +25,26 @@ fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
     let mut fx = WeaponEffects::new(effects, weapons.clone(), Default::default())?;
     fx.set_palette(&[[1.0, 0.0, 0.0, 1.0]]);
     let bank = SoundBank::load(content("audio"), &BankOptions::default())?;
+    // Native package sounds (including weighted tool swings) are decoded by
+    // the same adapter as gameplay, then fall back to the legacy sound bank.
+    let mut audio = ClientAudio::load(
+        &content("audio"),
+        &mut bri_ui::api::Settings::default(),
+        OutputKind::Offline,
+    )?;
+    audio.set_pack_sounds(&weapons, &content("weapons"));
     let mut gaps = Vec::new();
     let mut sound = |owner: &str, name: &str| {
-        if !name.is_empty() && bank.resolve(name).is_err() {
+        if !name.is_empty() && !audio.has_sound(name) {
             gaps.push(format!("{owner}: sound {name} does not resolve"));
         }
     };
+    // A playable first choice must not conceal a missing alternative.
+    for (profile, definition) in &weapons.sounds {
+        for variant in &definition.variants {
+            sound(profile, &variant.profile);
+        }
+    }
     for image in weapons.images.values() {
         for state in &image.states {
             sound(&format!("{} {}", image.name, state.name), &state.sound);

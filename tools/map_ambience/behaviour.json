@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "script": "ambience.rhai",
+  "modules": [
+    "palette.rhai"
+  ],
+  "tick_interval": 120,
+  "state": {
+    "global": {
+      "started": {
+        "default": false,
+        "persist": false
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# 2026-10-29 Legal brick room fixture correction
+
+Warm broker7328 compiled the client successfully and ran sound_carry4tests:3passed; live geometry failed at the wall sync with `Brick is off the stud/plate grid`. No ambient-handle test ran after that stop. The failure was the one-stud-thick wall centers, not the roof: odd stud widths need quarter-unit center offsets. Corrected to legal front/back centers±3.75 and shorter side panels that abut without overlapping corner occupancy. Each wall is explicitly checked through the existing Bounds::new rules. Fixture meshes now reuse the existing valid synthetic definition helper for attachment rows, while retaining the authored test collision compounds for windows/rafters. No production placement rule or assertion weakened.
+
+The authoritative hammer case remains included and unverified pending root's warm rerun. Local rustfmt/diff check pass; no Cargo/GPU process launched. Root observed Maxwell in a bot preview and held its importer broker before starting builds; this lane obeys the playtest resource hold. Required runtime/geometry/mix and private preview work remain, with12source palette frozen.

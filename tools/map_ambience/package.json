@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "map_ambience",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Map Ambience",
+  "description": "Two user-selected interior/exterior bases, unchanged storm ambience and a measured local fridge. Waterfall and shore playback stay with original map packages.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "LicenseRef-Approved-Ambience-Sources",
+  "provenance": {
+    "source": "See map-ambience-generated.json for recording authors, direct sources, quality, hashes and approvals."
+  },
+  "provides": [
+    {
+      "kind": "weapons",
+      "id": "map_ambience:weapons/palette",
+      "file": "assets/weapons.json"
+    }
+  ],
+  "companions": [
+    "map_ambience_rules"
+  ]
+}

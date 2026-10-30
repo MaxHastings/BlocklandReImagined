@@ -2272,34 +2272,55 @@ impl App {
     /// Judge how the sounds placed in the world reach the listener, and ring the listener's room: a wall between them cuts a
     /// sound's range, as do rooms the map does not join ([`crate::sound_carry`]).
     fn hear_world(&mut self, listener: &bri_audio::Listener) {
-        let (Some(regions), Some(model)) = (&self.scene.regions, &self.scene.sound_carry) else {
-            let room = self
-                .scene
-                .regions
-                .as_ref()
-                .map_or(bri_audio::Room::DRY, |regions| {
-                    crate::sound_carry::room(regions, listener.position)
-                });
-            self.audio.hear_world(|_| bri_audio::Hearing::CLEAR, room);
-            return;
-        };
-        let room = crate::sound_carry::room(regions, listener.position);
         let ear = Vec3::from(listener.position);
         let building = self.build.building.as_ref();
+        let map_interior = self.audio.needs_map_interior_context();
+        if self.audio.needs_exposure() {
+            self.audio.probe_exposure(
+                listener.position,
+                building.map_or(0, |building| building.query_generation()),
+                map_interior,
+                |direction| {
+                    let direction = Vec3::from(direction).normalize();
+                    building.is_some_and(|building| {
+                        crate::sound_carry::EnclosureProbe::blocked(
+                            building,
+                            ear,
+                            direction,
+                            map_interior,
+                        )
+                    })
+                },
+            );
+        }
+        let regions = self.scene.regions.as_ref();
+        let model = self.scene.sound_carry.as_ref();
+        let room = regions.map_or(bri_audio::Room::DRY, |regions| {
+            crate::sound_carry::room(regions, listener.position)
+        });
         self.audio.hear_world(
             |source| {
                 let to = Vec3::from(source);
                 let length = ear.distance(to);
-                // A line too short to trace is clear; so is one the world does not stop before the source.
                 let clear = length < 0.001
                     || building.is_none_or(|building| {
+                        let end = ear + (to - ear) * (2000.0 / length).min(1.0);
                         building
-                            .solid_segment(ear, to)
+                            .solid_segment(ear, end)
                             .ok()
                             .flatten()
                             .is_none_or(|hit| hit.distance >= length - SOUND_LINE_SLACK)
                     });
-                model.hearing(regions, listener.position, source, clear)
+                match (regions, model) {
+                    (Some(regions), Some(model)) => {
+                        model.hearing(regions, listener.position, source, clear)
+                    }
+                    _ if clear => bri_audio::Hearing::CLEAR,
+                    _ => bri_audio::Hearing {
+                        reach: 0.65,
+                        reference: 0.35,
+                    },
+                }
             },
             room,
         );

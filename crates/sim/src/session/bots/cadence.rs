@@ -106,6 +106,8 @@ pub(crate) mod salt {
     pub(crate) const REFLEX: u64 = 22;
     /// Where a search's sweep looks.
     pub(crate) const SWEEP: u64 = 23;
+    /// Reconsidering a retained visible combat target.
+    pub(crate) const TARGET_REVIEW: u64 = 24;
 }
 
 #[cfg(test)]

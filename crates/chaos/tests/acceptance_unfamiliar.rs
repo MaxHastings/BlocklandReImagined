@@ -642,6 +642,10 @@ fn vehicles(v: Variant) -> (bri_vehicles::Pack, Vec<bri_sim::bot_kind::BotKind>)
 /// box on the ground where no bot sees or reaches them. The same calls
 /// make the same session, which the replay relies on.
 fn session(v: Variant, seed: u64) -> (Session, OwnerId) {
+    session_with_glass_control(v, seed, false)
+}
+
+fn session_with_glass_control(v: Variant, seed: u64, opaque: bool) -> (Session, OwnerId) {
     let d = definitions(v);
     let world = World::new("Acceptance".into(), "chaos/map".into(), vec![[1.0; 4]]);
     let floor =
@@ -714,6 +718,19 @@ fn session(v: Variant, seed: u64) -> (Session, OwnerId) {
         s.simulation().state().palette.clone(),
     );
     let mut bricks = arena(v, &d);
+    if opaque {
+        let mut changed = 0;
+        for b in &mut bricks {
+            if b.definition == ContentRef::Resolved(bri_sim::testing::TALL.into()) && !b.raycast {
+                b.raycast = true;
+                changed += 1;
+            }
+        }
+        assert!(
+            changed > 0,
+            "the negative control covers the authored glass"
+        );
+    }
     // The host's box: four walls and a roof around the stands, the ends
     // past the sides' ends.
     let wall = height_of(&d, &v.wall());
@@ -770,6 +787,11 @@ struct Seen {
     push_moved_enemy: u32,
     zone_entries: u32,
     seen_through_glass: u32,
+    /// Geometry-only diagnostic, not a substitute for actual brain sight.
+    glass_candidate_pairs: u32,
+    /// Known-opportunity ordinary-brain proof, separate from the match's
+    /// incidental selected-target count above.
+    probed_through_glass: u32,
     fired_from_chosen_spot: u32,
     pushed_enemy_off: u32,
     pushed_teammate_off: Vec<String>,
@@ -820,9 +842,104 @@ fn through_glass(v: Variant, a: Vec3, b: Vec3) -> bool {
     (-HALF + 1.0..=GLASS_END).contains(&x)
 }
 
+/// The same unfamiliar world, bodies, rules and seed, in a separate session.
+/// F7 and Fetch arrange one real opposing pair across the existing glass;
+/// the host returns to its box before any brain tick. No bot goal, sight
+/// answer or controls are injected. Other bots keep their original spawns.
+fn glass_perception_contract(v: Variant, seed: u64) -> u32 {
+    let mut positive = 0;
+    for opaque in [false, true] {
+        let (mut s, host) = session_with_glass_control(v, seed, opaque);
+        let initial = bodies(&s);
+        let pair = [BLUE, RED].map(|team| {
+            *initial
+                .iter()
+                .find(|(_, b)| b.team == team && b.alive)
+                .unwrap()
+                .0
+        });
+        let names = s.names();
+        let roster = s.admin_state(host).unwrap();
+        let mut sequence = 1u64 << 42;
+        let mut send = |s: &mut Session, command| {
+            sequence += 1;
+            s.command(host, sequence, command).unwrap();
+        };
+        for (bot, z, yaw) in [(pair[0], -2.0, std::f32::consts::PI), (pair[1], 2.0, 0.0)] {
+            send(
+                &mut s,
+                Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+                    eye: [v.x(-18.0), DECK_TOP + 1.0, z],
+                    yaw,
+                    pitch: 0.0,
+                })),
+            );
+            let rows: Vec<_> = roster
+                .players
+                .iter()
+                .filter(|p| p.bot && p.name == names[&bot])
+                .collect();
+            assert_eq!(rows.len(), 1, "the native admin target is unambiguous");
+            send(
+                &mut s,
+                Command::Admin(bri_admin::Request::new(bri_admin::Action::Fetch {
+                    target: bri_admin::ConnectionId(rows[0].connection),
+                })),
+            );
+        }
+        send(
+            &mut s,
+            Command::DropPlayerAtCamera(Some(bri_sim::session::CameraView {
+                eye: [0.0, 1.0, 120.0],
+                yaw: 0.0,
+                pitch: 0.0,
+            })),
+        );
+        let mut opportunities = 0;
+        let mut seen = 0;
+        for _ in 0..HZ {
+            s.step().unwrap();
+            let now = bodies(&s);
+            for (viewer, subject) in [(pair[0], pair[1]), (pair[1], pair[0])] {
+                let (a, b) = (now[&viewer], now[&subject]);
+                if a.alive && b.alive && through_glass(v, a.feet, b.feet) {
+                    opportunities += 1;
+                    if s.bot_thoughts()
+                        .iter()
+                        .any(|t| t.bot == viewer && t.visible == Some(subject))
+                    {
+                        seen += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            opportunities > 0,
+            "{v:?} seed {seed} opaque {opaque}: pair must actually face the glass"
+        );
+        if opaque {
+            assert_eq!(
+                seen, 0,
+                "{v:?} seed {seed}: opaque glass blocks ordinary bot sight"
+            );
+        } else {
+            assert!(
+                seen > 0,
+                "{v:?} seed {seed}: ordinary brain must see the opposing player through authored glass"
+            );
+            positive = seen;
+        }
+        println!(
+            "glass contract {v:?} seed {seed} opaque {opaque}: {seen} sightings / {opportunities} opportunities"
+        );
+    }
+    positive
+}
+
 /// Play one run, recording every call, and return what it saw and the
 /// recording.
 fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
+    let trace_failures = std::env::var_os("BRI_BOT_FAILURE_TRACE").is_some();
     let (mut s, host) = session(v, seed);
     let file = Shared::default();
     let mut rec = Recorder::start(&mut s, Secrets::default(), Box::new(file.clone())).unwrap();
@@ -886,6 +1003,19 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             .collect();
         for p in view.fired().filter(|p| p.definition == canister) {
             if now.contains_key(&p.source.0) {
+                if trace_failures && !grenades.contains_key(&p.id) {
+                    eprintln!(
+                        "throw {v:?} seed {seed} tick {tick} id {} source {} at {:?} body {:?} plan {:?}",
+                        p.id,
+                        p.source.0,
+                        p.position,
+                        now.get(&p.source.0).map(|b| (b.feet, b.velocity)),
+                        s.bot_thoughts()
+                            .into_iter()
+                            .find(|t| t.bot == p.source.0)
+                            .map(|t| (t.planned, t.gate, t.input))
+                    );
+                }
                 grenades.entry(p.id).or_insert_with(|| {
                     seen.thrown += 1;
                     p.source.0
@@ -954,6 +1084,13 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             }
             let harm = seen.grenade_harm.entry(by.team).or_default();
             if victim.team == by.team {
+                if trace_failures {
+                    eprintln!(
+                        "friendly grenade {v:?} seed {seed} tick {tick}: damage {r:?}, source {:?}, victim {:?}, live {live:?}",
+                        (by.feet, by.velocity),
+                        (victim.feet, victim.velocity)
+                    );
+                }
                 harm.0 += r.amount;
                 if Some(r.victim) != r.source
                     && s.death_results()
@@ -1067,6 +1204,16 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
         // Thinking: seeing an enemy through the glass, firing from a spot
         // it chose.
         let thoughts = s.bot_thoughts();
+        seen.glass_candidate_pairs += now
+            .values()
+            .map(|a| {
+                now.values()
+                    .filter(|b| {
+                        a.alive && b.alive && a.team != b.team && through_glass(v, a.feet, b.feet)
+                    })
+                    .count() as u32
+            })
+            .sum::<u32>();
         for t in &thoughts {
             let (Some(me), Some(enemy)) = (now.get(&t.bot), t.visible.and_then(|e| now.get(&e)))
             else {
@@ -1161,7 +1308,7 @@ fn bots_play_an_unfamiliar_package_by_its_own_rules() {
             .iter()
             .map(|&(v, seed)| {
                 scope.spawn(move || {
-                    let (seen, recording) = play(v, seed);
+                    let (mut seen, recording) = play(v, seed);
                     // The same build replays the run tick for tick.
                     let (mut again, _) = session(v, seed);
                     let report = replay(
@@ -1171,6 +1318,7 @@ fn bots_play_an_unfamiliar_package_by_its_own_rules() {
                     )
                     .unwrap();
                     assert_eq!(report.divergence, None, "{v:?} seed {seed}: {report:#?}");
+                    seen.probed_through_glass = glass_perception_contract(v, seed);
                     (v, seed, seen)
                 })
             })
@@ -1252,7 +1400,7 @@ fn bots_play_an_unfamiliar_package_by_its_own_rules() {
             ("the ball entering a zone off a bot", of(|s| s.zone_entries)),
             (
                 "a bot seeing an enemy through the glass",
-                of(|s| s.seen_through_glass),
+                of(|s| s.probed_through_glass),
             ),
             (
                 "a bot firing from a spot it chose",

@@ -63,6 +63,7 @@ import ci_content  # noqa: E402
 import content_packs  # noqa: E402
 import generated_addons  # noqa: E402
 import imported_addons  # noqa: E402
+from map_ambience.approvals import original_map_problems  # noqa: E402
 
 LIST_SCHEMA = 3
 # 4: imported Add-Ons carry importer/port identity and output inventories.
@@ -399,9 +400,10 @@ def credits_text(entries):
     ]
     for entry in entries:
         if entry.get('generated'):
+            receipt = generated_addons.RECIPES[entry['generated']].get('receipt', 'npc-reactions-generated.json')
             lines.append(f"- **{entry['title']}**: generated recipe {entry['generated']} "
                          f"(sha256 {entry['sha256']}); on at start. Original recording attribution, "
-                         f"source URLs, hashes and notices: content/addons/{entry['id']}/npc-reactions-generated.json.")
+                         f"source URLs, hashes and notices: content/addons/{entry['id']}/{receipt}.")
             continue
         port = f", port {entry['port']}" if entry.get('port') else ''
         state = 'on at start' if entry['enabled'] else 'installed, off at start'
@@ -420,7 +422,7 @@ def generated_entry(repo, addon, directory):
             'companions': manifest.get('companions', []), 'enabled': addon.get('enabled', True)}
 
 
-def build_generated(repo, addons, work, entries):
+def build_generated(repo, addons, work, entries, content=None):
     for addon in addons:
         recipe = addon.get('generated')
         if recipe is None:
@@ -429,7 +431,10 @@ def build_generated(repo, addons, work, entries):
         if spec is None or spec['id'] != addon['id']:
             fail(f'Unknown or mismatched generated Add-On recipe {recipe!r}')
         directory = work / 'addons' / addon['id']
-        subprocess.run([sys.executable, str(repo / spec['builder']), '--download', '--output', str(directory)], check=True)
+        command = [sys.executable, str(repo / spec['builder']), '--download', '--output', str(directory)]
+        if spec.get('needs_content'):
+            command += ['--content', str(content or repo / 'content')]
+        subprocess.run(command, check=True)
         bad = problems(directory, addon, repo)
         if bad:
             fail('; '.join(bad))
@@ -512,6 +517,8 @@ def build(args):
             f"The authors' original Add-On, bundled with Blockland ReImagined with credit to them. "
             f"To have it left out, open an issue at {ISSUES}.")
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+        from map_ambience.original_policy import apply as apply_original_policy
+        apply_original_policy(args.repo,fresh)
         imported_addons.write_receipt(fresh, recipe)
         bad = problems(fresh, addon, args.repo, recipe)
         if bad:
@@ -523,7 +530,7 @@ def build(args):
         print(f"Bundled {original['addon']} from {copy}" + (f" with port {port['port']}" if port else ', no port')
               + (f" and its host rules {', '.join(rules)}." if rules else '.'))
     reference_temp.cleanup()
-    build_generated(args.repo, addons, work, entries)
+    build_generated(args.repo, addons, work, entries, installed)
     commit = subprocess.run(['git', 'rev-parse', '--short=9', 'HEAD'], cwd=args.repo,
                             capture_output=True, text=True).stdout.strip()
     (work / 'bundle.json').write_text(json.dumps({
@@ -577,6 +584,7 @@ def problems(directory, addon, repo=REPO, recipe=None):
             out.append(f"{manifest_path} does not credit {', '.join(original['authors'])}")
     if addon.get('generated'):
         out += generated_addons.problems(repo, directory, addon['generated'])
+    out += original_map_problems(repo, directory)
     for companion in manifest.get('companions', []):
         out += companion_problems(directory.parent / companion, companion, addon['id'])
     return out

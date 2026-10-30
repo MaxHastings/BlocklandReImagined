@@ -18,6 +18,7 @@ pub(crate) struct PreparedSounds {
     section_audio: bool,
     sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
     variants: BTreeMap<String, Vec<SoundChoice>>,
+    environments: BTreeMap<String, bri_weapons::SoundEnvironment>,
     /// Why each pack sound that did not load failed, by lowercase profile.
     failed: BTreeMap<String, String>,
     warnings: BTreeSet<String>,
@@ -99,6 +100,11 @@ impl PreparedSounds {
             section_audio: pack.effects.brick_debris_audio.is_some(),
             sounds: BTreeMap::new(),
             variants: BTreeMap::new(),
+            environments: pack
+                .sounds
+                .iter()
+                .filter_map(|(id, def)| def.environment.map(|intent| (id.clone(), intent)))
+                .collect(),
             failed: BTreeMap::new(),
             warnings: BTreeSet::new(),
         };
@@ -161,6 +167,15 @@ impl PreparedSounds {
         match loaded {
             Ok(mut asset) => {
                 asset.playback.looping = def.looping;
+                if let Some(spatial) = def.spatial {
+                    let spatial = bri_audio::schema::Spatial {
+                        reference_distance: spatial.reference_distance,
+                        max_distance: spatial.max_distance,
+                        falloff: bri_audio::schema::Falloff::Linear,
+                    };
+                    asset.playback.spatial = Some(spatial);
+                    asset.authored_spatial = Some(spatial);
+                }
                 if let Some(s) = def.sustain {
                     let frames = match &asset.data {
                         ClipData::Pcm(p) => p.frames(),
@@ -418,6 +433,10 @@ pub struct ClientAudio {
     /// volume: played in place of a bank sound of the same name.
     pack_sounds: BTreeMap<String, (Arc<SoundAsset>, f32)>,
     pack_sound_variants: BTreeMap<String, Vec<SoundChoice>>,
+    pack_environments: BTreeMap<String, bri_weapons::SoundEnvironment>,
+    acoustic_voices: BTreeMap<SoundHandle, AcousticVoice>,
+    enclosure_probe: crate::sound_carry::EnclosureProbe,
+    exposure: crate::sound_carry::Exposure,
     sound_choice_counter: u64,
     /// [`PreparedSounds`]' reasons for the pack sounds that did not load.
     pack_sound_failures: BTreeMap<String, String>,
@@ -486,6 +505,12 @@ struct RuleMusic {
     volume: f32,
     fade: f32,
     elapsed: f32,
+}
+struct AcousticVoice {
+    at: Option<[f32; 3]>,
+    intent: Option<bri_weapons::SoundEnvironment>,
+    sent: Option<bri_audio::Acoustics>,
+    remaining: Option<f64>,
 }
 /// How near an Add-On weapon sound plays at full volume, and how far it
 /// carries, in world units: v20's `AudioClose3d`/`AudioDefault3d` range.
@@ -585,6 +610,10 @@ impl ClientAudio {
             last_break: None,
             pack_sounds: BTreeMap::new(),
             pack_sound_variants: BTreeMap::new(),
+            pack_environments: BTreeMap::new(),
+            acoustic_voices: BTreeMap::new(),
+            enclosure_probe: Default::default(),
+            exposure: Default::default(),
             sound_choice_counter: 0,
             pack_sound_failures: BTreeMap::new(),
             windows: Vec::new(),
@@ -968,6 +997,9 @@ impl ClientAudio {
     /// `fade` seconds.
     pub fn play_ambient(&mut self, play: &bri_sim::session::AmbientPlay) {
         if let Some(old) = self.rule_ambient.remove(&play.key) {
+            if let Some(voice) = self.acoustic_voices.get_mut(&old.handle) {
+                voice.remaining = Some(f64::from(play.fade.max(0.0)) + 1.0);
+            }
             let result = self.runtime.stop_with_fade(old.handle, play.fade);
             self.record(result);
         }
@@ -990,8 +1022,10 @@ impl ClientAudio {
             None => (Placement::Listener, None),
         };
         let asset = Arc::new(asset.as_ambient(range));
+        let profile = asset.id.to_string();
         match self.runtime.play_asset(asset, placement, volume * start) {
             Ok(handle) => {
+                self.track_acoustics(handle, &profile, play.at, None);
                 self.rule_ambient.insert(
                     play.key.clone(),
                     RuleMusic {
@@ -1115,6 +1149,7 @@ impl ClientAudio {
         self.section_audio = prepared.section_audio;
         self.pack_sounds = prepared.sounds;
         self.pack_sound_variants = prepared.variants;
+        self.pack_environments = prepared.environments;
         self.pack_sound_failures = prepared.failed;
         self.warnings.extend(
             prepared
@@ -1159,13 +1194,71 @@ impl ClientAudio {
         };
         let duration =
             frames as f64 / f64::from(asset.data.sample_rate()) / f64::from(asset.playback.pitch);
+        let profile_id = asset.id.to_string();
+        let looping = asset.playback.looping;
         let handle = self.runtime.play_asset(asset, placement, volume)?;
+        if self.pack_environments.contains_key(&profile_id) {
+            let at = match placement {
+                Placement::World(at) => Some(at),
+                _ => None,
+            };
+            self.track_acoustics(
+                handle,
+                &profile_id,
+                at,
+                (!looping).then_some(duration + 0.1),
+            );
+        }
         if let Placement::World(at) = placement
             && self.fresh_world.len() < FRESH_WORLD_LIMIT
         {
             self.fresh_world.push((handle, at));
         }
         Ok((handle, duration))
+    }
+    fn track_acoustics(
+        &mut self,
+        handle: SoundHandle,
+        profile: &str,
+        at: Option<[f32; 3]>,
+        remaining: Option<f64>,
+    ) {
+        let intent = self.pack_environments.get(profile).copied();
+        if (at.is_some() || intent.is_some()) && self.acoustic_voices.len() < 512 {
+            self.acoustic_voices.insert(
+                handle,
+                AcousticVoice {
+                    at,
+                    intent,
+                    sent: None,
+                    remaining,
+                },
+            );
+        }
+    }
+
+    pub fn needs_exposure(&self) -> bool {
+        self.acoustic_voices
+            .values()
+            .any(|voice| voice.intent.is_some())
+    }
+
+    pub fn needs_map_interior_context(&self) -> bool {
+        self.acoustic_voices
+            .values()
+            .any(|voice| voice.intent == Some(bri_weapons::SoundEnvironment::Interior))
+    }
+
+    pub fn probe_exposure(
+        &mut self,
+        listener: [f32; 3],
+        revision: u64,
+        map_interior: bool,
+        blocked: impl FnMut([f32; 3]) -> bool,
+    ) {
+        self.exposure = self
+            .enclosure_probe
+            .sample(listener, revision, map_interior, blocked);
     }
     /// Judge the way each world sound takes to the listener ([`bri_audio::Hearing`]) and cut its range to match: every looping
     /// source, and a sound just started once, where it began. `hearing_at` is asked for a point in the world. `room` is the
@@ -1191,6 +1284,36 @@ impl ClientAudio {
         for (handle, hearing) in judged {
             let result = self.runtime.set_voice_hearing(handle, hearing);
             self.record(result);
+        }
+        let mut commands = Vec::new();
+        for (&handle, voice) in &mut self.acoustic_voices {
+            let hearing = voice.at.map(&mut hearing_at);
+            if let Some(hearing) = hearing {
+                commands.push((handle, Some(hearing), None));
+            }
+            let acoustic = self.exposure.acoustics(
+                voice.intent,
+                hearing.is_some_and(|hearing| hearing != bri_audio::Hearing::CLEAR),
+            );
+            if voice.sent != Some(acoustic) {
+                commands.push((handle, None, Some(acoustic)));
+            }
+        }
+        for (handle, hearing, acoustic) in commands {
+            if let Some(hearing) = hearing {
+                let result = self.runtime.set_voice_hearing(handle, hearing);
+                self.record(result);
+            }
+            if let Some(acoustic) = acoustic {
+                match self.runtime.set_voice_acoustics(handle, acoustic) {
+                    Ok(()) => {
+                        if let Some(voice) = self.acoustic_voices.get_mut(&handle) {
+                            voice.sent = Some(acoustic);
+                        }
+                    }
+                    Err(error) => self.record(Err(error)),
+                }
+            }
         }
     }
     fn pack_asset(&mut self, profile: &str) -> Option<(Arc<SoundAsset>, f32)> {
@@ -1413,6 +1536,9 @@ impl ClientAudio {
         self.music_bricks = MusicBricks::default();
         self.rule_music = None;
         self.rule_ambient.clear();
+        self.acoustic_voices.clear();
+        self.enclosure_probe = Default::default();
+        self.exposure = Default::default();
         self.world_volume = None;
         let result = self
             .runtime
@@ -1526,6 +1652,13 @@ impl ClientAudio {
             self.record(result);
         }
         self.runtime.update(seconds);
+        for voice in self.acoustic_voices.values_mut() {
+            if let Some(remaining) = &mut voice.remaining {
+                *remaining -= f64::from(seconds);
+            }
+        }
+        self.acoustic_voices
+            .retain(|_, voice| voice.remaining.is_none_or(|remaining| remaining > 0.0));
         for event in self.runtime.drain_events() {
             let ended = match event {
                 AudioEvent::Stopped { handle }
@@ -1534,6 +1667,7 @@ impl ClientAudio {
                 _ => None,
             };
             if let Some(handle) = ended {
+                self.acoustic_voices.remove(&handle);
                 self.held.retain(|_, v| v.handle != handle);
                 self.speech.retain(|_, speech| speech.handle != handle);
             }
@@ -2274,6 +2408,8 @@ mod tests {
             variants: Vec::new(),
             sustain: None,
             file: file.into(),
+            spatial: None,
+            environment: None,
             volume: 0.5,
             looping: false,
             local: false,
@@ -2521,6 +2657,8 @@ mod tests {
                 variants: Vec::new(),
                 sustain: None,
                 file: "blast.wav".into(),
+                spatial: None,
+                environment: None,
                 volume: 1.0,
                 looping: false,
                 local: false,
@@ -2565,6 +2703,216 @@ mod tests {
         assert_eq!(mine.len(), 1, "{mine:?}");
         assert_eq!(mine[0].kind, "sound");
         assert_eq!(mine[0].count, 2);
+    }
+    #[test]
+    fn streamed_local_ambience_keeps_authored_range_and_handle_when_listener_returns() -> Result<()>
+    {
+        let fx = Pack::synthetic()?;
+        let source = tempfile::tempdir()?;
+        let rate = 48_000;
+        let samples: Vec<f32> = (0..rate / 2)
+            .map(|i| (i as f32 / rate as f32 * 440.0 * std::f32::consts::TAU).sin() * 0.2)
+            .collect();
+        std::fs::write(
+            source.path().join("loop.wav"),
+            bri_audio::wav::encode_pcm16(rate, 1, &samples),
+        )?;
+        for (reference, maximum) in [(45., 270.), (40., 200.)] {
+            let mut audio =
+                ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+            let pack: bri_weapons::Pack = serde_json::from_value(serde_json::json!({
+                "schema_version":5,"id":"local-loop-probe","sounds":{
+                    "test:local":{"file":"loop.wav","looping":true,"music":true,
+                        "spatial":{"reference_distance":reference,"max_distance":maximum}}
+                }
+            }))?;
+            audio.set_pack_sounds(&pack, source.path());
+            assert!(
+                audio.pack_sound_failures.is_empty(),
+                "{:?}",
+                audio.pack_sound_failures
+            );
+            audio.play_ambient(&bri_sim::session::AmbientPlay {
+                key: "local".into(),
+                track: Some("test:local".into()),
+                volume: 1.,
+                fade: 0.,
+                at: Some([0.; 3]),
+                range: 100.,
+            });
+            let handle = audio.rule_ambient["local"].handle;
+            let measure = |audio: &mut ClientAudio, distance| {
+                audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
+                audio.tick(
+                    0.4,
+                    Listener {
+                        position: [0., 0., distance],
+                        ..Default::default()
+                    },
+                );
+                let pcm = audio.take_capture();
+                assert!(pcm.len() >= 9600 && pcm.iter().all(|v| v.is_finite()));
+                (pcm[pcm.len() - 9600..]
+                    .iter()
+                    .map(|v| f64::from(*v).powi(2))
+                    .sum::<f64>()
+                    / 9600.)
+                    .sqrt()
+            };
+            let near = measure(&mut audio, 0.);
+            let middle = measure(&mut audio, (reference + maximum) * 0.5);
+            let far = measure(&mut audio, maximum + 1.);
+            let returned = measure(&mut audio, 0.);
+            assert!(
+                near > 0.001 && middle > 0. && middle < near * 0.9,
+                "near{near}, middle{middle}"
+            );
+            assert!(far < 1e-8, "source audible beyond authored maximum: {far}");
+            assert!(
+                (returned - near).abs() < near * 0.02,
+                "return changed level: {near} then{returned}"
+            );
+            assert_eq!(audio.rule_ambient["local"].handle, handle);
+            assert_eq!(
+                audio.stats().started,
+                1,
+                "moving out of range must not restart the loop"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fresh_map_and_a_b_a_replay_keep_actual_pcm_level_and_clear_context() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let pack: bri_weapons::Pack = serde_json::from_value(serde_json::json!({
+            "schema_version":5,"id":"context-test","sounds":{
+                "test:outside":{"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,"music":true,"environment":"exterior"},
+                "test:inside":{"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,"music":true,"environment":"interior"}
+            }
+        }))?;
+        audio.set_pack_sounds(&pack, &fx.root);
+        let measure =
+            |audio: &mut ClientAudio, track: &str, exposure: crate::sound_carry::Exposure, room| {
+                audio.play_ambient(&bri_sim::session::AmbientPlay {
+                    key: "context".into(),
+                    track: Some(track.into()),
+                    volume: 1.,
+                    fade: 0.,
+                    at: None,
+                    range: 100.,
+                });
+                audio.exposure = exposure;
+                audio.hear_world(|_| Hearing::CLEAR, room);
+                audio.tick(0.7, Listener::default());
+                let pcm = audio.take_capture();
+                assert!(pcm.len() >= 9600 && pcm.iter().all(|v| v.is_finite()));
+                let rms = (pcm[pcm.len() - 9600..]
+                    .iter()
+                    .map(|v| f64::from(*v).powi(2))
+                    .sum::<f64>()
+                    / 9600.)
+                    .sqrt();
+                (rms, audio.rule_ambient["context"].handle)
+            };
+        let (fresh, first) = measure(&mut audio, "test:outside", Default::default(), Room::DRY);
+        assert!(fresh > 1e-5);
+        assert!(!audio.needs_map_interior_context());
+        audio.clear();
+        audio.take_capture();
+        measure(
+            &mut audio,
+            "test:inside",
+            crate::sound_carry::Exposure {
+                cover: 1.,
+                enclosure: 1.,
+            },
+            Room {
+                wet: 0.4,
+                decay_seconds: 0.3,
+            },
+        );
+        assert!(audio.needs_map_interior_context());
+        audio.clear();
+        audio.take_capture();
+        assert_eq!(audio.exposure.enclosure, 0.0);
+        assert!(!audio.needs_map_interior_context());
+        let (replayed, last) = measure(&mut audio, "test:outside", Default::default(), Room::DRY);
+        assert!(
+            (replayed - fresh).abs() < fresh * 0.02,
+            "fresh{fresh}, afterA-B-A{replayed}"
+        );
+        assert_ne!(first, last);
+        assert_eq!(audio.rule_ambient.len(), 1);
+        assert_eq!(audio.acoustic_voices.len(), 1);
+        assert_eq!(
+            audio.stats().started,
+            3,
+            "no duplicate starts during map transitions"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn authored_ambient_profile_reaches_existing_handles_and_queue_pressure_retries() -> Result<()>
+    {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let pack: bri_weapons::Pack = serde_json::from_value(serde_json::json!({
+            "schema_version":1, "id":"ambience-probe", "sounds": {
+                "test:exterior": {"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,
+                    "spatial":{"reference_distance":80.0,"max_distance":300.0},"environment":"exterior"},
+                "test:neutral": {"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true}
+            }
+        }))?;
+        audio.set_pack_sounds(&pack, &fx.root);
+        assert_eq!(
+            audio.pack_sounds["test:exterior"]
+                .0
+                .authored_spatial
+                .unwrap()
+                .reference_distance,
+            80.0
+        );
+        for (key, track) in [("outside", "test:exterior"), ("unaffected", "test:neutral")] {
+            audio.play_ambient(&bri_sim::session::AmbientPlay {
+                key: key.into(),
+                track: Some(track.into()),
+                volume: 1.0,
+                fade: 0.0,
+                at: None,
+                range: 100.0,
+            });
+        }
+        audio.tick(0.05, Listener::default());
+        let h = audio.rule_ambient["outside"].handle;
+        assert_eq!(audio.acoustic_voices.len(), 1);
+        audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
+        audio.tick(0.01, Listener::default());
+        audio.exposure = crate::sound_carry::Exposure {
+            cover: 1.0,
+            enclosure: 1.0,
+        };
+        while audio.runtime.set_listener(Listener::default()).is_ok() {}
+        audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
+        assert_eq!(audio.acoustic_voices[&h].sent, Some(Acoustics::CLEAR));
+        audio.tick(0.01, Listener::default());
+        audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
+        let sheltered = audio.acoustic_voices[&h].sent.unwrap();
+        assert!(sheltered.gain < 0.2 && sheltered.muffle > 0.9);
+        assert_eq!(audio.rule_ambient["outside"].handle, h);
+        assert_eq!(audio.stats().started, 2);
+        audio.clear();
+        assert!(audio.acoustic_voices.is_empty());
+        assert_eq!(
+            audio
+                .enclosure_probe
+                .sample([0.; 3], 0, false, |_| false)
+                .enclosure,
+            0.0
+        );
+        Ok(())
     }
 }
 

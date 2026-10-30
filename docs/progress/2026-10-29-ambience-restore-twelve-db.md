@@ -1,0 +1,3 @@
+# 2026-10-29 Restore twelve dB ambience mix
+
+Maxwell directly requested raise it back to +12dB total after trying +8. Restored only the two authored base gains/authority. R19 regenerates from unchanged approved unity PCM: all generated package files except the refreshed source/authority/recipe receipt are byte-identical to the already gain/clipping-verified R17. Package validator empty. No other audio or policy changes, no runtime build, preview/review writes or interactive testing. Root owns preserved +12 package mapping restoration, correct refreshed receipt, startup/inventory verification and launcher handoff. In-game acceptance remains pending.

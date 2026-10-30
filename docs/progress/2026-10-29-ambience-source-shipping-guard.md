@@ -1,0 +1,7 @@
+# 2026-10-29 Ambience hear-first shipping guard
+
+Added a release-side original-map audio approval guard in `tools/map_ambience/approvals.py`, called by Add-On bundle validation. Offline conversion and auditions remain possible while pending sources fail shipping adoption. It checks actual map-audio assets against the exact source receipt and one pinned approval identity; approval state alone without explicit recorded human evidence fails. Missing receipts and recording substitutions fail. Existing packages with no restored map audio require no reapproval.
+
+Ran `python -m unittest discover -s tools -p test_map_ambience_approvals.py` (2 passed), challenging pending state, evidence absence, approved synthetic fixture, replaced bytes, removed receipt and unaffected package; `python -m unittest discover -s tools -p test_generated_addons.py` (2 passed); `git diff --check` passed. Tests use synthetic bytes and do not approve any real source. All22 real source decisions remain pending. A future generated ambience recipe must apply the same hear-first requirement to its chosen processed source inventory; that builder is not implemented yet.
+
+Four original Creek/Forest recordings presented inline and a source-specific decision requested; no response inferred. Integrated balance with existing gameplay cues/NPC/voice is required by Maxwell and remains unverified. Next: root warm runtime/client/importer checks, fixed-map package/sparse policy, chosen palette freeze and private packaged mix preview after required decisions.

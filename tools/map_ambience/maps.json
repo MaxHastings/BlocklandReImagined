@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "reference_release": "v0.4.1",
+  "reference_source_commit": "030b43a03 (candidate origin/main baseline; packaged v0.4.1 inventory separately inspected)",
+  "maps": [
+    {
+      "id": "v20/add-ons/map_bedroom/bedroom.mis",
+      "name": "Bedroom",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_bedroom/bedroom.jpg",
+      "reference_sha256": "b7ba34383140e1c359a5407c70191f839bbb392efbd88f335cd116c7f1ab265a",
+      "visual_assessment": "Sheltered carpeted room, large furniture and daylight through a window. Keep the bed nearly subliminal; exterior treatment needs shelter transitions.",
+      "candidates": [
+        "room"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_bedroomdark/bedroomdark.mis",
+      "name": "Bedroom - Dark",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_bedroomdark/bedroomdark.jpg",
+      "reference_sha256": "a0b80b4cbac77d37be1e65c26000c71f5b81ac4bb7f7a2cfc32817cba661803b",
+      "visual_assessment": "Same furnished room under isolated lamp light. Less exterior activity; no added horror drone.",
+      "candidates": [
+        "room"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_construct/construct.mis",
+      "name": "Construct",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_construct/construct.jpg",
+      "reference_sha256": "c4d3bae90592fece4d1fe1452ebdec5f0faede0a5aff8d65dd127a561d00e7d4",
+      "visual_assessment": "The actual packaged preview is blank white. An abstract building space; deliberate quiet pending evidence for any specific environmental source.",
+      "candidates": [],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_destruct/destruct.mis",
+      "name": "Destruct",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_destruct/destruct.jpg",
+      "reference_sha256": "741d8bf69a2580a290bcba967bddd3f2ed6e272e594cf961f8eea9abfc9eb5e4",
+      "visual_assessment": "The actual packaged preview is blank black. Preserve quiet; no invented machinery or destruction sounds.",
+      "candidates": [],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_halloween_slate/halloweenslate.mis",
+      "name": "Halloween Slate",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_halloween_slate/halloweenslate.jpg",
+      "reference_sha256": "e2dc81cf36d1f7399674ce2a2bf85bf8b54b325ee349a713c375cca824cf51d3",
+      "visual_assessment": "Orange clouded horizon and open empty expanse. Sparse low air, with no Halloween novelty cries or music.",
+      "candidates": [
+        "dry-air"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_kitchen/kitchen.mis",
+      "name": "Kitchen",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_kitchen/kitchen.jpg",
+      "reference_sha256": "12ae9a0060c5a7a68a4438c21da75a9fc28845486ed40ec054b5652dd2e2fc8d",
+      "visual_assessment": "Large tiled kitchen, refrigerator, cabinets, illuminated fluorescent fixture and window openings. Quiet room bed; compressor belongs at the refrigerator, not throughout the map.",
+      "candidates": [
+        "room",
+        "fridge"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_kitchendark/kitchendark.mis",
+      "name": "Kitchen - Dark",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_kitchendark/kitchendark.jpg",
+      "reference_sha256": "dadc8520c6be843c27f9151a94e27075d1324169a00336b5ef6692506f816c9c",
+      "visual_assessment": "Same kitchen under artificial light. Keep appliance identity, softer room bed; light buzz is an optional powered-fixture detail.",
+      "candidates": [
+        "room",
+        "fridge"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_skylands/skylands.mis",
+      "name": "Skylands",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_skylands/skylands.jpg",
+      "reference_sha256": "d9b3c7994af5a0dc504a9db46dd501e26bee4d7f969fe3015be6cf62ae8df6da",
+      "visual_assessment": "Open bright sky with cloud layers and reflected-looking horizon. Gentle exposed air; the picture alone does not establish an ocean shore.",
+      "candidates": [
+        "dry-air"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_slate/slate.mis",
+      "name": "Slate",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_slate/slate.jpg",
+      "reference_sha256": "00f71dce04d3f1117efe9a339355b7a6b776cbd6e75fe5121d981a8668f741a6",
+      "visual_assessment": "Huge empty blue/clouded horizon. Air only, quiet enough for long building sessions; no invented birds.",
+      "candidates": [
+        "dry-air"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_slate_desert/slatedesert.mis",
+      "name": "Slate Desert",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_slate_desert/slatedesert.jpg",
+      "reference_sha256": "e5286c2db7bf39ff3d4669f49047d8436ce4991168e09582f1b128e36086f2cd",
+      "visual_assessment": "Flat sandy expanse under yellow hazy daylight. Low dry gusts; no city, insects or sandstorm impacts.",
+      "candidates": [
+        "dry-air"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
+      "name": "Slate Sea Revised",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_slate_sea_revised/slatesearevised.jpg",
+      "reference_sha256": "42c3ac19f32776f51e82160368515083189f21dcd8a661184ab3b1cbdb4fb6db",
+      "visual_assessment": "Broad calm water to the horizon in pale pink daylight. Gentle water wash and very low air; avoid nearby beach breakers in open water.",
+      "candidates": [
+        "shore",
+        "dry-air"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
+      "name": "Slate Storm Revised",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_slate_storm_revised/slatestormrevised.jpg",
+      "reference_sha256": "bd0d6225add4773db5adb561fbb881da0e1468cfed08f3917499aa88f0338c82",
+      "visual_assessment": "Dark overcast open water with visible slanted rain. One rain bed; restrained distant thunder already in the candidate, no second weather loop.",
+      "candidates": [
+        "rain"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_slopes/slopes.mis",
+      "name": "The Slopes",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_slopes/slopes.jpg",
+      "reference_sha256": "1b0b62573ecf67496dff79be2087ad7a27e087cd5f21d9747f072c14b83d9166",
+      "visual_assessment": "Bare snow-covered mountain ridges and falling snow. Variable cold air, no foliage rustle or continuous crunching snow.",
+      "candidates": [
+        "cold-air"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "v20/add-ons/map_tutorial/tutorial.mis",
+      "name": "Tutorial",
+      "shipped_enabled": true,
+      "reference": "ui-pack-005/images/add-ons/map_tutorial/tutorial.jpg",
+      "reference_sha256": "e7a6c8099d7c5b5818dbfe8b7b25cb6477d85f2ef5ce2ed536c534e9b0701196",
+      "visual_assessment": "Maxwell supplied an overhead gameplay capture on 2026-10-29: open roof framing, exposed walkways and teaching areas within grassy surrounding slopes. Use a very quiet outdoor breeze as the baseline, with only local partial shelter behind walls. Do not classify roof beams or the whole instructional structure as a sealed indoor room. Preserve teaching/UI cue intelligibility; occasional distant outdoor details require separate source selection.",
+      "candidates": [
+        "dry-air"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance.",
+      "supplemental_reference": "artifacts/map-ambience/inputs/tutorial-user-overview.png",
+      "supplemental_reference_sha256": "3b19c358430e9e861eca065aa004bdae2047cd4f7e5c254e756086e80cd578b6",
+      "supplemental_reference_label": "Maxwell-supplied Tutorial gameplay overview, 2026-10-29"
+    },
+    {
+      "id": "map_arcticchallenge3:map/map_arcticchallenge3",
+      "name": "Arctic Challenge v3",
+      "shipped_enabled": false,
+      "reference": "addons/map_arcticchallenge3/map/699044785caa19ff8284c8f7393ebf351d5378ab8f5729f803ee9db583ee126a.preview.png",
+      "reference_sha256": "699044785caa19ff8284c8f7393ebf351d5378ab8f5729f803ee9db583ee126a",
+      "visual_assessment": "Exposed snowy mountain obstacle course and elevated structures. Cold air; no invented ski-lift machinery from the thin rail-like structures.",
+      "candidates": [
+        "cold-air"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "map_creek:map/map_creek",
+      "name": "Creek",
+      "shipped_enabled": true,
+      "reference": "addons/map_creek/map/8b0e166a83dc1fecdf454a87e2e22f7372d2af4df4e6b06220fb2fe27a7e5ae5.preview.jpg",
+      "reference_sha256": "8b0e166a83dc1fecdf454a87e2e22f7372d2af4df4e6b06220fb2fe27a7e5ae5",
+      "visual_assessment": "Visible rock waterfall, sheltered water and wooden dock. Restore original frog/waterfall/shore emitter recordings at their authored positions first; no duplicate water bed.",
+      "candidates": [],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "map_emeraldisles4:map/map_emeraldisles4",
+      "name": "Emerald Isles 4",
+      "shipped_enabled": true,
+      "reference": "addons/map_emeraldisles4/map/f24484a5aab4757e4256ca79925c195c26cfaa09d5db1ad68ffcb9f997fedfcc.preview.jpg",
+      "reference_sha256": "f24484a5aab4757e4256ca79925c195c26cfaa09d5db1ad68ffcb9f997fedfcc",
+      "visual_assessment": "Palm-lined grassy/rocky islands beside blue water. Air outdoors; gentle water only near an evidenced shoreline. The thumbnail does not establish the entire island network.",
+      "candidates": [
+        "dry-air",
+        "shore"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "map_forest:map/forest",
+      "name": "Forest",
+      "shipped_enabled": true,
+      "reference": "addons/map_forest/map/forest/bfdf7efb93dee35e7a4e047e048100e8abab26da83fa428afa00156c8580c274.preview.jpg",
+      "reference_sha256": "bfdf7efb93dee35e7a4e047e048100e8abab26da83fa428afa00156c8580c274",
+      "visual_assessment": "Dense green canopy and trunks around a foggy grassy path. Soft moving foliage; compare a bird-free segment to avoid repetitive calls.",
+      "candidates": [
+        "leaves"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "map_forest:map/forestnight",
+      "name": "Forest - Dark",
+      "shipped_enabled": true,
+      "reference": "addons/map_forest/map/forestnight/e13c2ec468bc3927b76fc4d7eb4002f3cf7ff50356a1e06ab9fcd33198f4c870.preview.jpg",
+      "reference_sha256": "e13c2ec468bc3927b76fc4d7eb4002f3cf7ff50356a1e06ab9fcd33198f4c870",
+      "visual_assessment": "Dense dark trunks/grass beneath a large moon. Restore original soundNight.wav crickets first; external night candidates are alternatives, not additional layers.",
+      "candidates": [],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "map_paradise:map/gsf_paradise",
+      "name": "GSF Paradise",
+      "shipped_enabled": true,
+      "reference": "addons/map_paradise/map/gsf_paradise/9f95dc316324bc0f6fa06df93c56f2d337d8f6d8f7e8c2b56045ec3c4ed04b09.preview.jpg",
+      "reference_sha256": "9f95dc316324bc0f6fa06df93c56f2d337d8f6d8f7e8c2b56045ec3c4ed04b09",
+      "visual_assessment": "Packaged postcard shows colorful low buildings beneath a mountain. Existing 20261016-gsf-paradise-terrain.png additionally shows palm, beach, water and sheltered structures; local shore and sheltered transitions matter.",
+      "candidates": [
+        "dry-air",
+        "shore"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    },
+    {
+      "id": "map_paradise:map/gsf_paradise_night",
+      "name": "GSF Paradise-Night",
+      "shipped_enabled": true,
+      "reference": "addons/map_paradise/map/gsf_paradise_night/efe0eb51533096ea777d30dce45fb5faf67ec1bd5cdc50bdbaccb50d8ce94202.preview.jpg",
+      "reference_sha256": "efe0eb51533096ea777d30dce45fb5faf67ec1bd5cdc50bdbaccb50d8ce94202",
+      "visual_assessment": "Packaged night postcard shows colorful buildings under a large moon. Shared day terrain is known, but night coverage is limited: soft outdoor insects are provisional; quiet buildings and localized water.",
+      "candidates": [
+        "dry-air",
+        "night",
+        "shore"
+      ],
+      "acceptance": "Listening and in-game mix pending; imagery inspected, not interactive acceptance."
+    }
+  ]
+}

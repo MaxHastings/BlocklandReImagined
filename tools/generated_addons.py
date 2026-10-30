@@ -8,6 +8,25 @@ import json
 from pathlib import Path
 
 RECIPES = {
+    'map-ambience': {
+        'id': 'map_ambience',
+        'builder': 'tools/build_map_ambience.py',
+        'receipt': 'map-ambience-generated.json',
+        'needs_content': True,
+        'inputs': ['tools/build_map_ambience.py', 'tools/generated_addons.py',
+                   'tools/prepare_map_ambience_audition.py', 'tools/prepare_map_ambience_details.py',
+                   'tools/map_ambience/approvals.py', 'tools/map_ambience/source-approvals.json',
+                   'tools/map_ambience/original_policy.py', 'tools/map_ambience/original-emitter-policy.json',
+                   'tools/map_ambience/original-overlay.rhai',
+                   'tools/map_ambience/followup-selections.json',
+                   'tools/map_ambience/user-bases.json',
+                   'tools/map_ambience/processing.py',
+                   'tools/map_ambience/sources.py',
+                   'tools/map_ambience/candidates.json', 'tools/map_ambience/masters.json',
+                   'tools/map_ambience/maps.json', 'tools/map_ambience/palette.json',
+                   'tools/map_ambience/package.json', 'tools/map_ambience/rules-package.json', 'tools/map_ambience/behaviour.json',
+                   'tools/map_ambience/ambience.rhai'],
+    },
     'npc-reactions': {
         'id': 'npc_popculture',
         'builder': 'tools/build_npc_reactions.py',
@@ -28,6 +47,9 @@ def recipe_hash(repo, recipe):
 
 
 def problems(repo, directory, recipe):
+    if recipe == 'map-ambience':
+        from build_map_ambience import problems as ambience_problems
+        return ambience_problems(repo, directory)
     if recipe not in RECIPES:
         return [f'Unknown generated Add-On recipe {recipe!r}']
     directory = Path(directory)

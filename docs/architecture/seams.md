@@ -21,8 +21,10 @@ rather than repeating it. Two columns say where a seam stands:
   finished. It keeps the original branch and owner so earlier progress notes
   stay traceable, and it is often out of date: most `branch` rows below were
   merged long ago and their branches deleted.
-- *On main (checked 2026-10-28; yes = code integrated on main, not human-tested)*
-  is a check against main `4db7796916d8` on that date. Source availability
+- *On main (checked 2026-10-30; yes = code integrated on main, not human-tested)*
+  rechecks source locations at candidate `9105d1ca2bb9`, including main
+  `60fcbe7f4597`. The release corrections introduce no new public seam; the
+  existing 204 rows and 552 named items remain available. Source availability
   is distinct from consumer completeness and human acceptance. Where a row names
   code items in backticks (types, functions, fields), each was searched for in
   `crates/`, `packages/` and `tools/`. Where it names none, the code each row
@@ -41,7 +43,7 @@ mechanism, not complete v20 fidelity or human playtest acceptance; those limits
 belong in the feature/known-issue pages and dated evidence. Historical lane
 labels are retained so earlier progress notes remain traceable.
 
-| Seam | What it covers | Owner | Recorded state (history) | On main (checked 2026-10-28; yes = code integrated on main, not human-tested) |
+| Seam | What it covers | Owner | Recorded state (history) | On main (checked 2026-10-29; yes = code integrated on main, not human-tested) |
 |---|---|---|---|---|
 | Held PCM intro and sustain audio | Authored intro, loop offset, sample-clock attack/release and cancellable release; character sound policy selects a profile from accepted jetting state | Root Blockhead jet playtest | `codex/blockhead-jet-playtest`; local implementation and checks in progress | yes: `SoundAsset::sustain`/`Sustain` in audio/src/bank.rs, `SetSustainGate` in audio/src/command.rs, `AudioRuntime::set_sustain_gate` in audio/src/runtime.rs and `HeldVoice` in client/src/audio.rs |
 | Stud splits and cosmetic detached sections | Exact catalog partitions and original families; Simulation section journal with sealed delivery/retirement and tagged source recovery; admission before removal; shared local transforms and bounded landing assemblies | Root, `codex/plastic-destruction-playtest`, continuing Claude `0575b63b7` | PR #379 integrated candidate; technical checks in progress; Maxwell authorized merge before his playtest and removed proposed toggles | yes: `flush_section_journal` in sim/src/session/destruction.rs, journal in sim/src/simulation/sections.rs and `Section`/`advance_sections` in client/src/brick_debris/sections.rs; see [design](brick-destruction.md) |
@@ -97,7 +99,7 @@ labels are retained so earlier progress notes remain traceable.
 | Seat-tagged moves | moves tagged with the seat they steer | Turret aim flickers for watchers | on main | yes: `SeatSince` on moves (crates/net/src/protocol.rs) |
 | Seat hand holds | `Seat::hands` points, `Definition::hand_hold`, client two-bone reach (`avatar::reach_hands`) | Feel and presentation seams (W8, for Halo's Warthog) | branch w8-bodies | yes: all 3 named APIs are in the source |
 | Importer base datablocks | base v20 bricks, projectiles and damage types without `--core` | Trench Warfare game mode | on main | yes: `base_bricks` (crates/addon-import/src/lib.rs) |
-| Client app split | `crates/client/src/app.rs` into modules | Code health audit | on main | yes: the module files under crates/client/src/app/ |
+| Client app split | `crates/client/src/app.rs` into modules | Code health audit | on main | yes: the module files under crates/client/src/app/, entered through app/mod.rs |
 | Registries, protocol changes, progress entries | how features add ops, messages and notes without editing shared lists | Tech debt hot spots | on main | yes: `PROTOCOL_CHANGES` (crates/net/src/protocol.rs) and crates/net/protocol-changes/ |
 | Brick values | `set_brick_field`, `brick_field`: values rules keep on bricks, readable by every Add-On | Capture the Flag (Slayer) | on main | yes: all 2 named APIs are in the source |
 | Team points | `add_team_points`, `set_team_points`, a team's `points`: a team's own points kept with its mini-game (`MiniGame::team_points`), counted by `team_score` with its members' scores for wrench IF Team Score, MiniGame `addTeamScore` and Slayer's `IncScore` | Goal teams (v0.2.4) | branch fix/goal-teams | yes: all 7 named APIs are in the source |
@@ -275,12 +277,12 @@ pass. These source checks do not establish interactive acceptance.
 
 | Proximity voice transport and playout | QUIC datagrams with host-stamped identity/range, per-origin budgets, freshness limits, Opus FEC/PLC and bounded mixing; capture permission is distinct from local metering | Root PR #387 review | 32-client and device-free validation; human device/Internet acceptance pending | yes: audio/src/voice.rs, net/src/voice.rs and client/src/voice.rs |
 | Authored actor speech | `effects` operation `speak_at` explicitly attributes a one-shot sound to an actor; actual audio completion/cull/stop owns the shared name/talk presentation lifetime | Root PR #387 review | NPC reaction policy consumer and synthetic playback/animation checks | yes: package-runtime/src/script.rs, sim/session/packages/perform/effects.rs and client/src/audio.rs |
-| Local bot route breaching | Existing bot act arbitration, ordinary hand trigger, live damage scope and navigation confirm a real opening; two shared probes/tick, at most three presses/attempt; no content names or hypothetical destruction graph | Root Afghan Zombie CTF increment | candidate; synthetic ordinary-rocket traversal and protected-wall refusal pass, native match analysis pending | yes: sim/session/bots/breach.rs |
+| Local bot route breaching | Existing bot act arbitration, ordinary hand trigger, live damage scope and navigation confirm a real opening; two shared probes/tick, at most three presses/attempt; no content names or hypothetical destruction graph | Root Afghan Zombie CTF increment | candidate; synthetic ordinary-rocket traversal and protected-wall refusal pass, native match analysis pending | yes: sim/src/session/bots/breach.rs |
 
 | Package voice routing and speaker HUD | Read-only `on_voice`/`voice_routes`, `voice` capability; private generation-stamped playback routes; `voice` HUD region and `speakers` style | Maxwell next-release voice plan | codex/voice-policy | yes: `Behaviour::on_voice` and capability/arity checks in package-runtime/src/content.rs and script.rs; `Session::voice_routes` in sim/src/session/packages/voice.rs; `VoiceRoute`/`VoicePlayback` in sim/src/session/voice.rs; `RouteState`/`RouteTable` in net/src/voice.rs; `Region::Voice`/`SpeakerStyle` in content/src/hud.rs and `voice_style` in ui/src/screens/play.rs |
 
 Release recheck (2026-10-28): all **203 declarations** were audited against
-main `4db7796916d8`: 1,922 tracked production source files under crates/,
+main `ba4f1bbb54c4`: 1,922 tracked production source files under crates/,
 packages/ and tools/, row-named APIs, qualified/serde aliases and explicit
 source owner paths. 201 mechanisms are present. Sprint-specific engine input
 and in-game terrain editing remain absent. The three formerly private audio/
@@ -290,3 +292,4 @@ The earlier dated 192/193 counts above remain historical. The new registered
 seam since v0.4.0 is package voice routing and the speaker HUD; declared server
 companion interface resolution extends the existing companion loader. These
 source checks do not establish interactive acceptance.
+| Listener shelter and authored ambient profiles | Optional SoundDef spatial distances and exterior/interior intent; live physical-map/brick exposure probes and smoothed per-handle gain/low-pass; authored region acoustics retained | Map ambience lane with root integration (`codex/map-ambience`) | Candidate: 17 rays at most every 250 ms on movement/query revision; pure filter check passes, mixed playback/live brick checks pending; no serialized operation changes or automatic fallback reverb | yes: SoundDef spatial/environment metadata in weapons/src/lib.rs, client/src/sound_carry.rs and client/src/audio.rs, original emitter conversion in addon-import/src/map_audio.rs; at most 17 local plus 17 far Interior rays per 250 ms query; accepted map policy and human mix are recorded separately |

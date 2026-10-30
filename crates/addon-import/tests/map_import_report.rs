@@ -137,3 +137,90 @@ fn successfully_adapted_map_emitter_is_not_an_unsupported_object() {
     assert!(report.ambiguous.is_empty());
     assert!(dir.path().join("out/map/map_effects.json").is_file());
 }
+
+#[test]
+fn automatic_map_import_reuses_the_installed_vanilla_sky_without_an_original_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let original = root.join("reference");
+    let sky = original.join("base/data/skies/Shared");
+    let content = root.join("content");
+    let native = content.join("native-maps");
+    let input = content.join("Add-Ons/Map_Installed");
+    std::fs::create_dir_all(&sky).unwrap();
+    std::fs::create_dir_all(&native).unwrap();
+    std::fs::create_dir_all(&input).unwrap();
+    for i in 0..6 {
+        image::RgbImage::from_pixel(2, 2, image::Rgb([i * 20, 40, 80]))
+            .save(sky.join(format!("{i}.png")))
+            .unwrap();
+    }
+    std::fs::write(sky.join("resource.dml"), "0\n1\n2\n3\n4\n5\n").unwrap();
+    let scene = bri_convert::mission::read(
+        "new Sky() { materialList = \"base/data/skies/Shared/resource.dml\"; };",
+        "Add-Ons/Map_Stock/map.mis",
+    )
+    .unwrap();
+    let sky =
+        bri_convert::environment::convert(&original, "Add-Ons/Map_Stock/map.mis", &scene, &native)
+            .unwrap()
+            .unwrap();
+    std::fs::write(
+        native.join("bundle.json"),
+        serde_json::to_vec(&serde_json::json!({"environments":{"stock":sky}})).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(content.join("packages.json"), r#"{"schema_version":1,"packages":[{"id":"v20-map-bundle","version":"1.0.0","side":"shared","dir":"native-maps","role":"map_bundle"}]}"#).unwrap();
+    std::fs::write(
+        input.join("terrain.ter"),
+        terrain("Add-Ons/Map_Installed/ground"),
+    )
+    .unwrap();
+    image::RgbImage::from_pixel(2, 2, image::Rgb([80, 140, 30]))
+        .save(input.join("ground.png"))
+        .unwrap();
+    std::fs::write(input.join("installed.mis"), "new SimGroup(MissionGroup) { new Sky() { materialList = \"~/data/skies/Shared/resource.dml\"; fogDistance = \"17\"; visibleDistance = \"330\"; useSkyTextures = \"0\"; }; new Sun() { azimuth = \"180\"; elevation = \"60\"; color = \"1 1 1 1\"; ambient = \"0.4 0.4 0.4 1\"; }; new TerrainBlock(Terrain) { terrainFile = \"./terrain.ter\"; }; new SpawnSphere() { position = \"0 0 30\"; }; };").unwrap();
+    // The game installation, not an available source install, supplies it.
+    std::fs::remove_dir_all(&original).unwrap();
+    let out = content.join("addons/staged-map");
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_bri-import-addon"))
+        .arg(&input)
+        .arg(&out)
+        .arg("--installed")
+        .arg(&content)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let bundle: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("map/bundle.json")).unwrap()).unwrap();
+    let imported = &bundle["environments"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(
+        imported["source_materials"],
+        "base/data/skies/Shared/resource.dml"
+    );
+    assert_eq!(imported["source_sha256"], sky.source_sha256);
+    assert_eq!(imported["fog"]["start"], 17.0);
+    assert_eq!(imported["fog"]["end"], 330.0);
+    assert_eq!(imported["textures"], false);
+    for image in &sky.faces {
+        assert_eq!(
+            std::fs::read(native.join(&image.file)).unwrap(),
+            std::fs::read(out.join("map").join(&image.file)).unwrap()
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(&input).unwrap().count(),
+        3,
+        "source Add-On was modified"
+    );
+}
