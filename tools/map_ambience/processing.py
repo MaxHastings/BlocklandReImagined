@@ -21,6 +21,25 @@ def user_loop(raw):
                               'channels':pcm.shape[1],'frames':len(pcm),'normalization':False}
 
 
+def user_mix_gain(raw, gain_db):
+    """Apply the requested mix gain after the approved unity loop, without limiting."""
+    import numpy as np
+    import soundfile as sf
+    if not math.isfinite(gain_db):
+        raise ValueError('Nonfinite user mix gain')
+    pcm,rate=sf.read(io.BytesIO(raw),always_2d=True,dtype='float64')
+    amplitude=10**(gain_db/20)
+    pcm=pcm*amplitude
+    if not np.isfinite(pcm).all() or np.abs(pcm).max()>=1:
+        raise ValueError('Requested user mix gain would clip; no normalization applied')
+    output=io.BytesIO()
+    sf.write(output,pcm,rate,format='WAV',subtype='PCM_24')
+    return output.getvalue(),{'gain_db':gain_db,'amplitude':amplitude,'normalization':False,
+                              'limiting':False,'eq':'unchanged','rate':rate,
+                              'channels':pcm.shape[1],'frames':len(pcm),
+                              'peak':float(np.abs(pcm).max())}
+
+
 def recessed_pcm(pcm, rate, periodic=False):
     import numpy as np
     from scipy.signal import butter, sosfilt
