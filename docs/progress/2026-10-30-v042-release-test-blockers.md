@@ -1,4 +1,4 @@
-# v0.4.2 release validation blockers
+# 2026-10-30 v0.4.2 release validation blockers
 
 The first full release run at `60fcbe7f4597da5d88c26d93843b0605b06cc742`
 built all targets and passed packaged content startup, then ran 528 test
@@ -41,3 +41,28 @@ both performance budgets, fixed-save coverage and actual package verification.
 
 Maxwell's final combined-playtest and mix approval remains valid and recorded.
 Full alpha remains incomplete.
+
+## Focused correction evidence
+
+At `487ff84560ef825c22873b557465b997c15b1bdd`, the existing warm broker
+passed both native/synthetic hammer-contact cases, the actual stock-cue audio
+resolution case, and the native-room collision case using only `BRI_CONTENT`.
+Commands were `cargo test -p bri-sim --test tools` filtered to
+`destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound`,
+`cargo test -p bri-client --test v20_fidelity` filtered to
+`every_stock_cue_resolves_to_a_sound_or_effect`, and
+`cargo test -p bri-client --lib` filtered to the named native-room case;
+each used `--locked`, the shared warm target, `--include-ignored` and one
+test thread. The isolated full
+`cargo clippy --workspace --all-targets --locked -- -D warnings` step also
+passed after safely restarting the cache service with idle timeout disabled.
+Neither disk cache nor build targets were cleared.
+
+At combined `4e19a2f7e92c22bec6826ed2d150fc0b6e28de75`, the bot owner's
+objective correction passes the original 43-point reachable-alternative case.
+It replans on the ordinary cadence while the failed approach is still excluded,
+instead of allowing the exclusion to expire before choosing another action.
+The other two original cases still fail and their opt-in traces are retained;
+no successful release gate is claimed. The official content planner reports all
+19 base recipes current, and the actual imported-generation recipe equals the
+existing bundle receipt, so these changes do not justify restamping content.
