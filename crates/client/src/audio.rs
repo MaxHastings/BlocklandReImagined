@@ -1243,13 +1243,22 @@ impl ClientAudio {
             .any(|voice| voice.intent.is_some())
     }
 
+    pub fn needs_map_interior_context(&self) -> bool {
+        self.acoustic_voices
+            .values()
+            .any(|voice| voice.intent == Some(bri_weapons::SoundEnvironment::Interior))
+    }
+
     pub fn probe_exposure(
         &mut self,
         listener: [f32; 3],
         revision: u64,
+        map_interior: bool,
         blocked: impl FnMut([f32; 3]) -> bool,
     ) {
-        self.exposure = self.enclosure_probe.sample(listener, revision, blocked);
+        self.exposure = self
+            .enclosure_probe
+            .sample(listener, revision, map_interior, blocked);
     }
     /// Judge the way each world sound takes to the listener ([`bri_audio::Hearing`]) and cut its range to match: every looping
     /// source, and a sound just started once, where it began. `hearing_at` is asked for a point in the world. `room` is the
@@ -2696,6 +2705,78 @@ mod tests {
         assert_eq!(mine[0].count, 2);
     }
     #[test]
+    fn fresh_map_and_a_b_a_replay_keep_actual_pcm_level_and_clear_context() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let pack: bri_weapons::Pack = serde_json::from_value(serde_json::json!({
+            "schema_version":5,"id":"context-test","sounds":{
+                "test:outside":{"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,"music":true,"environment":"exterior"},
+                "test:inside":{"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,"music":true,"environment":"interior"}
+            }
+        }))?;
+        audio.set_pack_sounds(&pack, &fx.root);
+        let measure =
+            |audio: &mut ClientAudio, track: &str, exposure: crate::sound_carry::Exposure, room| {
+                audio.play_ambient(&bri_sim::session::AmbientPlay {
+                    key: "context".into(),
+                    track: Some(track.into()),
+                    volume: 1.,
+                    fade: 0.,
+                    at: None,
+                    range: 100.,
+                });
+                audio.exposure = exposure;
+                audio.hear_world(|_| Hearing::CLEAR, room);
+                audio.tick(0.7, Listener::default());
+                let pcm = audio.take_capture();
+                assert!(pcm.len() >= 9600 && pcm.iter().all(|v| v.is_finite()));
+                let rms = (pcm[pcm.len() - 9600..]
+                    .iter()
+                    .map(|v| f64::from(*v).powi(2))
+                    .sum::<f64>()
+                    / 9600.)
+                    .sqrt();
+                (rms, audio.rule_ambient["context"].handle)
+            };
+        let (fresh, first) = measure(&mut audio, "test:outside", Default::default(), Room::DRY);
+        assert!(fresh > 1e-5);
+        assert!(!audio.needs_map_interior_context());
+        audio.clear();
+        audio.take_capture();
+        measure(
+            &mut audio,
+            "test:inside",
+            crate::sound_carry::Exposure {
+                cover: 1.,
+                enclosure: 1.,
+            },
+            Room {
+                wet: 0.4,
+                decay_seconds: 0.3,
+            },
+        );
+        assert!(audio.needs_map_interior_context());
+        audio.clear();
+        audio.take_capture();
+        assert_eq!(audio.exposure.enclosure, 0.0);
+        assert!(!audio.needs_map_interior_context());
+        let (replayed, last) = measure(&mut audio, "test:outside", Default::default(), Room::DRY);
+        assert!(
+            (replayed - fresh).abs() < fresh * 0.02,
+            "fresh{fresh}, afterA-B-A{replayed}"
+        );
+        assert_ne!(first, last);
+        assert_eq!(audio.rule_ambient.len(), 1);
+        assert_eq!(audio.acoustic_voices.len(), 1);
+        assert_eq!(
+            audio.stats().started,
+            3,
+            "no duplicate starts during map transitions"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn authored_ambient_profile_reaches_existing_handles_and_queue_pressure_retries() -> Result<()>
     {
         let fx = Pack::synthetic()?;
@@ -2749,7 +2830,7 @@ mod tests {
         assert_eq!(
             audio
                 .enclosure_probe
-                .sample([0.; 3], 0, |_| false)
+                .sample([0.; 3], 0, false, |_| false)
                 .enclosure,
             0.0
         );

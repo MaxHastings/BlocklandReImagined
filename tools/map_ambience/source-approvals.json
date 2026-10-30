@@ -94,8 +94,8 @@
       "id": "original-wav:fridge-master",
       "source": "https://lasonotheque.org/refrigerateur-s1157.html",
       "input_sha256": "c1f33f3508cab6330b66cc8948b9ddafdd8f203929303690bcef8f4f9639302a",
-      "state": "pending",
-      "approval_evidence": null,
+      "state": "approved",
+      "approval_evidence": "Maxwell explicit reply to call_74a0049cd9fd47d1862f0147225e0c64 fridge source audition: \"Approve fridge recording\". Local placement/mix still require next game preview.",
       "note": "Audition candidate only. General base-direction approval is not source-specific shipping approval."
     },
     {

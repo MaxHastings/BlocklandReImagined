@@ -2274,21 +2274,21 @@ impl App {
     fn hear_world(&mut self, listener: &bri_audio::Listener) {
         let ear = Vec3::from(listener.position);
         let building = self.build.building.as_ref();
+        let map_interior = self.audio.needs_map_interior_context();
         if self.audio.needs_exposure() {
             self.audio.probe_exposure(
                 listener.position,
                 building.map_or(0, |building| building.query_generation()),
+                map_interior,
                 |direction| {
                     let direction = Vec3::from(direction).normalize();
                     building.is_some_and(|building| {
-                        building
-                            .solid_segment(
-                                ear,
-                                ear + direction * crate::sound_carry::EnclosureProbe::REACH,
-                            )
-                            .ok()
-                            .flatten()
-                            .is_some()
+                        crate::sound_carry::EnclosureProbe::blocked(
+                            building,
+                            ear,
+                            direction,
+                            map_interior,
+                        )
                     })
                 },
             );

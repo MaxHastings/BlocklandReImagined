@@ -14,21 +14,50 @@ pub struct Exposure {
 
 #[derive(Default)]
 pub struct EnclosureProbe {
-    last: Option<(std::time::Instant, [f32; 3], u64)>,
+    last: Option<(std::time::Instant, [f32; 3], u64, bool)>,
     exposure: Exposure,
 }
 
 impl EnclosureProbe {
     pub const RAYS: usize = 17;
     pub const REACH: f32 = 96.0;
+    /// The native dollhouse rooms exceed local brick scale. Only explicitly
+    /// requested interior context uses this existing static-interior query.
+    pub const MAP_INTERIOR_REACH: f32 = 2000.0;
+
+    pub fn blocked(
+        building: &crate::building::Building,
+        ear: glam::Vec3,
+        direction: glam::Vec3,
+        include_map_interior: bool,
+    ) -> bool {
+        building
+            .solid_segment(ear, ear + direction * Self::REACH)
+            .ok()
+            .flatten()
+            .is_some()
+            || (include_map_interior
+                && building
+                    .static_surface(ear, ear + direction * Self::MAP_INTERIOR_REACH)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(_, surface)| surface == bri_sim::map::MapSurface::Interior))
+    }
 
     pub fn sample(
         &mut self,
         listener: [f32; 3],
         revision: u64,
+        map_interior: bool,
         blocked: impl FnMut([f32; 3]) -> bool,
     ) -> Exposure {
-        self.sample_at(std::time::Instant::now(), listener, revision, blocked)
+        self.sample_at(
+            std::time::Instant::now(),
+            listener,
+            revision,
+            map_interior,
+            blocked,
+        )
     }
 
     fn sample_at(
@@ -36,16 +65,17 @@ impl EnclosureProbe {
         now: std::time::Instant,
         listener: [f32; 3],
         revision: u64,
+        map_interior: bool,
         mut blocked: impl FnMut([f32; 3]) -> bool,
     ) -> Exposure {
-        if let Some((last, position, old_revision)) = self.last {
+        if let Some((last, position, old_revision, old_context)) = self.last {
             let movement = listener
                 .iter()
                 .zip(position)
                 .map(|(a, b)| (a - b).powi(2))
                 .sum::<f32>();
             if now.duration_since(last).as_secs_f32() < 0.25
-                || (movement < 0.25 && old_revision == revision)
+                || (movement < 0.25 && old_revision == revision && old_context == map_interior)
             {
                 return self.exposure;
             }
@@ -77,7 +107,7 @@ impl EnclosureProbe {
             cover,
             enclosure: surround * (0.35 + 0.65 * cover),
         };
-        self.last = Some((now, listener, revision));
+        self.last = Some((now, listener, revision, map_interior));
         self.exposure
     }
 }
@@ -164,6 +194,153 @@ pub fn room(regions: &RegionMap, listener: [f32; 3]) -> Room {
 mod tests {
     use super::*;
     use bri_content::regions::{Region, RegionReverb};
+
+    #[test]
+    fn large_interior_context_is_opted_in_and_ignores_distant_terrain() {
+        use crate::building::Building;
+        use glam::Vec3;
+        use rapier3d::prelude::ColliderBuilder;
+        let fixture = |tag| {
+            Building::new(
+                Default::default(),
+                vec![
+                    ColliderBuilder::cuboid(250., 1., 250.)
+                        .translation(Vec3::new(0., 140., 0.))
+                        .user_data(tag),
+                    ColliderBuilder::cuboid(1., 70., 250.)
+                        .translation(Vec3::new(250., 70., 0.))
+                        .user_data(tag),
+                    ColliderBuilder::cuboid(1., 70., 250.)
+                        .translation(Vec3::new(-250., 70., 0.))
+                        .user_data(tag),
+                    ColliderBuilder::cuboid(250., 70., 1.)
+                        .translation(Vec3::new(0., 70., 250.))
+                        .user_data(tag),
+                    ColliderBuilder::cuboid(250., 70., 1.)
+                        .translation(Vec3::new(0., 70., -250.))
+                        .user_data(tag),
+                ],
+            )
+            .unwrap()
+        };
+        let interior = fixture(bri_sim::map::MapSurface::Interior as u128);
+        let terrain = fixture(bri_sim::map::MapSurface::Terrain as u128);
+        let ear = Vec3::new(0., 2., 0.);
+        let sample = |building: &Building, large, at: Vec3| {
+            EnclosureProbe::default().sample(at.to_array(), 0, large, |d| {
+                EnclosureProbe::blocked(building, at, Vec3::from(d).normalize(), large)
+            })
+        };
+        assert_eq!(sample(&interior, false, ear).enclosure, 0.0);
+        assert_eq!(sample(&interior, true, ear).enclosure, 1.0);
+        assert_eq!(
+            sample(&terrain, true, ear).enclosure,
+            0.0,
+            "distant landscape must not become an indoor room"
+        );
+        let outside = sample(&interior, true, Vec3::new(1000., 2., 0.));
+        assert!(outside.cover < 0.25 && outside.enclosure < 0.25);
+        let mut probe = EnclosureProbe::default();
+        let now = std::time::Instant::now();
+        probe.sample_at(now, ear.to_array(), 0, false, |_| false);
+        assert_eq!(
+            probe
+                .sample_at(
+                    now + std::time::Duration::from_millis(10),
+                    ear.to_array(),
+                    0,
+                    true,
+                    |_| panic!("context change bypassed bounded cadence")
+                )
+                .enclosure,
+            0.0
+        );
+        let mut calls = 0;
+        assert_eq!(
+            probe
+                .sample_at(
+                    now + std::time::Duration::from_millis(250),
+                    ear.to_array(),
+                    0,
+                    true,
+                    |_| {
+                        calls += 1;
+                        true
+                    }
+                )
+                .enclosure,
+            1.0
+        );
+        assert_eq!(
+            calls,
+            EnclosureProbe::RAYS,
+            "stationary context change must resample exactly bounded directions"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires actual packaged native maps; set BRI_AMBIENCE_CONTEXT_CONTENT"]
+    fn native_bedroom_kitchen_scale_and_outside_use_actual_collision() {
+        use crate::building::Building;
+        use glam::Vec3;
+        let content = std::path::PathBuf::from(
+            std::env::var_os("BRI_AMBIENCE_CONTEXT_CONTENT").expect("set native content root"),
+        );
+        for id in [
+            "v20/add-ons/map_bedroom/bedroom.mis",
+            "v20/add-ons/map_bedroomdark/bedroomdark.mis",
+            "v20/add-ons/map_kitchen/kitchen.mis",
+            "v20/add-ons/map_kitchendark/kitchendark.mis",
+        ] {
+            let native =
+                bri_sim::map::NativeMap::load(&content.join("map-bundle-017"), id).unwrap();
+            let ear = native
+                .scene
+                .nodes
+                .iter()
+                .find(|n| matches!(n.kind, bri_content::scene::Kind::Spawn))
+                .map(|n| {
+                    glam::Mat4::from_cols_array(&n.transform).transform_point3(Vec3::ZERO)
+                        + Vec3::Y * 2.
+                })
+                .unwrap();
+            let mut min = Vec3::splat(f32::INFINITY);
+            let mut max = Vec3::splat(f32::NEG_INFINITY);
+            for c in &native.colliders {
+                let collider = c.clone().build();
+                if bri_sim::map::MapSurface::from_tag(collider.user_data)
+                    == Some(bri_sim::map::MapSurface::Interior)
+                {
+                    let bounds = collider.compute_aabb();
+                    min = min.min(bounds.mins);
+                    max = max.max(bounds.maxs);
+                }
+            }
+            assert!(min.is_finite() && max.is_finite());
+            let mut building = Building::new(Default::default(), native.colliders).unwrap();
+            building.attach_terrain(native.terrain);
+            let sample = |at: Vec3, large| {
+                EnclosureProbe::default().sample(
+                    at.to_array(),
+                    building.query_generation(),
+                    large,
+                    |d| EnclosureProbe::blocked(&building, at, Vec3::from(d).normalize(), large),
+                )
+            };
+            let local = sample(ear, false);
+            let inside = sample(ear, true);
+            let outside = sample(Vec3::new(max.x + (max.x - min.x), ear.y, ear.z), true);
+            assert!(
+                inside.cover > local.cover + 0.3 && inside.enclosure > 0.8,
+                "{id}: local{local:?} inside{inside:?}"
+            );
+            assert!(outside.enclosure < 0.3, "{id}: outside{outside:?}");
+            let room = Some(bri_weapons::SoundEnvironment::Interior);
+            let air = Some(bri_weapons::SoundEnvironment::Exterior);
+            assert!(inside.acoustics(room, false).gain > outside.acoustics(room, false).gain + 0.4);
+            assert!(outside.acoustics(air, false).gain > inside.acoustics(air, false).gain + 0.4);
+        }
+    }
 
     #[test]
     fn live_brick_shapes_distinguish_roof_only_rooms_windows_and_open_rafters() {
@@ -259,12 +436,18 @@ mod tests {
         };
         let ear = Vec3::new(0., 2., 0.);
         let sample = |probe: &mut EnclosureProbe, building: &Building, now| {
-            probe.sample_at(now, ear.to_array(), building.query_generation(), |d| {
-                building
-                    .solid_segment(ear, ear + Vec3::from(d).normalize() * EnclosureProbe::REACH)
-                    .unwrap()
-                    .is_some()
-            })
+            probe.sample_at(
+                now,
+                ear.to_array(),
+                building.query_generation(),
+                false,
+                |d| {
+                    building
+                        .solid_segment(ear, ear + Vec3::from(d).normalize() * EnclosureProbe::REACH)
+                        .unwrap()
+                        .is_some()
+                },
+            )
         };
         building.sync_world(&world).unwrap();
         let mut probe = EnclosureProbe::default();
@@ -437,6 +620,7 @@ mod tests {
             now + std::time::Duration::from_millis(10),
             ear.to_array(),
             building.query_generation(),
+            false,
             |_| {
                 traced += 1;
                 false
