@@ -72,3 +72,36 @@ These last two corrections are formatter/diff checked only. Root must compile
 and rerun the original three acceptance cases, the adjacent stalled-deck case,
 harm units and relevant carrier/interaction controls before claiming success.
 No Cargo, native build or main push ran in the bot checkout.
+
+## Combined 9c3d rerun and remaining timed-shot correction
+
+Root combined `9c3d20b613a7f0267236dfc25d7fd9f01307f00c` passes all 40 selected
+related cases: original deck and objective, stalled-deck, all 15 physical
+objectives (including native carrier), all 11 physical interactions and 11 harm
+units. All four original deck layouts now have zero falls. Changed sim/chaos
+all-target Clippy passes. These are scoped results, not a full release pass.
+
+The original unfamiliar acceptance still fails, retained in root artifact
+`bot-release-check-9c3d20b613a7/acceptance_unfamiliar.log`: Variant(1) seed 2
+self-damage is now 20.037167 versus zero actual enemy damage; Variant(0) records
+no selected enemy through the glass. No assertion/seed/layout is changed.
+The glass metric reads `BotThought::visible`, the selected target, rather than
+all awareness; zero is not yet evidence that glass blocks visibility. No new
+visibility policy is justified by that aggregate opportunity count alone.
+
+The remaining self-hit throw is bot 6 at loop tick 4763, native fire tick 4884:
+planned enemy 95.26085 against own risk 60, actual self hit at native tick 5243.
+Further source inspection finds a definite clock mismatch: `combat::burst`'s
+resting branch returns the future fuse tick, but its path ends at the earlier
+resting contact. Harm reads the last path chord's time. It also truncates a
+timed blast to an earlier possible body contact as if it were an impact burst.
+That can credit bodies near a grenade before it actually explodes.
+
+Keep a stationary final chord through the predicted detonation tick, and for a
+timed throw price the blast at that predictor's endpoint and clock, retaining
+the existing pessimistic early-rebound risk. Do not fabricate immediate enemy
+damage at a possible bounce. Strengthen the existing predictor-versus-native
+burst test to require matching harm endpoint/time for every authored lifecycle
+case, and add a harm regression where a moving enemy is near an early contact
+but outside the blast by its fuse; the stationary enemy remains a positive
+60-damage control. Runtime/broker validation of this correction is pending.
