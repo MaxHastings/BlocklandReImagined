@@ -16,7 +16,7 @@ import tempfile
 
 import generated_addons
 from map_ambience.approvals import source_problems
-from map_ambience.processing import user_loop
+from map_ambience.processing import user_loop, user_mix_gain
 from map_ambience.sources import ensure_master
 import prepare_map_ambience_audition as beds
 
@@ -155,6 +155,9 @@ def build(cache, output, content, download=False, audition_only=False):
                 raw,processing=user_loop(original)
                 if sha(raw)!=row['loop_sha256']:
                     raise ValueError('user loop seam differs from the prepared audition candidate')
+                raw,mix_processing=user_mix_gain(raw,row['mix_gain_db'])
+                processing['mix']=dict(mix_processing,authority=row['mix_gain_authority'],
+                                       approved_unity_loop_sha256=row['loop_sha256'])
             elif row['kind'] == 'local':
                 original = ensure_master(row,cache,download).read_bytes()
                 if sha(original) != row['input_sha256']:
@@ -211,7 +214,7 @@ def build(cache, output, content, download=False, audition_only=False):
                         'a{color:#97d5ff}article{padding:16px;margin:16px 0;background:#242c35}audio{width:100%}</style>'
                         '<h1>Selected ambience sources</h1><p>Fixed candidate palette for the21 maps. '
                         'Listen to approve the recordings; final integrated levels remain pending. '
-                        'Bedroom/Kitchen have complementary indoor/outdoor beds plus the localized Kitchen fridge; other maps retain their existing setup. Forest birds are sparse fixed-source calls35–85s apart in the candidate policy. '
+                        'Bedroom/Kitchen have complementary indoor/outdoor beds plus the localized Kitchen fridge; other maps retain their existing setup. Forest birds are sparse fixed-source calls35â€“85s apart in the candidate policy. '
                         'Only localized fridge, waterfall and shore waves remain; other source files are archived inactive. '
                         'These controls play clips solo and do not demonstrate runtime spatial treatment. No autoplay.</p>'+''.join(rows))
             (output.parent/'audition.html').write_text(document,encoding='utf-8')
@@ -242,6 +245,8 @@ def problems(repo, directory):
             if r['input_sha256'] != pinned['input_sha256'] or r['source_id'] != pinned['source_id']:
                 out.append(r['key']+': recording differs from pinned source')
             out.extend(source_problems(registry,pinned['input_sha256']))
+            if pinned.get('user_edit') and (r.get('mix_gain_db')!=pinned['mix_gain_db'] or r.get('mix_gain_authority')!=pinned['mix_gain_authority']):
+                out.append(r['key']+': packaged mix gain differs from direct user authority')
             if pinned.get('user_edit') and pinned.get('loop_acceptance')!='approved':
                 out.append(r['key']+': loop seam approval pending')
             if r.get('source_approval') != approval_receipt(registry,pinned['input_sha256']):

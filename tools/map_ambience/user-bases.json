@@ -29,7 +29,9 @@
       "loop_frames": 3182608,
       "loop_sha256": "2de12887706c940e2d8f26d6f874400fbb3778b6d05f0785bf9212f62e8ce85a",
       "loop_acceptance": "approved",
-      "loop_approval_evidence": "Maxwell replied yeah that's good after clarification and playback of BOTH full72.17second prepared loops;250ms seam-only overlap, levels/EQ unchanged."
+      "loop_approval_evidence": "Maxwell replied yeah that's good after clarification and playback of BOTH full72.17second prepared loops;250ms seam-only overlap, levels/EQ unchanged.",
+      "mix_gain_db": 6.0,
+      "mix_gain_authority": "Maxwell direct request in release coordinator chat: can we raise ambiance up like6dB? Applied only to the two authored bases; Storm and local emitters unchanged."
     },
     {
       "key": "outdoor-base",
@@ -58,7 +60,9 @@
       "loop_frames": 3182608,
       "loop_sha256": "75fe152c1c08e41f00ef3355c4bc176fccbc604928f7647146e3200fc5baa563",
       "loop_acceptance": "approved",
-      "loop_approval_evidence": "Maxwell replied yeah that's good after clarification and playback of BOTH full72.17second prepared loops;250ms seam-only overlap, levels/EQ unchanged."
+      "loop_approval_evidence": "Maxwell replied yeah that's good after clarification and playback of BOTH full72.17second prepared loops;250ms seam-only overlap, levels/EQ unchanged.",
+      "mix_gain_db": 6.0,
+      "mix_gain_authority": "Maxwell direct request in release coordinator chat: can we raise ambiance up like6dB? Applied only to the two authored bases; Storm and local emitters unchanged."
     }
   ],
   "upstream_provenance": "Maxwell confirms edits of approved review recordings; exact per-file parent assignment unspecified, retain complete approved-source credits without claiming all were mixed",
