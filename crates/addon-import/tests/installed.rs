@@ -71,6 +71,66 @@ fn addon() -> PathBuf {
     dir
 }
 
+/// Match the game's automatic import layout and invoke the shipped CLI.
+/// Installed content is writable; an actual v20 reference remains protected.
+#[test]
+fn automatic_import_stages_inside_content_and_reads_sibling_dependencies() {
+    let root = installed_game();
+    let source = root.join("Add-Ons/Brick_Test_Dirt");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::rename(addon(), &source).unwrap();
+    write(
+        &source.join("server.cs"),
+        "ForceRequiredAddOn(\"Support_One\");\nexec(\"./Bricks.cs\");",
+    );
+    let bricks = std::fs::read_to_string(source.join("Bricks.cs")).unwrap();
+    write(
+        &source.join("Bricks.cs"),
+        &bricks.replace(": brick1x1Data", ": siblingBrickData"),
+    );
+    write(
+        &root.join("Add-Ons/Support_One/server.cs"),
+        "ForceRequiredAddOn(\"Support_Two\");",
+    );
+    write(
+        &root.join("Add-Ons/Support_Two/server.cs"),
+        "datablock fxDTSBrickData(siblingBrickData : brick1x1Data) { subCategory = \"Sibling\"; };",
+    );
+    let out = root.join("addons/.staging/brick_test_dirt");
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_bri-import-addon"))
+        .arg(&source)
+        .arg(&out)
+        .arg("--installed")
+        .arg(&root)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(report["summary"]["dependencies_missing"], 0, "{report}");
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/bricks.json")).unwrap()).unwrap();
+    assert_eq!(catalog["bricks"][0]["subcategory"], "Sibling");
+    // Removing --reference from automatic imports must not weaken the
+    // offline importer's existing source-install protection.
+    let forbidden = root.join("addons/protected-output");
+    let error = import(&Options {
+        input: source,
+        out: forbidden.clone(),
+        reference: Some(root.clone()),
+        installed: Some(root.clone()),
+        ..Default::default()
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("outside the read-only source"));
+    assert!(!forbidden.exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn a_brick_inherits_a_stock_brick_from_the_installed_game() {
     let installed = installed_game();

@@ -133,6 +133,18 @@ pub fn convert(
     scene: &Scene,
     output: &Path,
 ) -> Result<Option<Environment>> {
+    convert_with_sky_bundle(root, source, scene, output, None)
+}
+
+/// Use exact original sky resources, or their verified copies already in
+/// an installed native map bundle. The incoming mission owns all sky policy.
+pub fn convert_with_sky_bundle(
+    root: &Path,
+    source: &str,
+    scene: &Scene,
+    output: &Path,
+    sky_bundle: Option<&Path>,
+) -> Result<Option<Environment>> {
     let skies: Vec<_> = scene
         .nodes
         .iter()
@@ -150,64 +162,58 @@ pub fn convert(
         .get("materiallist")
         .map(|v| v.replace('\\', "/"))
         .unwrap_or_default();
-    let dml = if let Some(local) = dml.strip_prefix("./") {
-        format!(
-            "{}/{local}",
-            source.rsplit_once('/').context("Mission lacks parent")?.0
-        )
-    } else if let Some(base) = dml.strip_prefix("~/") {
-        format!(
-            "{}/{base}",
-            source.split_once('/').context("Mission lacks mod root")?.0
-        )
-    } else {
+    let dml = if dml.is_empty() {
         dml
+    } else {
+        crate::mission::asset_path(source, &dml)?
     };
     let textures = flag(p, "useskytextures", true)?;
     // Destruct deliberately has no material list and no sky textures. Preserve
     // its fog-color backdrop rather than inventing replacement image resources.
-    let (bytes, names) = if dml.is_empty() && !textures {
-        (Vec::new(), Vec::new())
-    } else {
-        let bytes = read_original(root, &dml)?
-            .with_context(|| format!("Missing sky material list {dml}"))?;
+    let (source_sha256, images) = if dml.is_empty() && !textures {
+        (format!("{:x}", Sha256::digest([])), Vec::new())
+    } else if let Some(bytes) = read_original(root, &dml)? {
         let names = material_names(std::str::from_utf8(&bytes)?)?;
-        (bytes, names)
-    };
-    let mut images = vec![];
-    for name in names {
-        let stem = format!(
-            "{}/{name}",
-            dml.rsplit_once('/').context("Sky path lacks parent")?.0
-        );
-        let mut found = None;
-        for path in [
-            stem.clone(),
-            format!("{stem}.png"),
-            format!("{stem}.jpg"),
-            format!("{stem}.jpeg"),
-        ] {
-            if let Some(bytes) = read_original(root, &path)? {
-                found = Some((path, bytes));
-                break;
+        let mut images = vec![];
+        for name in names {
+            let stem = format!(
+                "{}/{name}",
+                dml.rsplit_once('/').context("Sky path lacks parent")?.0
+            );
+            let mut found = None;
+            for path in [
+                stem.clone(),
+                format!("{stem}.png"),
+                format!("{stem}.jpg"),
+                format!("{stem}.jpeg"),
+            ] {
+                if let Some(bytes) = read_original(root, &path)? {
+                    found = Some((path, bytes));
+                    break;
+                }
             }
+            let (source, bytes) = found.with_context(|| format!("Missing sky image {stem}"))?;
+            let decoded = image::load_from_memory(&bytes)?;
+            let hash = format!("{:x}", Sha256::digest(&bytes));
+            let file = format!(
+                "{hash}.{}",
+                source.rsplit('.').next().context("Image lacks extension")?
+            );
+            std::fs::write(output.join(&file), bytes)?;
+            images.push(Image {
+                file,
+                source,
+                sha256: hash,
+                width: decoded.width(),
+                height: decoded.height(),
+            });
         }
-        let (source, bytes) = found.with_context(|| format!("Missing sky image {stem}"))?;
-        let decoded = image::load_from_memory(&bytes)?;
-        let hash = format!("{:x}", Sha256::digest(&bytes));
-        let file = format!(
-            "{hash}.{}",
-            source.rsplit('.').next().context("Image lacks extension")?
-        );
-        std::fs::write(output.join(&file), bytes)?;
-        images.push(Image {
-            file,
-            source,
-            sha256: hash,
-            width: decoded.width(),
-            height: decoded.height(),
-        });
-    }
+        (format!("{:x}", Sha256::digest(&bytes)), images)
+    } else {
+        installed_sky(sky_bundle, &dml, output)?
+            .with_context(|| format!("Missing sky material list {dml}; supply its original assets with --reference or install matching vanilla map content"))?
+    };
+    let mut images = images;
     let face_count = images.len().min(6);
     let faces = images.drain(..face_count).collect();
     let reflection = if images.is_empty() {
@@ -239,7 +245,7 @@ pub fn convert(
     let env = Environment {
         schema_version: 2,
         source_materials: dml,
-        source_sha256: format!("{:x}", Sha256::digest(&bytes)),
+        source_sha256,
         faces,
         reflection,
         clouds,
@@ -259,9 +265,252 @@ pub fn convert(
     env.validate()?;
     Ok(Some(env))
 }
+
+fn installed_sky(
+    bundle: Option<&Path>,
+    dml: &str,
+    output: &Path,
+) -> Result<Option<(String, Vec<Image>)>> {
+    let Some(bundle) = bundle else {
+        return Ok(None);
+    };
+    let bytes =
+        read_original(bundle, "bundle.json")?.context("Installed sky bundle has no bundle.json")?;
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let mut selected: Option<(String, Vec<Image>)> = None;
+    for value in manifest["environments"]
+        .as_object()
+        .into_iter()
+        .flat_map(|m| m.values())
+    {
+        if !value["source_materials"]
+            .as_str()
+            .is_some_and(|p| p.eq_ignore_ascii_case(dml))
+        {
+            continue;
+        }
+        let env: Environment = serde_json::from_value(value.clone())?;
+        env.validate()?;
+        let images: Vec<_> = env
+            .faces
+            .into_iter()
+            .chain(env.reflection)
+            .chain(env.clouds.into_iter().map(|c| c.image))
+            .collect();
+        ensure!(
+            (6..=10).contains(&images.len()),
+            "Installed sky {dml} has no complete image list"
+        );
+        if let Some((hash, previous)) = &selected {
+            let identity = |images: &[Image]| {
+                images
+                    .iter()
+                    .map(|i| {
+                        (
+                            i.source.to_ascii_lowercase(),
+                            i.sha256.clone(),
+                            i.width,
+                            i.height,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            ensure!(
+                hash == &env.source_sha256 && identity(previous) == identity(&images),
+                "Ambiguous installed sky resources for {dml}"
+            );
+        } else {
+            selected = Some((env.source_sha256, images));
+        }
+    }
+    let Some((hash, images)) = selected else {
+        return Ok(None);
+    };
+    // Validate every resource before writing. The native bundle contains
+    // original image bytes, so identity is independent of any map's fog.
+    let mut verified = Vec::new();
+    for image in images {
+        let bytes = read_original(bundle, &image.file)?
+            .with_context(|| format!("Missing installed sky image {}", image.file))?;
+        ensure!(
+            format!("{:x}", Sha256::digest(&bytes)) == image.sha256,
+            "Installed sky image checksum mismatch: {}",
+            image.file
+        );
+        let dimensions = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()?
+            .into_dimensions()?;
+        ensure!(
+            dimensions == (image.width, image.height),
+            "Installed sky image dimensions differ: {}",
+            image.file
+        );
+        ensure!(
+            bri_content::brick_materials::safe_relative(&image.source),
+            "Unsafe installed sky source"
+        );
+        // Use the verified hash for the output basename.
+        let ext = Path::new(&image.file)
+            .extension()
+            .and_then(|s| s.to_str())
+            .context("Installed sky image lacks extension")?;
+        let file = format!("{}.{ext}", image.sha256);
+        let mut image = image;
+        image.file = file;
+        verified.push((image, bytes));
+    }
+    let mut images = Vec::new();
+    for (image, bytes) in verified {
+        std::fs::write(output.join(&image.file), bytes)?;
+        images.push(image);
+    }
+    Ok(Some((hash, images)))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct SkyFixture(std::path::PathBuf);
+    impl Drop for SkyFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn installed_fixture() -> Result<(SkyFixture, Environment)> {
+        let root = std::env::temp_dir().join(format!(
+            "bri-installed-sky-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let fixture = SkyFixture(root.clone());
+        let source = root.join("original/base/data/skies/Shared");
+        std::fs::create_dir_all(&source)?;
+        std::fs::create_dir(root.join("native"))?;
+        std::fs::create_dir(root.join("empty"))?;
+        std::fs::create_dir(root.join("out"))?;
+        for i in 0..10 {
+            image::RgbImage::from_pixel(1, 1, image::Rgb([i * 20, 0, 0]))
+                .save(source.join(format!("{i}.png")))?;
+        }
+        std::fs::write(
+            source.join("resource.dml"),
+            (0..10)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )?;
+        let mission = "Add-Ons/Map_Original/map.mis";
+        let scene = crate::mission::read(
+            "new Sky() { materialList = \"~/data/skies/Shared/resource.dml\"; };",
+            mission,
+        )?;
+        let env = convert(
+            &root.join("original"),
+            mission,
+            &scene,
+            &root.join("native"),
+        )?
+        .unwrap();
+        std::fs::write(
+            root.join("native/bundle.json"),
+            serde_json::to_vec(
+                &serde_json::json!({"environments":{"original":env,"another":env}}),
+            )?,
+        )?;
+        Ok((fixture, env))
+    }
+
+    #[test]
+    fn installed_exact_sky_preserves_images_but_uses_the_incoming_mission_policy() -> Result<()> {
+        let (fixture, original) = installed_fixture()?;
+        let root = &fixture.0;
+        let mission = "Add-Ons/Map_New/map.mis";
+        let scene = crate::mission::read(
+            "new Sky() { materialList = \"~/data/skies/shared/resource.dml\"; useSkyTextures = \"0\"; skySolidColor = \"0.1 0.2 0.3\"; fogDistance = \"33\"; visibleDistance = \"444\"; fogColor = \"0.2 0.3 0.4\"; windVelocity = \"0 1 0\"; cloudSpeed1 = \"0.064\"; cloudHeightPer[0] = \"0.25\"; };",
+            mission,
+        )?;
+        assert!(
+            convert(&root.join("empty"), mission, &scene, &root.join("out"))
+                .unwrap_err()
+                .to_string()
+                .contains("Missing sky material list")
+        );
+        let converted = convert_with_sky_bundle(
+            &root.join("empty"),
+            mission,
+            &scene,
+            &root.join("out"),
+            Some(&root.join("native")),
+        )?
+        .unwrap();
+        assert_eq!(converted.source_sha256, original.source_sha256);
+        assert!(!converted.textures);
+        assert_eq!(converted.fog.start, 33.0);
+        assert_eq!(converted.fog.end, 444.0);
+        assert_eq!(converted.solid_color, [0.1, 0.2, 0.3]);
+        assert_eq!(converted.clouds[0].velocity, [0.0, 2.0]);
+        assert_eq!(converted.clouds[0].center_height, 0.25);
+        assert_eq!(
+            converted.reflection.as_ref().unwrap().source,
+            original.reflection.as_ref().unwrap().source
+        );
+        for image in converted
+            .faces
+            .iter()
+            .chain(converted.reflection.iter())
+            .chain(converted.clouds.iter().map(|c| &c.image))
+        {
+            assert_eq!(
+                std::fs::read(root.join("native").join(&image.file))?,
+                std::fs::read(root.join("out").join(&image.file))?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn installed_sky_refuses_other_materials_corruption_traversal_and_ambiguous_identity()
+    -> Result<()> {
+        let (fixture, env) = installed_fixture()?;
+        let root = &fixture.0;
+        let bundle = root.join("native");
+        let output = root.join("out");
+        let dml = env.source_materials.clone();
+        assert!(
+            installed_sky(Some(&bundle), "base/data/skies/Other/resource.dml", &output)?.is_none()
+        );
+        let pristine = serde_json::to_value(&env)?;
+        for field in ["hash", "dimensions", "traversal", "ambiguous"] {
+            let mut modified = pristine.clone();
+            match field {
+                "hash" => modified["faces"][0]["sha256"] = serde_json::json!("0".repeat(64)),
+                "dimensions" => modified["faces"][0]["width"] = serde_json::json!(2),
+                "traversal" => modified["faces"][0]["file"] = serde_json::json!("../outside.png"),
+                "ambiguous" => modified["source_sha256"] = serde_json::json!("f".repeat(64)),
+                _ => unreachable!(),
+            }
+            let mut environments = serde_json::json!({"modified":modified});
+            if field == "ambiguous" {
+                environments["original"] = pristine.clone();
+            }
+            std::fs::write(
+                bundle.join("bundle.json"),
+                serde_json::to_vec(&serde_json::json!({"environments":environments}))?,
+            )?;
+            assert!(
+                installed_sky(Some(&bundle), &dml, &output).is_err(),
+                "accepted {field}"
+            );
+            assert_eq!(
+                std::fs::read_dir(&output)?.count(),
+                0,
+                "refusal wrote partial resources: {field}"
+            );
+        }
+        Ok(())
+    }
     #[test]
     fn reflection_slot_is_not_a_cloud_and_empty_skies_need_no_images() -> Result<()> {
         struct Fixture(std::path::PathBuf);

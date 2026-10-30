@@ -61,13 +61,14 @@ fn shape_texture(root: &Path, source: &str, name: &str) -> Result<Option<String>
 pub fn run(args: Vec<String>) -> Result<()> {
     ensure!(
         args.len() >= 4,
-        "Usage: map_bundle <v20-root> <converted-dir> <new-output-dir> [--core-script <recovered-core-cs>] [--stand-in-missing-terrain-textures] <mission-virtual-path> ..."
+        "Usage: map_bundle <v20-root> <converted-dir> <new-output-dir> [--core-script <recovered-core-cs>] [--sky-bundle <installed-native-map-bundle>] [--stand-in-missing-terrain-textures] <mission-virtual-path> ..."
     );
     let root = PathBuf::from(&args[0]).canonicalize()?;
     let content = PathBuf::from(&args[1]).canonicalize()?;
     let output = PathBuf::from(&args[2]);
     let mut missions = Vec::new();
     let mut core_script = None;
+    let mut sky_bundle = None;
     // Community maps can name a terrain texture they never shipped; Blockland
     // drew those layers without one. With this option each such layer gets a
     // plain grey stand-in and is listed under `stand_in_textures`.
@@ -76,6 +77,13 @@ pub fn run(args: Vec<String>) -> Result<()> {
     while at < args.len() {
         if args[at] == "--stand-in-missing-terrain-textures" {
             stand_in = true;
+        } else if args[at] == "--sky-bundle" {
+            ensure!(sky_bundle.is_none(), "Duplicate installed sky bundle");
+            at += 1;
+            sky_bundle = Some(
+                PathBuf::from(args.get(at).context("Missing installed sky bundle")?)
+                    .canonicalize()?,
+            );
         } else if args[at] == "--core-script" {
             ensure!(core_script.is_none(), "Duplicate core script");
             at += 1;
@@ -100,6 +108,12 @@ pub fn run(args: Vec<String>) -> Result<()> {
         !parent.starts_with(&root) && !parent.starts_with(&content),
         "Output must be outside original/native source content"
     );
+    if let Some(bundle) = &sky_bundle {
+        ensure!(
+            !parent.starts_with(bundle),
+            "Output must be outside installed sky source content"
+        );
+    }
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(content.join("manifest.json"))?)?;
     let records = manifest["records"]
@@ -411,7 +425,13 @@ pub fn run(args: Vec<String>) -> Result<()> {
         }
     }
     for (path, (_, scene)) in missions.iter().zip(&scenes) {
-        if let Some(environment) = crate::environment::convert(&root, path, scene, &output)? {
+        if let Some(environment) = crate::environment::convert_with_sky_bundle(
+            &root,
+            path,
+            scene,
+            &output,
+            sky_bundle.as_deref(),
+        )? {
             environments.insert(scene.id.clone(), environment);
         }
         waters.insert(
