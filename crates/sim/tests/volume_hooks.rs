@@ -12,7 +12,7 @@ use bri_world::{OwnerId, World};
 use glam::{Mat4, Vec3};
 use rapier3d::prelude::*;
 use serde_json::json;
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 const RULES: &str = r#"
 fn on_volume(e) {
@@ -27,18 +27,17 @@ fn cmd_go(p, x) {
 }
 "#;
 
-struct Root(PathBuf);
-impl Drop for Root {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 fn catalog() -> Arc<Catalog> {
-    let root = Root(std::env::temp_dir().join(format!("bri-volume-hooks-{}", std::process::id())));
-    std::fs::create_dir_all(root.0.join("zone")).unwrap();
-    let write =
-        |file: &str, value: String| std::fs::write(root.0.join("zone").join(file), value).unwrap();
+    // Both tests load catalogs concurrently in one process. Each fixture
+    // owns its directory so dropping one cannot delete the other's files.
+    let root = tempfile::Builder::new()
+        .prefix("bri-volume-hooks-")
+        .tempdir()
+        .unwrap();
+    std::fs::create_dir_all(root.path().join("zone")).unwrap();
+    let write = |file: &str, value: String| {
+        std::fs::write(root.path().join("zone").join(file), value).unwrap()
+    };
     write(
         "package.json",
         json!({
@@ -74,7 +73,7 @@ fn catalog() -> Arc<Catalog> {
             role: None,
         }],
     };
-    Arc::new(Catalog::load(&root.0, &set, true).unwrap_or_else(|e| panic!("{e:#?}")))
+    Arc::new(Catalog::load(root.path(), &set, true).unwrap_or_else(|e| panic!("{e:#?}")))
 }
 
 fn volume(id: &str, centre: [f32; 3]) -> Volume {
