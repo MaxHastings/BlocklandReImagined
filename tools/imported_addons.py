@@ -20,6 +20,9 @@ def importer_hash():
         (REPO / 'Cargo.toml').read_bytes().replace(b'\r\n', b'\n'),
         (REPO / 'Cargo.lock').read_bytes().replace(b'\r\n', b'\n'),
         (REPO / 'tools/addon_bundle.py').read_bytes().replace(b'\r\n', b'\n'),
+        (REPO / 'tools/map_ambience/original_policy.py').read_bytes().replace(b'\r\n', b'\n'),
+        (REPO / 'tools/map_ambience/original-emitter-policy.json').read_bytes().replace(b'\r\n', b'\n'),
+        (REPO / 'tools/map_ambience/original-overlay.rhai').read_bytes().replace(b'\r\n', b'\n'),
         Path(__file__).read_bytes().replace(b'\r\n', b'\n'))
 
 

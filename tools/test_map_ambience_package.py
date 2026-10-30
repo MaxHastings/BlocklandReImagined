@@ -40,7 +40,8 @@ class Palette(unittest.TestCase):
             files=lambda p:{f.relative_to(p).as_posix():build_map_ambience.sha(f.read_bytes()) for f in p.rglob('*') if f.is_file()}
             receipt={'schema_version':1,'audition_only':False,
                      'recipe_sha256':generated_addons.recipe_hash(build_map_ambience.REPO,'map-ambience'),
-                     'clips':clips,'maps':palette['maps'],'files':files(out),'rules_files':files(rules)}
+                     'clips':clips,'maps':palette['maps'],'files':files(out),'rules_files':files(rules),
+                     'upstream_source_credits':build_map_ambience.upstream_credits(registry)}
             (out/'map-ambience-generated.json').write_text(json.dumps(receipt))
             (bundle/'CREDITS.md').write_text('Map Ambience: map-ambience-generated.json\n')
             spec={'id':'map_ambience','generated':'map-ambience','enabled':True}
@@ -61,16 +62,13 @@ class Palette(unittest.TestCase):
             (rules/'package.json').unlink()
             self.assertTrue(addon_bundle.problems(out,spec,build_map_ambience.REPO),'missing server policy cannot ship as complete')
 
-    def test_chosen_detail_identity_is_not_overwritten_by_master_catalog_key(self):
-        palette, clips = build_map_ambience.selection()
-        self.assertEqual(len(palette['maps']), 21)
-        slots=json.loads((build_map_ambience.HERE/'priority-slots.json').read_text())['slots']
-        self.assertEqual(set(clips), {'dry-air','cold-air','leaves','shore','rain',
-                                      'bird-robin','bird-blackbird','fridge-loop'} | {s['key'] for s in slots})
-        for key, row in clips.items():
-            self.assertEqual(key,row['key'], 'master key must not replace the actual packaged clip identity')
-        self.assertEqual(clips['bird-robin']['source_id'],'original-wav:robin')
-        self.assertEqual(clips['bird-blackbird']['source_id'],'original-wav:blackbird')
+    def test_only_two_user_bases_storm_and_fridge_are_active(self):
+        palette,clips=build_map_ambience.selection()
+        self.assertEqual(len(palette['maps']),21)
+        self.assertEqual(set(clips),{'indoor-base','outdoor-base','rain','fridge-loop'})
+        for key in ['indoor-base','outdoor-base']:
+            self.assertEqual(clips[key]['source_id'],'user-edit:'+key)
+            self.assertTrue(clips[key]['user_edit'])
 
     def test_local_fridge_retains_evidenced_position_and_no_listener_environment_gate(self):
         palette, clips=build_map_ambience.selection()
@@ -83,23 +81,21 @@ class Palette(unittest.TestCase):
         self.assertEqual(sound['spatial'],{'reference_distance':45.0,'max_distance':270.0})
         self.assertNotIn('environment',sound,'local fridge follows actual distance/obstruction on either side of a room')
         self.assertTrue(sound['music'] and sound['looping'],'local loop uses existing streaming path')
-        self.assertEqual(build_map_ambience.sound_definition(clips['kitchen-day-indoor'])['environment'],'interior')
+        self.assertEqual(build_map_ambience.sound_definition(clips['indoor-base'])['environment'],'interior')
 
-    def test_priority_slots_are_independent_and_only_pairs_add_an_exterior_context_bed(self):
+    def test_all_nonstorm_maps_pair_user_contexts_without_random_layers(self):
         palette,clips=build_map_ambience.selection()
-        slots=json.loads((build_map_ambience.HERE/'priority-slots.json').read_text())['slots']
-        self.assertEqual(len(slots),11)
-        for slot in slots:
-            row=clips[slot['key']]
-            self.assertEqual(row['editing_slot'],slot['editable_file'])
-            self.assertEqual(row['prepared_key'],slot['source_key'])
-            self.assertEqual(build_map_ambience.sound_definition(row)['environment'],slot['environment'])
-        focused={s['map'] for s in slots}
+        storm=[]
         for m in palette['maps']:
-            if m['map'] in focused:
-                self.assertFalse(m['details'],'priority maps keep simple beds, no added random events')
-                contexts={clips[key]['environment'] for key in m['beds']}
-                self.assertEqual(contexts,{'interior','exterior'} if len(m['beds'])==2 else {'exterior'})
+            self.assertFalse(m['details'])
+            self.assertFalse(m['anchors'])
+            if m['name']=='Slate Storm Revised':
+                storm.append(m)
+                self.assertEqual(m['beds'],['rain'])
+            else:
+                self.assertEqual(m['beds'],['indoor-base','outdoor-base'])
+                self.assertEqual({build_map_ambience.sound_definition(clips[key])['environment'] for key in m['beds']},{'interior','exterior'})
+        self.assertEqual(len(storm),1)
 
     def test_audition_marker_is_rejected_by_public_generated_recipe_dispatch(self):
         with tempfile.TemporaryDirectory() as folder:

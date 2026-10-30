@@ -12,6 +12,7 @@ import subprocess
 
 import build_map_ambience
 from map_ambience.approvals import original_map_problems
+from map_ambience.original_policy import apply as apply_original_policy
 
 REPO=Path(__file__).resolve().parent.parent
 
@@ -48,10 +49,12 @@ def stage(seed,output,generated,importer,originals,settings):
     for name,archive in [('map_creek','Map_Creek.zip'),('map_forest','Map_Forest.zip')]:
         target=output/'content/addons'/name
         subprocess.run([str(importer),'map-audio',str(originals/archive),str(target)],check=True)
+        override=apply_original_policy(REPO,target)
         bad=original_map_problems(REPO,target)
         if bad: raise ValueError('; '.join(bad))
         receipt=json.loads((target/'map-audio-provenance.json').read_text())
-        source_hashes.update(r['sha256'] for r in receipt['sources'])
+        enabled=set(override['enabled_profiles']) if override else {r['profile'] for r in receipt['sources']}
+        source_hashes.update(r['sha256'] for r in receipt['sources'] if r['profile'] in enabled)
         if len(receipt['sources']) != (3 if name=='map_creek' else 1):
             raise ValueError('original emitter inventory differs from approved4')
         refreshed.append(json.loads((target/'map-audio-refresh.json').read_text()))
@@ -69,9 +72,9 @@ def stage(seed,output,generated,importer,originals,settings):
     (output/'README-AMBience.txt').write_text(
         'Private ambience preview; not merged/released v0.4.2. Start Launch-Ambience.cmd.\n'
         f'{len(source_hashes)} approved starting recordings. Added palette covers21maps; Arctic remains installed/off as before.\n'
-        'Bedroom/Kitchen each have indoor/outdoor day/night profile slots; Slopes, Slate and Slate Desert have outdoor slots.\n'
-        'Some slots currently share approved starting samples; final distinct edits and combined mix acceptance remain pending.\n'
-        'Kitchen fridge remains local. Other maps retain current setup, including Forest tree calls and original Creek/Forest Dark emitters.\n'
+        'Your indoor/outdoor bases cover all20 nonstorm maps, including player-built interiors. Storm retains its existing mix.\n'
+        'Only localized Kitchen fridge, Creek waterfall and shoreline waves are additional active ambience.\n'
+        'Other birds/frogs/crickets/old global bed variations are preserved inactive. Final combined game mix acceptance remains pending.\n'
         'Compare normal footsteps/tools/weapons/NPC/voice with outdoors, roof-only, sealed room and an opening.\n'
         'Waterfall retains its original loud level initially: specifically report masking near the waterfall.\n'
         'State/settings are isolated here; only a copy of existing settings was used.\n')
@@ -83,7 +86,7 @@ def stage(seed,output,generated,importer,originals,settings):
              'approved_recordings':len(source_hashes),'palette_maps':21,
              'palette_profiles':len(generated_receipt['clips']),'seed_files_verified':len(copied),
              'original_refreshes':refreshed,'generated_receipt_sha256':sha(generated/'map-ambience-generated.json'),
-             'mix_acceptance':'pending Maxwell final focused-slot choices/edits and combined in-game listening; approved starting recordings only',
+             'mix_acceptance':'two user bases and full prepared loop seams approved; combined in-game listening and release blessing pending',
              'note':'Whole-import geometry generation identity retained; private audio overlays are separately receipted.'}
     (output/'ambience-preview.json').write_text(json.dumps(receipt,indent=2)+'\n')
     print('Private content staged:',output,'; warm executables still required')

@@ -16,14 +16,12 @@ import tempfile
 
 import generated_addons
 from map_ambience.approvals import source_problems
-from map_ambience.processing import recessed_loop
+from map_ambience.processing import user_loop
 from map_ambience.sources import ensure_master
 import prepare_map_ambience_audition as beds
-import prepare_map_ambience_details as details
 
 REPO = Path(__file__).resolve().parent.parent
 HERE = REPO / 'tools/map_ambience'
-DETAILS = {'bird-robin': 'robin', 'bird-blackbird': 'blackbird'}
 
 
 def sha(raw):
@@ -33,6 +31,12 @@ def sha(raw):
 def approval_receipt(registry, source_hash):
     row = next((r for r in registry['sources'] if r['input_sha256'] == source_hash), None)
     return None if row is None else {k:row[k] for k in ['id','input_sha256','state','approval_evidence']}
+
+
+def upstream_credits(registry):
+    # Maxwell confirmed the new edits derive from this approved review palette.
+    # Preserve its authors/licenses without claiming every source was mixed.
+    return [r for r in registry['sources'] if not r['id'].startswith('user-edit:')]
 
 
 def clip_file(row):
@@ -81,29 +85,13 @@ def selection(repo=REPO):
     inventory = json.loads((here / 'maps.json').read_text(encoding='utf-8'))['maps']
     if palette['schema_version'] != 1 or len(palette['maps']) != 21 or {m['map'] for m in palette['maps']} != {m['id'] for m in inventory}:
         raise ValueError('palette must cover exactly the fixed21-map inventory')
-    chosen_beds = {c for m in palette['maps'] for c in m['beds']}
-    chosen_details = {c for m in palette['maps'] for c in m['details']}
-    chosen_locals = {c['clip'] for m in palette['maps'] for c in m.get('locals',[])}
-    slots = json.loads((here/'priority-slots.json').read_text())['slots']
-    slot_by_key = {s['key']:s for s in slots}
-    if len(slots)!=11 or len(slot_by_key)!=11 or len({s['editable_file'] for s in slots})!=11:
-        raise ValueError('priority matrix must retain11 independent editing/profile slots')
-    if not chosen_locals <= {'fridge-loop'}:
-        raise ValueError('local loop has no approved pinned recording')
-    if palette['detail_gap_seconds'] != [35,85]:
-        raise ValueError('policy timing differs from the fixed35..85s gap')
-    if not chosen_details <= DETAILS.keys():
-        raise ValueError('detail has no pinned original recording')
+    user = json.loads((here/'user-bases.json').read_text())['base_recordings']
+    if {r['key'] for r in user} != {'indoor-base','outdoor-base'} or len(user)!=2:
+        raise ValueError('exactly the two Maxwell-selected base recordings are required')
     for m in palette['maps']:
-        assigned=[s for s in slots if s['map']==m['map']]
-        if assigned and m['beds'] != [s['key'] for s in assigned]:
-            raise ValueError('priority map beds differ from their explicit editing slots')
-        if len(m['beds']) > (2 if assigned else 1) or len(m['details']) > 2 or len(m['anchors']) > 32:
-            raise ValueError('palette exceeds the chosen layer/anchor budget')
-        if len(assigned)==2 and {s['environment'] for s in assigned} != {'interior','exterior'}:
-            raise ValueError('paired beds must be complementary interior/exterior layers')
-        if bool(m['details']) != bool(m['anchors']):
-            raise ValueError('localized details need evidenced fixed anchors')
+        expected=['rain'] if m['map']=='v20/add-ons/map_slate_storm_revised/slatestormrevised.mis' else ['indoor-base','outdoor-base']
+        if m['beds'] != expected or m['details'] or m['anchors']:
+            raise ValueError('only universal bases and unchanged Storm are active; no random extra layers')
         if len(m.get('locals',[])) > 1:
             raise ValueError('palette exceeds one local loop per map')
         for local in m.get('locals',[]):
@@ -113,16 +101,11 @@ def selection(repo=REPO):
                 raise ValueError('local loop must retain its evidenced fridge surface position')
     catalog = {r['key']: r for r in json.loads((here / 'candidates.json').read_text())['clips']}
     masters = {r['key']: r for r in json.loads((here / 'masters.json').read_text())}
-    selected = {}
-    for key in chosen_beds:
-        slot=slot_by_key.get(key)
-        source=slot['source_key'] if slot else key
-        selected[key]=dict(catalog[source],key=key,prepared_key=source,kind='bed',source_id='freesound-preview:'+source)
-        if slot:
-            selected[key].update(environment=slot['environment'],editing_slot=slot['editable_file'])
-    selected.update({k: dict(masters[DETAILS[k]], key=k, kind='detail', source_id='original-wav:'+DETAILS[k]) for k in chosen_details})
-    selected.update({k: dict(masters['fridge-master'], key=k, kind='local', source_id='original-wav:fridge-master') for k in chosen_locals})
-    if any(len(('ma/'+key).encode())>32 for key,row in selected.items() if row['kind'] in {'bed','local'}):
+    selected={r['key']:dict(r,kind='bed',user_edit=True,quality=r['source_quality'],
+                           environment='interior' if r['key']=='indoor-base' else 'exterior') for r in user}
+    selected['rain']=dict(catalog['rain'],kind='bed',prepared_key='rain',source_id='freesound-preview:rain')
+    selected['fridge-loop']=dict(masters['fridge-master'],key='fridge-loop',kind='local',source_id='original-wav:fridge-master')
+    if any(len(('ma/'+key).encode())>32 for key in selected):
         raise ValueError('ambient operation key exceeds the existing32-byte limit')
     return palette, selected
 
@@ -141,15 +124,17 @@ def build(cache, output, content, download=False, audition_only=False):
     palette, selected = selection()
     registry = json.loads((HERE / 'source-approvals.json').read_text(encoding='utf-8'))
     pending = [p for r in selected.values() for p in source_problems(registry, r['input_sha256'])]
+    pending += [r['key']+': prepared loop seam hearing approval pending' for r in selected.values()
+                if r.get('user_edit') and r.get('loop_acceptance')!='approved']
     if pending and not audition_only:
         raise ValueError('; '.join(pending))
     if output.exists() and any(output.iterdir()) and not (output / 'map-ambience-generated.json').is_file():
         raise ValueError('refusing to overwrite a folder not owned by this generator')
     with tempfile.TemporaryDirectory(prefix='bri-ambience-') as folder:
         staged = Path(folder)
-        needed_beds={r['prepared_key'] for r in selected.values() if r['kind']=='bed'}
+        needed_beds={r['prepared_key'] for r in selected.values() if r['kind']=='bed' and not r.get('user_edit')}
         bed_rows = beds.build(cache, staged, content, download, selected_keys=needed_beds)
-        detail_rows = details.build(cache, staged / 'details',selected_only=True,download=download)
+        detail_rows = []
         bed_rows = {r['key']: r for r in bed_rows}
         detail_rows = {r['file'][:-4]: r for r in detail_rows}
         output.mkdir(parents=True, exist_ok=True)
@@ -163,7 +148,14 @@ def build(cache, output, content, download=False, audition_only=False):
         for key, row in sorted(selected.items()):
             is_bed = row['kind'] in {'bed','local'}
             source = staged / ('loops' if is_bed else 'details') / (row.get('prepared_key',key)+'.wav')
-            if row['kind'] == 'local':
+            if row.get('user_edit'):
+                original=(cache/row['input']).read_bytes()
+                if sha(original)!=row['input_sha256']:
+                    raise ValueError('user-edited base differs from its explicitly selected file')
+                raw,processing=user_loop(original)
+                if sha(raw)!=row['loop_sha256']:
+                    raise ValueError('user loop seam differs from the prepared audition candidate')
+            elif row['kind'] == 'local':
                 original = ensure_master(row,cache,download).read_bytes()
                 if sha(original) != row['input_sha256']:
                     raise ValueError('fridge source changed')
@@ -176,14 +168,6 @@ def build(cache, output, content, download=False, audition_only=False):
             else:
                 raw = source.read_bytes()
                 processing = bed_rows[row.get('prepared_key',key)]['processing'] if is_bed else detail_rows[key]
-            if row.get('prepared_key',key) == 'dry-air':
-                choices = json.loads((HERE/'followup-selections.json').read_text())['clips']
-                approved = next(c for c in choices if c['id']=='wind-recessed')
-                if approved['approval'] != 'approved' or approved['source']['input_sha256'] != row['input_sha256']:
-                    raise ValueError('recessed wind choice is not approved for this source')
-                raw = recessed_loop(raw)
-                processing = dict(processing, selected_treatment='high shelf -4dB at 2.5kHz; one-pole 8kHz lowpass; periodic state; no loudness compensation',
-                                  treatment_approval=approved['approval_evidence'])
             encoding=None
             if is_bed:
                 raw,encoding=encode_bed(raw)
@@ -210,6 +194,7 @@ def build(cache, output, content, download=False, audition_only=False):
         rules_files = {p.relative_to(rules).as_posix():sha(p.read_bytes()) for p in rules.rglob('*') if p.is_file()}
         receipt = {'schema_version':1,'recipe_sha256':generated_addons.recipe_hash(REPO,'map-ambience'),
                    'audition_only':audition_only,'clips':receipts,'maps':palette['maps'],'files':files,'rules_files':rules_files,
+                   'upstream_source_credits':upstream_credits(registry),
                    'mix_acceptance':'Pending ordinary-game listening with footsteps/tools/weapons/NPC/voice; solo source approval does not accept the mix.'}
         (output / 'map-ambience-generated.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
         if audition_only:
@@ -219,15 +204,15 @@ def build(cache, output, content, download=False, audition_only=False):
                 quality = r.get('quality','Derived directly from original PCM WAV')
                 rows.append('<article><h2>'+html.escape(r['key'])+'</h2><p>'+html.escape(maps)+
                             '</p><audio controls preload="none" src="'+html.escape(output.name+'/'+r['file'])+'"></audio><p>'+
-                            html.escape(quality)+' · '+html.escape(r['author'])+' · CC0 · <a href="'+
-                            html.escape(r['source'])+'">recording source</a></p></article>')
+                            html.escape(quality)+' | '+html.escape(r['author'])+' | '+html.escape(r['license'])+
+                            ' | '+html.escape(r['source'])+'</p></article>')
             document = ('<!doctype html><meta charset="utf-8"><title>Chosen ambience palette</title>'
                         '<style>body{background:#171c22;color:#e8edf2;font:18px system-ui;max-width:900px;margin:40px auto;padding:20px}'
                         'a{color:#97d5ff}article{padding:16px;margin:16px 0;background:#242c35}audio{width:100%}</style>'
                         '<h1>Selected ambience sources</h1><p>Fixed candidate palette for the21 maps. '
                         'Listen to approve the recordings; final integrated levels remain pending. '
                         'Bedroom/Kitchen have complementary indoor/outdoor beds plus the localized Kitchen fridge; other maps retain their existing setup. Forest birds are sparse fixed-source calls35–85s apart in the candidate policy. '
-                        'Creek and Forest Dark use their separately approved originals; Construct and Destruct retain deliberate quiet. '
+                        'Only localized fridge, waterfall and shore waves remain; other source files are archived inactive. '
                         'These controls play clips solo and do not demonstrate runtime spatial treatment. No autoplay.</p>'+''.join(rows))
             (output.parent/'audition.html').write_text(document,encoding='utf-8')
     return receipt
@@ -246,6 +231,8 @@ def problems(repo, directory):
             return ['Generated ambience inventory differs from the fixed palette']
         registry = json.loads((Path(repo) / 'tools/map_ambience/source-approvals.json').read_text(encoding='utf-8'))
         out = []
+        if receipt.get('upstream_source_credits')!=upstream_credits(registry):
+            out.append('Approved upstream palette credits missing or changed')
         wanted_sounds = {'map_ambience:'+key:sound_definition(row) for key,row in selected.items()}
         packaged = json.loads((directory/'assets/weapons.json').read_text())
         if packaged != {'schema_version':5,'id':'map_ambience','sounds':wanted_sounds}:
@@ -255,6 +242,8 @@ def problems(repo, directory):
             if r['input_sha256'] != pinned['input_sha256'] or r['source_id'] != pinned['source_id']:
                 out.append(r['key']+': recording differs from pinned source')
             out.extend(source_problems(registry,pinned['input_sha256']))
+            if pinned.get('user_edit') and pinned.get('loop_acceptance')!='approved':
+                out.append(r['key']+': loop seam approval pending')
             if r.get('source_approval') != approval_receipt(registry,pinned['input_sha256']):
                 out.append(r['key']+': packaged source approval evidence differs from the registry')
             clip = directory / 'assets/clips' / clip_file(pinned)

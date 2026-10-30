@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "candidate; recording approvals and integrated listening pending",
+  "status": "Two user-selected universal bases; Storm retained; only localized fridge/waterfall/shore extras",
   "detail_gap_seconds": [
     35,
     85
@@ -10,8 +10,8 @@
       "map": "v20/add-ons/map_bedroom/bedroom.mis",
       "name": "Bedroom",
       "beds": [
-        "bedroom-day-indoor",
-        "bedroom-day-outdoor"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -21,8 +21,8 @@
       "map": "v20/add-ons/map_bedroomdark/bedroomdark.mis",
       "name": "Bedroom - Dark",
       "beds": [
-        "bedroom-night-indoor",
-        "bedroom-night-outdoor"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -31,7 +31,10 @@
     {
       "map": "v20/add-ons/map_construct/construct.mis",
       "name": "Construct",
-      "beds": [],
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
       "details": [],
       "anchors": [],
       "locals": []
@@ -39,7 +42,10 @@
     {
       "map": "v20/add-ons/map_destruct/destruct.mis",
       "name": "Destruct",
-      "beds": [],
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
       "details": [],
       "anchors": [],
       "locals": []
@@ -48,7 +54,8 @@
       "map": "v20/add-ons/map_halloween_slate/halloweenslate.mis",
       "name": "Halloween Slate",
       "beds": [
-        "dry-air"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -58,8 +65,8 @@
       "map": "v20/add-ons/map_kitchen/kitchen.mis",
       "name": "Kitchen",
       "beds": [
-        "kitchen-day-indoor",
-        "kitchen-day-outdoor"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -85,8 +92,8 @@
       "map": "v20/add-ons/map_kitchendark/kitchendark.mis",
       "name": "Kitchen - Dark",
       "beds": [
-        "kitchen-night-indoor",
-        "kitchen-night-outdoor"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -112,7 +119,8 @@
       "map": "v20/add-ons/map_skylands/skylands.mis",
       "name": "Skylands",
       "beds": [
-        "dry-air"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -122,7 +130,8 @@
       "map": "v20/add-ons/map_slate/slate.mis",
       "name": "Slate",
       "beds": [
-        "slate-outdoor"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -132,7 +141,8 @@
       "map": "v20/add-ons/map_slate_desert/slatedesert.mis",
       "name": "Slate Desert",
       "beds": [
-        "slate-desert-outdoor"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -142,7 +152,8 @@
       "map": "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
       "name": "Slate Sea Revised",
       "beds": [
-        "shore"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -162,7 +173,8 @@
       "map": "v20/add-ons/map_slopes/slopes.mis",
       "name": "The Slopes",
       "beds": [
-        "slopes-outdoor"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -172,7 +184,8 @@
       "map": "v20/add-ons/map_tutorial/tutorial.mis",
       "name": "Tutorial",
       "beds": [
-        "dry-air"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -182,7 +195,8 @@
       "map": "map_arcticchallenge3:map/map_arcticchallenge3",
       "name": "Arctic Challenge v3",
       "beds": [
-        "cold-air"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -191,7 +205,10 @@
     {
       "map": "map_creek:map/map_creek",
       "name": "Creek",
-      "beds": [],
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
       "details": [],
       "anchors": [],
       "locals": []
@@ -200,7 +217,8 @@
       "map": "map_emeraldisles4:map/map_emeraldisles4",
       "name": "Emerald Isles 4",
       "beds": [
-        "dry-air"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -210,114 +228,11 @@
       "map": "map_forest:map/forest",
       "name": "Forest",
       "beds": [
-        "leaves"
+        "indoor-base",
+        "outdoor-base"
       ],
-      "details": [
-        "bird-robin",
-        "bird-blackbird"
-      ],
-      "anchors": [
-        [
-          -229.88425,
-          93.581604,
-          -427.95685
-        ],
-        [
-          -128.1373,
-          89.57373,
-          20.319881
-        ],
-        [
-          -567.6399,
-          101.466156,
-          -392.11853
-        ],
-        [
-          -666.7283,
-          107.24097,
-          -251.51157
-        ],
-        [
-          -127.137596,
-          89.195984,
-          38.46459
-        ],
-        [
-          -469.7141,
-          92.79404,
-          12.430859
-        ],
-        [
-          176.78004,
-          91.06091,
-          -54.692272
-        ],
-        [
-          -200.66443,
-          92.19673,
-          -349.009
-        ],
-        [
-          192.24428,
-          90.26603,
-          40.35657
-        ],
-        [
-          105.10704,
-          90.18264,
-          -52.287663
-        ],
-        [
-          -90.857376,
-          94.89106,
-          149.25104
-        ],
-        [
-          68.57323,
-          90.089745,
-          188.49278
-        ],
-        [
-          47.422318,
-          86.647125,
-          -33.308144
-        ],
-        [
-          -327.38602,
-          94.22575,
-          -56.68734
-        ],
-        [
-          -356.99432,
-          86.3672,
-          214.07086
-        ],
-        [
-          -229.55829,
-          95.59534,
-          72.9404
-        ],
-        [
-          -54.062347,
-          95.681946,
-          134.24565
-        ],
-        [
-          -150.22958,
-          91.41771,
-          27.341045
-        ],
-        [
-          -480.14923,
-          95.60338,
-          -195.29144
-        ],
-        [
-          71.47099,
-          91.8282,
-          -89.42041
-        ]
-      ],
+      "details": [],
+      "anchors": [],
       "anchor_evidence": {
         "reference": "addons/map_forest/map/forest/f3b7280895e208bf1aa35989fe6b91aa1689da60af58bb09434188d2b8ea8a8e.scene.json",
         "sha256": "b6106a2ea10ecf07fc6faff22c5172167b85def9500634aa9540dba98b07fc70",
@@ -328,7 +243,10 @@
     {
       "map": "map_forest:map/forestnight",
       "name": "Forest - Dark",
-      "beds": [],
+      "beds": [
+        "indoor-base",
+        "outdoor-base"
+      ],
       "details": [],
       "anchors": [],
       "locals": []
@@ -337,7 +255,8 @@
       "map": "map_paradise:map/gsf_paradise",
       "name": "GSF Paradise",
       "beds": [
-        "dry-air"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],
@@ -347,7 +266,8 @@
       "map": "map_paradise:map/gsf_paradise_night",
       "name": "GSF Paradise-Night",
       "beds": [
-        "dry-air"
+        "indoor-base",
+        "outdoor-base"
       ],
       "details": [],
       "anchors": [],

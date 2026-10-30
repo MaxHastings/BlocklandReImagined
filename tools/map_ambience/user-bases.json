@@ -23,11 +23,13 @@
         "eq": "unchanged",
         "rate": "preserved",
         "channels": "preserved",
-        "method": "linear end/start overlap; no normalization/pitch/extra events"
+        "method": "linear end/start overlap; no normalization/pitch/extra events",
+        "working_format": "PCM24 WAV, deterministic header; input remains original PCM16"
       },
       "loop_frames": 3182608,
-      "loop_sha256": "2b2143a72760500fa22359ea3162c586a34d1347c602229fe31da272e6a7b1ef",
-      "loop_acceptance": "Prepared seam candidate; final listening acceptance pending"
+      "loop_sha256": "2de12887706c940e2d8f26d6f874400fbb3778b6d05f0785bf9212f62e8ce85a",
+      "loop_acceptance": "approved",
+      "loop_approval_evidence": "Maxwell replied yeah that's good after clarification and playback of BOTH full72.17second prepared loops;250ms seam-only overlap, levels/EQ unchanged."
     },
     {
       "key": "outdoor-base",
@@ -50,11 +52,13 @@
         "eq": "unchanged",
         "rate": "preserved",
         "channels": "preserved",
-        "method": "linear end/start overlap; no normalization/pitch/extra events"
+        "method": "linear end/start overlap; no normalization/pitch/extra events",
+        "working_format": "PCM24 WAV, deterministic header; input remains original PCM16"
       },
       "loop_frames": 3182608,
-      "loop_sha256": "4232d2812e82f76e604d381fed8cd7ec5de4f2946f576bc749911db474523d0f",
-      "loop_acceptance": "Prepared seam candidate; final listening acceptance pending"
+      "loop_sha256": "75fe152c1c08e41f00ef3355c4bc176fccbc604928f7647146e3200fc5baa563",
+      "loop_acceptance": "approved",
+      "loop_approval_evidence": "Maxwell replied yeah that's good after clarification and playback of BOTH full72.17second prepared loops;250ms seam-only overlap, levels/EQ unchanged."
     }
   ],
   "upstream_provenance": "Maxwell confirms edits of approved review recordings; exact per-file parent assignment unspecified, retain complete approved-source credits without claiming all were mixed",
