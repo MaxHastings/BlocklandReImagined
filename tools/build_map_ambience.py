@@ -44,7 +44,7 @@ def sound_definition(row):
     if row['kind'] == 'local':
         sound['spatial'] = {'reference_distance':45.0,'max_distance':270.0}
     else:
-        sound['environment'] = 'interior' if row['key'] == 'room' else 'exterior'
+        sound['environment'] = row.get('environment','interior' if row['key'] == 'room' else 'exterior')
         if not looping:
             sound['spatial'] = {'reference_distance':12.0,'max_distance':160.0}
     return sound
@@ -83,6 +83,10 @@ def selection(repo=REPO):
     chosen_beds = {c for m in palette['maps'] for c in m['beds']}
     chosen_details = {c for m in palette['maps'] for c in m['details']}
     chosen_locals = {c['clip'] for m in palette['maps'] for c in m.get('locals',[])}
+    slots = json.loads((here/'priority-slots.json').read_text())['slots']
+    slot_by_key = {s['key']:s for s in slots}
+    if len(slots)!=11 or len(slot_by_key)!=11 or len({s['editable_file'] for s in slots})!=11:
+        raise ValueError('priority matrix must retain11 independent editing/profile slots')
     if not chosen_locals <= {'fridge-loop'}:
         raise ValueError('local loop has no approved pinned recording')
     if palette['detail_gap_seconds'] != [35,85]:
@@ -90,8 +94,13 @@ def selection(repo=REPO):
     if not chosen_details <= DETAILS.keys():
         raise ValueError('detail has no pinned original recording')
     for m in palette['maps']:
-        if len(m['beds']) > 1 or len(m['details']) > 2 or len(m['anchors']) > 32:
+        assigned=[s for s in slots if s['map']==m['map']]
+        if assigned and m['beds'] != [s['key'] for s in assigned]:
+            raise ValueError('priority map beds differ from their explicit editing slots')
+        if len(m['beds']) > (2 if assigned else 1) or len(m['details']) > 2 or len(m['anchors']) > 32:
             raise ValueError('palette exceeds the chosen layer/anchor budget')
+        if len(assigned)==2 and {s['environment'] for s in assigned} != {'interior','exterior'}:
+            raise ValueError('paired beds must be complementary interior/exterior layers')
         if bool(m['details']) != bool(m['anchors']):
             raise ValueError('localized details need evidenced fixed anchors')
         if len(m.get('locals',[])) > 1:
@@ -103,7 +112,13 @@ def selection(repo=REPO):
                 raise ValueError('local loop must retain its evidenced fridge surface position')
     catalog = {r['key']: r for r in json.loads((here / 'candidates.json').read_text())['clips']}
     masters = {r['key']: r for r in json.loads((here / 'masters.json').read_text())}
-    selected = {k: dict(catalog[k], kind='bed', source_id='freesound-preview:'+k) for k in chosen_beds}
+    selected = {}
+    for key in chosen_beds:
+        slot=slot_by_key.get(key)
+        source=slot['source_key'] if slot else key
+        selected[key]=dict(catalog[source],key=key,prepared_key=source,kind='bed',source_id='freesound-preview:'+source)
+        if slot:
+            selected[key].update(environment=slot['environment'],editing_slot=slot['editable_file'])
     selected.update({k: dict(masters[DETAILS[k]], key=k, kind='detail', source_id='original-wav:'+DETAILS[k]) for k in chosen_details})
     selected.update({k: dict(masters['fridge-master'], key=k, kind='local', source_id='original-wav:fridge-master') for k in chosen_locals})
     return palette, selected
@@ -143,7 +158,7 @@ def build(cache, output, content, download=False, audition_only=False):
         sounds, receipts = {}, []
         for key, row in sorted(selected.items()):
             is_bed = row['kind'] in {'bed','local'}
-            source = staged / ('loops' if is_bed else 'details') / (key+'.wav')
+            source = staged / ('loops' if is_bed else 'details') / (row.get('prepared_key',key)+'.wav')
             if row['kind'] == 'local':
                 original = (cache/row['input']).read_bytes()
                 if sha(original) != row['input_sha256']:
@@ -156,8 +171,8 @@ def build(cache, output, content, download=False, audition_only=False):
                     raise ValueError('fridge loop differs from the approved audition')
             else:
                 raw = source.read_bytes()
-                processing = bed_rows[key]['processing'] if is_bed else detail_rows[key]
-            if key == 'dry-air':
+                processing = bed_rows[row.get('prepared_key',key)]['processing'] if is_bed else detail_rows[key]
+            if row.get('prepared_key',key) == 'dry-air':
                 choices = json.loads((HERE/'followup-selections.json').read_text())['clips']
                 approved = next(c for c in choices if c['id']=='wind-recessed')
                 if approved['approval'] != 'approved' or approved['source']['input_sha256'] != row['input_sha256']:
@@ -207,7 +222,7 @@ def build(cache, output, content, download=False, audition_only=False):
                         'a{color:#97d5ff}article{padding:16px;margin:16px 0;background:#242c35}audio{width:100%}</style>'
                         '<h1>Selected ambience sources</h1><p>Fixed candidate palette for the21 maps. '
                         'Listen to approve the recordings; final integrated levels remain pending. '
-                        'One subtle bed per map at most plus the localized Kitchen fridge; Forest birds are sparse fixed-source calls35–85s apart in the candidate policy. '
+                        'Bedroom/Kitchen have complementary indoor/outdoor beds plus the localized Kitchen fridge; other maps retain their existing setup. Forest birds are sparse fixed-source calls35–85s apart in the candidate policy. '
                         'Creek and Forest Dark use their separately approved originals; Construct and Destruct retain deliberate quiet. '
                         'These controls play clips solo and do not demonstrate runtime spatial treatment. No autoplay.</p>'+''.join(rows))
             (output.parent/'audition.html').write_text(document,encoding='utf-8')

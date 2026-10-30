@@ -35,8 +35,9 @@ def priority_slots(output):
     rows=[]
     for name,source,placement in slots:
         target=directory/name
-        shutil.copyfile(output/'01-Editable-WAVs'/(source+'.wav'),target)
-        rows.append({'editable_file':name,'placement':placement,'starting_source':source+'.wav',
+        source_file=name.lower() if (output/'01-Editable-WAVs'/name.lower()).is_file() else source+'.wav'
+        shutil.copyfile(output/'01-Editable-WAVs'/source_file,target)
+        rows.append({'editable_file':name,'placement':placement,'starting_source':source_file,
                      'status':'Independent editing slot; current approved starting sample, not a newly distinct recording',
                      'sha256':sha(target.read_bytes())})
     with (output/'PRIORITY-TRACKS.csv').open('w',newline='',encoding='utf-8-sig') as f:
@@ -120,7 +121,7 @@ def export(candidate, preview_content, cache, output):
                         'quality':choice['quality'],'state':'Previously approved excerpt; reference only after simpler-bed direction, not scheduled for integration'})
 
     for m in palette:
-        if m['name'] in {'Bedroom','Bedroom - Dark','Kitchen','Kitchen - Dark'}:
+        if m['name'] in {'Bedroom','Bedroom - Dark','Kitchen','Kitchen - Dark'} and len(m['beds'])==1:
             place('dry-air',m['map'],'Planned context follow-up','continuous exterior loop',note='Approved recessed wind outside; complements Interior room bed; not yet added to r7 policy')
 
     # Validate every source before creating the deliverable directory.
@@ -169,7 +170,7 @@ def export(candidate, preview_content, cache, output):
     (output/'manifest.json').write_text(json.dumps({'candidate_recipe_sha256':receipt['recipe_sha256'],
             'latest_human_direction':'11 simple priority beds; retain Kitchen fridge and original proximity/waterfall emitters; other maps keep current setup; no extra random events for priority maps',
             'priority_editing_slots':priority,'sounds':manifest,'placements':placements},indent=2)+'\n')
-    for name in ['source-approvals.json','followup-selections.json','palette.json','requested-desert-source.json']:
+    for name in ['source-approvals.json','followup-selections.json','palette.json','priority-slots.json','requested-desert-source.json']:
         shutil.copyfile(builder.HERE/name,evidence/name)
     shutil.copyfile(candidate/'map-ambience-generated.json',evidence/'map-ambience-generated.json')
     for package in ['map_creek','map_forest']:
@@ -182,7 +183,13 @@ def export(candidate, preview_content, cache, output):
     text=('LATEST DIRECTION\nStart in 00-Priority-Map-Tracks:11 independently named files for Bedroom/Kitchen Indoor+Outdoor Day+Night, Slopes outdoor, Slate and Slate Desert. These are EDITING SLOTS seeded from the existing approved room/wind beds. Several currently contain the SAME samples; day/night and Slate/Desert are NOT falsely claimed to already be unique recordings. Edit these named copies independently to make the versions you want. PRIORITY-TRACKS.csv maps every slot. Kitchen fridge and all original proximity emitters stay separate and retained. No new random bird/gust events are planned for these focused maps. Other maps keep their current setup.\n\n'+text)
     text=text.replace('The2 approved gust excerpts are provided for editing but are not integrated in r7 yet.',
                       'The2 previously approved gust excerpts are reference only after the simpler-bed direction; they are not scheduled for integration.')
+    text=text.replace('these15 files',f'these {len(records)} files')
+    text=text.replace('Current r7 candidate has9 selected clips',f'Current generated candidate has {len(receipt["clips"])} selected clips')
+    text=text.replace('Planned exterior wind for Bedroom/Kitchen variants is listed separately from current placements.',
+                      'The placement table distinguishes current generated policy from any pending context follow-up.')
     guide.write_text(text,encoding='utf-8')
+    listen=output/'LISTEN.html'
+    listen.write_text(listen.read_text().replace('15 editable clips from13 recordings.',f'{len(records)} editable/reference clips from {len(source_copies)} recordings. Earlier gusts are references only after the simpler-bed direction.'),encoding='utf-8')
     (output/'ABLETON-NOTES.txt').write_text('Turn Warp OFF to preserve natural ambience timing. Ableton official reference: https://www.ableton.com/en/live-manual/12/audio-clips-tempo-and-warping/\nExport changed slots as WAV under the same names to a new folder; preserve channels/rate, no normalize.32-bit float or24-bit PCM are suitable. Profile gains remain separate; do not bake them twice.\n',encoding='utf-8')
     return {'folder':str(output),'editable_clips':len(records),'priority_slots':len(priority),'unique_sources':len(source_copies),'placement_rows':len(placements)}
 

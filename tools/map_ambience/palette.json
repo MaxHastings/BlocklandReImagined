@@ -10,7 +10,8 @@
       "map": "v20/add-ons/map_bedroom/bedroom.mis",
       "name": "Bedroom",
       "beds": [
-        "room"
+        "bedroom-day-indoor",
+        "bedroom-day-outdoor"
       ],
       "details": [],
       "anchors": [],
@@ -20,7 +21,8 @@
       "map": "v20/add-ons/map_bedroomdark/bedroomdark.mis",
       "name": "Bedroom - Dark",
       "beds": [
-        "room"
+        "bedroom-night-indoor",
+        "bedroom-night-outdoor"
       ],
       "details": [],
       "anchors": [],
@@ -56,7 +58,8 @@
       "map": "v20/add-ons/map_kitchen/kitchen.mis",
       "name": "Kitchen",
       "beds": [
-        "room"
+        "kitchen-day-indoor",
+        "kitchen-day-outdoor"
       ],
       "details": [],
       "anchors": [],
@@ -82,7 +85,8 @@
       "map": "v20/add-ons/map_kitchendark/kitchendark.mis",
       "name": "Kitchen - Dark",
       "beds": [
-        "room"
+        "kitchen-night-indoor",
+        "kitchen-night-outdoor"
       ],
       "details": [],
       "anchors": [],
@@ -118,7 +122,7 @@
       "map": "v20/add-ons/map_slate/slate.mis",
       "name": "Slate",
       "beds": [
-        "dry-air"
+        "slate-outdoor"
       ],
       "details": [],
       "anchors": [],
@@ -128,7 +132,7 @@
       "map": "v20/add-ons/map_slate_desert/slatedesert.mis",
       "name": "Slate Desert",
       "beds": [
-        "dry-air"
+        "slate-desert-outdoor"
       ],
       "details": [],
       "anchors": [],
@@ -158,7 +162,7 @@
       "map": "v20/add-ons/map_slopes/slopes.mis",
       "name": "The Slopes",
       "beds": [
-        "cold-air"
+        "slopes-outdoor"
       ],
       "details": [],
       "anchors": [],

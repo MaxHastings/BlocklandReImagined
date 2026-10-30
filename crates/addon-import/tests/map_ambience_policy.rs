@@ -32,6 +32,9 @@ impl Fixture {
         let palette: Value =
             serde_json::from_slice(&std::fs::read(here.join("palette.json")).unwrap()).unwrap();
         let maps = palette["maps"].as_array().unwrap().clone();
+        let slot_config: Value =
+            serde_json::from_slice(&std::fs::read(here.join("priority-slots.json")).unwrap())
+                .unwrap();
         let mut script = String::from("fn palette() {\n");
         let mut sounds = serde_json::Map::new();
         for m in &maps {
@@ -53,11 +56,19 @@ impl Fixture {
                 for key in m[kind].as_array().unwrap() {
                     let key = key.as_str().unwrap();
                     let mut sound = json!({"file":"tone.wav","looping":looping,"music":looping});
-                    sound["environment"] = json!(if key == "room" {
-                        "interior"
-                    } else {
-                        "exterior"
-                    });
+                    sound["environment"] = slot_config["slots"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|slot| slot["key"] == key)
+                        .map(|slot| slot["environment"].clone())
+                        .unwrap_or_else(|| {
+                            json!(if key == "room" {
+                                "interior"
+                            } else {
+                                "exterior"
+                            })
+                        });
                     if !looping {
                         sound["spatial"] = json!({"reference_distance":12.0,"max_distance":160.0});
                     }

@@ -17,6 +17,7 @@ RECIPES = {
                    'tools/prepare_map_ambience_audition.py', 'tools/prepare_map_ambience_details.py',
                    'tools/map_ambience/approvals.py', 'tools/map_ambience/source-approvals.json',
                    'tools/map_ambience/followup-selections.json',
+                   'tools/map_ambience/priority-slots.json',
                    'tools/map_ambience/processing.py',
                    'tools/map_ambience/candidates.json', 'tools/map_ambience/masters.json',
                    'tools/map_ambience/maps.json', 'tools/map_ambience/palette.json',
