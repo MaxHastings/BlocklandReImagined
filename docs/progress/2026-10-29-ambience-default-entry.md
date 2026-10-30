@@ -1,0 +1,7 @@
+# 2026-10-29 Ambience default release entry prepared
+
+After actual native package/Session/client checks passed and the warm private preview was delivered, added map_ambience generated recipe to the feature branch's default Add-On list. Existing dependency/companion handling enables map_ambience_rules after the shared recordings. Updated only the existing package inventory test's expected ID vector. Root explicitly approved these paths; no runtime algorithm, running preview or approved mix changed.
+
+Local Python ambience5, generated2 and closure9tests pass; package defaults rustfmt/diff check pass. No Cargo/GPU/performance work while Maxwell actively listens (observed preview PID8832). The Rust direct consumer test and final current-main bundle regeneration/freshness remain queued; this entry is not listening acceptance or merge approval.
+
+Read-only current preview logs show Slopes/Slate Desert loads reaching IN GAME and add-on-health problems0/unlisted0; no audio/decode failure in inspected lines. Retained source AudioEmitter scene nodes can still produce pre-existing renderer Unadapted wording although their actual companions now supply audio; scene bytes intentionally remain unchanged in the warm refresh. That wording is not evidence of a failed audio consumer, and is not used to claim subjective mix acceptance. No renderer project or source expansion opened. Maxwell feedback, scoped remaining checks/CI, release bundle integrity and guarded main integration remain open.

@@ -13,6 +13,8 @@ pub mod coverage;
 pub mod gltf;
 mod help;
 mod hole_bots;
+mod map_audio;
+pub use map_audio::refresh as refresh_map_audio;
 mod player_types;
 pub mod porting;
 pub mod ports;
@@ -390,6 +392,16 @@ fn import_map(opts: &Options, src: &source::Source) -> Result<Report> {
         .zip(&made.map_ids)
         .map(|(mission, map)| format!("map {map} from {mission}"))
         .collect();
+    report.diagnostics.extend(made.audio_diagnostics);
+    if let Some(rules) = made.audio_rules {
+        report.ports.push(crate::ports::Applied {
+            addon:src.name.clone(),port:"literal-map-audio".into(),status:"partial".into(),applied:true,
+            copy:"unlisted".into(),covers:vec![],values:BTreeMap::new(),files_changed:vec!["assets/weapons.json".into()],
+            rules:Some(rules),reason:None,
+            notes:"Bounded literal AudioEmitter adaptation; unsupported semantics remain explicit diagnostics.".into(),
+            handled:Default::default(),prefs:Default::default(),replaces:vec![],
+        });
+    }
     for (mission, map) in made.missions.iter().zip(&made.map_ids) {
         let provide = manifest["provides"]
             .as_array()
@@ -434,6 +446,14 @@ fn import_map(opts: &Options, src: &source::Source) -> Result<Report> {
                 .get("source_class")
                 .map_or("unknown", String::as_str);
             if class == "particleemitternode" && emitted.contains(&index) {
+                continue;
+            }
+            if class == "audioemitter"
+                && made
+                    .audio_nodes
+                    .get(map)
+                    .is_some_and(|nodes| nodes.contains(&index))
+            {
                 continue;
             }
             report.unsupported.push(Finding {

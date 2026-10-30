@@ -53,6 +53,9 @@ pub struct SoundAsset {
     pub data: ClipData,
     /// Optional intro followed by a held PCM loop and a cancellable release.
     pub sustain: Option<Sustain>,
+    /// Only an explicit native profile opts into preserving its distances
+    /// during ambient conversion. Ordinary bank/default ranges stay legacy.
+    pub authored_spatial: Option<crate::schema::Spatial>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -200,6 +203,7 @@ impl SoundAsset {
             playback,
             data: self.data.clone(),
             sustain: self.sustain,
+            authored_spatial: self.authored_spatial,
         }
     }
     /// This sound played at `pitch` times its own, heard out to `radius`
@@ -220,14 +224,17 @@ impl SoundAsset {
             playback,
             data: self.data.clone(),
             sustain: self.sustain,
+            authored_spatial: self.authored_spatial,
         }
     }
     pub fn as_ambient(&self, range: Option<f32>) -> Self {
         let mut playback = self.playback.clone();
-        playback.spatial = range.map(|range| crate::schema::Spatial {
-            reference_distance: (range * 0.25).max(1.0),
-            max_distance: range.max(1.0),
-            falloff: crate::schema::Falloff::Linear,
+        playback.spatial = range.map(|range| {
+            self.authored_spatial.unwrap_or(crate::schema::Spatial {
+                reference_distance: (range * 0.25).max(1.0),
+                max_distance: range.max(1.0),
+                falloff: crate::schema::Falloff::Linear,
+            })
         });
         playback.bus = Bus::Bed;
         playback.looping = true;
@@ -237,6 +244,7 @@ impl SoundAsset {
             playback,
             data: self.data.clone(),
             sustain: self.sustain,
+            authored_spatial: self.authored_spatial,
         }
     }
     pub fn as_music(&self, looping: bool) -> Self {
@@ -250,6 +258,7 @@ impl SoundAsset {
             playback,
             data: self.data.clone(),
             sustain: self.sustain,
+            authored_spatial: self.authored_spatial,
         }
     }
     /// A world sound `id` playing `data` (a decoded clip, or one of the
@@ -272,6 +281,7 @@ impl SoundAsset {
             },
             data,
             sustain: None,
+            authored_spatial: None,
         }
     }
 }
@@ -441,6 +451,7 @@ impl SoundBank {
                             playback: s.playback.clone(),
                             data: data.clone(),
                             sustain: None,
+                            authored_spatial: None,
                         }),
                     );
                 }

@@ -116,6 +116,7 @@ struct Voice {
     pitch_scale: f32,
     /// How much of its range reaches the listener (`Command::SetVoiceHearing`).
     hearing: crate::spatial::Hearing,
+    acoustics: crate::acoustics::VoiceAcoustics,
     real: bool,
     /// Music disabled: not mixed, restarts from the top when re-enabled.
     suspended: bool,
@@ -651,6 +652,11 @@ impl Engine {
                     v.hearing = hearing.sanitized();
                 }
             }
+            Command::SetVoiceAcoustics { handle, acoustics } => {
+                if let Some(v) = self.voices.iter_mut().find(|v| v.handle == handle) {
+                    v.acoustics.set(acoustics);
+                }
+            }
             Command::SetListener(l) => {
                 if l.is_valid() {
                     self.listener = l;
@@ -838,6 +844,7 @@ impl Engine {
             gain_scale,
             pitch_scale: 1.0,
             hearing: crate::spatial::Hearing::CLEAR,
+            acoustics: Default::default(),
             real,
             suspended,
             cursor: 0.0,
@@ -1001,6 +1008,7 @@ fn mix_voice(
             v.done = Some(AudioEvent::Finished { handle: v.handle });
             break;
         };
+        f = v.acoustics.process(f, out_rate);
         if downmix {
             let m = (f[0] + f[1]) * 0.5;
             f = [m, m];

@@ -31,6 +31,10 @@ pub struct Imported {
     pub map_ids: Vec<String>,
     pub missions: Vec<String>,
     pub files: usize,
+    /// Exact instances covered by emitted audio assets and host rules.
+    pub audio_nodes: std::collections::BTreeMap<String, std::collections::BTreeSet<usize>>,
+    pub audio_diagnostics: Vec<String>,
+    pub audio_rules: Option<crate::ports::RulesPackage>,
 }
 
 /// A scratch folder removed when dropped.
@@ -261,6 +265,7 @@ pub fn import(opts: &Options) -> Result<Imported> {
     });
     let ns = crate::namespace_for(&addon_id)?;
     let mut maps = Vec::new();
+    let mut audio_scenes = Vec::new();
     let mut files = 0;
     for (k, mission) in chosen.iter().enumerate() {
         let bundle_dir = scratch.0.join(format!("bundle{k}"));
@@ -346,6 +351,7 @@ pub fn import(opts: &Options) -> Result<Imported> {
         std::fs::write(dir.join(&scene_file), serde_json::to_vec_pretty(&scene)?)?;
         std::fs::write(dir.join("bundle.json"), serde_json::to_vec_pretty(&bundle)?)?;
         files += 2;
+        audio_scenes.push((map_id.clone(), mission.clone(), scene));
         maps.push((map_id, name, format!("{folder}/bundle.json")));
     }
 
@@ -354,10 +360,19 @@ pub fn import(opts: &Options) -> Result<Imported> {
         (None, [(_, name, _)]) => name.clone(),
         (None, _) => stem.clone(),
     };
-    let provides: Vec<Value> = maps
+    let mut provides: Vec<Value> = maps
         .iter()
         .map(|(id, _, file)| json!({ "kind": "map", "id": id, "file": file }))
         .collect();
+    let audio = crate::map_audio::export(
+        &input,
+        &opts.out,
+        &ns,
+        &opts.version,
+        &audio_scenes,
+        &mut provides,
+    )?;
+    files += audio.files;
     let manifest = json!({
         "schema_version": 1,
         "id": ns,
@@ -369,17 +384,35 @@ pub fn import(opts: &Options) -> Result<Imported> {
         "license": "proprietary",
         "provenance": { "source": format!("Blockland map Add-On {stem}, missions {}", chosen.join(", ")), "notes": "Imported by bri-import-addon map. Set the licence of the original map." },
         "dependencies": {},
-        "capabilities": [],
+        "companions": audio.rules.iter().map(|r|r.id.clone()).collect::<Vec<_>>(),
         "provides": provides,
     });
     std::fs::write(
         opts.out.join("package.json"),
         serde_json::to_vec_pretty(&manifest)?,
     )?;
+    if !audio.covered.is_empty() {
+        let check = bri_package_runtime::check::check(
+            &opts.out.parent().context("map output has no parent")?.join(
+                &audio
+                    .rules
+                    .as_ref()
+                    .context("audio has no rules consumer")?
+                    .dir,
+            ),
+        );
+        ensure!(
+            check.ok,
+            "Native map-audio assets/consumer failed validation: {check}"
+        );
+    }
     Ok(Imported {
         map_ids: maps.into_iter().map(|(id, _, _)| id).collect(),
         missions: chosen,
         files: files + 1,
+        audio_nodes: audio.covered,
+        audio_diagnostics: audio.diagnostics,
+        audio_rules: audio.rules,
     })
 }
 

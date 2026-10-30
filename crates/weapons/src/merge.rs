@@ -501,6 +501,8 @@ mod tests {
             variants: Vec::new(),
             sustain: None,
             file: "fire.wav".into(),
+            spatial: None,
+            environment: None,
             volume: 1.0,
             looping: false,
             local: false,

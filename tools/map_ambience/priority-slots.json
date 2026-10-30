@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "status": "Independent profile slots using approved starting samples; separate final edits/mix acceptance pending",
+  "slots": [
+    {
+      "key": "bedroom-day-indoor",
+      "editable_file": "Bedroom-Day-Indoor.wav",
+      "source_key": "room",
+      "map": "v20/add-ons/map_bedroom/bedroom.mis",
+      "environment": "interior"
+    },
+    {
+      "key": "bedroom-day-outdoor",
+      "editable_file": "Bedroom-Day-Outdoor.wav",
+      "source_key": "dry-air",
+      "map": "v20/add-ons/map_bedroom/bedroom.mis",
+      "environment": "exterior"
+    },
+    {
+      "key": "bedroom-night-indoor",
+      "editable_file": "Bedroom-Night-Indoor.wav",
+      "source_key": "room",
+      "map": "v20/add-ons/map_bedroomdark/bedroomdark.mis",
+      "environment": "interior"
+    },
+    {
+      "key": "bedroom-night-outdoor",
+      "editable_file": "Bedroom-Night-Outdoor.wav",
+      "source_key": "dry-air",
+      "map": "v20/add-ons/map_bedroomdark/bedroomdark.mis",
+      "environment": "exterior"
+    },
+    {
+      "key": "kitchen-day-indoor",
+      "editable_file": "Kitchen-Day-Indoor.wav",
+      "source_key": "room",
+      "map": "v20/add-ons/map_kitchen/kitchen.mis",
+      "environment": "interior"
+    },
+    {
+      "key": "kitchen-day-outdoor",
+      "editable_file": "Kitchen-Day-Outdoor.wav",
+      "source_key": "dry-air",
+      "map": "v20/add-ons/map_kitchen/kitchen.mis",
+      "environment": "exterior"
+    },
+    {
+      "key": "kitchen-night-indoor",
+      "editable_file": "Kitchen-Night-Indoor.wav",
+      "source_key": "room",
+      "map": "v20/add-ons/map_kitchendark/kitchendark.mis",
+      "environment": "interior"
+    },
+    {
+      "key": "kitchen-night-outdoor",
+      "editable_file": "Kitchen-Night-Outdoor.wav",
+      "source_key": "dry-air",
+      "map": "v20/add-ons/map_kitchendark/kitchendark.mis",
+      "environment": "exterior"
+    },
+    {
+      "key": "slate-outdoor",
+      "editable_file": "Slate-Outdoor.wav",
+      "source_key": "dry-air",
+      "map": "v20/add-ons/map_slate/slate.mis",
+      "environment": "exterior"
+    },
+    {
+      "key": "slate-desert-outdoor",
+      "editable_file": "Slate-Desert-Outdoor.wav",
+      "source_key": "dry-air",
+      "map": "v20/add-ons/map_slate_desert/slatedesert.mis",
+      "environment": "exterior"
+    },
+    {
+      "key": "slopes-outdoor",
+      "editable_file": "Slopes-Outdoor.wav",
+      "source_key": "cold-air",
+      "map": "v20/add-ons/map_slopes/slopes.mis",
+      "environment": "exterior"
+    }
+  ]
+}
