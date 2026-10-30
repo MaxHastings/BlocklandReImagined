@@ -306,6 +306,7 @@ fn a_stalled_bot_on_the_move_does_not_jump_off_a_deck() {
 /// and three times as far north): the bots that went over the edge in 40 s
 /// of each layout, summed.
 fn deck_file_falls(layouts: &[(f32, f32, f32)]) -> u64 {
+    let trace_failures = std::env::var_os("BRI_BOT_FAILURE_TRACE").is_some();
     let mut falls = 0;
     for &(spacing, z, shift) in layouts {
         let mut arena = Arena::custom(&[], &[], &[]);
@@ -336,14 +337,41 @@ fn deck_file_falls(layouts: &[(f32, f32, f32)]) -> u64 {
         spawns.push((enemy, 1));
         let sides = arena.sides_by_spawn(&spawns);
         let mut scorer = Scorer::new("deck_file", 6.0);
-        for _ in 0..40 * TICKS_PER_SECOND {
+        let mut trace_frames = std::collections::VecDeque::new();
+        for tick in 0..40 * TICKS_PER_SECOND {
             arena.step(1);
             let vitals = arena.s.vitals();
+            if trace_failures && tick % 12 == 0 {
+                let states: Vec<_> = arena
+                    .s
+                    .motion_states()
+                    .into_iter()
+                    .filter(|(p, _)| sides.contains_key(&p.owner))
+                    .map(|(p, _)| (p.owner, p.feet, p.velocity, p.grounded))
+                    .collect();
+                let thoughts: Vec<_> = arena
+                    .s
+                    .bot_thoughts()
+                    .into_iter()
+                    .map(|t| (t.bot, t.goal, t.next, t.acted, t.input))
+                    .collect();
+                trace_frames.push_back(format!("tick {tick}: {states:?}; {thoughts:?}"));
+                if trace_frames.len() > 24 {
+                    trace_frames.pop_front();
+                }
+            }
+            let before_falls = scorer.report.fell;
             scorer.sample(&arena.s, &sides, |bot| {
                 sides
                     .iter()
                     .any(|(o, side)| Some(side) != sides.get(&bot) && vitals[o].alive)
             });
+            if trace_failures && scorer.report.fell > before_falls {
+                eprintln!(
+                    "deck fall spacing {spacing} z {z} shift {shift}: {}",
+                    trace_frames.make_contiguous().join("\n")
+                );
+            }
         }
         let r = scorer.report;
         falls += r.fell;

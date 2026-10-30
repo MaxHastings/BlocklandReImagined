@@ -823,6 +823,7 @@ fn through_glass(v: Variant, a: Vec3, b: Vec3) -> bool {
 /// Play one run, recording every call, and return what it saw and the
 /// recording.
 fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
+    let trace_failures = std::env::var_os("BRI_BOT_FAILURE_TRACE").is_some();
     let (mut s, host) = session(v, seed);
     let file = Shared::default();
     let mut rec = Recorder::start(&mut s, Secrets::default(), Box::new(file.clone())).unwrap();
@@ -886,6 +887,19 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             .collect();
         for p in view.fired().filter(|p| p.definition == canister) {
             if now.contains_key(&p.source.0) {
+                if trace_failures && !grenades.contains_key(&p.id) {
+                    eprintln!(
+                        "throw {v:?} seed {seed} tick {tick} id {} source {} at {:?} body {:?} plan {:?}",
+                        p.id,
+                        p.source.0,
+                        p.position,
+                        now.get(&p.source.0).map(|b| (b.feet, b.velocity)),
+                        s.bot_thoughts()
+                            .into_iter()
+                            .find(|t| t.bot == p.source.0)
+                            .map(|t| (t.planned, t.gate, t.input))
+                    );
+                }
                 grenades.entry(p.id).or_insert_with(|| {
                     seen.thrown += 1;
                     p.source.0
@@ -954,6 +968,13 @@ fn play(v: Variant, seed: u64) -> (Seen, Vec<u8>) {
             }
             let harm = seen.grenade_harm.entry(by.team).or_default();
             if victim.team == by.team {
+                if trace_failures {
+                    eprintln!(
+                        "friendly grenade {v:?} seed {seed} tick {tick}: damage {r:?}, source {:?}, victim {:?}, live {live:?}",
+                        (by.feet, by.velocity),
+                        (victim.feet, victim.velocity)
+                    );
+                }
                 harm.0 += r.amount;
                 if Some(r.victim) != r.source
                     && s.death_results()
