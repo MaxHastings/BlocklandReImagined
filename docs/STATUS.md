@@ -7,6 +7,13 @@ start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 
 ## Release state
 
+The v0.4.2 candidate integrates all approved feature work on main
+`ba4f1bbb54c4da18b27f15a088514cda58ccdc62`. Maxwell approved the combined
+playtest and final ambience mix. Required full release validation, native
+platform packages and publication are pending; this is not a new published
+release. See the [candidate receipt](progress/2026-10-29-v042-integration-and-release-candidate.md)
+and [v0.4.2 notes](releases/v0.4.2.md).
+
 Use the [latest published release](https://github.com/MaxHastings/BlocklandReImagined/releases/latest)
 for downloads, its exact source tag and release notes. Repository source
 can be ahead of that build; source checks alone are not a new publication.
