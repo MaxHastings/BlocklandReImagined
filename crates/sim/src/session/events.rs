@@ -871,6 +871,19 @@ impl Session {
                 due.push(id);
             }
         }
+        // The clock can make geometry due while a body occupies its former
+        // hole. Keep that original and all its parts intact until clear.
+        // Occupancy holds stay on the round-robin deadline queue, not at the
+        // front of restore_pending where they could starve unrelated work.
+        due.retain(|id| {
+            if self.simulation.damage_restore_occupied(*id) {
+                self.events.restore_pending.remove(id);
+                self.events.respawns.entry(*id).or_insert(tick);
+                false
+            } else {
+                true
+            }
+        });
         for brick in &due {
             self.events.respawns.remove(brick);
         }

@@ -68,7 +68,15 @@ fn saved_match_vehicle_routes() -> Result<()> {
     let build = bri_world::build::decode(&std::fs::read(path)?)?;
     let world_name = build.world.name.clone();
     let bricks = build.world.bricks.len();
-    let mut saved = build.minigame.context("save needs its mini-game")?;
+    // A build without saved rules can be exercised with an explicitly authored
+    // session setup. Never replace rules that the build already carries.
+    let mut saved = match build.minigame {
+        Some(saved) => saved,
+        None => serde_json::from_slice(&std::fs::read(
+            std::env::var_os("BRI_DRIVE_MINIGAME")
+                .context("save has no mini-game; set BRI_DRIVE_MINIGAME to an explicit setup")?,
+        )?)?,
+    };
     let principal = build
         .world
         .owners
@@ -78,6 +86,7 @@ fn saved_match_vehicle_routes() -> Result<()> {
         .principal
         .clone();
     saved["owner"] = serde_json::json!(principal);
+    let initial_minigame = saved.clone();
     let mut key = [0_u8; 32];
     for (i, byte) in key.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&principal[i * 2..i * 2 + 2], 16)?;
@@ -122,9 +131,97 @@ fn saved_match_vehicle_routes() -> Result<()> {
     let mut reaction_cues = Vec::new();
     let mut step_micros = Vec::with_capacity(seconds * 120);
     let nav_detail = std::env::var_os("BRI_DRIVE_NAV_DETAIL").is_some();
+    let rule_detail = std::env::var_os("BRI_DRIVE_RULE_SAMPLES").is_some();
+    let snapshot_at = std::env::var("BRI_DRIVE_SNAPSHOT_AT")
+        .ok()
+        .map(|s| s.parse::<usize>())
+        .transpose()?;
+    ensure!(
+        snapshot_at.is_none_or(|at| at < seconds),
+        "snapshot must be within the run"
+    );
+    let mut rule_samples = Vec::new();
+    // Optional bounded contact evidence: vehicle ID, first second, last second.
+    let contact_window = std::env::var("BRI_DRIVE_CONTACTS")
+        .ok()
+        .map(|s| {
+            let values: Vec<u64> = s.split(':').map(str::parse).collect::<Result<_, _>>()?;
+            ensure!(
+                values.len() == 3
+                    && values[1] < values[2]
+                    && values[2] - values[1] <= 10
+                    && values[2] <= seconds as u64,
+                "BRI_DRIVE_CONTACTS expects vehicle:first:last within the run, at most 10 seconds"
+            );
+            Ok::<_, anyhow::Error>((values[0], values[1], values[2]))
+        })
+        .transpose()?;
+    let mut contact_samples = Vec::new();
+    let watched_bricks: Vec<u64> = env_list("BRI_DRIVE_WATCH_BRICKS", &[])
+        .iter()
+        .map(|s| s.parse())
+        .collect::<Result<_, _>>()?;
+    ensure!(watched_bricks.len() <= 16, "watch at most 16 bricks");
+    let mut watched = std::collections::BTreeMap::new();
+    let mut brick_changes = Vec::new();
     for i in 0..seconds * 120 {
         let began = std::time::Instant::now();
         s.step()?;
+        for id in &watched_bricks {
+            let brick = s.simulation().state().bricks.get(id);
+            let flags = brick.map(|b| (b.visible, b.raycast, b.colliding, b.damage_hidden));
+            if watched.get(id) != Some(&flags) {
+                watched.insert(*id, flags);
+                brick_changes.push(serde_json::json!({"second": i as f64 / 120.0,
+                    "id": id, "flags": flags, "brick": brick}));
+            }
+        }
+        if let Some((vehicle, first, last)) = contact_window
+            && (first * 120..last * 120).contains(&(i as u64))
+        {
+            let simulation = s.simulation();
+            let physics = &simulation.physics;
+            let mut contacts = Vec::new();
+            for (handle, collider) in physics
+                .colliders
+                .iter()
+                .filter(|(_, c)| c.user_data >> 64 == 2 && c.user_data as u64 == vehicle)
+            {
+                for pair in physics.contact_pairs_with(handle) {
+                    let here_first = pair.collider1 == handle;
+                    let other = if here_first {
+                        pair.collider2
+                    } else {
+                        pair.collider1
+                    };
+                    let tag = physics.colliders[other].user_data;
+                    for manifold in pair.solver_manifolds() {
+                        let part = if here_first {
+                            manifold.subshape2
+                        } else {
+                            manifold.subshape1
+                        };
+                        contacts.push(serde_json::json!({
+                            "collider": format!("{handle:?}"),
+                            "local_pose": format!("{:?}", collider.position_wrt_parent()),
+                            "other_tag": tag.to_string(), "other_part": part,
+                            "brick": simulation.chunks().part_brick(tag, part as usize),
+                            "normal": manifold.data.normal.to_array(), "here_first": here_first,
+                            "active": manifold.data.num_active_contacts(),
+                            "points": manifold.points.iter().map(|p| serde_json::json!({
+                                "dist": p.dist, "impulse": p.data.impulse,
+                                "local1": p.local_p1.to_array(), "local2": p.local_p2.to_array(),
+                            })).collect::<Vec<_>>(),
+                        }));
+                    }
+                }
+            }
+            contact_samples.push(serde_json::json!({
+                "second": i as f64 / 120.0,
+                "vehicle": s.vehicle_poses().into_iter().find(|v| v.id == vehicle),
+                "contacts": contacts,
+            }));
+        }
         step_micros.push(began.elapsed().as_micros() as u64);
         for cue in s.take_cues() {
             if matches!(&cue.kind, bri_sim::presentation::CueKind::SoundShaped { profile, .. }
@@ -183,6 +280,22 @@ fn saved_match_vehicle_routes() -> Result<()> {
             );
         }
         if i % 120 == 0 {
+            if snapshot_at == Some(i / 120) {
+                let path = output.with_extension(format!("at-{}.world.json", i / 120));
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(
+                    path,
+                    bri_world::build::encode(&bri_world::build::SavedBuild::new(
+                        s.simulation().state().clone(),
+                    ))?,
+                )?;
+            }
+            if rule_detail {
+                rule_samples.push(serde_json::json!({"second": i / 120,
+                    "rules": s.package_store(), "games": s.minigame_views()}));
+            }
             let thoughts = s.bot_thoughts();
             let motion = s.motion_states();
             let vitals = s.vitals();
@@ -194,6 +307,7 @@ fn saved_match_vehicle_routes() -> Result<()> {
                     .map(|(p, _)| p);
                 bot_samples.push(serde_json::json!({
                     "second": i / 120, "id": t.bot, "state": state, "vitals": vitals.get(&t.bot),
+                    "body": state.map(|p| &s.archetypes().resolve(p.archetype).id),
                     "behaviour": t.behaviour, "leg": t.leg, "visible": t.visible,
                     "remembered": format!("{:?}", t.remembered), "task": format!("{:?}", t.task),
                     "goal": t.goal, "next": t.next, "route_end": t.route_end,
@@ -204,6 +318,7 @@ fn saved_match_vehicle_routes() -> Result<()> {
                     })),
                     "acted": t.acted, "planned": format!("{:?}", t.planned), "gate": t.gate,
                     "walking_intent": t.input, "driving": t.driving,
+                    "navigation": nav_detail.then(|| s.bot_navigation_diagnostic(t.bot)).flatten(),
                     "sight_starved": t.sight_starved, "unnoticed_hit": t.unnoticed_hit,
                     "inventory": inventories.get(&t.bot), "images": weapons.images.get(&t.bot),
                     "goof": t.surprise.interrupt, "surprise_gate": t.surprise.gate,
@@ -224,7 +339,6 @@ fn saved_match_vehicle_routes() -> Result<()> {
                     "bots": thoughts.iter().filter(|t| s.mounted(t.bot).is_some_and(|(id,_)| id == p.id)).map(|t| serde_json::json!({
                         "id": t.bot, "behaviour": t.behaviour, "goal": t.goal, "next": t.next, "route_end": t.route_end, "objective_diagnostic": t.objective_diagnostic, "objective_detail": format!("{:?}", t.objective_detail),
                         "short": t.route_short, "steps": t.path_steps, "searching": t.searching, "acted": t.acted, "driving": t.driving,
-                        "navigation": nav_detail.then(|| s.bot_drive_diagnostic(t.bot)).flatten(),
                     })).collect::<Vec<_>>(),
                 }));
             }
@@ -266,7 +380,7 @@ fn saved_match_vehicle_routes() -> Result<()> {
     std::fs::write(
         output,
         serde_json::to_vec_pretty(
-            &serde_json::json!({"timing": timing, "breach": breach, "world": world_name, "bricks": bricks, "seconds": seconds, "bot_step_failures": failures, "samples": samples, "bot_samples": bot_samples, "projectiles": projectiles, "damage": damage, "deaths": deaths, "rounds": rounds, "reaction_cues": reaction_cues, "games": s.minigame_views(), "packages": packages, "rules_state": s.package_store(), "host": "passive owner, saved rules preserved", "chat": format!("{:?}", s.chat())}),
+            &serde_json::json!({"timing": timing, "breach": breach, "world": world_name, "bricks": bricks, "seconds": seconds, "bot_step_failures": failures, "samples": samples, "bot_samples": bot_samples, "rule_samples": rule_samples, "contact_samples": contact_samples, "brick_changes": brick_changes, "projectiles": projectiles, "damage": damage, "deaths": deaths, "rounds": rounds, "reaction_cues": reaction_cues, "initial_minigame": initial_minigame, "games": s.minigame_views(), "packages": packages, "rules_state": s.package_store(), "host": "passive owner; saved rules or explicit missing-game setup", "chat": format!("{:?}", s.chat())}),
         )?,
     )?;
     Ok(())

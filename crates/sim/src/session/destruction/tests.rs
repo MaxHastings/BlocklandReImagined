@@ -6,6 +6,10 @@ use crate::{
 use rapier3d::prelude::*;
 
 fn session() -> (Session, OwnerId) {
+    session_with_vehicles(false)
+}
+
+fn session_with_vehicles(vehicles: bool) -> (Session, OwnerId) {
     let mut definitions = Definitions {
         entries: Default::default(),
     };
@@ -29,6 +33,11 @@ fn session() -> (Session, OwnerId) {
         )
         .unwrap(),
     );
+    if vehicles {
+        session
+            .set_vehicle_pack(bri_vehicles::testing::pack(), vec![])
+            .unwrap();
+    }
     session.set_lan_host(true);
     let owner = session
         .join("Builder".into(), Vec3::new(-10.0, 0.05, -10.0), false)
@@ -723,6 +732,181 @@ fn many_small_collapses_do_not_hold_a_new_section_for_the_lease() {
             .any(|c| matches!(c.kind, CueKind::BrickSectionReady { members: 1, .. }))
     );
     assert_eq!(s.destruction.work.capacity_holds, 0);
+}
+
+#[test]
+fn timed_restore_keeps_an_occupied_family_intact_and_retries_after_bodies_leave() {
+    for vehicle in [false, true] {
+        let (mut s, owner) = session_with_vehicles(vehicle);
+        let root = place(&mut s, owner, "8x8x12", [0., 1.2, 0.], false);
+        let part = place(&mut s, owner, "1x1x3", [1.25, 0.3, 1.25], false);
+        s.simulation.begin_damage_family(root);
+        s.simulation.register_damage_parts(root, &[part]);
+        let section = (0, 1);
+        s.simulation.begin_section(
+            section,
+            Arc::new(BTreeSet::from([part])),
+            Arc::new(BTreeSet::from([root])),
+        );
+        s.simulation.section_member(section, part);
+        s.fake_kill_brick(
+            root,
+            super::super::debris::BrickBlast::fake_kill(Vec3::Y, Vec3::ZERO),
+            1,
+        )
+        .unwrap();
+        s.simulation.seal_section(section, 1);
+        let clear = place(&mut s, owner, "8x8x12", [20., 1.2, 0.], false);
+        s.fake_kill_brick(
+            clear,
+            super::super::debris::BrickBlast::fake_kill(Vec3::X * 20., Vec3::ZERO),
+            1,
+        )
+        .unwrap();
+        let occupant = if vehicle {
+            let world = s.vehicles.world.as_mut().unwrap();
+            world
+                .spawn(
+                    &mut s.simulation.physics,
+                    bri_vehicles::Spawn {
+                        id: bri_vehicles::VehicleId(1),
+                        owner: bri_vehicles::OwnerId(owner),
+                        definition: bri_vehicles::testing::CAR.into(),
+                        transform: bri_vehicles::Transform {
+                            position: [0., 0.2, 0.],
+                            ..Default::default()
+                        },
+                        spawn_id: None,
+                        respawn_ticks: None,
+                        scale: 1.0,
+                    },
+                )
+                .unwrap();
+            for handle in world.colliders_of(&s.simulation.physics, bri_vehicles::VehicleId(1)) {
+                s.simulation.physics.colliders[handle].user_data =
+                    super::super::vehicles::VEHICLE_TAG | 1;
+            }
+            None
+        } else {
+            Some(
+                s.join(
+                    "In the former opening".into(),
+                    Vec3::new(0., 0.05, 0.),
+                    false,
+                )
+                .unwrap(),
+            )
+        };
+        s.simulation.step().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        assert!(
+            !s.live_damage_brick(root),
+            "restored inside vehicle={vehicle}"
+        );
+        assert!(s.simulation.state().bricks.contains_key(&part));
+        assert_eq!(s.simulation.damage_family_part_count(root), 1);
+        assert!(!s.take_cues().iter().any(|cue| matches!(cue.kind,
+            CueKind::BrickSectionRetired { started, group } if (started, group) == section
+        )));
+        assert!(
+            s.live_damage_brick(clear),
+            "one occupied restore cannot block unrelated work"
+        );
+        if let Some(occupant) = occupant {
+            s.peers
+                .get_mut(&occupant)
+                .unwrap()
+                .player
+                .teleport(&mut s.simulation.physics, Vec3::new(10., 0.05, 0.), 0.)
+                .unwrap();
+        } else {
+            s.vehicles
+                .world
+                .as_mut()
+                .unwrap()
+                .set_transform(
+                    &mut s.simulation.physics,
+                    bri_vehicles::VehicleId(1),
+                    &bri_vehicles::Transform {
+                        position: [10., 0.2, 0.],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        s.simulation.step().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        assert!(s.live_damage_brick(root), "clear original was not retried");
+        assert!(!s.simulation.state().bricks.contains_key(&part));
+        assert!(s.simulation.damage_flags(root).is_none());
+        assert!(s.take_cues().iter().any(|cue| matches!(cue.kind,
+            CueKind::BrickSectionRetired { started, group } if (started, group) == section
+        )));
+    }
+}
+
+#[test]
+fn timed_restore_admits_support_touch_openings_and_nonblocking_originals() {
+    for case in ["support", "opening", "noncolliding", "water"] {
+        let (mut s, owner) = session();
+        let root = if case == "support" {
+            place(&mut s, owner, "8x8x3", [0., 0.3, 0.], false)
+        } else {
+            if case == "opening" {
+                s.simulation
+                    .definitions
+                    .entries
+                    .get_mut("8x8x12")
+                    .unwrap()
+                    .shape = SharedShape::compound(vec![
+                    (
+                        Pose::translation(-1.8, 0., 0.),
+                        SharedShape::cuboid(0.2, 1.2, 2.),
+                    ),
+                    (
+                        Pose::translation(1.8, 0., 0.),
+                        SharedShape::cuboid(0.2, 1.2, 2.),
+                    ),
+                ]);
+            } else if case == "water" {
+                s.simulation
+                    .definitions
+                    .entries
+                    .get_mut("8x8x12")
+                    .unwrap()
+                    .special = Special::Water;
+            }
+            place(&mut s, owner, "8x8x12", [0., 1.2, 0.], false)
+        };
+        if case == "noncolliding" {
+            s.simulation.mutate(root, |b| b.colliding = false).unwrap();
+        }
+        s.fake_kill_brick(
+            root,
+            super::super::debris::BrickBlast::fake_kill(Vec3::Y, Vec3::ZERO),
+            1,
+        )
+        .unwrap();
+        let height = if case == "support" { 0.6 } else { 0.05 };
+        s.join(
+            "Clear of actual restored solid".into(),
+            Vec3::new(0., height, 0.),
+            false,
+        )
+        .unwrap();
+        s.simulation.step().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        let brick = &s.simulation.state().bricks[&root];
+        assert!(
+            brick.visible && !brick.damage_hidden,
+            "unnecessarily blocked {case}"
+        );
+        assert_eq!(
+            brick.colliding,
+            case != "noncolliding",
+            "original flag changed in {case}"
+        );
+    }
 }
 
 #[test]

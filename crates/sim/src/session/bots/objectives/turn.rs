@@ -137,7 +137,15 @@ impl Session {
                 state.paused = replaced;
                 state.diagnostic = Some(diagnostic);
             } else if tick > step.deadline {
-                state.fail(tick, "objective approach timed out");
+                if step.waiting.is_none()
+                    && step.view(self, bot).is_some_and(|view| view.feet_only())
+                {
+                    // A locomotion timeout is another failed route attempt,
+                    // not evidence against the provider's action semantics.
+                    state.navigation_failed(tick, "objective approach timed out");
+                } else {
+                    state.fail(tick, "objective approach timed out");
+                }
             } else if step.progress(self, bot, tick).is_none() {
                 // A guard has no completion counter or timeout. Revisit the
                 // provider's live offers on its ordinary fair planning turn,

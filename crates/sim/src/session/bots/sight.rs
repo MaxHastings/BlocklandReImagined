@@ -186,9 +186,11 @@ impl Session {
                 return Sight { target };
             }
         }
-        // Keep fighting the same enemy while it stays in view.
-        if let Some(seen) = brain.target.and_then(|t| visible(t, SightUrgency::Target)) {
-            return Sight { target: Some(seen) };
+        // Keep tracking between ordinary reassessment turns. Visibility alone
+        // must not lock a distant target forever while closer enemies pass.
+        let retained = brain.target.and_then(|t| visible(t, SightUrgency::Target));
+        if retained.is_some() && !cadence::beat(bot, cadence::salt::TARGET_REVIEW, tick, 12) {
+            return Sight { target: retained };
         }
         // Through an opening, anyone may be in sight wherever they stand.
         let portals = !self.simulation.passages().list.is_empty();
@@ -202,7 +204,12 @@ impl Session {
             .filter(|(d, _)| portals || *d < reach)
             .map(|(d, owner)| {
                 (
-                    d * (1.0 + kind.team.overlap() * self.team_crowd(bot, owner)),
+                    d * (1.0 + kind.team.overlap() * self.team_crowd(bot, owner))
+                        / if retained.is_some_and(|s| s.owner == owner) {
+                            1.0 + crate::bot_kind::HOLD_MARGIN
+                        } else {
+                            1.0
+                        },
                     owner,
                 )
             })
@@ -211,7 +218,12 @@ impl Session {
         Sight {
             target: candidates
                 .into_iter()
-                .find_map(|(_, owner)| visible(owner, SightUrgency::Ordinary)),
+                .find_map(|(_, owner)| {
+                    retained
+                        .filter(|s| s.owner == owner)
+                        .or_else(|| visible(owner, SightUrgency::Ordinary))
+                })
+                .or(retained),
         }
     }
     /// Whether a body standing at `feet` has open sky above and room all
@@ -268,6 +280,86 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_retained_target_yields_to_a_closer_visible_enemy_but_not_one_behind_a_wall() {
+        use rapier3d::prelude::*;
+        for hidden in [false, true] {
+            let mut colliders = vec![
+                ColliderBuilder::cuboid(40.0, 0.5, 40.0).translation(Vec3::new(0.0, -0.5, 0.0)),
+            ];
+            if hidden {
+                colliders.push(
+                    ColliderBuilder::cuboid(0.2, 3.0, 2.0).translation(Vec3::new(1.5, 3.0, 0.0)),
+                );
+            }
+            let sim = crate::simulation::Simulation::new(
+                bri_world::World::new("Reassessment".into(), "test/map".into(), vec![[1.0; 4]]),
+                crate::testing::definitions(),
+                colliders,
+            )
+            .unwrap();
+            let mut s = Session::new(sim);
+            s.set_spawn_points(vec![
+                Vec3::new(0.0, 0.05, -25.0),
+                Vec3::new(0.0, 0.05, 5.0),
+                Vec3::new(3.0, 0.05, 5.0),
+            ])
+            .unwrap();
+            let far = s
+                .join("Distant opponent".into(), Vec3::new(0.0, 0.05, -25.0), true)
+                .unwrap();
+            s.minigame_request(
+                far,
+                super::super::super::MiniGameRequest::Create {
+                    color: 0,
+                    settings: bri_minigames::Settings {
+                        spawn_protection_ms: 0,
+                        ..Default::default()
+                    },
+                },
+            )
+            .unwrap();
+            let game = s.minigame_views()[0].id;
+            let bot = s
+                .join("Observer".into(), Vec3::new(0.0, 0.05, 5.0), false)
+                .unwrap();
+            let near = s
+                .join("Passing opponent".into(), Vec3::new(3.0, 0.05, 5.0), false)
+                .unwrap();
+            for owner in [bot, near] {
+                s.minigame_request(owner, super::super::super::MiniGameRequest::Join { game })
+                    .unwrap();
+            }
+            for (owner, at) in [
+                (far, Vec3::new(0.0, 0.05, -25.0)),
+                (bot, Vec3::Y * 0.05),
+                (near, Vec3::new(3.0, 0.05, 0.0)),
+            ] {
+                s.peers
+                    .get_mut(&owner)
+                    .unwrap()
+                    .player
+                    .teleport(&mut s.simulation.physics, at, 0.0)
+                    .unwrap();
+            }
+            let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
+            brain.target = Some(far);
+            let mut noticed = false;
+            for _ in 0..60 {
+                s.step().unwrap();
+                let sight = s.bot_sight(bot, &brain, s.peers[&bot].player.eye());
+                noticed |= sight.target.is_some_and(|seen| seen.owner == near);
+                if hidden {
+                    assert!(sight.target.is_some_and(|seen| seen.owner == far));
+                }
+            }
+            assert_eq!(
+                noticed, !hidden,
+                "retention cannot replace the shared visibility test"
+            );
+        }
+    }
 
     #[test]
     fn fog_caps_how_far_a_bot_sees() {
