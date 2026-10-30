@@ -2117,13 +2117,20 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound(f: &Fixt
     aim(&mut s, admin, 2, [0.5, 0.1, -3.01]);
     s.take_cues();
     swing(&mut s, admin, 3, 0).unwrap();
+    let mut expected = Vec::new();
+    if f.is_native() {
+        // The approved native Fire-state swish precedes contact; the
+        // synthetic fixture has no swing recording. Contact cues stay exact.
+        expected.push("sound bri:foley/tools/swing".to_string());
+    }
+    expected.extend([
+        "explosion hammerExplosion".to_string(),
+        "sound hammerHitSound".into(),
+        format!("kill {first}"),
+    ]);
     assert_eq!(
         hit_cues(&mut s),
-        [
-            "explosion hammerExplosion".to_string(),
-            "sound hammerHitSound".into(),
-            format!("kill {first}"),
-        ]
+        expected
     );
     let second = plant(&mut s, admin, 4, [0.5, 0.1, -3.25]);
     aim(&mut s, admin, 5, [0.5, 0.1, -3.25]);
