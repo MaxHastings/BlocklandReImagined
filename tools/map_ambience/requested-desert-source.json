@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "source_url": "https://www.youtube.com/watch?v=LoO63RtYqP4",
+  "author": "Arizona Ambience",
+  "excerpt": {
+    "start_seconds": 1740,
+    "end_seconds": 1920,
+    "duration_seconds": 180,
+    "selection_authority": "Maxwell: take the 29:00 to 32:00"
+  },
+  "contexts": ["Slate Desert", "Bedroom outside", "Kitchen outside"],
+  "status": "Human-selected excerpt; redistribution/edit permission and actual processed loop audition pending",
+  "source_quality": "No media acquired; original recording/available encoding not yet verified",
+  "constraints": [
+    "Do not substitute another recording or choose a different passage silently",
+    "Preserve source and output hashes, actual codec, crop and loop processing when acquired",
+    "No creator messages authorized",
+    "Preserve current gains and Slate Storm"
+  ]
+}
