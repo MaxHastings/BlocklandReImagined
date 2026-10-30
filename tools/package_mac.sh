@@ -65,7 +65,8 @@ import hashlib, json, pathlib, plistlib, sys
 root, repo = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 with (root / 'BlocklandReImagined.app/Contents/Info.plist').open('rb') as source:
     info = plistlib.load(source)
-if not str(info.get('NSMicrophoneUsageDescription', '')).strip():
+description = info.get('NSMicrophoneUsageDescription')
+if not isinstance(description, str) or not description.strip():
     sys.exit('App is missing its microphone permission description')
 sys.path.insert(0, str(repo / 'tools'))
 import addon_bundle
