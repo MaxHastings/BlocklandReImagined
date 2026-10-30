@@ -291,7 +291,11 @@ pub fn check_set(root: &std::path::Path, set: &crate::packages::PackageSet) -> V
 }
 
 /// What an Add-On's import report says it could not resolve.
-fn import_problems(id: &str, path: &std::path::Path, on: &dyn Fn(&str) -> bool) -> Vec<Problem> {
+pub(crate) fn import_problems(
+    id: &str,
+    path: &std::path::Path,
+    on: &dyn Fn(&str) -> bool,
+) -> Vec<Problem> {
     let Ok(meta) = std::fs::metadata(path) else {
         return Vec::new();
     };
@@ -382,6 +386,61 @@ fn import_problems(id: &str, path: &std::path::Path, on: &dyn Fn(&str) -> bool) 
             ));
         }
     }
+    let unported: Vec<_> = list("needs_behaviour")
+        .into_iter()
+        .filter(|b| b["port"]["applied"].as_bool() != Some(true))
+        .collect();
+    if !unported.is_empty() {
+        let examples = unported
+            .iter()
+            .take(3)
+            .map(|b| text(b, "function"))
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push(Problem::new(
+            id,
+            Kind::Rules,
+            "unported scripts",
+            format!(
+                "{} script function(s) have no applied native port{}. Their custom behaviour does not run; importing assets does not convert TorqueScript. See IMPORT-REPORT.md for the porting requirements",
+                unported.len(),
+                if examples.is_empty() { String::new() } else { format!(" ({examples})") }
+            ),
+        ));
+    }
+    // Group repeated findings (for example dozens of external DSQ files)
+    // by their actual reason, keeping the affected files as examples.
+    let mut unsupported: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for finding in list("unsupported") {
+        unsupported
+            .entry(text(&finding, "detail"))
+            .or_default()
+            .push(text(&finding, "what"));
+    }
+    let groups = unsupported.len();
+    for (detail, findings) in unsupported.into_iter().take(5) {
+        out.push(Problem::new(
+            id,
+            Kind::Import,
+            findings.iter().take(2).cloned().collect::<Vec<_>>().join(", "),
+            format!(
+                "unsupported: {detail} ({} finding(s)). See IMPORT-REPORT.md; Retry does not add missing compatibility support",
+                findings.len()
+            ),
+        ));
+    }
+    if groups > 5 {
+        out.push(Problem::new(
+            id,
+            Kind::Import,
+            "other compatibility gaps",
+            format!(
+                "{} more unsupported categories are listed in IMPORT-REPORT.md",
+                groups - 5
+            ),
+        ));
+    }
     out
 }
 
@@ -450,6 +509,77 @@ mod tests {
             dir: format!("addons/{id}"),
             role: None,
         }
+    }
+
+    #[test]
+    fn successful_asset_conversion_still_reports_unported_scripts_and_animations_before_enable() {
+        let root =
+            std::env::temp_dir().join(format!("bri-health-compatibility-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("addons/custom");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            root.join("packages.json"),
+            r#"{"schema_version":1,"packages":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"schema_version":1,"id":"custom","version":"1.0.0","api":1,"name":"Custom"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join(IMPORT_REPORT),
+            r#"{"summary":{"assets_failed":0,"verdict":"converted_with_gaps"},
+                "dependencies":[{"addon":"Bot_Hole","status":"missing"}],
+                "needs_behaviour":[
+                    {"function":"Special::onAttack","port":null},
+                    {"function":"Special::onDamage","port":{"applied":false}},
+                    {"function":"Special::onAdd","port":{"applied":true}}],
+                "unsupported":[
+                    {"what":"file run.dsq","detail":"no native importer for animation files"},
+                    {"what":"file jump.dsq","detail":"no native importer for animation files"}],
+                "assets":[{"source":"body.dts","status":"converted"}]}"#,
+        )
+        .unwrap();
+        let library = crate::library::Library::scan(&root).unwrap();
+        let addon = library.get("custom").unwrap();
+        assert!(!addon.enabled);
+        let messages = addon
+            .problems
+            .iter()
+            .map(|p| p.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(messages.contains("Bot_Hole"), "{messages}");
+        assert!(messages.contains("2 script function(s)"), "{messages}");
+        assert!(messages.contains("Special::onAttack"), "{messages}");
+        assert!(
+            !messages.contains("Special::onAdd"),
+            "applied ports are not missing: {messages}"
+        );
+        assert!(
+            messages.contains("no native importer for animation files (2 finding(s))"),
+            "{messages}"
+        );
+        assert!(messages.contains("IMPORT-REPORT.md"));
+        assert!(
+            !addon.has_errors(),
+            "compatibility notes do not pretend the package cannot load"
+        );
+        let runtime = check_set(
+            &root,
+            &crate::packages::PackageSet {
+                schema_version: 1,
+                packages: vec![entry("custom")],
+            },
+        );
+        assert_eq!(
+            runtime.len(),
+            3,
+            "the same findings remain visible at startup: {runtime:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -2,8 +2,8 @@
 
 Put an old Blockland Add-On (a `.zip` or a folder with `server.cs`) in the
 game's `content/Add-Ons/` folder (see [checking and trying Add-Ons](README.md#2-check-it-and-try-it)
-for the content location), open **Start Game > Add-Ons**, pick it
-and press **Import**. Its scripts are never run: datablocks for bricks,
+for the content location), then open **Start Game > Add-Ons**. Conversion
+starts automatically. Its scripts are never run: datablocks for bricks,
 weapons and vehicles become data, and `IMPORT-REPORT.md` in the new Add-On
 lists what came across and what did not. An Add-On without a licence file
 is imported as `proprietary`; for your own work, set `license` in the new
@@ -19,6 +19,21 @@ stock 1x1's icon and fields, an image names `weaponSwitchSound`. The
 importer reads those base datablocks' names and fields from the installed
 game's brick catalog, weapons, sounds and effects (Import in the Add-Ons
 screen always passes it); without it they are unknown and the report says so.
+
+Required classic Add-Ons are read beside the dropped ZIP or folder, including
+their own requirements. `--reference` is only for a separate, read-only original
+Blockland installation; do not pass the writable ReImagined content folder as
+that reference. The importer refuses output inside a source installation.
+
+**Converted does not mean fully compatible.** Before enabling an imported
+Add-On, read its notes in Add-Ons. Missing dependencies, script functions with
+no applied native port, and unsupported assets are reported there; the complete
+details are in `IMPORT-REPORT.md` beside the converted Add-On. Retry repeats
+conversion after files or game support change; it cannot create a missing port.
+For a failed conversion, the error identifies the cause rather than assuming
+the ZIP is corrupt. A map can require original sky or terrain files absent
+from its ZIP; that needs the correct source assets or a converter correction,
+not a rewrite of the map in Rhai.
 
 Many v20 Add-Ons keep part of what they do in scripts: a shotgun's spread,
 a slash command. The report lists each such function under **Needs

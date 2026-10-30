@@ -1314,6 +1314,20 @@ fn entry(root: &Path, package: PackageEntry, enabled: bool, discovered: bool) ->
             }
         }
     }
+    // Show import compatibility before the player enables the Add-On.
+    // Enabled/dependency state is checked by the library separately; here
+    // we want unresolved source and native-port requirements, even when off.
+    if !required {
+        problems.extend(
+            crate::health::import_problems(
+                &package.id,
+                &dir.join(crate::health::IMPORT_REPORT),
+                &|_| true,
+            )
+            .into_iter()
+            .map(|p| Diagnostic::warning("library.import_compatibility", p.line())),
+        );
+    }
     LibraryEntry {
         package,
         enabled: enabled || required,

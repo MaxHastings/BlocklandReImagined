@@ -316,7 +316,7 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
             description: match failed {
                 Some(_) if native => "An Add-On ported for this game, in your Add-Ons folder, that could not be installed. Replace it with a working copy and it installs by itself, or press Retry.".into(),
                 None if native => "An Add-On ported for this game, in your Add-Ons folder, being installed as it is. It starts off; players who join you download it from you.".into(),
-                Some(_) => "A classic Blockland Add-On in your Add-Ons folder that could not be converted. Replace it with a working copy and it converts by itself, or press Retry.".into(),
+                Some(_) => "This classic Add-On could not be converted. The error above names the cause. Some Add-Ons need missing source assets or a native port of their scripts; Retry cannot add that support. Retry after updating the game or supplying the required files.".into(),
                 None => "A classic Blockland Add-On in your Add-Ons folder, being converted into an Add-On this game can load. It starts off; players who join you download it from you. Its scripts are never run: the game's own rewrites of them come with it, and its report lists anything still missing.".into(),
             },
             problems: failed.map(|e| vec![e.to_string()]).unwrap_or_default(),
@@ -418,7 +418,7 @@ fn reads() -> String {
 /// (not to the schemas): a conversion made before one is out of date. Bump
 /// it with any such fix, or players keep the old conversion (a zombie
 /// converted before it stopped using guns kept its gun).
-const IMPORTER_REVISION: u32 = 1;
+const IMPORTER_REVISION: u32 = 2;
 
 /// Progress of [`start_sync`]: a notice for the Add-Ons screen, the last
 /// one with `finished`.
@@ -503,29 +503,52 @@ fn run_importer(importer: &Path, input: &Path, out: &Path, reference: &Path) -> 
     if classic::is_native_zip(input) {
         return classic::unpack_native_zip(input, out);
     }
-    let output = std::process::Command::new(importer)
-        .arg(input)
-        .arg(out)
-        .arg("--json")
-        // The other dropped Add-Ons, for one it requires, and the game's
-        // own content for the base bricks, sounds and the rest.
-        .arg("--reference")
-        .arg(reference)
-        .arg("--installed")
-        .arg(reference)
+    let output = legacy_import_command(importer, input, out, reference)
         .stdin(std::process::Stdio::null())
         .output()
         .with_context(|| format!("Running {}", importer.display()))?;
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        let reason = err
-            .lines()
-            .rev()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("no details");
-        anyhow::bail!("{}", reason.trim());
+        anyhow::bail!(
+            "{}",
+            conversion_error(&String::from_utf8_lossy(&output.stderr))
+        );
     }
     Ok(())
+}
+
+fn legacy_import_command(
+    importer: &Path,
+    input: &Path,
+    out: &Path,
+    content: &Path,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(importer);
+    command
+        .arg(input)
+        .arg(out)
+        .arg("--json")
+        // This is writable installed content, not a protected v20 source
+        // installation. The importer already reads required legacy Add-Ons
+        // beside the input ZIP, including transitive dependencies.
+        .arg("--installed")
+        .arg(content);
+    command
+}
+
+fn conversion_error(stderr: &str) -> String {
+    // Keep anyhow's context and cause chain instead of only the last line.
+    let error = stderr.lines().position(|line| line.starts_with("Error:"));
+    let lines: Vec<_> = stderr
+        .lines()
+        .skip(error.unwrap_or(0))
+        .filter(|line| !line.trim().is_empty())
+        .take(12)
+        .collect();
+    if lines.is_empty() {
+        "Conversion failed without details. See the game log.".into()
+    } else {
+        lines.join("\n")
+    }
 }
 
 /// Convert `name` again: forget that it failed.
@@ -1135,6 +1158,61 @@ mod tests {
             .to_string(),
         )?;
         Ok(())
+    }
+
+    #[test]
+    fn automatic_import_does_not_protect_its_own_content_output_as_a_source_install() {
+        let command = legacy_import_command(
+            Path::new("bri-import-addon"),
+            Path::new("content/Add-Ons/Example.zip"),
+            Path::new("content/addons/staged"),
+            Path::new("content"),
+        );
+        let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy()).collect();
+        assert_eq!(
+            args,
+            [
+                "content/Add-Ons/Example.zip",
+                "content/addons/staged",
+                "--json",
+                "--installed",
+                "content"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_conversion_keeps_the_missing_asset_and_its_context() {
+        let error = conversion_error(
+            "warning: unrelated file\nError: packaging Add-Ons/Map_Test/test.mis\n\nCaused by:\n    Missing sky material list Add-Ons/data/skies/Blue/resource.dml\n",
+        );
+        assert!(error.contains("packaging Add-Ons/Map_Test/test.mis"));
+        assert!(error.contains("Missing sky material list Add-Ons/data/skies/Blue/resource.dml"));
+        assert!(!error.contains("unrelated"));
+        assert!(conversion_error("").contains("without details"));
+    }
+
+    #[test]
+    fn updating_the_import_recipe_retries_an_unchanged_previously_failed_zip() {
+        let root =
+            std::env::temp_dir().join(format!("bri-add-ons-retry-recipe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(classic::folder(&root)).unwrap();
+        std::fs::write(classic::folder(&root).join("Example.zip"), b"bad").unwrap();
+        sync_now(&root);
+        let mut state = State::load(&root);
+        let mut failed = state.get("Example").unwrap().clone();
+        assert!(failed.error.is_some());
+        failed.importer = Some("previous import recipe".into());
+        state.set(failed);
+        state.save(&root).unwrap();
+        let steps = classic::plan(
+            &Library::scan(&root).unwrap(),
+            &State::load(&root),
+            &reads(),
+        );
+        assert!(matches!(steps.as_slice(), [Step::Import { name, .. }] if name == "Example"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn sync_now(root: &Path) -> Vec<SyncNote> {
