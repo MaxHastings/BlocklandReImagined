@@ -40,6 +40,15 @@ fixtures contain only authored synthetic text, no community content.
 passed. Cargo checks, platform CI, packaged verification and main merge are
 pending; this entry makes no runtime or Linux pass claim yet.
 
+Bounded check with the existing shipped v0.4.1 Windows importer and the
+corrected argument list (`INPUT FRESH_OUTPUT --json --installed CONTENT`,
+without `--reference CONTENT`) passed conversion for both zombie ZIPs and
+Player_Roll, retaining respectively 82, 62 and 1 unported functions and the
+named Bot_Hole/Event_botSpawnLoot missing dependencies. Map_IZB reached its
+actual packaging error and retained the missing-sky cause chain. This tests
+the argument correction, not the newly compiled client or its UI. Raw outputs:
+`C:\Users\Maxwell\AppData\Local\Temp\bri-corrected-import-args-ifguxw2r`.
+
 Map_IZB remains a distinct unresolved asset-resolution case. It names
 `~/data/skies/Sky_Blue2/resource.dml`; the original reference contains that
 sky under `base/data/skies`, but the current mission/environment reader
