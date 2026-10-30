@@ -66,3 +66,46 @@ The other two original cases still fail and their opt-in traces are retained;
 no successful release gate is claimed. The official content planner reports all
 19 base recipes current, and the actual imported-generation recipe equals the
 existing bundle receipt, so these changes do not justify restamping content.
+
+## Finite correction handoff
+
+At `9105d1ca2bb931bcbbb1741ddd1e2e8eef8bed6f`, the complete unfamiliar-game
+acceptance passes with all original free-play runs, seeds, layouts and replays
+intact. A new geometry-only diagnostic confirms that all three Variant(1)
+free-play runs present zero glass sight opportunities after legitimate bot
+behavior corrections. The earlier selected-target aggregate therefore could
+not prove a visibility defect.
+
+The test now separately establishes that opportunity using the same authored
+world, glass, bot kinds, rules/provider and seeds. Native F7/Fetch admin commands
+place an existing opposing pair, then ordinary brains run without injected bot
+inputs, goals or sight answers. Every variant/seed must have actual geometric
+opportunities and positive ordinary-brain sight through the authored glass;
+changing only that glass's raycast flag to opaque must produce zero sightings
+with positive opportunities. All six positive and six opaque sessions pass
+(240 positive observations for Variant(0), 208 for Variant(1), zero for opaque
+controls). The original match's natural sight count remains diagnostic. No
+threshold, seed, layout, damage assertion or replay assertion was relaxed.
+
+An intermediate bounded runtime sight observer did not supply the missing
+opportunity and is excluded entirely from the candidate and its ancestry.
+Its source and failed evidence remain on
+`codex/v042-validation-perception-observer`; no new observer API, runtime
+bookkeeping or seam ships. The final probe is test-only, based on the already
+verified timing corrections. The original owner handoff
+`40bffa31615dfa2a083de450eaed853cb5e814c9` is an ancestor of this candidate.
+
+Final warm focused checks pass: the complete acceptance case, all four sight
+budget units, all 12 harm units and the strengthened actual-host versus
+predictor lifecycle case (18 tests total), plus warning-free all-target Clippy
+for `bri-sim` and `bri-chaos`. The earlier 40 deck/objective/carrier/physical
+checks and four audio/native-room corrections remain recorded. All four deck
+layouts now report zero falls. The final full release gate and native package
+checks remain required; scoped evidence is not a full pass.
+
+Source availability was rechecked for all 204 seam rows, 552 named items and
+13 manually reviewed source paths. The serialized `height_black` spelling is
+verified through `OverlayFit::HeightBlack` and its actual serde snake-case
+attribute, rather than misreported as a missing literal Rust identifier.
+This source audit does not establish consumer completeness or human alpha
+acceptance. Maxwell's approved mix and media are unchanged.

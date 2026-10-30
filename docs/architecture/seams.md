@@ -21,8 +21,10 @@ rather than repeating it. Two columns say where a seam stands:
   finished. It keeps the original branch and owner so earlier progress notes
   stay traceable, and it is often out of date: most `branch` rows below were
   merged long ago and their branches deleted.
-- *On main (checked 2026-10-29; yes = code integrated on main, not human-tested)*
-  is a check against main `ba4f1bbb54c4` on that date. Source availability
+- *On main (checked 2026-10-30; yes = code integrated on main, not human-tested)*
+  rechecks source locations at candidate `9105d1ca2bb9`, including main
+  `60fcbe7f4597`. The release corrections introduce no new public seam; the
+  existing 204 rows and 552 named items remain available. Source availability
   is distinct from consumer completeness and human acceptance. Where a row names
   code items in backticks (types, functions, fields), each was searched for in
   `crates/`, `packages/` and `tools/`. Where it names none, the code each row

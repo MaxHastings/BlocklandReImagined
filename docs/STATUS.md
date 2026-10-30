@@ -1,6 +1,6 @@
 # Status
 
-Current release and engineering decisions. Reviewed 2026-10-29. Players should
+Current release and engineering decisions. Reviewed 2026-10-30. Players should
 start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 [known issues](KNOWN-ISSUES.md). Dated development receipts are in
 [progress/](progress/README.md); older history is in [progress.md](progress.md).
@@ -8,10 +8,13 @@ start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 ## Release state
 
 The v0.4.2 candidate integrates all approved feature work on main
-`ba4f1bbb54c4da18b27f15a088514cda58ccdc62`. Maxwell approved the combined
-playtest and final ambience mix. Required full release validation, native
-platform packages and publication are pending; this is not a new published
-release. See the [candidate receipt](progress/2026-10-29-v042-integration-and-release-candidate.md)
+`60fcbe7f4597da5d88c26d93843b0605b06cc742`. Maxwell approved the combined
+playtest and final ambience mix. Release-gate corrections in PR410 have scoped
+evidence at `9105d1ca2bb931bcbbb1741ddd1e2e8eef8bed6f`; their final guarded
+merge, full release validation, native packages and publication are pending.
+This is not a new published release. See the
+[candidate receipt](progress/2026-10-29-v042-integration-and-release-candidate.md),
+[retained failures and corrections](progress/2026-10-30-v042-release-test-blockers.md)
 and [v0.4.2 notes](releases/v0.4.2.md).
 
 Use the [latest published release](https://github.com/MaxHastings/BlocklandReImagined/releases/latest)
