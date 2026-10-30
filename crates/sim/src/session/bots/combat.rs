@@ -1389,9 +1389,18 @@ fn burst(
         age += ticks;
         match expiry {
             Some(true) => {
+                // Expiration runs before movement on the next weapon tick.
+                // Its burst stays at the last flown position, at that tick.
+                let position = at(start, velocity, flown)?;
+                let ticks = age + 1;
+                path.push(Chord {
+                    from: position,
+                    to: position,
+                    seconds: ticks as f32 / hz,
+                });
                 return Some(Some(Burst {
-                    position: at(start, velocity, flown)?,
-                    ticks: age + 1,
+                    position,
+                    ticks,
                     path,
                 }));
             }
