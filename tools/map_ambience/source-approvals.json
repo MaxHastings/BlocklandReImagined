@@ -213,6 +213,28 @@
       "gain_db": -15.689859301260983,
       "quality": "Original map WAV, audition gain adjusted only; not a replacement recording",
       "license": "Original map package provenance; not relabelled CC0"
+    },
+    {
+      "id": "user-edit:indoor-base",
+      "author": "Maxwell (edit); approved upstream authors retained",
+      "source": "Maxwell supplied Ableton edit; approved review recordings",
+      "input_sha256": "a3cc2d5b3a97cadcc8038a54ca88b4576c9cd77be3e38c37092567a3b5c6f1cf",
+      "state": "approved",
+      "approval_evidence": "Maxwell explicitly requested these two filenames as universalbases and confirmed Edits of the approved review recordings (call_2f940c2ae04a4e4d8dbbbe20bd505a98)",
+      "quality": "User supplied stereo PCM16 WAV at44.1kHz; derived from approved review recordings, not a claim of original lossless source acquisition",
+      "license": "Inherited approved recording provenance; no relicensing",
+      "scope": "User explicitly chose this exact supplied file for universal base. Prepared loop seam and final game mix acceptance remain separate."
+    },
+    {
+      "id": "user-edit:outdoor-base",
+      "author": "Maxwell (edit); approved upstream authors retained",
+      "source": "Maxwell supplied Ableton edit; approved review recordings",
+      "input_sha256": "2d14d005e6546f0ff068a69f21539ca4f402cf508e1468e0581ba27ce157adc7",
+      "state": "approved",
+      "approval_evidence": "Maxwell explicitly requested these two filenames as universalbases and confirmed Edits of the approved review recordings (call_2f940c2ae04a4e4d8dbbbe20bd505a98)",
+      "quality": "User supplied stereo PCM16 WAV at44.1kHz; derived from approved review recordings, not a claim of original lossless source acquisition",
+      "license": "Inherited approved recording provenance; no relicensing",
+      "scope": "User explicitly chose this exact supplied file for universal base. Prepared loop seam and final game mix acceptance remain separate."
     }
   ]
 }

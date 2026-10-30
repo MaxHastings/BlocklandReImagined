@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "scope": "Two universal base recordings on all20nonstorm maps, including brick interiors. SlateStorm unchanged. Onlylocalizedfridge/waterfall/waves additional; no birds/frogs/crickets/oldglobalbeds. Toolswings explicitly retained (separate owner).",
+  "base_recordings": [
+    {
+      "key": "indoor-base",
+      "source_id": "user-edit:indoor-base",
+      "input": "maxwell-indoor-base-a3cc2d5b.wav",
+      "input_sha256": "a3cc2d5b3a97cadcc8038a54ca88b4576c9cd77be3e38c37092567a3b5c6f1cf",
+      "source_filename": "Indoor for Everything like Bedroom, Kitchen and Including inside brick builds.wav",
+      "source": "Maxwell supplied Ableton edit; approved review recordings",
+      "author": "Maxwell (edit); approved upstream authors retained",
+      "license": "Inherited approved recording provenance; no relicensing",
+      "rate": 44100,
+      "channels": 2,
+      "frames": 3193633,
+      "seconds": 72.41798185941043,
+      "source_quality": "User supplied stereo PCM16 WAV at44.1kHz; derived from approved review recordings, not a claim of original lossless source acquisition",
+      "source_approval": "Maxwell explicitly requested these two filenames as universalbases and confirmed Edits of the approved review recordings (call_2f940c2ae04a4e4d8dbbbe20bd505a98)",
+      "loop_processing": {
+        "overlap_seconds": 0.25,
+        "gain": 1.0,
+        "eq": "unchanged",
+        "rate": "preserved",
+        "channels": "preserved",
+        "method": "linear end/start overlap; no normalization/pitch/extra events"
+      },
+      "loop_frames": 3182608,
+      "loop_sha256": "2b2143a72760500fa22359ea3162c586a34d1347c602229fe31da272e6a7b1ef",
+      "loop_acceptance": "Prepared seam candidate; final listening acceptance pending"
+    },
+    {
+      "key": "outdoor-base",
+      "source_id": "user-edit:outdoor-base",
+      "input": "maxwell-outdoor-base-2d14d005.wav",
+      "input_sha256": "2d14d005e6546f0ff068a69f21539ca4f402cf508e1468e0581ba27ce157adc7",
+      "source_filename": "Outdoor-Everything-Except-For-Storms.wav",
+      "source": "Maxwell supplied Ableton edit; approved review recordings",
+      "author": "Maxwell (edit); approved upstream authors retained",
+      "license": "Inherited approved recording provenance; no relicensing",
+      "rate": 44100,
+      "channels": 2,
+      "frames": 3193633,
+      "seconds": 72.41798185941043,
+      "source_quality": "User supplied stereo PCM16 WAV at44.1kHz; derived from approved review recordings, not a claim of original lossless source acquisition",
+      "source_approval": "Maxwell explicitly requested these two filenames as universalbases and confirmed Edits of the approved review recordings (call_2f940c2ae04a4e4d8dbbbe20bd505a98)",
+      "loop_processing": {
+        "overlap_seconds": 0.25,
+        "gain": 1.0,
+        "eq": "unchanged",
+        "rate": "preserved",
+        "channels": "preserved",
+        "method": "linear end/start overlap; no normalization/pitch/extra events"
+      },
+      "loop_frames": 3182608,
+      "loop_sha256": "4232d2812e82f76e604d381fed8cd7ec5de4f2946f576bc749911db474523d0f",
+      "loop_acceptance": "Prepared seam candidate; final listening acceptance pending"
+    }
+  ],
+  "upstream_provenance": "Maxwell confirms edits of approved review recordings; exact per-file parent assignment unspecified, retain complete approved-source credits without claiming all were mixed",
+  "retained_local_profiles": [
+    "map_ambience:fridge-loop",
+    "map_creek:map/map_creek/sound/waterfallloop",
+    "map_creek:map/map_creek/sound/shoreloop"
+  ],
+  "final_game_mix_acceptance": "pending"
+}
