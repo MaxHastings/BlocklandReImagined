@@ -2746,7 +2746,7 @@ mod tests {
                 audio.tick(
                     0.4,
                     Listener {
-                        position: glam::Vec3::new(0., 0., distance),
+                        position: [0., 0., distance].into(),
                         ..Default::default()
                     },
                 );
