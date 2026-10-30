@@ -196,6 +196,8 @@ fn actual_tools_sound_on_misses_keep_contacts_and_mix_for_both_observers() -> Re
         "distance didn't reduce the swing"
     );
     local.set_volume("effects", 0.)?;
+    local.tick(0.02, Listener::default());
+    local.take_capture();
     local.profile(leaf, Placement::Listener);
     local.tick(0.3, Listener::default());
     assert_eq!(
