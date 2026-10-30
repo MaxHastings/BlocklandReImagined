@@ -333,6 +333,7 @@ fn main() -> Result<()> {
             emitters: vec![],
             light: None,
             burst: None,
+            bursts: vec![],
         };
         for (key, value) in &d.fields {
             if key.starts_with("emitter[") && !value.is_empty() {
