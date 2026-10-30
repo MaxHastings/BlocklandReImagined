@@ -179,7 +179,7 @@ fn automatic_map_import_reuses_the_installed_vanilla_sky_without_an_original_ins
     image::RgbImage::from_pixel(2, 2, image::Rgb([80, 140, 30]))
         .save(input.join("ground.png"))
         .unwrap();
-    std::fs::write(input.join("installed.mis"), "new SimGroup(MissionGroup) { new Sky() { materialList = \"~/data/skies/Shared/resource.dml\"; fogDistance = \"17\"; visibleDistance = \"330\"; useSkyTextures = \"0\"; }; new TerrainBlock(Terrain) { terrainFile = \"./terrain.ter\"; }; new SpawnSphere() { position = \"0 0 30\"; }; };").unwrap();
+    std::fs::write(input.join("installed.mis"), "new SimGroup(MissionGroup) { new Sky() { materialList = \"~/data/skies/Shared/resource.dml\"; fogDistance = \"17\"; visibleDistance = \"330\"; useSkyTextures = \"0\"; }; new Sun() { azimuth = \"180\"; elevation = \"60\"; color = \"1 1 1 1\"; ambient = \"0.4 0.4 0.4 1\"; }; new TerrainBlock(Terrain) { terrainFile = \"./terrain.ter\"; }; new SpawnSphere() { position = \"0 0 30\"; }; };").unwrap();
     // The game installation, not an available source install, supplies it.
     std::fs::remove_dir_all(&original).unwrap();
     let out = content.join("addons/staged-map");

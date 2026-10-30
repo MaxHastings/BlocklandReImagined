@@ -52,3 +52,13 @@ or automatic installed-sky path. The original Archive.zip/install is unchanged.
 Cargo, platform CI, actual unmodified-map conversion, packaged startup and
 main integration are pending root's warm broker after playtest clearance.
 No interactive playtest or visual-fidelity acceptance is claimed.
+
+Initial PR #408 CI at `0dc4eb9e0` passed Windows check/Clippy, all five shipping
+binary builds and Linux backend/wheel checks. Linux shard 1 found an authored
+fixture omission: the new installed-sky CLI test had terrain but no Sun, which
+the lighting converter correctly rejected. Its isolated retry failed identically;
+this is a deterministic fixture failure, not a flaky pass. Added the same authored
+Sun fields used by the existing map fixtures; assertions and runtime behavior
+are unchanged. Native checks and new-head CI must still pass. Root's initial
+workspace `cargo fmt --all` hit Windows command-line limit os206; scoped formatting
+is used locally while exact-head workspace formatting has passed remotely.
