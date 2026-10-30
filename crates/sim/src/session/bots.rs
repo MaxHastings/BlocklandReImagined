@@ -3492,6 +3492,7 @@ impl Session {
             && feet.y - next.feet.y > body.step + 0.5
             && (on_body || flat(next.feet - feet).length() < body.width + 1.0)
             && driving.is_none()
+            && !self.seated(bot)
             && swim.is_none()
         {
             let to = self.bot_step_off(bot, feet, &body, next.feet, feet.y - body.step - 0.5);
