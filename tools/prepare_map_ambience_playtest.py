@@ -27,6 +27,8 @@ def stage(seed,output,generated,importer,originals,settings):
         raise ValueError('preview needs a new separate output directory')
     bad=build_map_ambience.problems(REPO,generated)
     if bad: raise ValueError('; '.join(bad))
+    generated_receipt=json.loads((generated/'map-ambience-generated.json').read_text())
+    source_hashes={r['input_sha256'] for r in generated_receipt['clips']}
     manifest=json.loads((seed/'MANIFEST.json').read_text())
     if manifest['version']!='v0.4.1': raise ValueError('use the clean published v041 seed')
     output.mkdir(parents=True)
@@ -49,6 +51,7 @@ def stage(seed,output,generated,importer,originals,settings):
         bad=original_map_problems(REPO,target)
         if bad: raise ValueError('; '.join(bad))
         receipt=json.loads((target/'map-audio-provenance.json').read_text())
+        source_hashes.update(r['sha256'] for r in receipt['sources'])
         if len(receipt['sources']) != (3 if name=='map_creek' else 1):
             raise ValueError('original emitter inventory differs from approved4')
         refreshed.append(json.loads((target/'map-audio-refresh.json').read_text()))
@@ -65,8 +68,10 @@ def stage(seed,output,generated,importer,originals,settings):
     (output/'Launch-Ambience.cmd').write_text('@echo off\nsetlocal\nset BRI_INSTALL_DEFAULT_ADD_ONS=0\ncd /d "%~dp0"\n"%~dp0bri-client.exe" --run "%~dp0content" "%~dp0state"\n')
     (output/'README-AMBience.txt').write_text(
         'Private ambience preview; not merged/released v0.4.2. Start Launch-Ambience.cmd.\n'
-        '12 approved sources. Added palette covers21maps; Arctic remains installed/off as before.\n'
-        'Forest birds: walk near trees and allow35-85s quiet gaps. Creek/Forest Dark keep original emitters.\n'
+        f'{len(source_hashes)} approved starting recordings. Added palette covers21maps; Arctic remains installed/off as before.\n'
+        'Bedroom/Kitchen each have indoor/outdoor day/night profile slots; Slopes, Slate and Slate Desert have outdoor slots.\n'
+        'Some slots currently share approved starting samples; final distinct edits and combined mix acceptance remain pending.\n'
+        'Kitchen fridge remains local. Other maps retain current setup, including Forest tree calls and original Creek/Forest Dark emitters.\n'
         'Compare normal footsteps/tools/weapons/NPC/voice with outdoors, roof-only, sealed room and an opening.\n'
         'Waterfall retains its original loud level initially: specifically report masking near the waterfall.\n'
         'State/settings are isolated here; only a copy of existing settings was used.\n')
@@ -75,9 +80,10 @@ def stage(seed,output,generated,importer,originals,settings):
                 'Original Creek/Forest audio retains map author provenance; see map-audio-provenance.json in those packages.\n')
     receipt={'schema_version':1,'seed':'v0.4.1','seed_manifest_sha256':sha(seed/'MANIFEST.json'),
              'tool_source':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),
-             'approved_recordings':12,'palette_maps':21,'seed_files_verified':len(copied),
+             'approved_recordings':len(source_hashes),'palette_maps':21,
+             'palette_profiles':len(generated_receipt['clips']),'seed_files_verified':len(copied),
              'original_refreshes':refreshed,'generated_receipt_sha256':sha(generated/'map-ambience-generated.json'),
-             'mix_acceptance':'pending Maxwell in-game listening; source choices approved',
+             'mix_acceptance':'pending Maxwell final focused-slot choices/edits and combined in-game listening; approved starting recordings only',
              'note':'Whole-import geometry generation identity retained; private audio overlays are separately receipted.'}
     (output/'ambience-preview.json').write_text(json.dumps(receipt,indent=2)+'\n')
     print('Private content staged:',output,'; warm executables still required')
@@ -85,6 +91,11 @@ def stage(seed,output,generated,importer,originals,settings):
 
 def finalize(output,expected_version):
     receipt=json.loads((output/'ambience-preview.json').read_text())
+    bad=build_map_ambience.problems(REPO,output/'content/addons/map_ambience')
+    if bad:raise ValueError('; '.join(bad))
+    for name in ['map_creek','map_forest']:
+        bad=original_map_problems(REPO,output/'content/addons'/name)
+        if bad:raise ValueError('; '.join(bad))
     exes=['bri-client.exe','bri-import-addon.exe','bri-addon-check.exe','bri-addon-run.exe','bri-server.exe']
     for name in exes:
         if not (output/name).is_file(): raise ValueError('missing warm executable: '+name)
