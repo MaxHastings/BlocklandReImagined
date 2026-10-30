@@ -2705,6 +2705,84 @@ mod tests {
         assert_eq!(mine[0].count, 2);
     }
     #[test]
+    fn streamed_local_ambience_keeps_authored_range_and_handle_when_listener_returns() -> Result<()>
+    {
+        let fx = Pack::synthetic()?;
+        let source = tempfile::tempdir()?;
+        let rate = 48_000;
+        let samples: Vec<f32> = (0..rate / 2)
+            .map(|i| (i as f32 / rate as f32 * 440.0 * std::f32::consts::TAU).sin() * 0.2)
+            .collect();
+        std::fs::write(
+            source.path().join("loop.wav"),
+            bri_audio::wav::encode_pcm16(rate, 1, &samples),
+        )?;
+        for (reference, maximum) in [(45., 270.), (40., 200.)] {
+            let mut audio =
+                ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+            let pack: bri_weapons::Pack = serde_json::from_value(serde_json::json!({
+                "schema_version":5,"id":"local-loop-probe","sounds":{
+                    "test:local":{"file":"loop.wav","looping":true,"music":true,
+                        "spatial":{"reference_distance":reference,"max_distance":maximum}}
+                }
+            }))?;
+            audio.set_pack_sounds(&pack, source.path());
+            assert!(
+                audio.pack_sound_failures.is_empty(),
+                "{:?}",
+                audio.pack_sound_failures
+            );
+            audio.play_ambient(&bri_sim::session::AmbientPlay {
+                key: "local".into(),
+                track: Some("test:local".into()),
+                volume: 1.,
+                fade: 0.,
+                at: Some([0.; 3]),
+                range: 100.,
+            });
+            let handle = audio.rule_ambient["local"].handle;
+            let measure = |audio: &mut ClientAudio, distance| {
+                audio.hear_world(|_| Hearing::CLEAR, Room::DRY);
+                audio.tick(
+                    0.4,
+                    Listener {
+                        position: glam::Vec3::new(0., 0., distance),
+                        ..Default::default()
+                    },
+                );
+                let pcm = audio.take_capture();
+                assert!(pcm.len() >= 9600 && pcm.iter().all(|v| v.is_finite()));
+                (pcm[pcm.len() - 9600..]
+                    .iter()
+                    .map(|v| f64::from(*v).powi(2))
+                    .sum::<f64>()
+                    / 9600.)
+                    .sqrt()
+            };
+            let near = measure(&mut audio, 0.);
+            let middle = measure(&mut audio, (reference + maximum) * 0.5);
+            let far = measure(&mut audio, maximum + 1.);
+            let returned = measure(&mut audio, 0.);
+            assert!(
+                near > 0.001 && middle > 0. && middle < near * 0.9,
+                "near{near}, middle{middle}"
+            );
+            assert!(far < 1e-8, "source audible beyond authored maximum: {far}");
+            assert!(
+                (returned - near).abs() < near * 0.02,
+                "return changed level: {near} then{returned}"
+            );
+            assert_eq!(audio.rule_ambient["local"].handle, handle);
+            assert_eq!(
+                audio.stats().started,
+                1,
+                "moving out of range must not restart the loop"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn fresh_map_and_a_b_a_replay_keep_actual_pcm_level_and_clear_context() -> Result<()> {
         let fx = Pack::synthetic()?;
         let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
