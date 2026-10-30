@@ -172,7 +172,8 @@ class Install(unittest.TestCase):
         self.assertEqual({i["folder"] for i in installed}, {"weapon_a", "weapon_a-rules"})
         self.assertTrue((self.content / "addons/weapon_a/assets/weapons.json").is_file())
         self.assertEqual((self.content / "packages.json").read_text(), '{"enabled": ["x"]}')
-        self.assertEqual([p.name for p in (self.content / "addons").iterdir()], sorted(["weapon_a", "weapon_a-rules"]))
+        self.assertEqual(sorted(p.name for p in (self.content / "addons").iterdir()),
+                         ["weapon_a", "weapon_a-rules"])
 
     def test_an_update_replaces_the_folder_whole(self):
         port_addon.install_zip(self.make_zip(), self.content)
