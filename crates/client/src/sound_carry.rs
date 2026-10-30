@@ -279,12 +279,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires actual packaged native maps; set BRI_AMBIENCE_CONTEXT_CONTENT"]
+    #[ignore = "requires actual packaged native maps; set BRI_CONTENT or BRI_AMBIENCE_CONTEXT_CONTENT"]
     fn native_bedroom_kitchen_scale_and_outside_use_actual_collision() {
         use crate::building::Building;
         use glam::Vec3;
         let content = std::path::PathBuf::from(
-            std::env::var_os("BRI_AMBIENCE_CONTEXT_CONTENT").expect("set native content root"),
+            std::env::var_os("BRI_AMBIENCE_CONTEXT_CONTENT")
+                .or_else(|| std::env::var_os("BRI_CONTENT"))
+                .expect("set native content root"),
         );
         for id in [
             "v20/add-ons/map_bedroom/bedroom.mis",

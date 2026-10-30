@@ -16,8 +16,9 @@ assertions and the accepted feature scope remain intact.
 The synthetic Slopes mirror case passes alone after failing under full-run
 load; retain it as a load-sensitive failure, not an unqualified pass. The
 native Bedroom/Kitchen collision case passes when its documented
-`BRI_AMBIENCE_CONTEXT_CONTENT` input is supplied. The release wrapper must
-provide that same actual content root, in addition to `BRI_CONTENT`.
+`BRI_AMBIENCE_CONTEXT_CONTENT` input is supplied. That test now also accepts
+the full gate's standard `BRI_CONTENT` input as the same actual content root;
+an explicit ambience-only override still takes precedence.
 
 Two older tool checks did not account for the approved package-owned swishes.
 The hammer/contact test now expects exactly one native Fire-state swing before
