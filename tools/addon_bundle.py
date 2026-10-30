@@ -517,6 +517,8 @@ def build(args):
             f"The authors' original Add-On, bundled with Blockland ReImagined with credit to them. "
             f"To have it left out, open an issue at {ISSUES}.")
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+        from map_ambience.original_policy import apply as apply_original_policy
+        apply_original_policy(args.repo,fresh)
         imported_addons.write_receipt(fresh, recipe)
         bad = problems(fresh, addon, args.repo, recipe)
         if bad:

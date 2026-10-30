@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Map Ambience Policy",
-  "description": "Server-only fixed-map bed selection and sparse environmental detail timing.",
+  "description": "Server-only universal indoor/outdoor base selection with the Storm exception and a measured local fridge; no random environmental details.",
   "authors": [
     "Blockland ReImagined"
   ],

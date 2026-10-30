@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "authority": "Maxwell: only proximity waterfall, fridge and shoreline waves besides the two user bases and Storm; preserve other source files inactive",
+  "enabled_profiles": [
+    "map_creek:map/map_creek/sound/waterfallloop",
+    "map_creek:map/map_creek/sound/shoreloop"
+  ]
+}

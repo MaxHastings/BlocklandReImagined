@@ -2746,7 +2746,7 @@ mod tests {
                 audio.tick(
                     0.4,
                     Listener {
-                        position: [0., 0., distance].into(),
+                        position: [0., 0., distance],
                         ..Default::default()
                     },
                 );

@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "scope": "Two universal base recordings on all20nonstorm maps, including brick interiors. SlateStorm unchanged. Onlylocalizedfridge/waterfall/waves additional; no birds/frogs/crickets/oldglobalbeds. Toolswings explicitly retained (separate owner).",
+  "base_recordings": [
+    {
+      "key": "indoor-base",
+      "source_id": "user-edit:indoor-base",
+      "input": "maxwell-indoor-base-a3cc2d5b.wav",
+      "input_sha256": "a3cc2d5b3a97cadcc8038a54ca88b4576c9cd77be3e38c37092567a3b5c6f1cf",
+      "source_filename": "Indoor for Everything like Bedroom, Kitchen and Including inside brick builds.wav",
+      "source": "Maxwell supplied Ableton edit; approved review recordings",
+      "author": "Maxwell (edit); approved upstream authors retained",
+      "license": "Inherited approved recording provenance; no relicensing",
+      "rate": 44100,
+      "channels": 2,
+      "frames": 3193633,
+      "seconds": 72.41798185941043,
+      "source_quality": "User supplied stereo PCM16 WAV at44.1kHz; derived from approved review recordings, not a claim of original lossless source acquisition",
+      "source_approval": "Maxwell explicitly requested these two filenames as universalbases and confirmed Edits of the approved review recordings (call_2f940c2ae04a4e4d8dbbbe20bd505a98)",
+      "loop_processing": {
+        "overlap_seconds": 0.25,
+        "gain": 1.0,
+        "eq": "unchanged",
+        "rate": "preserved",
+        "channels": "preserved",
+        "method": "linear end/start overlap; no normalization/pitch/extra events",
+        "working_format": "PCM24 WAV, deterministic header; input remains original PCM16"
+      },
+      "loop_frames": 3182608,
+      "loop_sha256": "2de12887706c940e2d8f26d6f874400fbb3778b6d05f0785bf9212f62e8ce85a",
+      "loop_acceptance": "approved",
+      "loop_approval_evidence": "Maxwell replied yeah that's good after clarification and playback of BOTH full72.17second prepared loops;250ms seam-only overlap, levels/EQ unchanged."
+    },
+    {
+      "key": "outdoor-base",
+      "source_id": "user-edit:outdoor-base",
+      "input": "maxwell-outdoor-base-2d14d005.wav",
+      "input_sha256": "2d14d005e6546f0ff068a69f21539ca4f402cf508e1468e0581ba27ce157adc7",
+      "source_filename": "Outdoor-Everything-Except-For-Storms.wav",
+      "source": "Maxwell supplied Ableton edit; approved review recordings",
+      "author": "Maxwell (edit); approved upstream authors retained",
+      "license": "Inherited approved recording provenance; no relicensing",
+      "rate": 44100,
+      "channels": 2,
+      "frames": 3193633,
+      "seconds": 72.41798185941043,
+      "source_quality": "User supplied stereo PCM16 WAV at44.1kHz; derived from approved review recordings, not a claim of original lossless source acquisition",
+      "source_approval": "Maxwell explicitly requested these two filenames as universalbases and confirmed Edits of the approved review recordings (call_2f940c2ae04a4e4d8dbbbe20bd505a98)",
+      "loop_processing": {
+        "overlap_seconds": 0.25,
+        "gain": 1.0,
+        "eq": "unchanged",
+        "rate": "preserved",
+        "channels": "preserved",
+        "method": "linear end/start overlap; no normalization/pitch/extra events",
+        "working_format": "PCM24 WAV, deterministic header; input remains original PCM16"
+      },
+      "loop_frames": 3182608,
+      "loop_sha256": "75fe152c1c08e41f00ef3355c4bc176fccbc604928f7647146e3200fc5baa563",
+      "loop_acceptance": "approved",
+      "loop_approval_evidence": "Maxwell replied yeah that's good after clarification and playback of BOTH full72.17second prepared loops;250ms seam-only overlap, levels/EQ unchanged."
+    }
+  ],
+  "upstream_provenance": "Maxwell confirms edits of approved review recordings; exact per-file parent assignment unspecified, retain complete approved-source credits without claiming all were mixed",
+  "retained_local_profiles": [
+    "map_ambience:fridge-loop",
+    "map_creek:map/map_creek/sound/waterfallloop",
+    "map_creek:map/map_creek/sound/shoreloop"
+  ],
+  "final_game_mix_acceptance": "pending"
+}

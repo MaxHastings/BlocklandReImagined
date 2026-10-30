@@ -58,6 +58,8 @@ def original_map_problems(repo, directory):
             if actual_hash != row['sha256']:
                 out.append(f'{key}: original recording differs from its source receipt')
             out.extend(source_problems(registry, actual_hash))
+        from map_ambience.original_policy import problems as policy_problems
+        out.extend(policy_problems(repo,directory))
         return out
     except (OSError, ValueError, KeyError, TypeError) as error:
         return [f'Incomplete original-map ambience approval evidence: {error}']

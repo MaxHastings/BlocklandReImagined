@@ -4,11 +4,11 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Map Ambience",
-  "description": "Subtle map beds and sparse localized environmental details. Original map emitters remain in their map packages.",
+  "description": "Two user-selected interior/exterior bases, unchanged storm ambience and a measured local fridge. Waterfall and shore playback stay with original map packages.",
   "authors": [
     "Blockland ReImagined"
   ],
-  "license": "LicenseRef-CC0-Recordings",
+  "license": "LicenseRef-Approved-Ambience-Sources",
   "provenance": {
     "source": "See map-ambience-generated.json for recording authors, direct sources, quality, hashes and approvals."
   },

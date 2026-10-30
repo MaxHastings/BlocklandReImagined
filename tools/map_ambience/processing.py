@@ -3,6 +3,24 @@ import io
 import math
 
 
+def user_loop(raw):
+    import numpy as np
+    import soundfile as sf
+    pcm,rate=sf.read(io.BytesIO(raw),always_2d=True,dtype='float64')
+    if not np.isfinite(pcm).all() or np.abs(pcm).max()>=1:
+        raise ValueError('Invalid user base PCM')
+    overlap=round(rate*0.25)
+    if len(pcm)<overlap*4:
+        raise ValueError('User base too short for the selected loop seam')
+    mix=np.arange(overlap)[:,None]/overlap
+    pcm=np.concatenate((pcm[overlap:-overlap],pcm[-overlap:]*(1-mix)+pcm[:overlap]*mix))
+    output=io.BytesIO()
+    # PCM24 avoids libsndfile's timestamped FLOAT/PEAK container metadata.
+    sf.write(output,pcm,rate,format='WAV',subtype='PCM_24')
+    return output.getvalue(),{'overlap_seconds':0.25,'gain':1.0,'eq':'unchanged','rate':rate,
+                              'channels':pcm.shape[1],'frames':len(pcm),'normalization':False}
+
+
 def recessed_pcm(pcm, rate, periodic=False):
     import numpy as np
     from scipy.signal import butter, sosfilt

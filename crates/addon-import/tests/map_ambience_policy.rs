@@ -7,6 +7,7 @@ use bri_sim::{
 };
 use glam::Vec3;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Arc};
 
 struct Fixture {
@@ -14,6 +15,7 @@ struct Fixture {
     catalog: Arc<bri_package_runtime::Catalog>,
     pack: bri_weapons::Pack,
     maps: Vec<Value>,
+    originals: Vec<(String, String, [f32; 3])>,
 }
 
 impl Fixture {
@@ -32,9 +34,7 @@ impl Fixture {
         let palette: Value =
             serde_json::from_slice(&std::fs::read(here.join("palette.json")).unwrap()).unwrap();
         let maps = palette["maps"].as_array().unwrap().clone();
-        let slot_config: Value =
-            serde_json::from_slice(&std::fs::read(here.join("priority-slots.json")).unwrap())
-                .unwrap();
+
         let mut script = String::from("fn palette() {\n");
         let mut sounds = serde_json::Map::new();
         for m in &maps {
@@ -56,19 +56,11 @@ impl Fixture {
                 for key in m[kind].as_array().unwrap() {
                     let key = key.as_str().unwrap();
                     let mut sound = json!({"file":"tone.wav","looping":looping,"music":looping});
-                    sound["environment"] = slot_config["slots"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|slot| slot["key"] == key)
-                        .map(|slot| slot["environment"].clone())
-                        .unwrap_or_else(|| {
-                            json!(if key == "room" {
-                                "interior"
-                            } else {
-                                "exterior"
-                            })
-                        });
+                    sound["environment"] = json!(if key == "indoor-base" {
+                        "interior"
+                    } else {
+                        "exterior"
+                    });
                     if !looping {
                         sound["spatial"] = json!({"reference_distance":12.0,"max_distance":160.0});
                     }
@@ -87,6 +79,70 @@ impl Fixture {
         }
         script.push_str("#{beds:[],details:[],anchors:[],locals:[]}\n}\n");
         std::fs::write(rules.join("palette.rhai"), script).unwrap();
+        // Execute the actual authored overlay template against an available
+        // full original palette, so exclusion is policy, not missing assets.
+        let allowed: Value = serde_json::from_slice(
+            &std::fs::read(here.join("original-emitter-policy.json")).unwrap(),
+        )
+        .unwrap();
+        let overlay = dir.path().join("original_overlay");
+        std::fs::create_dir_all(&overlay).unwrap();
+        let mut original_script = String::from("fn map_beds() {\n");
+        let mut originals = Vec::new();
+        for (i, profile) in [
+            "map_creek:map/map_creek/sound/waterfallloop",
+            "map_creek:map/map_creek/sound/shoreloop",
+            "map_creek:map/map_creek/sound/critterloop",
+            "map_forest:map/forestnight/sound/crickets",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sounds.insert(
+                profile.into(),
+                json!({"file":"tone.wav","looping":true,"music":true}),
+            );
+            if !allowed["enabled_profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some(profile))
+            {
+                continue;
+            }
+            let map = profile.split("/sound/").next().unwrap();
+            originals.push((map.to_string(), profile.to_string(), [i as f32, 3., -4.]));
+        }
+        for map in ["map_creek:map/map_creek", "map_forest:map/forestnight"] {
+            let entries = originals
+                .iter()
+                .filter(|(m, _, _)| m == map)
+                .map(|(_, profile, at)| {
+                    let digest = format!("{:x}", Sha256::digest(profile.as_bytes()));
+                    format!(
+                        "#{{key:{},track:{},at:{}}}",
+                        json!(format!("map_audio/{}", &digest[..20])),
+                        json!(profile),
+                        json!(at)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            original_script.push_str(&format!(
+                "if map_id() == {} {{return [{entries}];}}\n",
+                json!(map)
+            ));
+        }
+        original_script.push_str("[]\n}\n");
+        original_script
+            .push_str(&std::fs::read_to_string(here.join("original-overlay.rhai")).unwrap());
+        std::fs::write(overlay.join("policy.rhai"), original_script).unwrap();
+        std::fs::write(overlay.join("behaviour.json"),serde_json::to_vec(&json!({"schema_version":1,"script":"policy.rhai","tick_interval":120,"state":{"global":{"started":{"default":false,"persist":false}}}})).unwrap()).unwrap();
+        std::fs::write(overlay.join("package.json"),serde_json::to_vec(&json!({
+            "schema_version":1,"id":"original_overlay","version":"1.0.0","api":1,"name":"Original policy fixture","authors":["fixture"],"license":"CC0-1.0",
+            "dependencies":{"map_ambience":"^1.0.0"},"capabilities":["effects"],
+            "provides":[{"kind":"script","id":"original_overlay:script/policy","file":"policy.rhai"},{"kind":"behaviour","id":"original_overlay:behaviour/policy","file":"behaviour.json"}]
+        })).unwrap()).unwrap();
         let mut wav = Vec::new();
         wav.extend(b"RIFF");
         wav.extend(164u32.to_le_bytes());
@@ -113,7 +169,8 @@ impl Fixture {
         assert!(check.ok, "{check}");
         let set = serde_json::from_value(json!({"schema_version":1,"packages":[{
             "id":"map_ambience","version":"1.0.0","side":"shared","dir":"map_ambience"
-        },{"id":"map_ambience_rules","version":"1.0.0","side":"server","dir":"map_ambience_rules"}]}))
+        },{"id":"map_ambience_rules","version":"1.0.0","side":"server","dir":"map_ambience_rules"},
+        {"id":"original_overlay","version":"1.0.0","side":"server","dir":"original_overlay"}]}))
         .unwrap();
         let environment = bri_package::environment::Environment::load(dir.path(), &set).unwrap();
         assert_eq!(
@@ -131,6 +188,7 @@ impl Fixture {
             catalog,
             pack: bri_weapons::Pack::from_json(&data).unwrap(),
             maps,
+            originals,
         }
     }
 
@@ -191,15 +249,33 @@ fn fixed_inventory_beds_join_late_join_and_unknown_map_have_actual_consumers() {
                 .iter()
                 .map(|c| format!("map_ambience:{}", c["clip"].as_str().unwrap())),
         );
-        assert_eq!(
-            first
+        expected.extend(
+            f.originals
                 .iter()
-                .filter_map(|b| b.track.clone())
-                .collect::<Vec<_>>(),
-            expected,
-            "{:?}",
-            s.package_diagnostics()
+                .filter(|(map, _, _)| map == m["map"].as_str().unwrap())
+                .map(|(_, profile, _)| profile.clone()),
         );
+        expected.sort();
+        let mut actual_tracks = first
+            .iter()
+            .filter_map(|bed| bed.track.clone())
+            .collect::<Vec<_>>();
+        actual_tracks.sort();
+        assert_eq!(actual_tracks, expected, "{:?}", s.package_diagnostics());
+        for (_, profile, at) in f
+            .originals
+            .iter()
+            .filter(|(map, _, _)| map == m["map"].as_str().unwrap())
+        {
+            assert_eq!(
+                first
+                    .iter()
+                    .find(|bed| bed.track.as_ref() == Some(profile))
+                    .unwrap()
+                    .at,
+                Some(*at)
+            );
+        }
         for local in m["locals"].as_array().unwrap() {
             let track = format!("map_ambience:{}", local["clip"].as_str().unwrap());
             let emitted = first
@@ -248,59 +324,22 @@ fn fixed_inventory_beds_join_late_join_and_unknown_map_have_actual_consumers() {
 }
 
 #[test]
-fn sparse_details_use_evidenced_sources_quiet_gaps_and_no_duplicate_player_broadcast() {
+fn universal_bases_do_not_emit_random_detail_events_over_time() {
     let f = Fixture::new();
-    let forest = f.maps.iter().find(|m| m["name"] == "Forest").unwrap();
-    let anchors: Vec<[f32; 3]> = serde_json::from_value(forest["anchors"].clone()).unwrap();
-    let mut s = f.session(forest["map"].as_str().unwrap());
-    for (i, at) in anchors.iter().take(2).enumerate() {
-        s.join(
-            format!("Listener{i}"),
-            Vec3::from(*at) + Vec3::Y * 2.,
-            i == 0,
-        )
-        .unwrap();
-    }
-    let mut events = Vec::new();
-    for tick in 1..=32_000 {
-        s.step().unwrap();
-        for cue in s.take_cues() {
-            let profile = match cue.kind {
-                CueKind::WeaponSound { profile } | CueKind::SoundShaped { profile, .. } => profile,
-                _ => continue,
-            };
-            if profile.starts_with("map_ambience:bird-") {
-                assert!(
-                    anchors.contains(&cue.position),
-                    "detail invented a source position"
-                );
-                events.push((tick, profile, cue.position));
-            }
+    for name in ["Forest", "Creek", "Bedroom", "Slate Desert"] {
+        let m = f.maps.iter().find(|m| m["name"] == name).unwrap();
+        let mut s = f.session(m["map"].as_str().unwrap());
+        s.join("Listener".into(), Vec3::new(0., 84., 0.), true)
+            .unwrap();
+        for _ in 0..11_000 {
+            s.step().unwrap();
         }
-    }
-    assert!(
-        events.len() >= 3,
-        "{events:?}; {:?}",
-        s.package_diagnostics()
-    );
-    assert!(events[0].0 >= 4200, "initial quiet gap missing");
-    for pair in events.windows(2) {
+        assert!(!s.take_cues().iter().any(|cue|matches!(&cue.kind,
+            CueKind::WeaponSound{profile}|CueKind::SoundShaped{profile,..} if profile.starts_with("map_ambience:"))),"unexpected extra sound event on{name}");
         assert!(
-            (4200..=10320).contains(&(pair[1].0 - pair[0].0)),
-            "quiet gap or duplicate broadcast: {pair:?}"
+            s.package_diagnostics().is_empty(),
+            "{:?}",
+            s.package_diagnostics()
         );
-        assert_ne!(pair[0].1, pair[1].1, "immediate recording repeat");
-        assert_ne!(pair[0].2, pair[1].2, "immediate source repeat");
     }
-    assert!(
-        s.package_diagnostics().is_empty(),
-        "{:?}",
-        s.package_diagnostics()
-    );
-    let mut empty = f.session(forest["map"].as_str().unwrap());
-    for _ in 0..11_000 {
-        empty.step().unwrap();
-    }
-    assert!(!empty.take_cues().iter().any(|cue|matches!(&cue.kind,
-        CueKind::WeaponSound{profile}|CueKind::SoundShaped{profile,..} if profile.starts_with("map_ambience:bird-"))),"no listeners must not emit detail events");
 }
