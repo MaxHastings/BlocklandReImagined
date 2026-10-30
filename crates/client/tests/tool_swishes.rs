@@ -136,7 +136,11 @@ fn actual_tools_sound_on_misses_keep_contacts_and_mix_for_both_observers() -> Re
         if repeats_while_held {
             assert!(ticks.len() >= 3, "held hammer use didn't repeat: {ticks:?}");
         } else {
-            assert_eq!(ticks.len(), 1, "held wrench invented repeated swings: {ticks:?}");
+            assert_eq!(
+                ticks.len(),
+                1,
+                "held wrench invented repeated swings: {ticks:?}"
+            );
         }
         assert!(
             ticks.windows(2).all(|w| w[1] > w[0] + 1),
