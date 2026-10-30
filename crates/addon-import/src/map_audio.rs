@@ -458,6 +458,7 @@ pub fn export(
         .extend(declarations.diagnostics.iter().cloned());
     let mut sounds = BTreeMap::new();
     let mut by_map = BTreeMap::<String, Vec<Value>>::new();
+    let mut ambient_keys = BTreeSet::new();
     let mut receipts = Vec::new();
     let mut clips = BTreeMap::new();
     for (map, mission, value) in maps {
@@ -505,12 +506,22 @@ pub fn export(
                 sound["environment"] = json!("exterior");
             }
             sounds.insert(e.profile.clone(), sound);
+            // Ambient keys are <=32 bytes; full source/profile identities often
+            // exceed that. Keep identity in track/provenance, not the loop key.
+            let key = format!(
+                "map_audio/{}",
+                &crate::source::hash(e.profile.as_bytes())[..20]
+            );
+            ensure!(
+                ambient_keys.insert(key.clone()),
+                "map ambient key identity collision"
+            );
             by_map.entry(map.clone()).or_default().push(json!({
-                "key": e.profile, "track":e.profile,
+                "key": key, "track":e.profile,
                 "at":e.spatial.map(|_| e.position),
             }));
             receipts.push(json!({"map":map,"mission":mission,"node":index,"name":node.name,
-                "profile":e.profile,"source":e.source,"sha256":hash,"position":e.position,
+                "profile":e.profile,"ambient_key":key,"source":e.source,"sha256":hash,"position":e.position,
                 "spatial":e.spatial,"volume":e.volume,"outside_ambient":e.exterior,
                 "authored_properties":node.properties,
                 "cone":"angularly neutral; no directional approximation",
@@ -681,13 +692,16 @@ mod tests {
         p["maxloopgap"] = json!("10");
         let d = node("Scheduled", p);
         let maps = vec![(
-            "audio:map/test".into(),
+            "audio:map/long_original_mission_identity".into(),
             "Add-Ons/Map_Audio/test.mis".into(),
-            json!({"schema_version":1,"id":"audio:map/test","name":"Audio fixture","nodes":[a,b,c,d]}),
+            json!({"schema_version":1,"id":"audio:map/long_original_mission_identity","name":"Audio fixture","nodes":[a,b,c,d]}),
         )];
         let mut provides = Vec::new();
         let result = export(&input, &out, "audio", "1.0.0", &maps, &mut provides).unwrap();
-        assert_eq!(result.covered["audio:map/test"], BTreeSet::from([0, 1]));
+        assert_eq!(
+            result.covered["audio:map/long_original_mission_identity"],
+            BTreeSet::from([0, 1])
+        );
         assert!(result.diagnostics.iter().any(|s| s.contains("non-neutral")));
         assert!(
             result
@@ -700,14 +714,14 @@ mod tests {
                 .unwrap();
         assert_eq!(pack.sounds.len(), 2);
         assert_eq!(
-            pack.sounds["audio:map/test/sound/river"]
+            pack.sounds["audio:map/long_original_mission_identity/sound/river"]
                 .spatial
                 .unwrap()
                 .reference_distance,
             80.
         );
         assert_eq!(
-            pack.sounds["audio:map/test/sound/crickets"].environment,
+            pack.sounds["audio:map/long_original_mission_identity/sound/crickets"].environment,
             None
         );
         for sound in pack.sounds.values() {
@@ -765,7 +779,7 @@ mod tests {
             beds.sort_by(|a, b| a.key.cmp(&b.key));
             beds
         };
-        let mut s = session("audio:map/test");
+        let mut s = session("audio:map/long_original_mission_identity");
         let a = s
             .join("First".into(), glam::Vec3::new(0., 4., 0.), true)
             .unwrap();
@@ -775,6 +789,12 @@ mod tests {
         let first = beds(&mut s, a);
         assert_eq!(first.len(), 2, "{:?}", s.package_diagnostics());
         assert!(first.iter().all(|bed| bed.at == Some([2., 3., -4.])));
+        assert!(
+            first
+                .iter()
+                .all(|bed| bed.key.len() <= 32 && bed.track.as_ref().unwrap().len() > 32),
+            "long authored track identity must survive a bounded operation key"
+        );
         for _ in 0..240 {
             s.step().unwrap();
         }

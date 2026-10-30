@@ -122,6 +122,8 @@ def selection(repo=REPO):
             selected[key].update(environment=slot['environment'],editing_slot=slot['editable_file'])
     selected.update({k: dict(masters[DETAILS[k]], key=k, kind='detail', source_id='original-wav:'+DETAILS[k]) for k in chosen_details})
     selected.update({k: dict(masters['fridge-master'], key=k, kind='local', source_id='original-wav:fridge-master') for k in chosen_locals})
+    if any(len(('ma/'+key).encode())>32 for key,row in selected.items() if row['kind'] in {'bed','local'}):
+        raise ValueError('ambient operation key exceeds the existing32-byte limit')
     return palette, selected
 
 

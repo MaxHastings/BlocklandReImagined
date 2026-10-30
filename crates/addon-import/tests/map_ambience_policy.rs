@@ -174,6 +174,10 @@ fn fixed_inventory_beds_join_late_join_and_unknown_map_have_actual_consumers() {
             s.step().unwrap();
         }
         let first = beds(&mut s, a);
+        assert!(
+            first.iter().all(|bed| bed.key.len() <= 32),
+            "ambient keys must fit the actual operation contract"
+        );
         let mut expected = m["beds"]
             .as_array()
             .unwrap()

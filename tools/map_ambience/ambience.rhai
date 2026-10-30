@@ -9,10 +9,10 @@ fn start() {
     if get("started") { return; }
     let p = palette();
     for clip in p.beds {
-        play_ambient_all("map_ambience/"+clip, "map_ambience:"+clip, #{fade:2.0});
+        play_ambient_all("ma/"+clip, "map_ambience:"+clip, #{fade:2.0});
     }
     for local in p.locals {
-        play_ambient_all("map_ambience/"+local.clip, "map_ambience:"+local.clip, #{fade:2.0,at:local.at});
+        play_ambient_all("ma/"+local.clip, "map_ambience:"+local.clip, #{fade:2.0,at:local.at});
     }
     later();
     set("started",true);
