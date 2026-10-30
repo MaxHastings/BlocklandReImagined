@@ -1630,7 +1630,11 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
             let facing=max(half_vector.y,0.0);
             var shine=1.0;
             if material[4].w>0.0 {shine=select(0.0,pow(facing,material[4].w),facing>0.0);}
-            rgb+=material[4].rgb*shine*shine*a/alpha*water_light;
+            // Keep the original moving texture visible through the broad sun
+            // highlight. Its bright pattern carries the glint; dark cells do
+            // not receive the same uniform wash. Base pigment/alpha stay intact.
+            let texture_highlight=clamp(dot((first_rgb+second_rgb)*0.5,vec3<f32>(0.2126,0.7152,0.0722)),0.0,1.0);
+            rgb+=material[4].rgb*shine*shine*a/alpha*water_light*texture_highlight;
         }
         return vec4<f32>(fogged(rgb,v.world_position),alpha);
     }
