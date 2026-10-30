@@ -1234,21 +1234,25 @@ fn burst(
 ) -> Option<Option<Burst>> {
     use bri_weapons::runtime::{Rebound, expires, hit_bursts, rebound};
     // A body at rest goes off when its clock says.
-    let waits = |at: Vec3, age: u32, path: Vec<Chord>| -> Option<Option<Burst>> {
+    let waits = |at: Vec3, age: u32, mut path: Vec<Chord>| -> Option<Option<Burst>> {
         let fuse = fuse.filter(|f| *f >= age && *f < def.lifetime_ticks);
-        Some(match fuse {
-            Some(ticks) => Some(Burst {
-                position: at,
-                ticks,
-                path,
-            }),
-            None if def.explode_death => Some(Burst {
-                position: at,
-                ticks: def.lifetime_ticks.max(age),
-                path,
-            }),
-            None => None,
-        })
+        let ticks = match fuse {
+            Some(ticks) => ticks,
+            None if def.explode_death => def.lifetime_ticks.max(age),
+            None => return Some(None),
+        };
+        // Harm reads the last chord's clock. Rest is not detonation: keep
+        // the waiting interval so moving bodies are priced at the fuse.
+        path.push(Chord {
+            from: at,
+            to: at,
+            seconds: ticks as f32 / bri_weapons::TICK_HZ as f32,
+        });
+        Some(Some(Burst {
+            position: at,
+            ticks,
+            path,
+        }))
     };
     let hz = bri_weapons::TICK_HZ as f32;
     let mut path: Vec<Chord> = Vec::new();
@@ -2671,6 +2675,13 @@ mod tests {
             let (ticks, position) =
                 flown.unwrap_or_else(|| panic!("{case}: the host never burst it"));
             assert_eq!(planned.ticks, ticks, "{case}: tick");
+            let last = planned.path.last().expect("a burst has a harm endpoint");
+            assert_eq!(last.to, planned.position, "{case}: harm position");
+            assert_eq!(
+                last.seconds,
+                ticks as f32 / bri_weapons::TICK_HZ as f32,
+                "{case}: harm must use the host's detonation clock"
+            );
             let roll = if case == "rolled" {
                 // It rests at its last bounce in the plan; the host rolls it
                 // on, slowed by friction, until its clock runs out.

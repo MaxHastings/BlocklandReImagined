@@ -298,6 +298,7 @@ pub(super) fn shot_harm(
         .map_or(Vec3::ZERO, |c| (c.to - c.from).normalize_or_zero());
     let mut end = chords.last().map_or(origin, |c| c.to);
     let mut seconds = chords.last().map_or(0.0, |c| c.seconds);
+    let detonation = (end, seconds);
     // The bodies its way meets: priced by the plan whatever they take (a
     // push's target takes no damage, yet the shot is meant for it).
     let mut met = Vec::new();
@@ -376,6 +377,13 @@ pub(super) fn shot_harm(
                 None => way.push(*c),
             }
         }
+    }
+    if strike.rebounds {
+        // A possible body contact is not an impact explosion for a timed
+        // throw. Its trajectory predictor already supplies the burst's
+        // endpoint and clock; an uncertain early rebound only adds risk.
+        (end, seconds) = detonation;
+        way = chords.to_vec();
     }
     // Its blast where the way ends, by the host's falloff, to the centre
     // of each body; within its fragments' reach, all of it for its own side.
@@ -654,6 +662,43 @@ mod tests {
             assert_eq!(harm.own, if side == Side::Own { 60.0 } else { 0.0 });
             assert_eq!(shape.burst, Some((Vec3::Z * 10.0, 6.2)));
         }
+    }
+
+    #[test]
+    fn a_timed_blast_uses_detonation_time_not_an_earlier_possible_body_contact() {
+        let strike = Strike {
+            direct: 0.0,
+            pellets: 1,
+            spread: 0.0,
+            blast: Some((60.0, 4.0, 0.0)),
+            contact: None,
+            rebounds: true,
+            flies_on: None,
+        };
+        let at = Vec3::Z * 8.0;
+        let path = [
+            Chord {
+                from: Vec3::ZERO,
+                to: at,
+                seconds: 0.5,
+            },
+            Chord {
+                from: at,
+                to: at,
+                seconds: 3.0,
+            },
+        ];
+        let mut enemy = body(2, Side::Enemy, at);
+        enemy.velocity = Vec3::X * 3.0;
+        let (harm, shape) = shot_harm(&Bodies(vec![enemy]), Vec3::ZERO, &path, &strike);
+        assert_eq!(
+            harm.enemy, 0.0,
+            "it leaves before the fuse, not before first contact"
+        );
+        assert_eq!(shape.chords.last().unwrap().seconds, 3.0);
+        enemy.velocity = Vec3::ZERO;
+        let (harm, _) = shot_harm(&Bodies(vec![enemy]), Vec3::ZERO, &path, &strike);
+        assert_eq!(harm.enemy, 60.0, "a body still there takes the real blast");
     }
 
     #[test]
