@@ -41,3 +41,14 @@ screenshots preserved byte-for-byte under references/05..07 with hashes.
 Presented the exact pair and asked whether Maxwell wants a playtest build;
 answer pending. No new water package, merge or publication.
 
+
+## Maxwell acceptance and merge instruction
+
+After seeing the actual same-pose original/after pair, Maxwell answered:
+**i accept after just merge into main**. This accepts this exact small glare
+change and explicitly replaces the separate-preview request for this change.
+It does not accept the rejected overhaul. Release coordinator was sent the
+accepted isolated commit1d8ec48b6fa480f84e004b0883be5e886eb7cfb8 for
+cherry-pick onto current main under its existing integration lease. Keep
+rejected60e ancestry out; local merge/push/platform CI pending coordination.
+
