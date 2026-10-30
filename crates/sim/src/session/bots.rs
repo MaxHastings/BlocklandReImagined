@@ -3483,18 +3483,23 @@ impl Session {
         // The same when its route starts well below its feet, right by it:
         // it stands on something the walk grid does not see (a narrow wall
         // top, a ledge between cell centres), so it steps off to the
-        // nearest free floor toward the route first.
+        // nearest free floor toward the route first. On a moving body this
+        // also applies to a distant waypoint: walking along someone's head
+        // toward the deck's far rim leaves no room to land on that deck.
         if let Some(next) = wanted
             && next.mode == Mode::Walk
             && next.through.is_none()
             && feet.y - next.feet.y > body.step + 0.5
-            && flat(next.feet - feet).length() < body.width + 1.0
+            && (on_body || flat(next.feet - feet).length() < body.width + 1.0)
             && driving.is_none()
             && swim.is_none()
-            && let Some(to) =
-                self.bot_step_off(bot, feet, &body, next.feet, feet.y - body.step - 0.5)
         {
-            wanted = Some(Waypoint::walk(to));
+            let to = self.bot_step_off(bot, feet, &body, next.feet, feet.y - body.step - 0.5);
+            if on_body || to.is_some() {
+                // No clear landing beside the support: wait for one rather
+                // than resuming a route grounded for a different height.
+                wanted = to.map(Waypoint::walk);
+            }
         }
         let pushing = if behaviour == Behaviour::Interact {
             self.act_bot_interaction(bot, interaction_enemy.map(|k| k.at), tick)?
