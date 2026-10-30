@@ -104,4 +104,7 @@ damage at a possible bounce. Strengthen the existing predictor-versus-native
 burst test to require matching harm endpoint/time for every authored lifecycle
 case, and add a harm regression where a moving enemy is near an early contact
 but outside the blast by its fuse; the stationary enemy remains a positive
-60-damage control. Runtime/broker validation of this correction is pending.
+60-damage control. The non-rest expiration branch also retains its actual
+expiration tick: expiration happens before the next weapon movement, so its
+last position is unchanged while the harm clock advances by that one tick.
+Runtime/broker validation of this correction is pending.
