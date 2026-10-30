@@ -108,3 +108,44 @@ but outside the blast by its fuse; the stationary enemy remains a positive
 expiration tick: expiration happens before the next weapon movement, so its
 last position is unchanged while the harm clock advances by that one tick.
 Runtime/broker validation of this correction is pending.
+
+## Minimal test-only glass contract resolution
+
+Root's combined `21a6e693ccea3d26bb792066d406c24ce763e230` passes the timed
+harm, actual predictor/native lifecycle and changed Clippy checks. The original
+unfamiliar run now passes every grenade, damage, near-enemy, teammate and
+walkoff requirement; only Variant(1)'s incidental glass target count is zero.
+
+An unmerged read-only observer experiment `a1f7ddffb` / combined `0e9841779e98`
+did not resolve that opportunity problem: Variant(0) had actual perception
+witnesses, Variant(1) still none. Source and failed evidence stay on their
+branches/root artifacts. Root explicitly requested the smaller test-only
+resolution if existing `BotThought::visible` can prove a known opportunity.
+The new `codex/bot-glass-contract` branch starts at `b2376ab33` and contains none
+of that observer API, bookkeeping or seam row. Production remains unchanged.
+
+Preserve the original 75-second matches, variants, seeds, authored layout and
+replay. Their selected-target glass counts remain in `Seen`; additionally
+report geometry-only candidate pairs without mistaking those for proven sight.
+After replay verification, a separate pair of sessions per variant/seed uses
+the same full authored world, packages, bot kinds/archetypes, weapon data and
+minigame rules. Native admin F7/Fetch commands place one existing opposing pair
+beside the authored glass, resolve target connections through real admin
+roster/name data, and return the host to its sealed box before brain stepping.
+Other bots keep their original spawns; no bot inputs, goals, rays or perception
+answers are injected. Ordinary brains then step for one second.
+
+Require a positive real opportunity and `BotThought::visible` opponent sight
+through the authored glass for EVERY existing variant/seed. A matching opaque
+control changes only those glass bricks' raycasting flag, with identical
+geometry, providers, seed and native placement commands. It must have positive
+geometric opportunities but ZERO actual opposing-pair sightings through that
+blocked line. The original per-variant positive sight requirement is now fed
+by this explicit brain-perception contract proof rather than an incidental
+target-winning event during the chaotic match. No threshold, damage, seed,
+original match layout or AI target preference is weakened or tuned.
+
+Formatter/diff checks pass. Root must compile and run the complete original
+acceptance plus these integrated positive/opaque controls and changed-area
+checks; no runtime success or full release pass is claimed here. No Cargo,
+build, push or original-content mutation ran in this checkout.
