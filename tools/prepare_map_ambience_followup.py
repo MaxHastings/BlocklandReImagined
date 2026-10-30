@@ -13,6 +13,7 @@ import subprocess
 
 import build_map_ambience
 import prepare_map_ambience_audition
+from map_ambience.processing import recessed_pcm
 
 HERE=Path(__file__).resolve().parent/'map_ambience'
 RATE=48000
@@ -33,7 +34,7 @@ def lufs(raw):
 def build(cache,current,output):
     import numpy as np
     import soundfile as sf
-    from scipy.signal import butter,sosfilt,find_peaks
+    from scipy.signal import find_peaks
     output.mkdir(parents=True,exist_ok=True)
     masters={r['key']:r for r in json.loads((HERE/'masters.json').read_text())}
     candidates={r['key']:r for r in json.loads((HERE/'candidates.json').read_text())['clips']}
@@ -76,12 +77,7 @@ def build(cache,current,output):
     current_pcm,current_rate=sf.read(current/'assets/clips/dry-air.ogg',always_2d=True,dtype='float64')
     if current_rate!=RATE:raise ValueError('unexpected current game mix rate')
     a=current_pcm[20*RATE:40*RATE].copy()
-    # RBJ high shelf -4dB at2.5kHz, followed by gentle8kHz lowpass.
-    amp=10**(-4/40);w=2*math.pi*2500/RATE;c=math.cos(w);alpha=math.sin(w)/2*math.sqrt(2);root=2*math.sqrt(amp)*alpha
-    num=[amp*((amp+1)+(amp-1)*c+root),-2*amp*((amp-1)+(amp+1)*c),amp*((amp+1)+(amp-1)*c-root)]
-    den=[(amp+1)-(amp-1)*c+root,2*((amp-1)-(amp+1)*c),(amp+1)-(amp-1)*c-root]
-    shelf=np.array(num+den)/den[0]
-    b=sosfilt(np.vstack([shelf,butter(1,8000,'lowpass',fs=RATE,output='sos')]),a,axis=0)
+    b=recessed_pcm(a,RATE)
     # Metering compensation is only for the fair A/B, never a master-volume edit.
     def wav(v):
         x=io.BytesIO();sf.write(x,v,RATE,format='WAV',subtype='PCM_16');return x.getvalue()

@@ -16,6 +16,7 @@ import tempfile
 
 import generated_addons
 from map_ambience.approvals import source_problems
+from map_ambience.processing import recessed_loop
 import prepare_map_ambience_audition as beds
 import prepare_map_ambience_details as details
 
@@ -34,7 +35,19 @@ def approval_receipt(registry, source_hash):
 
 
 def clip_file(row):
-    return row['key'] + ('.ogg' if row['kind']=='bed' else '.wav')
+    return row['key'] + ('.ogg' if row['kind'] in {'bed','local'} else '.wav')
+
+
+def sound_definition(row):
+    looping = row['kind'] in {'bed','local'}
+    sound = {'file':'clips/'+clip_file(row),'volume':1.0,'looping':looping,'music':looping}
+    if row['kind'] == 'local':
+        sound['spatial'] = {'reference_distance':45.0,'max_distance':270.0}
+    else:
+        sound['environment'] = 'interior' if row['key'] == 'room' else 'exterior'
+        if not looping:
+            sound['spatial'] = {'reference_distance':12.0,'max_distance':160.0}
+    return sound
 
 
 def encode_bed(raw):
@@ -69,6 +82,9 @@ def selection(repo=REPO):
         raise ValueError('palette must cover exactly the fixed21-map inventory')
     chosen_beds = {c for m in palette['maps'] for c in m['beds']}
     chosen_details = {c for m in palette['maps'] for c in m['details']}
+    chosen_locals = {c['clip'] for m in palette['maps'] for c in m.get('locals',[])}
+    if not chosen_locals <= {'fridge-loop'}:
+        raise ValueError('local loop has no approved pinned recording')
     if palette['detail_gap_seconds'] != [35,85]:
         raise ValueError('policy timing differs from the fixed35..85s gap')
     if not chosen_details <= DETAILS.keys():
@@ -78,10 +94,18 @@ def selection(repo=REPO):
             raise ValueError('palette exceeds the chosen layer/anchor budget')
         if bool(m['details']) != bool(m['anchors']):
             raise ValueError('localized details need evidenced fixed anchors')
+        if len(m.get('locals',[])) > 1:
+            raise ValueError('palette exceeds one local loop per map')
+        for local in m.get('locals',[]):
+            if m['map'] not in {'v20/add-ons/map_kitchen/kitchen.mis','v20/add-ons/map_kitchendark/kitchendark.mis'}:
+                raise ValueError('no evidenced fridge source on this map')
+            if local['clip'] != 'fridge-loop' or local['at'] != [-382.75,170.284,288.171] or not local.get('evidence'):
+                raise ValueError('local loop must retain its evidenced fridge surface position')
     catalog = {r['key']: r for r in json.loads((here / 'candidates.json').read_text())['clips']}
     masters = {r['key']: r for r in json.loads((here / 'masters.json').read_text())}
     selected = {k: dict(catalog[k], kind='bed', source_id='freesound-preview:'+k) for k in chosen_beds}
     selected.update({k: dict(masters[DETAILS[k]], key=k, kind='detail', source_id='original-wav:'+DETAILS[k]) for k in chosen_details})
+    selected.update({k: dict(masters['fridge-master'], key=k, kind='local', source_id='original-wav:fridge-master') for k in chosen_locals})
     return palette, selected
 
 
@@ -90,8 +114,9 @@ def policy(palette):
     for m in palette['maps']:
         text += ('if map_id() == '+json.dumps(m['map'])+' { return #{beds:'+
                  json.dumps(m['beds'])+',details:'+json.dumps(m['details'])+
-                 ',anchors:'+json.dumps(m['anchors'])+'}; }\n')
-    return text + '#{beds:[],details:[],anchors:[]}\n}\n'
+                 ',anchors:'+json.dumps(m['anchors'])+',locals:['+
+                 ','.join('#{clip:'+json.dumps(c['clip'])+',at:'+json.dumps(c['at'])+'}' for c in m.get('locals',[]))+']}; }\n')
+    return text + '#{beds:[],details:[],anchors:[],locals:[]}\n}\n'
 
 
 def build(cache, output, content, download=False, audition_only=False):
@@ -117,23 +142,38 @@ def build(cache, output, content, download=False, audition_only=False):
                 old.unlink()  # Only generator-owned WAV names within this clip folder.
         sounds, receipts = {}, []
         for key, row in sorted(selected.items()):
-            is_bed = row['kind'] == 'bed'
+            is_bed = row['kind'] in {'bed','local'}
             source = staged / ('loops' if is_bed else 'details') / (key+'.wav')
-            raw = source.read_bytes()
+            if row['kind'] == 'local':
+                original = (cache/row['input']).read_bytes()
+                if sha(original) != row['input_sha256']:
+                    raise ValueError('fridge source changed')
+                raw,_,processing = beds.prepare(original,-35)
+                processing['encoding'] = 'PCM16 WAV derived from original PCM WAV'
+                choices = json.loads((HERE/'followup-selections.json').read_text())['clips']
+                approved = next(c for c in choices if c['id']==key)
+                if approved['approval'] != 'approved' or sha(raw) != approved['sha256']:
+                    raise ValueError('fridge loop differs from the approved audition')
+            else:
+                raw = source.read_bytes()
+                processing = bed_rows[key]['processing'] if is_bed else detail_rows[key]
+            if key == 'dry-air':
+                choices = json.loads((HERE/'followup-selections.json').read_text())['clips']
+                approved = next(c for c in choices if c['id']=='wind-recessed')
+                if approved['approval'] != 'approved' or approved['source']['input_sha256'] != row['input_sha256']:
+                    raise ValueError('recessed wind choice is not approved for this source')
+                raw = recessed_loop(raw)
+                processing = dict(processing, selected_treatment='high shelf -4dB at 2.5kHz; one-pole 8kHz lowpass; periodic state; no loudness compensation',
+                                  treatment_approval=approved['approval_evidence'])
             encoding=None
             if is_bed:
                 raw,encoding=encode_bed(raw)
             file=clip_file(row)
             (clips_dir/file).write_bytes(raw)
-            sound = {'file':'clips/'+file,'volume':1.0,'looping':is_bed,'music':is_bed}
-            if key != 'room':
-                sound['environment'] = 'exterior'
-            if not is_bed:
-                sound['spatial'] = {'reference_distance':12.0,'max_distance':160.0}
-            sounds['map_ambience:'+key] = sound
+            sounds['map_ambience:'+key] = sound_definition(row)
             receipts.append(dict(row, file='assets/clips/'+file, processed_sha256=sha(raw),encoding=encoding,
                                  source_approval=approval_receipt(registry,row['input_sha256']),
-                                 processing=bed_rows[key]['processing'] if is_bed else detail_rows[key]))
+                                 processing=processing))
         (output / 'assets/weapons.json').write_text(json.dumps({'schema_version':5,'id':'map_ambience','sounds':sounds},indent=2)+'\n')
         shutil.copyfile(HERE / 'package.json', output / 'package.json')
         rules = output.parent / 'map_ambience_rules'
@@ -156,8 +196,8 @@ def build(cache, output, content, download=False, audition_only=False):
         if audition_only:
             rows = []
             for r in receipts:
-                maps = ', '.join(m['name'] for m in palette['maps'] if r['key'] in m['beds']+m['details'])
-                quality = 'WAV derived from public HQ MP3 preview' if r['kind']=='bed' else 'Derived directly from original PCM WAV'
+                maps = ', '.join(m['name'] for m in palette['maps'] if r['key'] in m['beds']+m['details']+[c['clip'] for c in m.get('locals',[])])
+                quality = r.get('quality','Derived directly from original PCM WAV')
                 rows.append('<article><h2>'+html.escape(r['key'])+'</h2><p>'+html.escape(maps)+
                             '</p><audio controls preload="none" src="'+html.escape(output.name+'/'+r['file'])+'"></audio><p>'+
                             html.escape(quality)+' · '+html.escape(r['author'])+' · CC0 · <a href="'+
@@ -165,9 +205,9 @@ def build(cache, output, content, download=False, audition_only=False):
             document = ('<!doctype html><meta charset="utf-8"><title>Chosen ambience palette</title>'
                         '<style>body{background:#171c22;color:#e8edf2;font:18px system-ui;max-width:900px;margin:40px auto;padding:20px}'
                         'a{color:#97d5ff}article{padding:16px;margin:16px 0;background:#242c35}audio{width:100%}</style>'
-                        '<h1>Eight proposed ambience sources</h1><p>Fixed candidate palette for the21 maps. '
+                        '<h1>Selected ambience sources</h1><p>Fixed candidate palette for the21 maps. '
                         'Listen to approve the recordings; final integrated levels remain pending. '
-                        'One subtle bed per map at most; Forest birds are sparse fixed-source calls35–85s apart in the candidate policy. '
+                        'One subtle bed per map at most plus the localized Kitchen fridge; Forest birds are sparse fixed-source calls35–85s apart in the candidate policy. '
                         'Creek and Forest Dark use their separately approved originals; Construct and Destruct retain deliberate quiet. '
                         'These controls play clips solo and do not demonstrate runtime spatial treatment. No autoplay.</p>'+''.join(rows))
             (output.parent/'audition.html').write_text(document,encoding='utf-8')
@@ -187,6 +227,10 @@ def problems(repo, directory):
             return ['Generated ambience inventory differs from the fixed palette']
         registry = json.loads((Path(repo) / 'tools/map_ambience/source-approvals.json').read_text(encoding='utf-8'))
         out = []
+        wanted_sounds = {'map_ambience:'+key:sound_definition(row) for key,row in selected.items()}
+        packaged = json.loads((directory/'assets/weapons.json').read_text())
+        if packaged != {'schema_version':5,'id':'map_ambience','sounds':wanted_sounds}:
+            out.append('Generated sound definitions differ from approved spatial/context policy')
         for r in receipt['clips']:
             pinned = selected[r['key']]
             if r['input_sha256'] != pinned['input_sha256'] or r['source_id'] != pinned['source_id']:

@@ -36,24 +36,45 @@ impl Fixture {
         let mut sounds = serde_json::Map::new();
         for m in &maps {
             script.push_str(&format!(
-                "if map_id() == {} {{ return #{{beds:{},details:{},anchors:{}}}; }}\n",
-                m["map"], m["beds"], m["details"], m["anchors"]
+                "if map_id() == {} {{ return #{{beds:{},details:{},anchors:{},locals:[{}]}}; }}\n",
+                m["map"],
+                m["beds"],
+                m["details"],
+                m["anchors"],
+                m["locals"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|c| format!("#{{clip:{},at:{}}}", c["clip"], c["at"]))
+                    .collect::<Vec<_>>()
+                    .join(",")
             ));
             for (kind, looping) in [("beds", true), ("details", false)] {
                 for key in m[kind].as_array().unwrap() {
                     let key = key.as_str().unwrap();
                     let mut sound = json!({"file":"tone.wav","looping":looping,"music":looping});
-                    if key != "room" {
-                        sound["environment"] = json!("exterior");
-                    }
+                    sound["environment"] = json!(if key == "room" {
+                        "interior"
+                    } else {
+                        "exterior"
+                    });
                     if !looping {
                         sound["spatial"] = json!({"reference_distance":12.0,"max_distance":160.0});
                     }
                     sounds.insert(format!("map_ambience:{key}"), sound);
                 }
             }
+            for local in m["locals"].as_array().unwrap() {
+                sounds.insert(
+                    format!("map_ambience:{}", local["clip"].as_str().unwrap()),
+                    json!({
+                        "file":"tone.wav","looping":true,"music":true,
+                        "spatial":{"reference_distance":45.0,"max_distance":270.0}
+                    }),
+                );
+            }
         }
-        script.push_str("#{beds:[],details:[],anchors:[]}\n}\n");
+        script.push_str("#{beds:[],details:[],anchors:[],locals:[]}\n}\n");
         std::fs::write(rules.join("palette.rhai"), script).unwrap();
         let mut wav = Vec::new();
         wav.extend(b"RIFF");
@@ -142,12 +163,19 @@ fn fixed_inventory_beds_join_late_join_and_unknown_map_have_actual_consumers() {
             s.step().unwrap();
         }
         let first = beds(&mut s, a);
-        let expected = m["beds"]
+        let mut expected = m["beds"]
             .as_array()
             .unwrap()
             .iter()
             .map(|v| format!("map_ambience:{}", v.as_str().unwrap()))
             .collect::<Vec<_>>();
+        expected.extend(
+            m["locals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| format!("map_ambience:{}", c["clip"].as_str().unwrap())),
+        );
         assert_eq!(
             first
                 .iter()
@@ -157,6 +185,19 @@ fn fixed_inventory_beds_join_late_join_and_unknown_map_have_actual_consumers() {
             "{:?}",
             s.package_diagnostics()
         );
+        for local in m["locals"].as_array().unwrap() {
+            let track = format!("map_ambience:{}", local["clip"].as_str().unwrap());
+            let emitted = first
+                .iter()
+                .find(|b| b.track.as_ref() == Some(&track))
+                .unwrap();
+            let at: [f32; 3] = serde_json::from_value(local["at"].clone()).unwrap();
+            assert_eq!(
+                emitted.at,
+                Some(at),
+                "fridge loop must retain authored world position"
+            );
+        }
         for _ in 0..240 {
             s.step().unwrap();
         }
@@ -167,9 +208,12 @@ fn fixed_inventory_beds_join_late_join_and_unknown_map_have_actual_consumers() {
         let b = s
             .join("Later".into(), Vec3::new(2., 84., 0.), false)
             .unwrap();
+        let mut replay = beds(&mut s, b);
+        let mut retained = first.clone();
+        replay.sort_by(|a, b| a.key.cmp(&b.key));
+        retained.sort_by(|a, b| a.key.cmp(&b.key));
         assert_eq!(
-            beds(&mut s, b),
-            first,
+            replay, retained,
             "late join must get each retained bed once"
         );
         assert!(

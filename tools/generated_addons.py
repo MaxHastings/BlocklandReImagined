@@ -16,6 +16,8 @@ RECIPES = {
         'inputs': ['tools/build_map_ambience.py', 'tools/generated_addons.py',
                    'tools/prepare_map_ambience_audition.py', 'tools/prepare_map_ambience_details.py',
                    'tools/map_ambience/approvals.py', 'tools/map_ambience/source-approvals.json',
+                   'tools/map_ambience/followup-selections.json',
+                   'tools/map_ambience/processing.py',
                    'tools/map_ambience/candidates.json', 'tools/map_ambience/masters.json',
                    'tools/map_ambience/maps.json', 'tools/map_ambience/palette.json',
                    'tools/map_ambience/package.json', 'tools/map_ambience/rules-package.json', 'tools/map_ambience/behaviour.json',
