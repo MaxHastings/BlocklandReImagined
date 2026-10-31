@@ -235,8 +235,11 @@ impl App {
         }
         self.voice
             .set_preview_active(self.ui.core.voice_preview_active);
-        self.voice
-            .update(voice_link, listener, std::time::Instant::now());
+        self.voice.update(
+            self.net.attempt.as_ref().map(|a| a.id),
+            voice_link,
+            listener,
+        );
         if let Some(indicator) = self.voice.indicator_change() {
             self.ui.apply(UiUpdate::VoiceIndicator(indicator));
         }

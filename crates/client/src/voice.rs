@@ -4,7 +4,7 @@
 //!
 //! The audio work (capture, codec, jitter buffers, mixing, devices) is
 //! `bri_audio::voice`; the transport is `bri_net::voice`. This ties them
-//! together once a frame: it holds no network or audio state of its own beyond
+//! together on a bounded worker independent of game frames: it holds no network or audio state of its own beyond
 //! what a session needs, and a missing microphone or speakers, or a device that
 //! fails, costs the voice chat and never the game.
 //!
@@ -93,8 +93,11 @@ pub fn input_devices() -> Vec<String> {
     bri_audio::input_devices()
 }
 
-pub struct VoiceClient {
+struct VoiceState {
     config: Config,
+    /// Device construction stays separate from packet pumping; device-free
+    /// lifecycle tests supply a failing opener and never touch real hardware.
+    open_device: fn(VoiceSettings, Option<String>) -> Result<VoiceChat, bri_audio::AudioError>,
     chat: Option<VoiceChat>,
     /// Driver startup can block; poll completion without blocking a game frame.
     opening: Option<(
@@ -106,7 +109,8 @@ pub struct VoiceClient {
     talking: bool,
     /// A session is on and voice chat is enabled: the HUD indicator shows.
     active: bool,
-    session_link: Option<usize>,
+    session_key: Option<u64>,
+    transport_id: Option<usize>,
     routes: bri_net::voice::RouteTable,
     hud_activity: BTreeMap<OwnerId, Instant>,
     focused: bool,
@@ -136,15 +140,17 @@ pub struct VoiceClient {
     shown: Option<VoiceIndicator>,
 }
 
-impl VoiceClient {
+impl VoiceState {
     pub fn new(settings: &Settings) -> Self {
         Self {
             config: config_from(&settings.prefs),
+            open_device: VoiceChat::open,
             chat: None,
             opening: None,
             talking: false,
             active: false,
-            session_link: None,
+            session_key: None,
+            transport_id: None,
             routes: bri_net::voice::RouteTable::default(),
             hud_activity: BTreeMap::new(),
             focused: true,
@@ -225,14 +231,6 @@ impl VoiceClient {
         if let Some(chat) = &self.chat {
             chat.set_talking(talking);
         }
-    }
-    /// Whether the player's voice is going out right now.
-    pub fn transmitting(&self) -> bool {
-        self.chat.as_ref().is_some_and(VoiceChat::transmitting)
-    }
-    /// The players heard in the last moment.
-    pub fn speaking(&self) -> &[OwnerId] {
-        &self.speaking
     }
     /// What the HUD's voice indicator shows now; None outside a session or
     /// with voice chat off.
@@ -378,10 +376,6 @@ impl VoiceClient {
     pub fn unmute(&mut self, owner: OwnerId) {
         self.muted.remove(&owner);
     }
-    /// Whether a player's voice is muted locally right now.
-    pub fn is_muted(&self, owner: OwnerId) -> bool {
-        self.muted.contains(&owner)
-    }
     /// The players this player has muted locally (the F2 list).
     pub fn muted(&self) -> &BTreeSet<OwnerId> {
         &self.muted
@@ -400,15 +394,20 @@ impl VoiceClient {
             VoiceMode::Disabled => false,
         }
     }
-    /// One frame. `link` is the joined session's voice connection; when
+    /// One bounded pump iteration. `transport` is the accepted session link; when
     /// Options is open, the same capture stream remains available for the
     /// microphone meter even without a joined session.
-    pub fn update(&mut self, transport: Option<&VoiceLink>, listener: Listener, now: Instant) {
+    pub fn tick(
+        &mut self,
+        session_key: Option<u64>,
+        transport: Option<&VoiceLink>,
+        listener: Listener,
+        now: Instant,
+    ) {
         // Keep the raw session handle briefly so a settings change that turns
         // voice off can publish a final false state before we stop processing.
-        let session_link = transport.map(VoiceLink::id);
-        if self.session_link != session_link {
-            self.session_link = session_link;
+        if self.session_key != session_key {
+            self.session_key = session_key;
             self.chat = None;
             self.opening = None;
             self.muted.clear();
@@ -419,6 +418,20 @@ impl VoiceClient {
             self.sent_activity = None;
             self.activity_sent_at = None;
             self.retry_at = None;
+        }
+        let transport_id = transport.map(VoiceLink::id);
+        if self.transport_id != transport_id {
+            self.transport_id = transport_id;
+            // A new transport needs fresh grants/decoder state, but keeps the
+            // same microphone, held PTT and personal mutes within this session.
+            self.apply_routes(bri_net::voice::RouteTable::default());
+            if let Some(chat) = &mut self.chat {
+                self.outgoing.clear();
+                chat.take_frames(&mut self.outgoing);
+                self.outgoing.clear();
+            }
+            self.sent_activity = None;
+            self.activity_sent_at = None;
         }
         let link = transport.filter(|_| self.config.settings.enabled);
         self.active = link.is_some();
@@ -513,9 +526,10 @@ impl VoiceClient {
         {
             let settings = self.audio_settings();
             let device = self.config.device.clone();
+            let open_device = self.open_device;
             match std::thread::Builder::new()
                 .name("bri-voice-open".into())
-                .spawn(move || VoiceChat::open(settings, device))
+                .spawn(move || open_device(settings, device))
             {
                 Ok(task) => self.opening = Some((self.config.clone(), task)),
                 Err(error) => {
@@ -640,6 +654,124 @@ impl VoiceClient {
     }
 }
 
+struct VoiceShared {
+    state: VoiceState,
+    session: Option<u64>,
+    transport: Option<VoiceLink>,
+    listener: Listener,
+}
+
+/// UI controls and snapshots for one independently pumped voice state machine.
+/// No frame owns capture queues, route refresh, jitter feeding or keepalives.
+pub struct VoiceClient {
+    shared: std::sync::Arc<std::sync::Mutex<VoiceShared>>,
+    stop: std::sync::mpsc::Sender<()>,
+}
+impl VoiceClient {
+    pub fn new(settings: &Settings) -> std::io::Result<Self> {
+        Self::spawn(VoiceShared {
+            state: VoiceState::new(settings),
+            session: None,
+            transport: None,
+            listener: Listener::default(),
+        })
+    }
+    fn spawn(shared: VoiceShared) -> std::io::Result<Self> {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(shared));
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let worker = shared.clone();
+        std::thread::Builder::new()
+            .name("bri-voice-pump".into())
+            .spawn(move || {
+                loop {
+                    {
+                        let mut held = worker.lock().unwrap_or_else(|e| e.into_inner());
+                        let link = held.transport.clone();
+                        let listener = held.listener;
+                        let session = held.session;
+                        held.state
+                            .tick(session, link.as_ref(), listener, Instant::now());
+                    }
+                    match stopped.recv_timeout(Duration::from_millis(5)) {
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        _ => break,
+                    }
+                }
+                let mut held = worker.lock().unwrap_or_else(|e| e.into_inner());
+                held.state
+                    .tick(None, None, Listener::default(), Instant::now());
+            })?;
+        Ok(Self { shared, stop })
+    }
+    fn shared(&self) -> std::sync::MutexGuard<'_, VoiceShared> {
+        self.shared.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn update(
+        &mut self,
+        session: Option<u64>,
+        transport: Option<&VoiceLink>,
+        listener: Listener,
+    ) {
+        let mut held = self.shared();
+        held.session = session;
+        held.transport = transport.cloned();
+        held.listener = listener;
+    }
+    pub fn apply_settings(&mut self, settings: &Settings) {
+        self.shared().state.apply_settings(settings);
+    }
+    pub fn set_focused(&mut self, focused: bool) {
+        self.shared().state.set_focused(focused);
+    }
+    pub fn set_master_volume(&mut self, volume: f32) {
+        self.shared().state.set_master_volume(volume);
+    }
+    pub fn set_volume(&mut self, volume: f32) {
+        self.shared().state.set_volume(volume);
+    }
+    pub fn set_talking(&mut self, talking: bool) {
+        self.shared().state.set_talking(talking);
+    }
+    pub fn set_preview_active(&mut self, active: bool) {
+        self.shared().state.set_preview_active(active);
+    }
+    pub fn set_server_muted(&mut self, muted: &BTreeSet<OwnerId>, local_owner: OwnerId) {
+        self.shared().state.set_server_muted(muted, local_owner);
+    }
+    pub fn mute(&mut self, owner: OwnerId) {
+        self.shared().state.mute(owner);
+    }
+    pub fn unmute(&mut self, owner: OwnerId) {
+        self.shared().state.unmute(owner);
+    }
+    pub fn muted(&self) -> BTreeSet<OwnerId> {
+        self.shared().state.muted().clone()
+    }
+    pub fn indicator_change(&mut self) -> Option<Option<VoiceIndicator>> {
+        self.shared().state.indicator_change()
+    }
+    pub fn preview(&self) -> VoicePreview {
+        self.shared().state.preview()
+    }
+    pub fn speaking_owners(&self, owner: OwnerId) -> BTreeSet<OwnerId> {
+        self.shared().state.speaking_owners(owner)
+    }
+    pub fn speaking_labels(&self, owner: OwnerId) -> BTreeMap<u64, (String, f32)> {
+        self.shared().state.speaking_labels(owner)
+    }
+    pub fn speaking_levels(&self, owner: OwnerId) -> BTreeMap<OwnerId, f32> {
+        self.shared().state.speaking_levels(owner)
+    }
+}
+impl Drop for VoiceClient {
+    fn drop(&mut self) {
+        if let Some(chat) = &self.shared().state.chat {
+            chat.set_transmit_allowed(false);
+        }
+        let _ = self.stop.send(());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,20 +834,20 @@ mod tests {
 
     #[test]
     fn without_a_session_nothing_is_open_and_the_key_is_forgotten() {
-        let mut voice = VoiceClient::new(&Settings::default());
+        let mut voice = VoiceState::new(&Settings::default());
         voice.set_talking(true);
-        voice.update(None, Listener::default(), Instant::now());
+        voice.tick(None, None, Listener::default(), Instant::now());
         assert!(voice.chat.is_none());
         assert!(!voice.talking, "a key held across a session does not stick");
-        assert!(!voice.transmitting());
-        assert!(voice.speaking().is_empty());
+        assert!(voice.chat.is_none());
+        assert!(voice.speaking.is_empty());
         assert_eq!(voice.indicator(), None);
         assert_eq!(voice.indicator_change(), None, "nothing shown, nothing new");
     }
 
     #[test]
     fn the_indicator_follows_the_key_the_mode_and_the_microphone() {
-        let mut voice = VoiceClient::new(&settings(&[("$pref::Voice::Mode", "0")]));
+        let mut voice = VoiceState::new(&settings(&[("$pref::Voice::Mode", "0")]));
         voice.active = true;
         assert_eq!(
             voice.indicator(),
@@ -744,7 +876,7 @@ mod tests {
 
     #[test]
     fn world_speaking_state_uses_vad_packets_not_received_audio_frames() {
-        let mut voice = VoiceClient::new(&Settings::default());
+        let mut voice = VoiceState::new(&Settings::default());
         // Audio may still be buffered or carry a quiet frame after speech ends;
         // it is not authoritative evidence that the player is talking.
         voice.speaking.push(99);
@@ -755,11 +887,11 @@ mod tests {
 
     #[test]
     fn a_locally_muted_player_is_silent_and_unbolded_for_this_player() {
-        let mut voice = VoiceClient::new(&Settings::default());
+        let mut voice = VoiceState::new(&Settings::default());
         voice.remote_activity.insert(99, Instant::now());
         assert_eq!(voice.speaking_owners(7), BTreeSet::from([99]));
         voice.mute(99);
-        assert!(voice.is_muted(99));
+        assert!(voice.muted.contains(&99));
         assert!(
             voice.speaking_owners(7).is_empty(),
             "a muted player shows no speech state"
@@ -774,7 +906,7 @@ mod tests {
 
     #[test]
     fn a_new_microphone_or_disabling_reopens_the_devices_but_volume_does_not() {
-        let mut voice = VoiceClient::new(&Settings::default());
+        let mut voice = VoiceState::new(&Settings::default());
         voice.retry_at = Some(Instant::now());
         voice.apply_settings(&settings(&[("$pref::Voice::Volume", "0.3")]));
         assert_eq!(
@@ -796,7 +928,7 @@ mod tests {
     }
     #[test]
     fn voice_route_revocation_clears_activity_and_keeps_unchanged_speakers() {
-        let mut voice = VoiceClient::new(&Settings::default());
+        let mut voice = VoiceState::new(&Settings::default());
         let route = |generation| bri_net::voice::RouteState {
             generation,
             playback: bri_sim::session::VoicePlayback {
@@ -827,5 +959,183 @@ mod tests {
             voice.remote_activity.is_empty(),
             "same speaker on a new channel/map generation cannot retain old speech activity"
         );
+    }
+}
+
+#[cfg(test)]
+mod pump_tests {
+    use super::*;
+    use bri_net::{
+        client::{Arrival, Client, HostPin},
+        server::{self, ServerOptions},
+    };
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    use std::sync::Arc;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn loading_pump_and_verified_handoff_work_without_ui_frames_or_devices()
+    -> anyhow::Result<()> {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+        let catalog = bri_package_runtime::Catalog::load(
+            &root,
+            &PackageSet {
+                schema_version: 1,
+                packages: vec![PackageEntry {
+                    id: "voice_chat".into(),
+                    version: "1.0.0".into(),
+                    dir: "voice_chat".into(),
+                    side: Side::Server,
+                    role: None,
+                }],
+            },
+            true,
+        )
+        .map_err(|d| anyhow::anyhow!("{d:?}"))?;
+        let mut session = bri_sim::session::Session::new(bri_sim::simulation::Simulation::new(
+            bri_world::World::new("Voice pump".into(), "fixture".into(), vec![[1.; 4]; 2]),
+            bri_sim::testing::definitions(),
+            vec![],
+        )?);
+        session.install_packages(Arc::new(catalog), None)?;
+        let server = server::start(
+            session,
+            ServerOptions {
+                bind: "127.0.0.1:0".parse()?,
+                environment: bri_package::environment::Environment::empty(),
+                spawn_points: vec![glam::Vec3::new(0., 10., 0.)],
+                certificate: None,
+                map_loader: None,
+                packages: None,
+            },
+        )?;
+        let mut a = Client::connect(
+            server.address,
+            &server.certificate,
+            "Speaker".into(),
+            vec![],
+            None,
+        )
+        .await?;
+        let temp = tempfile::tempdir()?;
+        let identity =
+            bri_identity::ClientIdentity::load_or_create(temp.path().join("loading.identity"))?;
+        let loading = Arrival::open(
+            server.address,
+            &HostPin::from(&server.certificate[..]),
+            "Loading".into(),
+            None,
+            &identity,
+        )
+        .await?;
+        let link = loading.voice_link();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !link.routes().routes.contains_key(&a.owner) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let mut state = VoiceState::new(&Settings::default());
+        state.open_device = |_, _| Err(bri_audio::AudioError::NoDevice);
+        state.session_key = Some(1);
+        state.transport_id = Some(link.id());
+        // An unavailable device in its ordinary retry interval. No test opens
+        // hardware; relayed VAD remains useful independently of device success.
+        state.retry_at = Some(Instant::now() + Duration::from_secs(3600));
+        let mut voice = VoiceClient::spawn(VoiceShared {
+            state,
+            session: Some(1),
+            transport: Some(link),
+            listener: Listener::default(),
+        })?;
+        a.voice_link().send_activity(true)?;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !voice.speaking_owners(loading.owner).contains(&a.owner) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        // There has been no VoiceClient::update call: the frame thread may be
+        // stopped in a resource load while the worker reads routes and activity.
+        voice.mute(a.owner);
+        assert!(!voice.speaking_owners(loading.owner).contains(&a.owner));
+        voice.unmute(a.owner);
+        assert!(voice.speaking_owners(loading.owner).contains(&a.owner));
+        a.command(bri_sim::session::Command::MiniGame(
+            bri_sim::session::MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        ))
+        .await?;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while voice.speaking_owners(loading.owner).contains(&a.owner) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        assert!(!voice.shared().state.routes.routes.contains_key(&a.owner));
+        assert!(
+            voice.shared().state.opening.is_none(),
+            "no native device was opened by this fixture"
+        );
+        let (release, held) = std::sync::mpsc::channel();
+        let opening = std::thread::spawn(move || {
+            let _ = held.recv();
+            Err(bri_audio::AudioError::NoDevice)
+        });
+        let opener_id = opening.thread().id();
+        {
+            let mut shared = voice.shared();
+            let config = shared.state.config.clone();
+            shared.state.opening = Some((config, opening));
+        }
+        voice.set_talking(true);
+        voice.mute(a.owner);
+        let cache = bri_package::sync::Cache::open(&temp.path().join("cache"))?;
+        let (entered, _, _) = Client::connect_arriving(
+            server.address,
+            HostPin::from(&server.certificate[..]),
+            "Loading".into(),
+            vec![],
+            None,
+            None,
+            None,
+            &identity,
+            &cache,
+            bri_progress::Progress::default(),
+            |_, _| Ok(vec![]),
+            Some(loading.ticket.clone()),
+            async { Ok(()) },
+        )
+        .await?;
+        assert_eq!(entered.owner, loading.owner);
+        let entered_link = entered.voice_link();
+        voice.update(Some(1), Some(&entered_link), Listener::default());
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while voice.shared().state.transport_id != Some(entered_link.id()) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        {
+            let shared = voice.shared();
+            assert!(
+                shared.state.talking,
+                "held PTT survives the same logical session's transport replacement"
+            );
+            assert!(shared.state.muted.contains(&a.owner));
+            assert_eq!(
+                shared.state.opening.as_ref().map(|(_, h)| h.thread().id()),
+                Some(opener_id),
+                "the microphone opener is retained rather than restarted during gameplay entry"
+            );
+        }
+        release.send(())?;
+        drop(voice);
+        entered.close();
+        loading.close();
+        a.close();
+        server.stop().await?;
+        Ok(())
     }
 }
