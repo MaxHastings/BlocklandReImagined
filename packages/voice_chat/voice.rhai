@@ -9,7 +9,7 @@ fn voice_routes(speaker, listeners) {
         if id == speaker { continue; }
         let target = player(id);
         if target.minigame != game { continue; }
-        if game != () && !source.alive && target.alive { continue; }
+        if game != () && mode != "global" && !source.alive && target.alive { continue; }
         if mode == "team" && source.team != target.team { continue; }
         routes.push(#{ listener: id, spatial: mode == "proximity", range: range.to_float(), label: "", priority: 0 });
     }

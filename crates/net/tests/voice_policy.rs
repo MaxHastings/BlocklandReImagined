@@ -202,14 +202,37 @@ fn voice_minigame_settings_and_death_policy_use_existing_authority() {
     assert_eq!(routes[&b][&a].range, 128.0);
     cmd(&mut s, a, 3, Command::Suicide);
     let routes = s.voice_routes(&[a, b]);
-    assert!(
-        !routes.get(&b).is_some_and(|r| r.contains_key(&a)),
-        "dead members do not broadcast to living members"
-    );
+    assert!(routes[&b].contains_key(&a), "Global includes dead speakers");
     assert!(
         routes[&a].contains_key(&b),
-        "dead members still hear living teammates"
+        "Global includes living speakers"
     );
+    for (i, mode) in ["proximity", "team"].into_iter().enumerate() {
+        cmd(
+            &mut s,
+            a,
+            4 + i as u64,
+            Command::MiniGame(MiniGameRequest::AddOnSettings {
+                game,
+                settings: vec![SettingEdit {
+                    key: "voice_chat:mode".into(),
+                    value: Some(SettingValue::Text(mode.into())),
+                }],
+                teams: None,
+                quiet: true,
+                reset: false,
+            }),
+        );
+        let routes = s.voice_routes(&[a, b]);
+        assert!(
+            !routes.get(&b).is_some_and(|r| r.contains_key(&a)),
+            "{mode} retains its dead-to-living restriction"
+        );
+        assert!(
+            routes[&a].contains_key(&b),
+            "dead listeners still hear living members in {mode}"
+        );
+    }
 }
 
 #[test]
