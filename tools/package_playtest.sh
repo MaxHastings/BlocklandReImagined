@@ -201,8 +201,26 @@ sha = hashlib.sha256(executable.read_bytes()).hexdigest()
 
 listing = effective_packages()
 content = repo / 'content'
+# The default Add-Ons every build ships (content/addons/<id>): our own from
+# packages/, the bundled originals from the Add-On bundle, turned on unless
+# the list carries one turned off; the Stress Lab ones join them with
+# --stress-lab.
+defaults, credits = addon_bundle.default_sources(repo, bundle, without_originals)
+mods = [dict(mod_package(pathlib.Path(a['path']), 'addons'), enabled=a['enabled']) for a in defaults]
+if stress_lab:
+    found = sorted(d for d in (repo / 'packages/stresslab').iterdir() if (d / 'package.json').is_file())
+    if not found:
+        die('no Add-Ons found in packages/stresslab')
+    mods += [mod_package(d, 'stresslab') for d in found]
+
+# Installed source lists can already contain these exact Add-Ons. Validate
+# identities and refresh their defaults before copying anything into a release.
+packages = addon_bundle.release_packages(listing['packages'], mods)
+replaced = {m['id'] for m in mods}
 selected, content_files, content_bytes = [], 0, 0
 for package in listing['packages']:
+    if package['id'] in replaced:
+        continue
     directory = content / package['dir']
     if not directory.is_dir() or directory.is_symlink():
         die(f"selected {package['id']} package is missing or a link: {directory}")
@@ -215,17 +233,6 @@ for package in listing['packages']:
     content_bytes += sum(f.stat().st_size for f in files)
     selected.append(package)
 
-# The default Add-Ons every build ships (content/addons/<id>): our own from
-# packages/, the bundled originals from the Add-On bundle, turned on unless
-# the list carries one turned off; the Stress Lab ones join them with
-# --stress-lab.
-defaults, credits = addon_bundle.default_sources(repo, bundle, without_originals)
-mods = [dict(mod_package(pathlib.Path(a['path']), 'addons'), enabled=a['enabled']) for a in defaults]
-if stress_lab:
-    found = sorted(d for d in (repo / 'packages/stresslab').iterdir() if (d / 'package.json').is_file())
-    if not found:
-        die('no Add-Ons found in packages/stresslab')
-    mods += [mod_package(d, 'stresslab') for d in found]
 
 docs = [('docs/PLAYTEST.md', 'PLAYTEST.md'), ('docs/KNOWN-ISSUES.md', 'KNOWN-ISSUES.md'),
         ('vendor/winit/LICENSE', 'WINIT-LICENSE.txt'), ('vendor/winit/BRI-PATCH.md', 'WINIT-PATCH.md'),
@@ -293,12 +300,8 @@ try:
         (release / name).chmod(0o755)
     for package in selected:
         shutil.copytree(content / package['dir'], release / 'content' / package['dir'])
-    packages = list(listing['packages'])
     for mod in mods:
         shutil.copytree(mod['path'], release / 'content' / mod['dir'])
-        if not mod.get('enabled', True):
-            continue
-        packages.append({'id': mod['id'], 'version': mod['version'], 'side': mod['side'], 'dir': mod['dir']})
     (release / 'content/packages.json').write_text(
         json.dumps({'schema_version': listing['schema_version'], 'packages': packages}, indent=2) + '\n', encoding='utf-8')
     content_packs.verify_menu_images(release / 'content', repo)

@@ -657,6 +657,29 @@ def default_sources(repo, bundle, without_originals=False):
     return out, credits
 
 
+def release_packages(packages, mods):
+    """Refresh shipping defaults in an installed list without duplicates.
+
+    The source list is read-only. Disabled defaults stay installed but are not
+    enabled; unrelated packages keep their declared order and metadata.
+    """
+    out = [dict(p) for p in packages]
+    for mod in mods:
+        matches = [i for i, p in enumerate(out)
+                   if p['id'] == mod['id'] or p['dir'] == mod['dir']]
+        if matches and (len(matches) != 1 or
+                        any(out[matches[0]][k] != mod[k] for k in ('id', 'dir'))):
+            fail(f"Conflicting package identity or directory for {mod['id']}: {mod['dir']}")
+        if not mod.get('enabled', True):
+            if matches:
+                del out[matches[0]]
+        elif matches:
+            out[matches[0]].update(version=mod['version'], side=mod['side'])
+        else:
+            out.append({k: mod[k] for k in ('id', 'version', 'side', 'dir')})
+    return out
+
+
 def sources(args):
     addons, credits = default_sources(args.repo, args.bundle.resolve(), args.without_originals)
     print(json.dumps({'addons': addons, 'credits': str(credits) if credits else None}, indent=2))
