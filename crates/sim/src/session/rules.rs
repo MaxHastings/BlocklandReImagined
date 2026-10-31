@@ -2698,12 +2698,52 @@ mod tests {
                 .any(|g| g.id == game && g.settings.title == "Restored while outside")
         );
         s.disconnect(creator).unwrap();
-        let (_, recovery) = s.recovery_snapshot();
+        let (world, recovery) = s.recovery_snapshot();
         let recovery = recovery.unwrap();
         assert_eq!(
             recovery["owner"],
             "5b".repeat(32),
             "offline recovery keeps the already verified world owner principal"
+        );
+        // Exercise the actual restart handoff, including world-owner reuse;
+        // an unrelated verified join must not consume the held encounter.
+        let mut restarted = Session::new(
+            Simulation::new(
+                world,
+                s.simulation.definitions.clone(),
+                vec![
+                    rapier3d::prelude::ColliderBuilder::cuboid(100.0, 0.5, 100.0)
+                        .translation(Vec3::new(0.0, -0.5, 0.0)),
+                ],
+            )
+            .unwrap(),
+        );
+        restarted.hold_minigame(recovery.clone());
+        restarted
+            .join_verified(
+                "Unrelated".into(),
+                Vec3::new(-20., 2., 0.),
+                false,
+                Some(bri_admin::Principal([0x6c; 32])),
+            )
+            .unwrap();
+        assert!(restarted.minigame_views().is_empty());
+        assert!(restarted.held_minigame().is_some());
+        let reclaimed = restarted
+            .join_verified(
+                "Creator again".into(),
+                Vec3::new(20., 2., 0.),
+                false,
+                Some(principal),
+            )
+            .unwrap();
+        assert_eq!(reclaimed, creator);
+        assert!(restarted.held_minigame().is_none());
+        assert!(
+            restarted
+                .minigame_views()
+                .iter()
+                .any(|g| g.owner == creator && g.settings.title == "Restored while outside")
         );
         let returned = s
             .join_verified(

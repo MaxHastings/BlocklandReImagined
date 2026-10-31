@@ -267,3 +267,17 @@ world replication omits OwnerRecords; do not invent an identity/name registry.
 This does not complete step 4's remaining loading PCM continuity or final release
 CI/history/protocol/platform/package gates. Maxwell waived further playtests; no
 new human acceptance is claimed.
+
+
+## Restart ownership verification
+
+Extended the existing native recovery regression to reconstruct a Session from
+its saved world, hold the recovered encounter, reject consumption by an unrelated
+verified principal, and restore it when the original principal rejoins. The saved
+world owner ID and the encounter settings are retained. The focused test passes:
+`cargo test --locked --profile playtest -p bri-sim -p bri-net -p bri-client --lib
+creator_minigame_save_and_offline_recovery`. Warning-free all-target
+`cargo clippy --locked --profile playtest -p bri-sim --all-targets -- -D warnings`
+passes. This verifies identity and settings restoration, not restoration of bot
+resources or autonomous play before the creator rejoins; those remain open.
+Diagnostics: `minigame-restart-reclaim.txt` and `minigame-restart-clippy.txt`.
