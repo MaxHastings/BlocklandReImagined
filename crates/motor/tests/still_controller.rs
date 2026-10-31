@@ -1,6 +1,7 @@
 //! A body whose Add-On controller owns its running (the archetype's own
 //! `acceleration` 0) stands still on level ground: nothing in the motor
 //! lifts it off the floor, so it stays grounded and can jump.
+use bri_console::Clamp;
 use bri_motor::controller::{Controller, ControllerTick, MoveController, Probe};
 use bri_motor::player::{MoveInput, Player, PlayerTuning};
 use glam::Vec3;
@@ -168,6 +169,46 @@ fn a_living_body_supports_another_until_it_becomes_a_corpse() {
     assert!(
         upper.state().grounded && upper.state().feet[1] < 0.1,
         "death must revoke support: {:?}",
+        upper.state()
+    );
+}
+
+#[test]
+fn ordinary_jump_can_land_on_a_living_body_without_jets() {
+    let mut world = floor();
+    let tuning = PlayerTuning::default();
+    let height = tuning.stand_height;
+    let mut lower = Player::spawn(&mut world, 1, Vec3::new(0., 0.05, 0.), tuning.clone()).unwrap();
+    let mut upper = Player::spawn(&mut world, 2, Vec3::new(-2.0, 0.05, 0.), tuning).unwrap();
+    for _ in 0..30 {
+        lower.step(&mut world, MoveInput::default()).unwrap();
+        upper.step(&mut world, MoveInput::default()).unwrap();
+    }
+    assert!(upper.state().grounded);
+    let mut landed = false;
+    for tick in 0..180 {
+        lower.step(&mut world, MoveInput::default()).unwrap();
+        let x = upper.state().feet[0];
+        let vx = upper.state().velocity[0];
+        upper
+            .step(
+                &mut world,
+                MoveInput {
+                    forward: (-x * 0.8 - vx * 0.6).clamped(-1.0, 1.0),
+                    yaw: std::f32::consts::FRAC_PI_2,
+                    jump: tick == 0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        if upper.state().grounded && upper.state().feet[1] > height - 0.1 {
+            landed = true;
+            break;
+        }
+    }
+    assert!(
+        landed,
+        "ordinary jump failed to land on the living support: {:?}",
         upper.state()
     );
 }
