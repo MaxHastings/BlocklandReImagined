@@ -2698,6 +2698,10 @@ mod tests {
                 .any(|g| g.id == game && g.settings.title == "Restored while outside")
         );
         s.disconnect(creator).unwrap();
+        // The persisted owner record supplies the name even after transient
+        // departed-session metadata has been discarded.
+        s.departed.remove(&creator);
+        assert_eq!(s.minigame_views()[0].owner_name, "Creator");
         let (world, recovery) = s.recovery_snapshot();
         let recovery = recovery.unwrap();
         assert_eq!(

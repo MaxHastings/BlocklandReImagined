@@ -2702,7 +2702,7 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
             .replica
             .minigames
             .iter()
-            .any(|g| g.id == game && g.owner == owner_id)
+            .any(|g| g.id == game && g.owner == owner_id && g.owner_name == "Owner")
     );
     let offline_at = other.replica.tick;
     wait(&mut other, |c| c.replica.tick >= offline_at + 120).await?;

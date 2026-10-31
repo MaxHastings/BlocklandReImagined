@@ -880,6 +880,8 @@ impl Session {
             peer.name.clone()
         } else if let Some((name, ..)) = self.departed.get(&owner) {
             name.clone()
+        } else if let Some(record) = self.simulation.state().owners.get(&owner) {
+            record.name.clone()
         } else if owner == 0 {
             "Public".into()
         } else {

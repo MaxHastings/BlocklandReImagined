@@ -116,7 +116,16 @@ pub fn state(
     // Owner 0 is the server: a game mode's own mini-game.
     let name = |owner: &OwnerId| match owner {
         0 => "Server".to_string(),
-        _ => names.get(owner).cloned().unwrap_or_default(),
+        _ => names
+            .get(owner)
+            .cloned()
+            .or_else(|| {
+                games
+                    .iter()
+                    .find(|g| g.owner == *owner)
+                    .map(|g| g.owner_name.clone())
+            })
+            .unwrap_or_default(),
     };
     let mine = vitals.get(&local);
     let active = mine.and_then(|v| v.minigame);
@@ -578,6 +587,7 @@ mod tests {
         let view = MiniGameView {
             id: 1,
             owner: 2,
+            owner_name: "Host".into(),
             color: 3,
             settings,
             members: vec![2],
@@ -589,6 +599,7 @@ mod tests {
             name_distance: None,
         };
         let names: BTreeMap<_, _> = [(2, "Host".to_string()), (3, "Guest".to_string())].into();
+        let offline_view = view.clone();
         let state = state(
             3,
             &[view],
@@ -602,6 +613,19 @@ mod tests {
         assert!(state.colors.iter().all(|c| c.index != 3));
         assert!(!state.owns_active_game);
         assert_eq!(state.games[0].owner_name, "Host");
+        let offline = super::state(
+            3,
+            &[MiniGameView {
+                owner_name: "Former host".into(),
+                ..offline_view
+            }],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &[],
+            &Default::default(),
+            2,
+        );
+        assert_eq!(offline.games[0].owner_name, "Former host");
         assert!(settings_invalid());
     }
     #[test]
@@ -609,6 +633,7 @@ mod tests {
         let owned = MiniGameView {
             id: 1,
             owner: 7,
+            owner_name: "Creator".into(),
             color: 0,
             settings: Default::default(),
             members: vec![9],
@@ -670,6 +695,7 @@ mod tests {
         let mut view = MiniGameView {
             id: 4,
             owner: 0,
+            owner_name: "Server".into(),
             color: 0,
             settings: Default::default(),
             members: vec![],
@@ -736,6 +762,7 @@ mod tests {
         let view = MiniGameView {
             id: 1,
             owner: 2,
+            owner_name: "Host".into(),
             color: 3,
             settings: Settings::default(),
             members: vec![2, 3],

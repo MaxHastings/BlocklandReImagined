@@ -353,6 +353,8 @@ pub struct Vitals {
 pub struct MiniGameView {
     pub id: u64,
     pub owner: OwnerId,
+    /// Last known display name, including when the creator is offline.
+    pub owner_name: String,
     pub color: u8,
     pub settings: mg::Settings,
     pub members: Vec<OwnerId>,
@@ -390,6 +392,8 @@ impl MiniGameView {
                 })
         };
         self.members.len() <= MAX_PARTICIPANTS
+            && self.owner_name.chars().count() <= bri_world::MAX_OWNER_NAME
+            && !self.owner_name.chars().any(char::is_control)
             && self.color < 10
             && self.paint_color.is_none_or(|c| c < 64)
             && self
@@ -1226,6 +1230,11 @@ impl Session {
                     id: game.id.0,
                     // A game mode's mini-game belongs to the server (0).
                     owner: game.owner.0,
+                    owner_name: if game.is_server() {
+                        "Server".into()
+                    } else {
+                        self.brick_group_name(game.owner.0)
+                    },
                     color: game.color,
                     settings: game.settings.clone(),
                     members: game

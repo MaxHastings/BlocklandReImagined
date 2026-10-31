@@ -302,3 +302,19 @@ bot. Changed-crate all-target Clippy passes. This is a synthetic headless restar
 not a networked restart or proof of all saved resource kinds. Diagnostics:
 `minigame-restart-autobot.txt`, `minigame-restart-autobot-green.txt`, and
 `minigame-restart-autobot-clippy.txt`.
+
+
+## Offline creator display
+
+`MiniGameView` now carries a bounded, control-character-free owner display name.
+The host resolves connected/departed names through its existing session data and
+falls back to the saved World OwnerRecord, without exposing its principal. Client
+listings use that name when the owner is absent. A protocol change record advances
+the wire version; no new identity registry or persisted schema is introduced.
+The client bridge and real-QUIC minigame tests pass, including the name after the
+creator disconnects. A native recovery case removes transient departure metadata
+and verifies the saved OwnerRecord fallback. Both standalone protocol-change tests
+and all-target sim/net/client Clippy pass. The first Clippy run found a test-local
+name shadowing the bridge function; the fixture was corrected and rerun. Evidence:
+`minigame-owner-name-{types,test,record,protocol,clippy-final}.txt` in planning
+diagnostics. This does not establish the remaining release gates.
