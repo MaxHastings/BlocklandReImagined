@@ -81,3 +81,20 @@ yet, and imported content must be regenerated before testing the capability in
 the saved cube scenario. `cargo fmt -p bri-addon-import -p bri-sim -- --check`
 and `cargo test --locked --profile playtest -p bri-addon-import hole_bots::tests
 --lib` passed (three importer tests, including presence and absence of the flag).
+
+An elevated enemy that remains visible no longer loses its chase score solely
+because the reachable route ended below it. Small motion at the same failed
+destination no longer resets that settled route; a materially moved enemy does
+allow a new plan. The normal evidence-search policy remains for unseen enemies.
+The focused `a_settled_visible_enemy_does_not_restart_the_same_failed_route`
+test and `cargo clippy --locked --profile playtest -p bri-sim --lib -- -D
+warnings` pass. Headless replays of the user's staircase and city tower still
+killed the target at ticks 3240 and 4823 respectively. The 14400-tick cube
+replay left the target alive at 10 health (from 100), with most samples in
+chase or search; previous shorter cube replays ended at 100 health with all
+bots wandering. The cube replay also showed repeated large route searches and
+one bot respawn, so this is not proof of successful cooperative stacking or
+acceptable search cost. Reports: `v043-visible-stairs.json`,
+`v043-visible-tower.json`, `v043-cube-visible-pursuit.json` in the private
+planning diagnostics directory. Revalidate pursuit with the full coordinated
+stack, including losing sight and actual movement in height.

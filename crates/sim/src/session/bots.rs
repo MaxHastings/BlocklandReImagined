@@ -512,8 +512,8 @@ struct Brain {
     /// (`HOME_GIVEN_UP`), so `Return` stands instead of searching again.
     home_given_up: Option<Vec3>,
     /// A chase point whose best route ends beyond its reach (`reach`):
-    /// Once its reachable partial route is executed, that enemy is not worth
-    /// chasing again while they stay there.
+    /// Once its reachable partial route is executed, avoid searching the same
+    /// unreachable destination again while it stays there.
     out_of_reach: Option<Vec3>,
     /// How far across and up it hurts from where it stands.
     reach: (f32, f32),
@@ -899,7 +899,8 @@ impl Brain {
     }
     /// A partial route is useful progress even when its endpoint cannot yet
     /// hurt the target. Do not cancel it merely because planning found that
-    /// endpoint. Once it is exhausted, keep the existing unreachable policy.
+    /// endpoint. Once it is exhausted, stop chasing an unreachable destination
+    /// unless a currently visible elevated enemy warrants holding position.
     fn may_pursue(&self, at: Vec3) -> bool {
         (matches!(self.goal, Some(Goal::Chase(_) | Goal::Search(_)))
             && (self.search.is_some() || !self.plan.is_empty()))
@@ -1030,6 +1031,9 @@ impl Brain {
                             || self.settled
                                 && self.plan.is_empty()
                                 && flat(p - feet).length() > near
+                                && self
+                                    .out_of_reach
+                                    .is_none_or(|at| at.distance(to) > CHASE_SLACK)
                     }
                     _ => true,
                 };
@@ -3012,9 +3016,12 @@ impl Session {
             spared: 1.0 - menace,
             exposed,
             enemy: enemy
-                // Where it was out of reach, not across from there: one
-                // that came down off a jump or a roof is in reach again.
-                .filter(|seen| brain.may_pursue(seen.real))
+                // A visible enemy above still warrants holding the reachable
+                // frontier. It might descend or allies might provide support;
+                // unseen enemies retain the ordinary bounded search policy.
+                .filter(|seen| {
+                    brain.may_pursue(seen.real) || seen.feet.y > feet.y + body.step + 1.0
+                })
                 .map(|seen| {
                     if swim.is_some() || weapon.is_none_or(|w| w.melee) {
                         (seen.feet.distance(feet), 0.0)
@@ -4870,6 +4877,41 @@ mod navigation_body_tests {
             brain.search.is_none(),
             "materially displaced evidence needs a new route"
         );
+    }
+
+    #[test]
+    fn a_settled_visible_enemy_does_not_restart_the_same_failed_route() {
+        let feet = Vec3::ZERO;
+        let target = Vec3::new(10.0, 12.0, 0.0);
+        let mut brain = Brain::new(None, BotKind::default(), feet, 1, 0);
+        brain.goal = Some(Goal::Chase(target));
+        brain.out_of_reach = Some(target);
+        brain.settled = true;
+        let seen = |at: Vec3| Seen {
+            owner: 2,
+            real: at,
+            feet: at,
+            eye: at,
+            aim: at,
+            way: Way {
+                aim: at,
+                carry: None,
+                length: at.length(),
+            },
+        };
+        brain.pursue(Some(seen(target + Vec3::X * 0.1)), false, 1.0, feet, 0.5, 1);
+        assert!(
+            brain.settled,
+            "small target movement must not restart a failed route"
+        );
+        assert_eq!(brain.goal, Some(Goal::Chase(target)));
+        let moved = target + Vec3::X * (CHASE_SLACK + 1.0);
+        brain.pursue(Some(seen(moved)), false, 1.0, feet, 0.5, 2);
+        assert!(
+            !brain.settled,
+            "a materially moved target must be replanned"
+        );
+        assert_eq!(brain.goal, Some(Goal::Chase(moved)));
     }
 
     #[test]
