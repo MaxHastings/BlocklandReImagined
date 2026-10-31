@@ -5,10 +5,7 @@ use bri_fx_runtime::*;
 use bri_net::protocol::PublicWorld;
 use bri_world::{BrickId, ContentRef};
 use glam::Vec3;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
 struct Attachment {
@@ -21,6 +18,10 @@ struct Active {
     asset: String,
     handle: EffectHandle,
 }
+struct Detached {
+    cue: u64,
+    attachment: Attachment,
+}
 /// Stable brick identity and resource kind; light and emitter never share a handle.
 type Key = (BrickId, bool);
 pub struct WorldEffects {
@@ -28,6 +29,7 @@ pub struct WorldEffects {
     limits: EffectsLimits,
     source: Option<Arc<PublicWorld>>,
     attachments: BTreeMap<Key, Attachment>,
+    detached: BTreeMap<Key, Detached>,
     active: BTreeMap<Key, Active>,
     /// Preserved unresolved imported records, never substituted with
     /// another effect, by brick so a changed brick clears its own.
@@ -105,6 +107,7 @@ impl WorldEffects {
             limits,
             source: None,
             attachments: BTreeMap::new(),
+            detached: BTreeMap::new(),
             active: BTreeMap::new(),
             warnings: BTreeMap::new(),
             deferred: 0,
@@ -151,12 +154,50 @@ impl WorldEffects {
         self.map_active.iter_mut().for_each(|a| *a = None);
         self.source = None;
         self.attachments.clear();
+        self.detached.clear();
         self.active.clear();
         self.warnings.clear();
         self.deferred = 0;
     }
     pub fn attachment_count(&self) -> usize {
         self.attachments.len()
+    }
+    /// Capture active sources before a replicated removal discards their
+    /// authored metadata. Inactive/capacity-culled sources stay suppressed.
+    /// Retention is bounded by the same source budget as active effects.
+    pub(crate) fn observe_deaths(&mut self, cues: &[bri_sim::presentation::Cue]) {
+        for cue in cues {
+            let bri_sim::presentation::CueKind::BrickKill { brick, .. } = cue.kind else {
+                continue;
+            };
+            for key in [(brick, false), (brick, true)] {
+                if !self.active.contains_key(&key) {
+                    continue;
+                }
+                let Some(attachment) = self.attachments.get(&key) else {
+                    continue;
+                };
+                if !self.detached.contains_key(&key)
+                    && self.detached.len() >= self.limits.sources
+                    && let Some(oldest) = self
+                        .detached
+                        .iter()
+                        .min_by_key(|(key, d)| (d.cue, **key))
+                        .map(|(key, _)| *key)
+                {
+                    self.detached.remove(&oldest);
+                }
+                if self.limits.sources > 0 {
+                    self.detached.insert(
+                        key,
+                        Detached {
+                            cue: cue.id,
+                            attachment: attachment.clone(),
+                        },
+                    );
+                }
+            }
+        }
     }
     /// Follow the replicated world: the attachments of the bricks that
     /// changed since the last world it saw (an imbl diff, which skips the
@@ -255,45 +296,95 @@ impl WorldEffects {
         dt: f32,
         eye: Vec3,
         wind: Vec3,
+        visible: impl FnMut(BrickId, Vec3, Vec3) -> Result<bool>,
+    ) -> Result<()> {
+        self.advance_frames(dt, eye, wind, &BTreeMap::new(), |_| false, visible)
+    }
+    pub(crate) fn advance_with_debris(
+        &mut self,
+        dt: f32,
+        eye: Vec3,
+        wind: Vec3,
+        debris: &crate::brick_debris::BrickDebris,
+        visible: impl FnMut(BrickId, Vec3, Vec3) -> Result<bool>,
+    ) -> Result<()> {
+        let frames = debris.attachment_frames(|id| {
+            [(id, false), (id, true)]
+                .iter()
+                .any(|key| self.attachments.contains_key(key) || self.detached.contains_key(key))
+        });
+        self.advance_frames(dt, eye, wind, &frames, |id| debris.is_dead(id), visible)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn advance_frames(
+        &mut self,
+        dt: f32,
+        eye: Vec3,
+        wind: Vec3,
+        frames: &BTreeMap<BrickId, crate::brick_debris::AttachmentFrame>,
+        dead: impl Fn(BrickId) -> bool,
         mut visible: impl FnMut(BrickId, Vec3, Vec3) -> Result<bool>,
     ) -> Result<()> {
+        self.detached.retain(|key, d| {
+            self.source
+                .as_ref()
+                .is_some_and(|s| !s.bricks.contains_key(&key.0))
+                && frames.get(&key.0).is_some_and(|f| f.cue == d.cue)
+        });
+        let moving = |attachment: &Attachment, frame: &crate::brick_debris::AttachmentFrame| {
+            let mut transform = attachment.transform;
+            transform.position = frame.delta.transform_point3(transform.position);
+            transform.rotation = glam::Quat::from_mat4(&frame.delta) * transform.rotation;
+            transform.velocity = frame.delta.transform_vector3(transform.velocity);
+            transform
+        };
+        let mut current: Vec<_> = self
+            .attachments
+            .iter()
+            .filter_map(|(&key, attachment)| {
+                let brick = self.source.as_ref()?.bricks.get(&key.0)?;
+                let transform = if brick.damage_hidden || dead(key.0) {
+                    moving(attachment, frames.get(&key.0)?)
+                } else {
+                    attachment.transform
+                };
+                Some((key, attachment, transform))
+            })
+            .chain(self.detached.iter().filter_map(|(&key, d)| {
+                Some((
+                    key,
+                    &d.attachment,
+                    moving(&d.attachment, frames.get(&key.0)?),
+                ))
+            }))
+            .collect();
         // Within budget every attachment runs; only past it do the nearest
         // win, which needs them in distance order.
-        let lights_wanted = self.attachments.keys().filter(|k| k.1).count();
-        let selected: BTreeSet<Key> = if self.attachments.len() <= self.limits.sources
-            && lights_wanted <= self.limits.lights
+        if current.len() > self.limits.sources
+            || current.iter().filter(|(k, _, _)| k.1).count() > self.limits.lights
         {
-            self.attachments.keys().copied().collect()
-        } else {
-            let mut order: Vec<_> = self.attachments.iter().collect();
-            order.sort_by(|(ka, a), (kb, b)| {
-                a.transform
-                    .position
+            current.sort_by(|(ka, _, a), (kb, _, b)| {
+                a.position
                     .distance_squared(eye)
-                    .total_cmp(&b.transform.position.distance_squared(eye))
+                    .total_cmp(&b.position.distance_squared(eye))
                     .then_with(|| ka.cmp(kb))
             });
-            let mut selected = BTreeSet::new();
-            let mut lights = 0;
-            for (&key, _) in order {
-                if selected.len() >= self.limits.sources || (key.1 && lights >= self.limits.lights)
-                {
-                    continue;
-                }
-                selected.insert(key);
-                if key.1 {
-                    lights += 1;
-                }
+        }
+        let count = current.len();
+        let mut selected = BTreeMap::new();
+        let mut lights = 0;
+        for (key, attachment, transform) in current {
+            if selected.len() >= self.limits.sources || (key.1 && lights >= self.limits.lights) {
+                continue;
             }
-            selected
-        };
-        self.deferred = self.attachments.len() - selected.len();
+            lights += usize::from(key.1);
+            selected.insert(key, (attachment, transform));
+        }
+        self.deferred = count - selected.len();
         let removed: Vec<_> = self
             .active
             .iter()
-            .filter(|(k, a)| {
-                !selected.contains(k) || self.attachments.get(k).is_none_or(|b| b.asset != a.asset)
-            })
+            .filter(|(k, a)| selected.get(k).is_none_or(|(b, _)| b.asset != a.asset))
             .map(|(k, _)| *k)
             .collect();
         for key in removed {
@@ -307,13 +398,12 @@ impl WorldEffects {
                 },
             );
         }
-        for key in selected {
-            let attachment = &self.attachments[&key];
+        for (key, (attachment, transform)) in selected {
             let mut options = attachment.options.clone();
             if key.1 {
                 // Flares only show nearer than FLARE_MAX_DISTANCE; farther
                 // lights skip the line-of-sight test, like player lights.
-                let at = attachment.transform.position;
+                let at = transform.position;
                 options.flare_visibility =
                     if eye.distance(at) < FLARE_MAX_DISTANCE && visible(key.0, eye, at)? {
                         1.
@@ -324,17 +414,16 @@ impl WorldEffects {
             if let Some(active) = self.active.get(&key) {
                 // Finite authored emitters end naturally; do not restart every frame.
                 if self.world.is_active(active.handle) {
-                    self.world
-                        .update_source(active.handle, attachment.transform)?;
+                    self.world.update_source(active.handle, transform)?;
                     self.world.update_options(active.handle, options)?;
                 }
             } else {
                 let handle = if key.1 {
                     self.world
-                        .start_light(&attachment.asset, attachment.transform, options)?
+                        .start_light(&attachment.asset, transform, options)?
                 } else {
                     self.world
-                        .start_emitter(&attachment.asset, attachment.transform, options)?
+                        .start_emitter(&attachment.asset, transform, options)?
                 };
                 self.active.insert(
                     key,
@@ -417,7 +506,9 @@ fn attach(
                         .palette
                         .get(brick.color as usize)
                         .context("Effect paint index outside palette")?,
-                    // Fake kill has no replicated native state yet. Visibility is deliberately independent.
+                    // Eligibility and detached pose are resolved together in
+                    // advance_frames. Keep authored emission here; invisible
+                    // sources and sources carried by debris can still emit.
                     fake_dead: false,
                 },
             )?;
@@ -465,6 +556,226 @@ fn attach(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn destroyed_effects_follow_debris_and_restore_without_moving_old_particles() -> Result<()> {
+        use crate::brick_debris::{
+            BrickDebris,
+            tests::{building, kill, tool_kill},
+        };
+        let pack = bri_fx_runtime::testing::pack(|l| {
+            l.particles[0].orientation = Some(bri_content::effects::ParticleOrientation::Plane);
+            l.particles[0].spin_degrees = 0.0;
+            l.emitters[0].speed = 0.0;
+            l.emitters[0].period = 0.05;
+            l.emitters[0].orient_on_velocity = false;
+        });
+        let camera = Camera {
+            view_projection: glam::Mat4::IDENTITY,
+            position: Vec3::Z * 10.0,
+            right: Vec3::X,
+            up: Vec3::Y,
+        };
+        for permanent in [false, true] {
+            for tool in [false, true] {
+                let at = [0.0, 0.3, 0.0];
+                let (mut building, mut replica) = building(&[(1, at), (2, [6.0, 0.3, 0.0])]);
+                let meshes = BTreeMap::from([(
+                    "brick".into(),
+                    building.definition("brick").unwrap().mesh.clone(),
+                )]);
+                for id in [1, 2] {
+                    let brick = replica.bricks.get_mut(&id).unwrap();
+                    brick.light = Some(Box::new(bri_world::Light {
+                        asset: ContentRef::Resolved("light".into()),
+                        enabled: true,
+                    }));
+                    if id == 1 {
+                        brick.quarter_turns = 1;
+                        brick.emitter = Some(Box::new(bri_world::Emitter {
+                            asset: Some(ContentRef::Resolved("emitter".into())),
+                            direction: 2,
+                        }));
+                    }
+                }
+                building.sync_world(&replica)?;
+                let original = replica.bricks[&1].clone();
+                let mut effects = WorldEffects::new(pack.clone(), Default::default())?;
+                effects.sync(Arc::new(replica.clone()), &meshes)?;
+                effects.advance(0.1, Vec3::ZERO, Vec3::ZERO, |_, _, _| Ok(true))?;
+                let initial = effects.active[&(1, false)].handle;
+                let plane = |p: &&ParticleInstance| p.plane_right.length_squared() > 0.1;
+                let before = effects
+                    .world
+                    .snapshot(&camera)
+                    .particles
+                    .into_iter()
+                    .filter(|p| plane(&p))
+                    .collect::<Vec<_>>();
+                assert!(!before.is_empty());
+                let cue = if tool {
+                    tool_kill(1, 1, at)
+                } else {
+                    kill(1, 1, at, [0.0, -1.0, 0.0], 12.0, 1.0)
+                };
+                let mut debris = BrickDebris::new();
+                effects.observe_deaths(std::slice::from_ref(&cue));
+                if permanent {
+                    replica.bricks.remove(&1);
+                } else {
+                    let b = replica.bricks.get_mut(&1).unwrap();
+                    b.damage_hidden = true;
+                    b.visible = false;
+                    b.colliding = false;
+                    b.raycast = false;
+                }
+                effects.sync(Arc::new(replica.clone()), &meshes)?;
+                debris.cues(&[cue], &building)?;
+                building.sync_world(&replica)?;
+                debris.sync_world(&replica);
+                debris.advance(0.1, &building)?;
+                let frame = debris.attachment_frames(|id| id == 1)[&1];
+                let expected = frame.delta.transform_point3(Vec3::from(at));
+                assert!(expected.distance(Vec3::from(at)) > 0.01);
+                effects.advance_with_debris(0.0, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| {
+                    Ok(true)
+                })?;
+                assert_eq!(
+                    effects.active[&(1, false)].handle,
+                    initial,
+                    "movement must not restart emission"
+                );
+                let shown = effects.world.snapshot(&camera);
+                assert_eq!(
+                    shown.lights.len(),
+                    2,
+                    "one moving lamp and one fixed reference"
+                );
+                assert!(
+                    shown
+                        .lights
+                        .iter()
+                        .any(|l| l.position.abs_diff_eq(expected, 1e-4))
+                );
+                assert!(
+                    shown
+                        .lights
+                        .iter()
+                        .any(|l| l.position.abs_diff_eq(Vec3::new(6.0, 0.3, 0.0), 1e-4))
+                );
+                let after = shown.particles.iter().filter(plane).collect::<Vec<_>>();
+                assert_eq!(after.len(), before.len());
+                for (old, new) in before.iter().zip(after) {
+                    assert!(
+                        old.position.abs_diff_eq(new.position, 1e-5),
+                        "emitted smoke must stay in the world"
+                    );
+                    assert!(old.axis.abs_diff_eq(new.axis, 1e-5));
+                }
+                for _ in 0..2 {
+                    effects.advance_with_debris(
+                        0.1,
+                        Vec3::ZERO,
+                        Vec3::ZERO,
+                        &debris,
+                        |_, _, _| Ok(true),
+                    )?;
+                }
+                let authored = if permanent {
+                    &effects.detached[&(1, false)].attachment
+                } else {
+                    &effects.attachments[&(1, false)]
+                };
+                let axis =
+                    glam::Quat::from_mat4(&frame.delta) * authored.transform.rotation * Vec3::Y;
+                assert!(
+                    effects
+                        .world
+                        .snapshot(&camera)
+                        .particles
+                        .iter()
+                        .filter(plane)
+                        .any(|p| p.axis.abs_diff_eq(axis, 1e-4)),
+                    "new emission must use the rotated source"
+                );
+                replica.bricks.insert(1, original.clone());
+                debris.sync_world(&replica);
+                effects.sync(Arc::new(replica.clone()), &meshes)?;
+                effects.advance_with_debris(0.0, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| {
+                    Ok(true)
+                })?;
+                let shown = effects.world.snapshot(&camera);
+                assert_eq!(shown.lights.len(), 2);
+                assert!(
+                    shown
+                        .lights
+                        .iter()
+                        .any(|l| l.position.abs_diff_eq(Vec3::from(at), 1e-5))
+                );
+                assert!(effects.detached.is_empty());
+                building.sync_world(&replica)?;
+                let mut again = if tool {
+                    tool_kill(2, 1, at)
+                } else {
+                    kill(2, 1, at, [0.0, -1.0, 0.0], 12.0, 1.0)
+                };
+                again.tick = 2;
+                effects.observe_deaths(std::slice::from_ref(&again));
+                if permanent {
+                    replica.bricks.remove(&1);
+                } else {
+                    let b = replica.bricks.get_mut(&1).unwrap();
+                    b.damage_hidden = true;
+                    b.visible = false;
+                    b.colliding = false;
+                    b.raycast = false;
+                }
+                effects.sync(Arc::new(replica.clone()), &meshes)?;
+                debris.cues(&[again], &building)?;
+                building.sync_world(&replica)?;
+                debris.sync_world(&replica);
+                assert_eq!(
+                    debris.attachment_frames(|id| id == 1)[&1].cue,
+                    2,
+                    "new death must replace the old visual parent"
+                );
+                effects.advance_with_debris(0.0, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| {
+                    Ok(true)
+                })?;
+                if tool {
+                    for _ in 0..300 {
+                        debris.advance(1.0 / 60.0, &building)?;
+                    }
+                } else {
+                    debris.set_limit(0);
+                }
+                effects.advance_with_debris(0.0, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| {
+                    Ok(true)
+                })?;
+                assert_eq!(
+                    effects.world.source_count(),
+                    1,
+                    "expired/culled debris cannot leave a light or emitter"
+                );
+                assert!(effects.detached.is_empty());
+                assert!(
+                    effects.world.particle_count() > 0,
+                    "retiring the source must drain its existing particles"
+                );
+                let mut late = WorldEffects::new(pack.clone(), Default::default())?;
+                late.sync(Arc::new(replica.clone()), &meshes)?;
+                late.advance(0.1, Vec3::ZERO, Vec3::ZERO, |_, _, _| Ok(true))?;
+                assert_eq!(
+                    late.world.source_count(),
+                    1,
+                    "only the fixed reference lamp"
+                );
+                effects.clear();
+                assert_eq!(effects.world.source_count(), 0);
+                assert_eq!(effects.world.particle_count(), 0);
+            }
+        }
+        Ok(())
+    }
     /// An effects pack and an emitter and a light it has: made up
     /// (`bri_fx_runtime::testing`), or the converted v20 pack.
     struct Effects {

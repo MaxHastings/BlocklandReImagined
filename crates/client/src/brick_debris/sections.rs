@@ -23,6 +23,7 @@ const MAX_CHUNK_SPAN: f32 = 6.;
 #[derive(Clone)]
 pub(super) struct SectionPiece {
     pub brick: BrickId,
+    pub cue: u64,
     pub look: Look,
     pub offset: Vec3,
     pub turn: Quat,
@@ -122,6 +123,47 @@ pub(super) struct Section {
     assignment: Vec<Option<usize>>,
 }
 impl Section {
+    fn member_pose(
+        &self,
+        i: usize,
+        center: Vec3,
+        turn: Quat,
+        world: &PhysicsWorld,
+    ) -> (Vec3, Quat) {
+        let p = &self.pieces[i];
+        self.assignment[i].map_or(
+            (center + turn * p.offset + self.recoil, turn * p.turn),
+            |a| {
+                let c = &self.chunks[a];
+                let (cc, ct) = c.pose(world);
+                (cc + ct * (p.offset - c.local), ct * p.turn)
+            },
+        )
+    }
+    pub(super) fn append_attachment_frames(
+        &self,
+        world: &PhysicsWorld,
+        wanted: &impl Fn(BrickId) -> bool,
+        keep: &mut impl FnMut(BrickId, AttachmentFrame),
+    ) {
+        let (center, turn) = self.pose(self.shown);
+        for (i, p) in self
+            .pieces
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.active && wanted(p.brick))
+        {
+            let (at, rotation) = self.member_pose(i, center, turn, world);
+            keep(
+                p.brick,
+                AttachmentFrame {
+                    cue: p.cue,
+                    delta: Mat4::from_rotation_translation(rotation, at)
+                        * Mat4::from_rotation_translation(p.turn, self.origin + p.offset).inverse(),
+                },
+            );
+        }
+    }
     fn new(p: &SectionPiece, group: u64) -> Self {
         let width = p.section_half.x.max(p.section_half.z);
         let motion = if p.section_half.y > width * 1.6 {
@@ -205,12 +247,16 @@ impl Section {
         )
     }
     fn admit(&mut self, mut p: SectionPiece) {
+        if self.ids.contains(&p.brick) {
+            if let Some(old) = self.pieces.iter_mut().find(|old| old.brick == p.brick) {
+                old.cue = old.cue.max(p.cue);
+            }
+            return;
+        }
         if self.sealed {
             return;
         }
-        if !self.ids.insert(p.brick) {
-            return;
-        }
+        self.ids.insert(p.brick);
         p.offset -= self.origin;
         self.record_member(&p);
         self.pieces.push(p);
@@ -309,6 +355,9 @@ impl Section {
             };
             self.admit(SectionPiece {
                 brick,
+                // Recovered from replicated section membership, not a death
+                // cue. A later matching cue supplies its real sequence.
+                cue: 0,
                 look: Look {
                     definition: definition.clone(),
                     color: b.color,
@@ -920,14 +969,7 @@ impl BrickDebris {
                     .enumerate()
                     .filter(|(_, p)| p.active)
                     .map(move |(i, p)| {
-                        let (at, rotation) = s.assignment[i].map_or(
-                            (center + turn * p.offset + s.recoil, turn * p.turn),
-                            |a| {
-                                let c = &s.chunks[a];
-                                let (cc, ct) = c.pose(&self.world);
-                                (cc + ct * (p.offset - c.local), ct * p.turn)
-                            },
-                        );
+                        let (at, rotation) = s.member_pose(i, center, turn, &self.world);
                         (
                             &p.look,
                             SceneTransform {
@@ -971,6 +1013,62 @@ mod tests {
         for _ in 0..frames {
             d.advance(1. / 60., b).unwrap();
         }
+    }
+    #[test]
+    fn attachment_frames_match_rendered_section_members_through_motion_and_fade() -> Result<()> {
+        let (b, _) = super::super::tests::building(&[]);
+        let mut d = BrickDebris::new();
+        let origin = [0.5, 3.3, 0.0];
+        d.cues(
+            &[
+                cue(1, [0.0, 3.3, 0.0], 2, [1.0, 0.3, 0.5], origin, origin),
+                cue(2, [1.0, 3.3, 0.0], 2, [1.0, 0.3, 0.5], origin, origin),
+                Cue {
+                    id: 3,
+                    tick: 1,
+                    position: origin,
+                    kind: CueKind::BrickSectionReady {
+                        started: 0,
+                        group: 7,
+                        members: 2,
+                    },
+                },
+            ],
+            &b,
+        )?;
+        for target in [0.2, SOLID_SECONDS * 0.8, SOLID_SECONDS + FADE_SECONDS * 0.5] {
+            while d.sections[&(0, 7)].age < target {
+                d.advance(1.0 / 60.0, &b)?;
+            }
+            let frames = d.attachment_frames(|_| true);
+            assert_eq!(frames.len(), 2);
+            let section = &d.sections[&(0, 7)];
+            for (p, (_, drawn)) in section.pieces.iter().zip(d.section_instances()) {
+                let original = Mat4::from_rotation_translation(p.turn, section.origin + p.offset);
+                let attached = frames[&p.brick].delta * original;
+                assert!(
+                    attached.abs_diff_eq(drawn.transform, 1e-4),
+                    "brick {}: source frame differs from its actual rendered member",
+                    p.brick
+                );
+                assert_eq!(frames[&p.brick].cue, p.cue);
+            }
+        }
+        d.cues(
+            &[Cue {
+                id: 4,
+                tick: 2,
+                position: origin,
+                kind: CueKind::BrickSectionRetired {
+                    started: 0,
+                    group: 7,
+                },
+            }],
+            &b,
+        )?;
+        assert!(d.attachment_frames(|_| true).is_empty());
+        assert_eq!(d.section_instances().count(), 0);
+        Ok(())
     }
     #[test]
     fn incomplete_delivery_stays_staged_until_the_complete_assembly_can_fall() -> Result<()> {
@@ -1336,6 +1434,7 @@ mod tests {
         assert!(turn.to_scaled_axis().length() > 0.2);
         let mut p = SectionPiece {
             brick: 1,
+            cue: 1,
             look: d.sections[&(0, 7)].pieces[0].look.clone(),
             offset: Vec3::ZERO,
             turn: Quat::IDENTITY,
@@ -1361,6 +1460,7 @@ mod landing_regressions {
     use super::*;
     pub(super) fn piece(id: u64, at: Vec3) -> SectionPiece {
         SectionPiece {
+            cue: id,
             brick: id,
             look: Look {
                 definition: "brick".into(),

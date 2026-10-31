@@ -162,8 +162,10 @@ impl Ord for Look {
 
 struct Body {
     handle: RigidBodyHandle,
-    #[allow(dead_code)]
     brick: BrickId,
+    /// One shard carries the original brick's attachments. Its inverse birth
+    /// pose preserves authored offsets instead of snapping to the shard centre.
+    attachment: Option<Mat4>,
     look: Look,
     age: f32,
     collision: crate::local_physics::CollisionWindow,
@@ -179,8 +181,8 @@ impl Body {
 /// fall straight through everything while it fades. It moves in closed
 /// form, so every frame rate draws the same path.
 struct Falling {
-    #[allow(dead_code)]
     brick: BrickId,
+    cue: u64,
     look: Look,
     start: Vec3,
     rotation: Quat,
@@ -189,6 +191,14 @@ struct Falling {
     /// Radians per second about `axis`.
     spin: f32,
     age: f32,
+}
+
+/// A visual parent's delta from its birth pose, stamped with the death cue.
+/// Used only for cosmetic sources; never moves replicated gameplay objects.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AttachmentFrame {
+    pub cue: u64,
+    pub delta: Mat4,
 }
 impl Falling {
     fn position(&self) -> Vec3 {
@@ -579,6 +589,7 @@ impl BrickDebris {
                     .or_default()
                     .push(SectionPiece {
                         brick: *brick,
+                        cue: cue.id,
                         look,
                         offset: Vec3::from(cue.position),
                         turn: Quat::from_rotation_y(-f32::from(*quarter_turns) * FRAC_PI_2),
@@ -681,6 +692,20 @@ impl BrickDebris {
                     .collect(),
             };
             self.diagnostics.evicted += self.evict_to(self.limit - pieces.len());
+            // The authored source is at the original brick centre. Select the
+            // shard containing that point from the actual crack half-spaces,
+            // not the nearest centroid (which can be a different fragment).
+            // On a cut plane choose its positive side deterministically.
+            let parent = pieces.iter().position(|(look, _)| {
+                look.shard.as_ref().is_none_or(|s| {
+                    let at_origin = s
+                        .cracks
+                        .iter()
+                        .enumerate()
+                        .fold(0u8, |bits, (i, c)| bits | (u8::from(c.offset > 0.0) << i));
+                    s.index == at_origin
+                })
+            });
             for (piece, (look, shard)) in pieces.into_iter().enumerate() {
                 self.spawn(
                     (cue.id, piece as u8),
@@ -690,6 +715,7 @@ impl BrickDebris {
                     turn,
                     half,
                     shard,
+                    parent == Some(piece),
                     Vec3::from(*origin),
                     *force,
                     *radius,
@@ -729,6 +755,7 @@ impl BrickDebris {
         let spin = rng.unit() * (8 / studs).clamp(3, 8) as f32;
         self.falling.push(Falling {
             brick,
+            cue: id,
             look,
             start: center,
             rotation: Quat::from_rotation_y(
@@ -753,6 +780,7 @@ impl BrickDebris {
         turn: Quat,
         half: Vec3,
         shard: Option<Shard>,
+        carries_attachment: bool,
         origin: Vec3,
         force: f32,
         radius: f32,
@@ -831,6 +859,8 @@ impl BrickDebris {
             Body {
                 handle,
                 brick,
+                attachment: carries_attachment
+                    .then(|| Mat4::from_rotation_translation(turn, center).inverse()),
                 look,
                 age: 0.0,
                 collision: Default::default(),
@@ -1208,6 +1238,59 @@ impl BrickDebris {
             .chain(ghosts)
             .chain(falling)
             .chain(self.section_instances())
+    }
+    /// Only requested sources allocate entries. Work is bounded by the existing
+    /// debris/member limits; there are no extra collision queries. Ghosts made
+    /// by capacity culling intentionally carry no active source.
+    pub(crate) fn attachment_frames(
+        &self,
+        wanted: impl Fn(BrickId) -> bool,
+    ) -> BTreeMap<BrickId, AttachmentFrame> {
+        let mut frames = BTreeMap::new();
+        let mut keep = |brick, frame: AttachmentFrame| {
+            let old = frames.entry(brick).or_insert(frame);
+            if frame.cue > old.cue {
+                *old = frame;
+            }
+        };
+        for (&(cue, _), body) in &self.bodies {
+            if wanted(body.brick)
+                && let Some(initial) = body.attachment
+            {
+                let rb = &self.world.bodies[body.handle];
+                let pose = Mat4::from_rotation_translation(
+                    Quat::from_array(rb.rotation().to_array()),
+                    Vec3::from_array(rb.translation().to_array()),
+                );
+                keep(
+                    body.brick,
+                    AttachmentFrame {
+                        cue,
+                        delta: pose * initial,
+                    },
+                );
+            }
+        }
+        for f in &self.falling {
+            if wanted(f.brick) {
+                keep(
+                    f.brick,
+                    AttachmentFrame {
+                        cue: f.cue,
+                        delta: Mat4::from_rotation_translation(f.rotation(), f.position())
+                            * Mat4::from_rotation_translation(f.rotation, f.start).inverse(),
+                    },
+                );
+            }
+        }
+        for s in self
+            .sections
+            .values()
+            .filter(|s| s.age < SOLID_SECONDS + FADE_SECONDS)
+        {
+            s.append_attachment_frames(&self.world, &wanted, &mut keep);
+        }
+        frames
     }
     /// What the physics has to chew on right now, for probes.
     pub fn work(&self) -> DebrisWork {
@@ -2433,6 +2516,48 @@ pub(crate) mod tests {
         assert_eq!(whole.len(), 1, "a blast beside it throws it whole");
         // A 2x2 brick cracks once each way.
         assert_eq!(cracked.len(), 4);
+        assert_eq!(
+            cracked
+                .bodies
+                .values()
+                .filter(|b| b.attachment.is_some())
+                .count(),
+            1,
+            "one shard carries the original attachments"
+        );
+        assert_eq!(cracked.attachment_frames(|_| true).len(), 1);
+        let carrier = cracked
+            .bodies
+            .values()
+            .find(|b| b.attachment.is_some())
+            .unwrap();
+        let cut = carrier.look.shard.as_ref().unwrap();
+        let geometry = shards(
+            building.definition_half_extents("brick").unwrap(),
+            &cut.cracks,
+        )
+        .into_iter()
+        .find(|s| s.index == cut.index)
+        .unwrap();
+        let points = geometry
+            .hull
+            .iter()
+            .map(|p| Vector::from_array(p.to_array()))
+            .collect::<Vec<_>>();
+        let shape = SharedShape::convex_hull(&points).unwrap();
+        let anchor = carrier
+            .attachment
+            .unwrap()
+            .transform_point3(Vec3::new(0.0, 0.3, 0.0));
+        assert!(
+            shape.contains_point(&Pose::IDENTITY, Vector::from_array(anchor.to_array())),
+            "the chosen carrier must actually contain the original source point"
+        );
+        assert!(
+            cracked.attachment_frames(|_| true)[&1]
+                .delta
+                .abs_diff_eq(Mat4::IDENTITY, 1e-5)
+        );
         assert!((mass(&cracked) - mass(&whole)).abs() < mass(&whole) * 0.01);
         let looks: BTreeSet<_> = cracked
             .bodies
@@ -2447,6 +2572,19 @@ pub(crate) mod tests {
             .cues(&[hit(4, 1, [0.0, 0.3, 0.0], [0.2, 0.6, 0.1])], &building)
             .unwrap();
         run(&mut cracked, &building, 0.5);
+        let parent = cracked
+            .bodies
+            .values()
+            .find(|b| b.attachment.is_some())
+            .unwrap();
+        let center = Vec3::from_array(cracked.world.bodies[parent.handle].translation().to_array());
+        let source = cracked.attachment_frames(|_| true)[&1]
+            .delta
+            .transform_point3(Vec3::new(0.0, 0.3, 0.0));
+        assert!(
+            source.distance(center) > 0.1,
+            "retain the original source offset; do not snap to a shard centre"
+        );
         run(&mut again, &building, 0.5);
         assert_eq!(cracked.positions(), again.positions());
         let spread = cracked.positions();

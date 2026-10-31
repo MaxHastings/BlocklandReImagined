@@ -1555,6 +1555,7 @@ impl App {
                 self.motion.local_eye(),
             );
             let sync_span = crate::frame_trace::span("effects sync");
+            self.fx.effects.observe_deaths(&self.fx.brick_kills);
             let synced = self.fx.effects.sync(view.world.clone(), meshes);
             drop(sync_span);
             self.cosmetic_faults.absorb("world effects", synced);
@@ -2112,10 +2113,11 @@ impl App {
             // boundary. Retain requests in the adapter and expose its queue-drop
             // diagnostics; do not claim these have been rendered or played.
             let effects_span = crate::frame_trace::span("effects");
-            let advanced = self.fx.effects.advance(
+            let advanced = self.fx.effects.advance_with_debris(
                 game_elapsed.as_secs_f32(),
                 eye,
                 Vec3::ZERO,
+                &self.fx.brick_debris,
                 |id, from, to| building.effect_visible(id, from, to),
             );
             drop(effects_span);
