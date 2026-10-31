@@ -14,6 +14,7 @@ pub enum BotOp {
     AutoRespawn(bool),
     MeleeDamage(f32),
     Name(String),
+    SeekPlayersWhenIdle(bool),
 }
 
 pub fn catalog(base: &Catalog) -> Result<Catalog> {
@@ -54,6 +55,7 @@ pub fn catalog(base: &Catalog) -> Result<Catalog> {
         ("setBotWanderRadius", vec![radius(64.0, 12.0)]),
         ("setBotReturnHome", vec![Param::Bool]),
         ("setBotAutoRespawn", vec![Param::Bool]),
+        ("setBotSeekPlayersWhenIdle", vec![Param::Bool]),
         ("setBotMeleeDamage", vec![radius(1000.0, 15.0)]),
         (
             "setBotName",
@@ -96,6 +98,7 @@ pub(crate) fn compile(name: &str, values: &[Value]) -> Option<Result<BotOp>> {
         "setbotwanderradius" => number().map(BotOp::WanderRadius),
         "setbotreturnhome" => boolean().map(BotOp::ReturnHome),
         "setbotautorespawn" => boolean().map(BotOp::AutoRespawn),
+        "setbotseekplayerswhenidle" => boolean().map(BotOp::SeekPlayersWhenIdle),
         "setbotmeleedamage" => number().map(BotOp::MeleeDamage),
         "setbotname" => match values {
             [Value::Text(name)] => Ok(BotOp::Name(name.clone())),

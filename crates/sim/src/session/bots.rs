@@ -515,6 +515,9 @@ struct Brain {
     /// Spawner policy survives a change of creature kind (infection).
     return_home: bool,
     auto_respawn: bool,
+    /// An authored encounter may direct idle movement toward eligible players.
+    seek_players_when_idle: bool,
+    idle_seek_active: bool,
     /// The last trip through a portal (`Session::crossings`) it took
     /// account of.
     crossed: u64,
@@ -819,6 +822,8 @@ impl Brain {
             leash: home,
             return_home,
             auto_respawn: true,
+            seek_players_when_idle: false,
+            idle_seek_active: false,
             crossed,
             resting: false,
             rehome: brick.is_none(),
@@ -3056,6 +3061,24 @@ impl Session {
         } else {
             0.0
         };
+        // A destination is not sight: attacks still use the normal sight path.
+        let idle_player = if self.bots.brains[&bot].seek_players_when_idle {
+            self.peers
+                .iter()
+                .filter(|(owner, _)| {
+                    !self.bots.brains.contains_key(owner)
+                        && self.bot_enemy(bot, &self.bots.brains[&bot].kind, **owner)
+                })
+                .map(|(owner, peer)| (*owner, Vec3::from(peer.player.state().feet)))
+                .min_by(|(a_id, a), (b_id, b)| {
+                    a.distance_squared(feet)
+                        .total_cmp(&b.distance_squared(feet))
+                        .then(a_id.cmp(b_id))
+                })
+                .map(|(_, at)| at)
+        } else {
+            None
+        };
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         if std::mem::take(&mut brain.rehome) {
             brain.home = feet;
@@ -3177,7 +3200,7 @@ impl Session {
             // Strayed past where it strolls; while it works a body or a
             // seat (an interaction, idle play's included) its leash is
             // the chase's, as for a fight.
-            strayed: if brain.tethered() {
+            strayed: if brain.tethered() && idle_player.is_none() {
                 let radius = if opportunity.is_some() {
                     brain.chase_radius()
                 } else {
@@ -3439,6 +3462,9 @@ impl Session {
             && selected_objective.is_some_and(|view| view.feet_only());
         // Goal.
         brain.chase_offset = Vec3::ZERO;
+        if behaviour != Behaviour::Wander {
+            brain.idle_seek_active = false;
+        }
         let hold = match behaviour {
             Behaviour::Arm => {
                 if let Some((at, _)) = arm {
@@ -3543,7 +3569,22 @@ impl Session {
                 false
             }
             Behaviour::Wander => {
-                brain.wander(feet, tick, swim.is_some());
+                if let Some(at) = idle_player {
+                    brain.idle = None;
+                    brain.idle_seek_active = true;
+                    if flat(at - feet).length() <= body.width + 1.0
+                        && (at.y - feet.y).abs() <= body.step + 1.0
+                    {
+                        brain.set_goal(None);
+                    } else {
+                        brain.set_goal_near(Goal::Wander(at));
+                    }
+                } else {
+                    if std::mem::take(&mut brain.idle_seek_active) {
+                        brain.set_goal(None);
+                    }
+                    brain.wander(feet, tick, swim.is_some());
+                }
                 false
             }
         };

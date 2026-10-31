@@ -119,6 +119,12 @@ impl Session {
             BotOp::AutoRespawn(enabled) => {
                 brain.auto_respawn = enabled;
             }
+            BotOp::SeekPlayersWhenIdle(enabled) => {
+                brain.seek_players_when_idle = enabled;
+                if !enabled && std::mem::take(&mut brain.idle_seek_active) {
+                    brain.set_goal(None);
+                }
+            }
             BotOp::MeleeDamage(damage) => {
                 ensure!(
                     damage.is_finite() && (0.0..=1000.0).contains(&damage),

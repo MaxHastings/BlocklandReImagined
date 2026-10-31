@@ -188,6 +188,105 @@ impl Game {
 }
 
 #[test]
+fn authored_idle_seeking_moves_toward_an_unseen_eligible_player() {
+    let mut g = Game::new(vec![row(
+        "onBotSpawn",
+        Slot::SelfBrick,
+        "setBotSightRadius",
+        vec![Value::Float(0.0)],
+    )]);
+    let before = g.at().distance(ENEMY);
+    g.edit_and_fire(vec![row(
+        "onActivate",
+        Slot::SelfBrick,
+        "setBotSeekPlayersWhenIdle",
+        vec![Value::Bool(true)],
+    )]);
+    g.steps(600);
+    let after = g.at().distance(ENEMY);
+    assert!(
+        after + 3.0 < before,
+        "idle bot must move toward the player: {before} -> {after}; {:?}",
+        g.s.bot_why()
+    );
+    assert_eq!(
+        g.s.vitals()[&g.human].health,
+        100.0,
+        "no visual contact means no attack"
+    );
+    g.edit_and_fire(vec![row(
+        "onActivate",
+        Slot::SelfBrick,
+        "setBotSeekPlayersWhenIdle",
+        vec![Value::Bool(false)],
+    )]);
+    let away = g.at().distance(HOME);
+    g.steps(600);
+    assert!(
+        g.at().distance(HOME) + 3.0 < away,
+        "disabling seeking lets the bot return home"
+    );
+}
+
+#[test]
+fn idle_seeking_prefers_the_nearest_eligible_player() {
+    let mut g = Game::new(vec![row(
+        "onBotSpawn",
+        Slot::SelfBrick,
+        "setBotSightRadius",
+        vec![Value::Float(0.0)],
+    )]);
+    let near = HOME + Vec3::new(8.0, 0.0, 0.0);
+    g.s.set_spawn_points(vec![near]).unwrap();
+    let player = g.s.join("Nearby".into(), near, false).unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.s.command(player, 1, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+    let start = g.at();
+    g.edit_and_fire(vec![row(
+        "onActivate",
+        Slot::SelfBrick,
+        "setBotSeekPlayersWhenIdle",
+        vec![Value::Bool(true)],
+    )]);
+    g.steps(360);
+    let end = g.at();
+    assert!(
+        end.x > start.x + 2.0,
+        "bot should head toward nearer player: {start:?} -> {end:?}; {:?}",
+        g.s.bot_why()
+    );
+}
+
+#[test]
+fn idle_seeking_ignores_a_nearer_player_outside_its_game() {
+    let mut g = Game::new(vec![row(
+        "onBotSpawn",
+        Slot::SelfBrick,
+        "setBotSightRadius",
+        vec![Value::Float(0.0)],
+    )]);
+    let outsider =
+        g.s.join("Outsider".into(), HOME + Vec3::new(6.0, 0.0, 0.0), false)
+            .unwrap();
+    let start = g.at();
+    g.edit_and_fire(vec![row(
+        "onActivate",
+        Slot::SelfBrick,
+        "setBotSeekPlayersWhenIdle",
+        vec![Value::Bool(true)],
+    )]);
+    g.steps(360);
+    let end = g.at();
+    assert!(
+        end.z > start.z + 2.0,
+        "bot should seek the eligible game member, not the nearer outsider: {start:?} -> {end:?}; {:?}",
+        g.s.bot_why()
+    );
+    assert_eq!(g.s.vitals()[&outsider].health, 100.0);
+}
+
+#[test]
 fn builder_event_names_a_bot_and_clears_the_override() {
     let mut g = Game::new(vec![]);
     let name = |g: &Game| g.s.names()[&g.bot].clone();
