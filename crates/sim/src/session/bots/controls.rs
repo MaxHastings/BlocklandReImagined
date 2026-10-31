@@ -52,6 +52,19 @@ impl Session {
         if let BotOp::Powered(on) = op {
             return self.set_bot_resting(bot, !on);
         }
+        if let BotOp::Name(name) = op {
+            let name = name.trim();
+            let override_name = (!name.is_empty()).then(|| clean_player_name(name));
+            self.bots
+                .brains
+                .get_mut(&bot)
+                .context("This bot is gone")?
+                .name_override = override_name;
+            let brain = &self.bots.brains[&bot];
+            let derived =
+                self.brick_bot_name(brain.born.as_ref().unwrap_or(&brain.kind), brick, Some(bot));
+            return self.rename_brick_bot(bot, derived);
+        }
         let home = Vec3::from(
             self.simulation
                 .state()
@@ -120,7 +133,7 @@ impl Session {
                     melee.damage = damage;
                 }
             }
-            BotOp::Powered(_) | BotOp::Respawn => unreachable!(),
+            BotOp::Powered(_) | BotOp::Respawn | BotOp::Name(_) => unreachable!(),
         }
         Ok(())
     }

@@ -13,6 +13,7 @@ pub enum BotOp {
     ReturnHome(bool),
     AutoRespawn(bool),
     MeleeDamage(f32),
+    Name(String),
 }
 
 pub fn catalog(base: &Catalog) -> Result<Catalog> {
@@ -54,6 +55,13 @@ pub fn catalog(base: &Catalog) -> Result<Catalog> {
         ("setBotReturnHome", vec![Param::Bool]),
         ("setBotAutoRespawn", vec![Param::Bool]),
         ("setBotMeleeDamage", vec![radius(1000.0, 15.0)]),
+        (
+            "setBotName",
+            vec![Param::String {
+                max_length: 32,
+                width: 150,
+            }],
+        ),
     ] {
         if out.output(Class::Brick, name).is_none() {
             out.outputs.push(OutputDef {
@@ -89,6 +97,10 @@ pub(crate) fn compile(name: &str, values: &[Value]) -> Option<Result<BotOp>> {
         "setbotreturnhome" => boolean().map(BotOp::ReturnHome),
         "setbotautorespawn" => boolean().map(BotOp::AutoRespawn),
         "setbotmeleedamage" => number().map(BotOp::MeleeDamage),
+        "setbotname" => match values {
+            [Value::Text(name)] => Ok(BotOp::Name(name.clone())),
+            _ => Err(anyhow::anyhow!("Bot name needs one text parameter")),
+        },
         _ => return None,
     })
 }

@@ -540,6 +540,12 @@ impl Session {
         let Some(b) = self.simulation.state().bricks.get(&brick) else {
             return kind.name.clone();
         };
+        if let Some(name) = bot
+            .and_then(|o| self.bots.brains.get(&o))
+            .and_then(|b| b.name_override.as_ref())
+        {
+            return name.clone();
+        }
         let named = b
             .name
             .as_deref()
@@ -811,6 +817,18 @@ mod spawn_tests {
         s.reconcile_bot_brick(1, Some("fixture:bot/melee"))?;
         s.sync_bot_minigames()?;
         let bot = s.bots.by_brick[&1];
+        s.control_brick_bot(1, &bri_events::bots::BotOp::Name("Guard".into()))?;
+        assert_eq!(s.peers[&bot].name, "Guard");
+        s.sync_bot_minigames()?;
+        assert_eq!(
+            s.peers[&bot].name, "Guard",
+            "reconciliation keeps an authored name"
+        );
+        s.control_brick_bot(1, &bri_events::bots::BotOp::Name(String::new()))?;
+        assert_ne!(
+            s.peers[&bot].name, "Guard",
+            "empty name restores the derived name"
+        );
         let life = s
             .minigames
             .player(s.peers[&bot].combat.player)

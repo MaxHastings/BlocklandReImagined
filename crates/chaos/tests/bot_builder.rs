@@ -185,6 +185,29 @@ impl Game {
 }
 
 #[test]
+fn builder_event_names_a_bot_and_clears_the_override() {
+    let mut g = Game::new(vec![]);
+    let name = |g: &Game| g.s.names()[&g.bot].clone();
+    let original = name(&g);
+    g.edit_and_fire(vec![row(
+        "onActivate",
+        Slot::SelfBrick,
+        "setBotName",
+        vec![Value::Text("Guard".into())],
+    )]);
+    assert_eq!(name(&g), "Guard");
+    g.steps(120);
+    assert_eq!(name(&g), "Guard");
+    g.edit_and_fire(vec![row(
+        "onActivate",
+        Slot::SelfBrick,
+        "setBotName",
+        vec![Value::Text(String::new())],
+    )]);
+    assert_eq!(name(&g), original);
+}
+
+#[test]
 fn a_builder_can_pause_configure_release_and_stop_a_real_pursuing_bot() {
     let mut g = Game::new(vec![row(
         "onBotSpawn",

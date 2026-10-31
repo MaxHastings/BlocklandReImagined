@@ -691,6 +691,8 @@ struct Brain {
     /// The name this brick bot last asked for (before a number makes it
     /// unique).
     named: String,
+    /// Builder-set name for this life; an empty event restores the derived name.
+    name_override: Option<String>,
     /// Variation among its choices over time ([`surprise`]).
     surprise: surprise::Mind,
     /// Where a flanking chase aims, from the enemy (zero straight at them).
@@ -898,6 +900,7 @@ impl Brain {
             mount_anchor: None,
             brick_team: None,
             named: String::new(),
+            name_override: None,
             perception: Default::default(),
             surprise: surprise::Mind::new(bot),
             chase_offset: Vec3::ZERO,
