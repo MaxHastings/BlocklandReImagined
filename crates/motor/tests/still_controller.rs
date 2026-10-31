@@ -161,6 +161,21 @@ fn a_living_body_supports_another_until_it_becomes_a_corpse() {
         "living body must support the upper body: {:?}",
         upper.state()
     );
+    assert_eq!(
+        upper.support_tag(),
+        Some((1_u128 << 64) | 1),
+        "the motor identifies the actual supporting actor"
+    );
+    upper.set_pass_group(&mut world, 1).unwrap();
+    assert_eq!(
+        upper.support_tag(),
+        None,
+        "changing collision eligibility invalidates the old contact"
+    );
+    for _ in 0..8 {
+        upper.step(&mut world, MoveInput::default()).unwrap();
+    }
+    assert_eq!(upper.support_tag(), Some((1_u128 << 64) | 1));
     lower.set_corpse(&mut world, true);
     for _ in 0..240 {
         lower.step(&mut world, MoveInput::default()).unwrap();
@@ -170,6 +185,11 @@ fn a_living_body_supports_another_until_it_becomes_a_corpse() {
         upper.state().grounded && upper.state().feet[1] < 0.1,
         "death must revoke support: {:?}",
         upper.state()
+    );
+    assert_ne!(
+        upper.support_tag(),
+        Some((1_u128 << 64) | 1),
+        "a corpse cannot remain the support"
     );
 }
 

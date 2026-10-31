@@ -58,3 +58,18 @@ valid cooperative attempt; broadly disabling this recovery would regress ordinar
 navigation and ledge behavior. The bot's seen-target data already carries the
 observed target position, so ordinary stacking can use known pursuit evidence
 without reading a hidden target's live transform.
+
+
+The shared motor now retains the collider tag selected by its existing grounded
+contact (`Player::support_tag`), including the follow-floor shape-cast path. It
+is cleared on corrections, teleport/place, pass-group changes, death and
+archetype changes; a consumer must revalidate the referenced object's current
+lifetime/eligibility because other actors can move or die after the motor step.
+It is transient local contact evidence, not a new wire or save field. A two-body
+case checks the actual supporting actor tag, invalidation on a pass-group change,
+and loss of that actor tag after death. Nine focused motor/collider/spawn cases
+and warning-free all-target motor Clippy pass; the last body-shape invalidation
+change also reran the five still-controller cases and Clippy. Diagnostics:
+`stack-contact-tag-final.txt`, `stack-contact-tag-last.txt`, and
+`stack-contact-tag-clippy.txt`. No bot currently consumes the seam, and moving
+support, prediction agreement, cooperation and the cube remain unverified.

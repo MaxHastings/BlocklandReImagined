@@ -1341,6 +1341,8 @@ pub struct Player {
     relocations: u64,
     /// The body is a corpse ([`Player::set_corpse`]).
     corpse: bool,
+    /// Collider tag selected by the motor's most recent grounded contact.
+    support_tag: Option<u128>,
     /// Seconds the body has been inside solid geometry ([`Unstick`]).
     embedded_for: f32,
 }
@@ -1496,6 +1498,7 @@ impl Player {
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
+            support_tag: None,
             embedded_for: 0.0,
         })
     }
@@ -1549,6 +1552,7 @@ impl Player {
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
+            support_tag: None,
             embedded_for: 0.0,
         })
     }
@@ -1612,6 +1616,7 @@ impl Player {
             mounted_eye_offset: None,
             relocations: 0,
             corpse: false,
+            support_tag: None,
             embedded_for: 0.0,
         };
         player.restore(physics, state, tuning)?;
@@ -1667,6 +1672,7 @@ impl Player {
         if tuning.controller != self.tuning.controller {
             self.state.controller = None;
         }
+        self.support_tag = None;
         self.state.archetype = archetype;
         self.state.scale = scale;
         self.state.energy = self.state.energy.min(tuning.max_energy);
@@ -1767,6 +1773,7 @@ impl Player {
         }
         let regroup = state.pass_group != self.state.pass_group;
         self.state = state;
+        self.support_tag = None;
         if regroup {
             self.apply_groups(physics);
         }
@@ -1888,6 +1895,12 @@ impl Player {
     pub fn seated(&self) -> bool {
         self.seated
     }
+    /// Tag of the contact that most recently supported this body, if grounded.
+    /// Consumers must also validate that the referenced object still exists and
+    /// remains eligible; another actor can die or move after this body steps.
+    pub fn support_tag(&self) -> Option<u128> {
+        self.state.grounded.then_some(self.support_tag).flatten()
+    }
     /// Corpses stop blocking players and weapons; respawn makes them solid.
     pub fn set_solid(&self, physics: &mut PhysicsWorld, solid: bool) {
         physics.colliders[self.collider].set_sensor(!solid);
@@ -1896,6 +1909,9 @@ impl Player {
     /// once, but stays solid to everything else until it is cleared.
     pub fn set_corpse(&mut self, physics: &mut PhysicsWorld, corpse: bool) {
         self.corpse = corpse;
+        if corpse {
+            self.support_tag = None;
+        }
         self.apply_groups(physics);
     }
     /// Put the body in pass group `group` (0 for none, up to
@@ -1907,6 +1923,7 @@ impl Player {
             "Invalid pass group: 0 to {MAX_PASS_GROUP}"
         );
         self.state.pass_group = group;
+        self.support_tag = None;
         self.apply_groups(physics);
         Ok(())
     }
@@ -1948,6 +1965,7 @@ impl Player {
         let pose = self.body_pose(feet, false);
         physics.bodies[self.body].set_position(pose, true);
         self.relocations += 1;
+        self.support_tag = None;
         Ok(())
     }
     /// How many times the body jumped instead of travelling: each server
@@ -1966,6 +1984,7 @@ impl Player {
         if !feet.is_finite() || !yaw.is_finite() || !velocity.is_finite() {
             return;
         }
+        self.support_tag = None;
         self.state.feet = feet.to_array();
         self.state.velocity = velocity.to_array();
         self.state.keep_in_bounds();
@@ -3008,21 +3027,23 @@ impl Player {
                 .is_some_and(|n| velocity.dot(n) > -LANDING_SPEED);
         // Down a stair or a slope: the floor that fell away under a walking body within a step's height is walked down onto, so
         // the body keeps its grip and its speed instead of falling the stair a step at a time.
+        let mut support_tag = self.state.grounded.then_some(end_contact.tag).flatten();
         if t.follow_floor
             && was_grounded
             && !self.state.grounded
             && !jumped
             && velocity.y <= 0.0
             && !self.state.posture.climbing
-            && let Some((_, hit)) = physics.query_pipeline_with_filter(filter).cast_shape(
-                &t.pose(Vec3::from(self.state.feet), self.state.crouched),
-                Vector::new(0.0, -1.0, 0.0),
-                t.shape(self.state.crouched).as_ref(),
-                ShapeCastOptions {
-                    max_time_of_impact: step_reach,
-                    ..Default::default()
-                },
-            )
+            && let Some((support_collider, hit)) =
+                physics.query_pipeline_with_filter(filter).cast_shape(
+                    &t.pose(Vec3::from(self.state.feet), self.state.crouched),
+                    Vector::new(0.0, -1.0, 0.0),
+                    t.shape(self.state.crouched).as_ref(),
+                    ShapeCastOptions {
+                        max_time_of_impact: step_reach,
+                        ..Default::default()
+                    },
+                )
             && hit.time_of_impact > 0.0
             && hit.normal1.y >= run_cos
         {
@@ -3034,7 +3055,9 @@ impl Player {
             self.state.velocity[1] = 0.0;
             self.state.grounded = true;
             self.state.jump.since_contact = 0;
+            support_tag = Some(physics.colliders[support_collider].user_data);
         }
+        self.support_tag = support_tag;
         // Animation provenance belongs to the simulation: presentation can
         // skip all the jetting ticks, and pose datagrams can lose them too.
         // A real jump after release starts new motion, even if no rendered
