@@ -136,7 +136,9 @@ pub fn relaunch_on_x11(error: &anyhow::Error) -> Option<i32> {
     if !failed || !wayland_session() || !set("DISPLAY") || set(X11_RELAUNCH) {
         return None;
     }
-    bri_console::warn("The Wayland window connection failed; starting again on X11.");
+    bri_console::warn(format!(
+        "The Wayland window connection failed: {error:#}. Restarting the game process on X11."
+    ));
     let status = std::process::Command::new(std::env::current_exe().ok()?)
         .args(std::env::args_os().skip(1))
         .env_remove("WAYLAND_DISPLAY")

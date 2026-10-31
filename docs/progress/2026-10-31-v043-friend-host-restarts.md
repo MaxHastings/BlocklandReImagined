@@ -46,3 +46,10 @@ Startup-only fallback and an explicit backend preference deserve evaluation;
 separating host lifetime from the display process is a broader architectural
 option, not a proven prerequisite for this release. Native Linux validation
 is required for backend changes; Windows-only checks cannot establish them.
+
+
+The fallback diagnostic now records the complete available error chain and
+explicitly says it restarts the game process. This improves the next incident's
+attribution; it does not claim to fix a Wayland connection/driver failure or
+preserve an in-process host. The source remains Linux-only and must pass native
+Linux CI before integration/publication; Windows checks cannot establish that.
