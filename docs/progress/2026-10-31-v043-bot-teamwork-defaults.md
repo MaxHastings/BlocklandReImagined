@@ -20,16 +20,28 @@ second level. The target had 85 health at the end of this shorter trace.
 The contact field is diagnostic and a future controller must revalidate live
 support, team and collision eligibility.
 
-An isolated two-player motor experiment placed one player on another and
+An initial isolated two-player motor experiment placed one player on another and
 compared the upper jump with the lower still or jumping, at five button delays
 and both step orders. In this fixture the upper apex was 6.3463 in every case;
-the jumping lower body only rose to 0.5795 before being obstructed. Thus simply
-scheduling two jump presses does not currently produce the boost Maxwell asked
-for. This does not prove all moving-support conditions fail; the shared motor
+the jumping lower body only rose to 0.5795 before being obstructed. **This initial
+experiment did not step the shared physics world and is not valid evidence of
+normal gameplay.** A corrected experiment that steps the world after both motors
+measured an upper apex of 6.3088 in each tested case, with the lower body's feet
+reaching 0.0151. Its checked delays and step orders do not produce the requested
+boost. This does not prove all moving-support conditions fail; the shared motor
 and its authoritative/predicted support-motion semantics need investigation
 before implementing a general capability. The experimental code and output are
-kept privately as `stack-synchronized-jump-experiment.rs` and
-`stack-synchronized-jump-motor.txt`; they are not a passing boost test.
+kept privately as `stack-synchronized-jump-physics-ticked.rs` and
+`stack-synchronized-jump-physics-ticked.txt`; they are not a passing boost test.
+
+For the separate climb onto an ally, the existing `Body::leaps.seconds`,
+`Ground::sweep_arc`, and `route::LeapLeg` already measure reach, check fixed
+geometry, and drive ordinary jump and air-steering controls. Reuse those for a
+live, eligible actor support rather than inventing a separate movement motor.
+They do not validate the support's lifetime, team, movement, dynamic obstacles,
+or coordinated support behavior; those checks and a bounded state machine are
+still required. In particular the no-world-floor recovery currently sends a
+perched actor back down and must be overridden only during a valid cooperation.
 
 Checks: `cargo test --locked --profile playtest -p bri-sim
 teamwork_is_default_and_a_kind_can_disable_it --lib`; `cargo test --locked
