@@ -229,6 +229,38 @@ fn authored_idle_seeking_moves_toward_an_unseen_eligible_player() {
 }
 
 #[test]
+fn idle_seeking_works_when_random_wandering_is_disabled() {
+    let mut g = Game::new(vec![
+        row(
+            "onBotSpawn",
+            Slot::SelfBrick,
+            "setBotSightRadius",
+            vec![Value::Float(0.0)],
+        ),
+        row(
+            "onBotSpawn",
+            Slot::SelfBrick,
+            "setBotWanderRadius",
+            vec![Value::Float(0.0)],
+        ),
+    ]);
+    let before = g.at().distance(ENEMY);
+    g.edit_and_fire(vec![row(
+        "onActivate",
+        Slot::SelfBrick,
+        "setBotSeekPlayersWhenIdle",
+        vec![Value::Bool(true)],
+    )]);
+    g.steps(600);
+    let after = g.at().distance(ENEMY);
+    assert!(
+        after + 3.0 < before,
+        "idle seeking should work without random wandering: {before} -> {after}; {:?}",
+        g.s.bot_why()
+    );
+}
+
+#[test]
 fn idle_seeking_prefers_the_nearest_eligible_player() {
     let mut g = Game::new(vec![row(
         "onBotSpawn",

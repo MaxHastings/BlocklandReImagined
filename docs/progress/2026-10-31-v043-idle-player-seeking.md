@@ -33,6 +33,11 @@ the remaining live game member. All 11 `cargo test --locked --profile playtest
 Clippy passed. This covers that death and moving-target scenario, not every
 reconnection or team transition.
 
+The targeted `idle_seeking_works_when_random_wandering_is_disabled` builder
+case also passes with both sight and random wander radius set to zero. This
+checks that an authored seeker need not enable random strolling. Scoped
+`bri-chaos --test bot_builder` Clippy passed after the case was added.
+
 This is a first scoped implementation, not full navigation acceptance: team
 changes, competing objectives, saved spawn rows and network
 observers still need direct checks. The earlier selected-specific-player design
