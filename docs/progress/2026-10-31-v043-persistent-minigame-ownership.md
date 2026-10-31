@@ -1,11 +1,11 @@
 # 2026-10-31 Persistent minigame ownership
 
-Current dependency/acceptance handoff for creator departure. Leaving currently
-ends an owned encounter in `MinigamesWorld::remove_member`; disconnect uses the
-same path. Bot and vehicle membership separately follows the builder's current
-membership through `Session::spawn_brick_game`. The UI additionally refuses Leave
-for owners. Changing only the UI would therefore end the battle or move its bots
-out of combat. All three layers must be corrected before claiming the feature.
+Current dependency/acceptance handoff for creator departure. The initial audit
+found that Leave/disconnect ended the creator's encounter, bot/vehicle affiliation
+followed their participation, and the UI refused creator Leave. The ownership,
+resource and UI corrections below are now implemented with scoped evidence;
+remaining combined persistence/mode/display acceptance is named at the end.
+Changing only Leave would not have preserved a running battle.
 
 The domain now separates ownership from participation: `MiniGame::owner` is the
 stable host-authenticated AccountId rather than a transient PlayerId. Management
@@ -185,3 +185,85 @@ Final all-target warning-free Clippy and diff whitespace checks pass. These are
 changed-area checks, not final CI/platform/full-release acceptance. No human
 playtest is claimed. Next: implement the UI chain above, then complete actual
 network continuing-resource and native persistence/default/Slayer acceptance.
+
+
+## Creator controls and combined network battle — scoped checks complete
+
+The UI derives its owned-game selector from existing authenticated summaries,
+independently of active membership. Escape opens the overview. Creator Leave sends
+Leave, My Minigame opens owned settings, and Rejoin admits the creator to their
+invite-only game using normal spawning. End remains a separate settings action.
+The overview explains that Leave keeps the game running; Basics explains that the
+creator's bricks/spawners stay with it until End. Successful list refresh no longer
+replaces that explanation with a generic completed message, caught by actual
+source-art inspection and a failing regression before the correction.
+
+Owned defaults apply to settings, pending post-create Add-On drafts and client
+management adaptation. F2 Invite/Remove use owned encounter membership/identity;
+list highlighting/scores still describe actual participation. Explicitly selected
+editor targets stay explicit, including a new optional game selector on the
+client-only InviteMiniGame UiAction, consumed through the existing host-authorized
+Manage request. Shared SERVER-owned games allow ordinary join/leave/create;
+exclusive game-mode restrictions remain. No identity registry, new wire message,
+wire/save representation or migration is introduced in this UI increment.
+
+Final evidence: **65 distinct scoped cases pass**, plus **nine offscreen frames**:
+
+- UI model: three cases (`cargo test --locked --profile playtest -p bri-ui --lib
+  models::minigames`).
+- MiniGame screen integration: 44 ordinary cases (`-p bri-ui --test
+  minigame_screens`); the pre-existing broad GPU matrix is separate and not
+  counted. Includes creator departure/private rejoin, outside/other-game settings,
+  host Leave revocation, F2 owned membership, explicit editor invitation and the
+  listing explanation.
+- Field-flow consumers: all eight synthetic/converted-content cases (`-p bri-ui
+  --test field_flow -- --include-ignored`).
+- Client bridge: six, actual QUIC: two, Session saved-minigame/rule consumers: two
+  (`cargo test --locked --profile playtest -p bri-sim -p bri-net -p bri-client
+  --lib --test loopback minigame`). The final expanded QUIC case also passes in
+  `--test loopback minigame` after adding normal rejoin/zero-human checks.
+- Warning-free all-target Clippy for ui/client/net and diff whitespace pass.
+- `cargo run --locked --profile playtest -p bri-ui --bin ui_runtime_probe --
+  content/ui-pack-005 <private-capture-folder> --minigame-review` renders three
+  screens at three sizes/scales. Real source-pack hit testing reaches the overview
+  from Escape, sends Leave, and opens retained settings through My Minigame. Final
+  1024x768 overview and 1920x1080 at 2x settings are visually inspected: new labels
+  fit and the ownership explanation remains visible after list completion. The
+  fixture has coherent invite-only/catalog/member metadata. No window or OS input.
+
+The QUIC case uses a normally planted/wrenched melee bot, observes new damage at
+least a full simulation second after both departure and disconnect transitions,
+and retains the same bot spawn identity until explicit Reset. The outside creator
+remains alive/unhurt. A member cannot reset it; the resumed creator reclaims the
+same account/game, manages it without joining, then rejoins through a fresh normal
+spawn. Both humans can Leave while the bot keeps its affiliation; End removes the
+game and bot affiliation. The stopped server reports zero simulation-step errors
+and no failure. This is actual hosted multi-client combat, not a policy-only test.
+
+Retained failures: the three initial UI behaviors and the F2/list-explanation cases
+fail before correction. The F2 fixture initially omitted required Players-update
+metadata. The initial UI edit retained an invitation Callback use after removing
+its import and hit a collapsible-if lint; both are corrected. An early combined
+Cargo filter selected zero integration cases; those are not counted and the actual
+integration targets were run. The expanded network fixture initially requested
+items absent from its tool-only pack; its starting/configured equipment now uses
+that pack. Its default-spawn actors could overlap and occlude combat; the member
+now walks clear using ordinary input paced six moves per 50 ms (120 Hz), rather
+than instant repeated batches that exceed normal admission. No damage assertion,
+permission, input limit or timeout is relaxed. Initial 0.5-second movement was not
+assumed to cover a fixed distance: the bounded control follows observed position.
+
+Private evidence is `minigame-departure-*-final.txt`,
+`minigame-departure-combat-{diagnostic,green,complete}.txt`,
+`minigame-listing-explanation-red.txt`, `minigame-f2-management-red.txt` and
+`minigame-departure-ui-captures/` under planning diagnostics. Earlier red logs and
+pre-final green receipts remain separately identifiable. These checks overlap
+prior foundation/resource coverage; counts must not be summed as unique features.
+
+Next supported correction: complete the explicit native restart/save-load resource
+case and the server/default/Slayer lifecycle combinations, and ensure offline/late
+join creator display uses existing verified owner-name metadata. Current public
+world replication omits OwnerRecords; do not invent an identity/name registry.
+This does not complete step 4's remaining loading PCM continuity or final release
+CI/history/protocol/platform/package gates. Maxwell waived further playtests; no
+new human acceptance is claimed.

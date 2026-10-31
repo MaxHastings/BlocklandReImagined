@@ -2499,8 +2499,22 @@ async fn minigame_listing_replicates_to_other_clients_and_late_joiners() -> Resu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() -> Result<()> {
-    use bri_sim::session::MiniGameRequest;
-    let server = server::start(session(), options())?;
+    use bri_sim::session::{MiniGameRequest, ToolCatalog, WrenchProperties};
+    const SPAWN: &str = "vehicle_spawn";
+    const KIND: &str = "fixture:bot/melee";
+    let mut game = session_with_sturdy(&[SPAWN]);
+    game.set_weapon_pack(tool_pack())?;
+    game.set_vehicle_pack(bri_vehicles::Pack {
+        schema_version: bri_vehicles::schema::SCHEMA_VERSION,
+        definitions: vec![], assets: vec![], evidence: vec![], unresolved: vec![],
+        animation_aliases: Default::default(),
+    }, bri_sim::bot_kind::BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"fixture:bot/melee","name":"Melee bot","sight":80,"wander_radius":0,"reaction_seconds":0,"weapons":false,"side":"hostile","melee":{"damage":1,"reach":2.5,"seconds":0.3},"behaviours":{"fly":0},"perception":{"strength":0},"surprise":{"strength":0}}]}"#)?.bots)?;
+    game.set_tool_catalog(ToolCatalog {
+        vehicles: [KIND.to_string()].into(),
+        vehicle_bricks: [SPAWN.to_string()].into(),
+        ..Default::default()
+    })?;
+    let server = server::start(game, options())?;
     let mut owner = Client::connect(
         server.address,
         &server.certificate,
@@ -2517,10 +2531,20 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
         None,
     )
     .await?;
+    let battle_settings = bri_minigames::Settings {
+        loadout: [
+            Some("v20.weapon.hammeritem".into()),
+            Some("v20.weapon.wrenchitem".into()),
+            None,
+            None,
+            None,
+        ],
+        ..Default::default()
+    };
     owner
         .command(Command::MiniGame(MiniGameRequest::Create {
             color: 2,
-            settings: Default::default(),
+            settings: battle_settings.clone(),
         }))
         .await?;
     wait(&mut other, |c| c.replica.minigames.len() == 1).await?;
@@ -2528,8 +2552,91 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
     other
         .command(Command::MiniGame(MiniGameRequest::Join { game }))
         .await?;
+    // These joins can choose the same map spawn. Walk the participant
+    // clear through ordinary input, paced at the actual 120 Hz input rate,
+    // so an overlapping nonparticipant cannot occlude the combat target.
+    let mut movement_clock = tokio::time::interval(Duration::from_millis(50));
+    movement_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    for _ in 0..60 {
+        movement_clock.tick().await;
+        let sequence = send_inputs(
+            &mut other,
+            &[MoveInput {
+                forward: 1.0,
+                yaw: std::f32::consts::FRAC_PI_2,
+                ..Default::default()
+            }; 6],
+        )?;
+        wait(&mut other, |c| {
+            c.replica.poses[&c.owner].acknowledged_input >= sequence
+        })
+        .await
+        .with_context(|| {
+            format!(
+                "walking clear: requested={sequence}, pose={:?}",
+                other.replica.poses.get(&other.owner)
+            )
+        })?;
+        if other.replica.poses[&other.owner].player.feet[0] >= 4.0 {
+            break;
+        }
+    }
+    assert!(
+        other.replica.poses[&other.owner].player.feet[0] >= 4.0,
+        "the participant must walk clear of the creator's spawn: {:?}",
+        other.replica.poses[&other.owner].player
+    );
     let owner_id = owner.owner;
     let member_id = other.owner;
+    let Reply::Planted(brick) = owner
+        .command(Command::Plant {
+            definition: SPAWN.into(),
+            position: [0.5, 0.1, -3.25],
+            quarter_turns: 0,
+            color: 0,
+        })
+        .await?
+    else {
+        anyhow::bail!("the creator's bot brick did not plant")
+    };
+    aim(&mut owner).await?;
+    assert_eq!(
+        swing(&mut owner, 1).await?.map(|(id, _, _)| id),
+        Some(brick)
+    );
+    owner
+        .command(Command::Tool(ToolAction::SetWrench {
+            brick,
+            properties: WrenchProperties {
+                vehicle: Some(KIND.into()),
+                raycast: true,
+                colliding: true,
+                visible: true,
+                ..Default::default()
+            },
+        }))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica
+            .vitals
+            .keys()
+            .any(|o| ![owner_id, member_id].contains(o))
+    })
+    .await?;
+    let bot = *other
+        .replica
+        .vitals
+        .keys()
+        .find(|o| ![owner_id, member_id].contains(o))
+        .unwrap();
+    wait(&mut other, |c| {
+        c.replica
+            .vitals
+            .get(&bot)
+            .is_some_and(|v| v.minigame == Some(game))
+    })
+    .await?;
+    let bot_spawn = other.replica.vitals[&bot].spawn_tick;
     owner
         .command(Command::MiniGame(MiniGameRequest::Leave))
         .await?;
@@ -2539,6 +2646,28 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
         })
     })
     .await?;
+    // Observe new damage well after the replicated departure, not merely
+    // damage already queued while the creator was still participating.
+    let left_at = other.replica.tick;
+    wait(&mut other, |c| c.replica.tick >= left_at + 120).await?;
+    let health = other.replica.vitals[&member_id].health;
+    let observed_at = other.replica.tick;
+    wait(&mut other, |c| {
+        c.replica.tick >= observed_at + 120 && c.replica.vitals[&member_id].health < health
+    })
+    .await.with_context(|| format!(
+        "continuing battle: tick={} baseline_health={health}, member={:?}, bot={:?}, creator={:?}, memberships={:?}",
+        other.replica.tick,
+        other.replica.poses.get(&member_id).map(|p| (p.player.feet, other.replica.vitals[&member_id].health)),
+        other.replica.poses.get(&bot).map(|p| (p.player.feet, other.replica.vitals[&bot].health)),
+        other.replica.poses.get(&owner_id).map(|p| p.player.feet),
+        other.replica.vitals.iter().map(|(id,v)| (*id, v.minigame)).collect::<Vec<_>>()
+    ))?;
+    assert_eq!(
+        other.replica.vitals[&bot].spawn_tick, bot_spawn,
+        "creator Leave must preserve the already-running bot body"
+    );
+    assert_eq!(other.replica.vitals[&bot].minigame, Some(game));
     assert!(
         other
             .command(Command::MiniGame(MiniGameRequest::Reset))
@@ -2548,7 +2677,7 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
     );
     let settings = bri_minigames::Settings {
         title: "Owner is outside".into(),
-        ..Default::default()
+        ..battle_settings.clone()
     };
     owner
         .command(Command::MiniGame(MiniGameRequest::Configure { settings }))
@@ -2560,6 +2689,11 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
             .any(|g| g.id == game && g.settings.title == "Owner is outside")
     })
     .await?;
+    assert!(owner.replica.vitals[&owner_id].alive);
+    assert_eq!(
+        owner.replica.vitals[&owner_id].health, 100.0,
+        "the creator outside play is not a combat target"
+    );
     let resume = owner.resume.clone();
     owner.close();
     wait(&mut other, |c| !c.replica.names.contains_key(&owner_id)).await?;
@@ -2570,6 +2704,26 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
             .iter()
             .any(|g| g.id == game && g.owner == owner_id)
     );
+    let offline_at = other.replica.tick;
+    wait(&mut other, |c| c.replica.tick >= offline_at + 120).await?;
+    let health = other.replica.vitals[&member_id].health;
+    let observed_at = other.replica.tick;
+    wait(&mut other, |c| {
+        c.replica.tick >= observed_at + 120 && c.replica.vitals[&member_id].health < health
+    })
+    .await.with_context(|| format!(
+        "continuing battle: tick={} baseline_health={health}, member={:?}, bot={:?}, creator={:?}, memberships={:?}",
+        other.replica.tick,
+        other.replica.poses.get(&member_id).map(|p| (p.player.feet, other.replica.vitals[&member_id].health)),
+        other.replica.poses.get(&bot).map(|p| (p.player.feet, other.replica.vitals[&bot].health)),
+        other.replica.poses.get(&owner_id).map(|p| p.player.feet),
+        other.replica.vitals.iter().map(|(id,v)| (*id, v.minigame)).collect::<Vec<_>>()
+    ))?;
+    assert_eq!(
+        other.replica.vitals[&bot].spawn_tick, bot_spawn,
+        "creator disconnect must preserve the running bot"
+    );
+    assert_eq!(other.replica.vitals[&bot].minigame, Some(game));
     let mut returned = Client::connect(
         server.address,
         &server.certificate,
@@ -2594,7 +2748,7 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
         .await?;
     let settings = bri_minigames::Settings {
         title: "Same retained encounter".into(),
-        ..Default::default()
+        ..battle_settings
     };
     returned
         .command(Command::MiniGame(MiniGameRequest::Configure { settings }))
@@ -2606,6 +2760,44 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
             .any(|g| g.id == game && g.settings.title == "Same retained encounter")
     })
     .await?;
+    let previous_body = returned.replica.vitals[&owner_id].spawn_tick;
+    returned
+        .command(Command::MiniGame(MiniGameRequest::Join { game }))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica
+            .minigames
+            .iter()
+            .any(|g| g.id == game && g.members.contains(&owner_id))
+    })
+    .await?;
+    wait(&mut returned, |c| {
+        c.replica.vitals[&owner_id].minigame == Some(game)
+            && c.replica.vitals[&owner_id].spawn_tick > previous_body
+    })
+    .await?;
+    returned
+        .command(Command::MiniGame(MiniGameRequest::Leave))
+        .await?;
+    other
+        .command(Command::MiniGame(MiniGameRequest::Leave))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica.minigames.iter().any(|g| {
+            g.id == game
+                && g.members.contains(&bot)
+                && !g.members.contains(&owner_id)
+                && !g.members.contains(&member_id)
+        })
+    })
+    .await?;
+    let empty_at = other.replica.tick;
+    wait(&mut other, |c| c.replica.tick >= empty_at + 30).await?;
+    assert_eq!(
+        other.replica.vitals[&bot].minigame,
+        Some(game),
+        "zero human participants must not end the autonomous encounter"
+    );
     returned
         .command(Command::MiniGame(MiniGameRequest::End))
         .await?;
@@ -2613,9 +2805,15 @@ async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() ->
         c.replica.minigames.iter().all(|g| g.id != game)
     })
     .await?;
+    wait(&mut other, |c| c.replica.vitals[&bot].minigame.is_none()).await?;
     other.close();
     returned.close();
-    server.stop().await?;
+    let report = server.stop().await?;
+    assert_eq!(
+        report.step_errors, 0,
+        "continued combat must not hide simulation errors"
+    );
+    assert!(report.failure.is_none());
     Ok(())
 }
 

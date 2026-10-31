@@ -407,6 +407,7 @@ impl MiniGameWindow {
     fn target(&self, core: &Core) -> Option<MiniGameId> {
         self.picked
             .filter(|p| core.minigames.games.iter().any(|g| g.id == *p))
+            .or_else(|| core.minigames.owned_game())
             .or_else(|| {
                 core.minigames
                     .active_game
@@ -1584,6 +1585,10 @@ impl MiniGameWindow {
         let basics = self.placed(core, MiniGameSettingPlace::Basics);
         self.setting_rows(&mut sec, &basics, true, editable, core);
         self.vanilla_checks(&mut sec, &["$MiniGame::InviteOnly"], editable);
+        if self.game.is_none() || self.game == core.minigames.owned_game() {
+            self.note(&mut sec, "Leave keeps this minigame running.");
+            self.note(&mut sec, "Your bricks and spawners stay with it until End.");
+        }
         self.close(sec, y);
 
         // Computer players sit beside the mode that decides their count,
@@ -2694,6 +2699,7 @@ impl Screen for MiniGameWindow {
                 MiniGameOperation::Invite,
                 UiAction::InviteMiniGame {
                     target: MiniGamePlayerId(player),
+                    game: self.game,
                 },
             );
             self.build(core);

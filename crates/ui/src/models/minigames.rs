@@ -23,7 +23,13 @@ pub enum Operation {
 impl MiniGameUiState {
     /// Whether `op` is offered on the local player's own game.
     pub fn can(&self, op: Operation) -> bool {
-        self.can_on(op, self.active_game)
+        self.can_on(op, self.owned_game().or(self.active_game))
+    }
+    /// A creator keeps management of their game independently of participation.
+    pub fn owned_game(&self) -> Option<MiniGameId> {
+        self.local_player
+            .and_then(|me| self.games.iter().find(|g| g.owner == me).map(|g| g.id))
+            .or_else(|| self.active_game.filter(|_| self.owns_active_game))
     }
     /// Whether `op` is offered on `game` (a managing operation's target).
     pub fn can_on(&self, op: Operation, game: Option<MiniGameId>) -> bool {
@@ -34,10 +40,10 @@ impl MiniGameUiState {
         let manage = game.is_some_and(|g| self.can_manage(g));
         match op {
             Operation::List => c.list,
-            Operation::Create => c.create,
+            Operation::Create => c.create && self.owned_game().is_none(),
             Operation::Configure => c.configure && manage,
             Operation::Join => c.join,
-            Operation::Leave => c.leave && self.active_game.is_some() && !self.owns_active_game,
+            Operation::Leave => c.leave && self.active_game.is_some(),
             Operation::Invite => c.invite && manage,
             Operation::AcceptInvite | Operation::RejectInvite | Operation::IgnoreInvite => {
                 c.respond_invite
@@ -63,7 +69,8 @@ impl MiniGameUiState {
                 || self.addon_editable.contains(&game))
     }
     pub fn rules_draft(&self) -> MiniGameRules {
-        self.active_game
+        self.owned_game()
+            .or(self.active_game)
             .and_then(|id| self.games.iter().find(|g| g.id == id))
             .map(|g| g.rules.clone())
             .unwrap_or_default()

@@ -122,7 +122,7 @@ pub fn state(
     let active = mine.and_then(|v| v.minigame);
     let active_view = active.and_then(|id| games.iter().find(|g| g.id == id));
     let used: Vec<u8> = games.iter().map(|g| g.color).collect();
-    let server_game = games.iter().any(|g| g.owner == 0);
+    let server_game = games.iter().any(|g| g.owner == 0 && !g.shared);
     let invitations = mine
         .and_then(|v| v.invite)
         .and_then(|id| games.iter().find(|g| g.id == id))
@@ -443,8 +443,24 @@ pub fn with_addon_settings(
     state
 }
 
+/// Management defaults to the locally owned encounter, even while outside
+/// or participating elsewhere. An editor without an owned game retains the
+/// active-game context; the host independently authorizes every operation.
+pub fn management_context(
+    local: OwnerId,
+    games: &[MiniGameView],
+    active: Option<u64>,
+) -> (Option<u64>, bool) {
+    let owned = games
+        .iter()
+        .find(|g| g.owner != 0 && g.owner == local)
+        .map(|g| g.id);
+    (owned.or(active), owned.is_some())
+}
+
 /// Map a dialog request to a server command. `None` for local-only actions.
-/// `own` is the local player's game and `owner` whether they own it: a
+/// `own` is the management context (owned game before active game), and
+/// `owner` whether it is theirs: a
 /// request about another game (its editor's, from the Mini-Game list), or
 /// about their own game by a player who does not own it (an admin), names
 /// that game, and the host decides whether they may.
@@ -473,10 +489,10 @@ pub fn command(action: &UiAction, own: Option<u64>, owner: bool) -> Result<Optio
         ),
         UiAction::JoinMiniGame { game } => MiniGameRequest::Join { game: game.0 },
         UiAction::LeaveMiniGame { .. } => MiniGameRequest::Leave,
-        UiAction::InviteMiniGame { target } => {
+        UiAction::InviteMiniGame { target, game } => {
             let invite = MiniGameRequest::Invite { target: target.0 };
-            match own {
-                Some(game) => manage(&MiniGameId(game), invite),
+            match game.or(own.map(MiniGameId)) {
+                Some(game) => manage(&game, invite),
                 None => invite,
             }
         }
@@ -589,12 +605,111 @@ mod tests {
         assert!(settings_invalid());
     }
     #[test]
+    fn management_uses_the_owned_game_without_changing_participation_commands() {
+        let owned = MiniGameView {
+            id: 1,
+            owner: 7,
+            color: 0,
+            settings: Default::default(),
+            members: vec![9],
+            teams: vec![],
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            shared: false,
+            name_distance: None,
+        };
+        let mut other = owned.clone();
+        other.id = 2;
+        other.owner = 8;
+        let games = [owned, other];
+        for active in [None, Some(1), Some(2)] {
+            let (game, owner) = management_context(7, &games, active);
+            assert_eq!((game, owner), (Some(1), true));
+            assert!(matches!(
+                command(
+                    &UiAction::InviteMiniGame {
+                        target: MiniGamePlayerId(9),
+                        game: None,
+                    },
+                    game,
+                    owner
+                )
+                .unwrap(),
+                Some(Command::MiniGame(MiniGameRequest::Invite { target: 9 }))
+            ));
+            assert!(matches!(
+                command(
+                    &UiAction::ResetMiniGame {
+                        game: MiniGameId(2),
+                    },
+                    game,
+                    owner
+                )
+                .unwrap(),
+                Some(Command::MiniGame(MiniGameRequest::Manage { game: 2, .. }))
+            ));
+            assert!(matches!(
+                command(
+                    &UiAction::LeaveMiniGame {
+                        game: MiniGameId(2),
+                    },
+                    game,
+                    owner
+                )
+                .unwrap(),
+                Some(Command::MiniGame(MiniGameRequest::Leave))
+            ));
+        }
+        assert_eq!(management_context(9, &games, Some(2)), (Some(2), false));
+        assert_eq!(management_context(9, &games, None), (None, false));
+    }
+
+    #[test]
+    fn shared_server_games_allow_participation_and_explicit_invite_targets() {
+        let mut view = MiniGameView {
+            id: 4,
+            owner: 0,
+            color: 0,
+            settings: Default::default(),
+            members: vec![],
+            teams: vec![],
+            addon_settings: Default::default(),
+            default: true,
+            paint_color: None,
+            shared: true,
+            name_distance: None,
+        };
+        for exclusive in [false, true] {
+            view.shared = !exclusive;
+            let state = state(
+                7,
+                &[view.clone()],
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &[],
+                &Default::default(),
+                1,
+            );
+            assert_eq!(state.capabilities.join, !exclusive);
+            assert_eq!(state.capabilities.leave, !exclusive);
+            assert_eq!(state.capabilities.create, !exclusive);
+        }
+        assert!(matches!(command(&UiAction::InviteMiniGame {
+            target: MiniGamePlayerId(9), game: Some(MiniGameId(4)),
+        }, Some(1), true).unwrap(), Some(Command::MiniGame(MiniGameRequest::Manage {
+            game: 4, request,
+        })) if matches!(*request, MiniGameRequest::Invite { target: 9 })));
+    }
+
+    #[test]
     fn a_player_managing_a_game_they_do_not_own_names_it() {
         let reset = UiAction::ResetMiniGame {
             game: MiniGameId(4),
         };
         let invite = UiAction::InviteMiniGame {
             target: MiniGamePlayerId(9),
+            game: Some(MiniGameId(4)),
         };
         let kick = UiAction::RemoveMiniGameMember {
             target: MiniGamePlayerId(9),

@@ -84,9 +84,17 @@ complete the broader release scope.
 Current creator-departure handoff: [persistent ownership](../progress/2026-10-31-v043-persistent-minigame-ownership.md)
 now separates management accounts from membership/session lifetimes, preserves
 owned-game save/recovery while outside, and passes 94 scoped cases plus changed-crate
-Clippy. Actual QUIC leave/manage/resume/end is checked. Bot/vehicle/item/resource
-bindings, UI and continuing real battle acceptance remain open; this does not
-complete step 4 or the creator-departure feature.
+Clippy. Actual QUIC leave/manage/resume/end is checked. Resource correction
+`24a28b318` additionally passes 113 distinct scoped checks, including actual
+headless continued bot damage after creator Leave/joining another game, retained
+vehicle/queued goal events, offline creator round messages, generated-content
+consumers and shared-server claim isolation. Departure/Rejoin/My Minigame UI,
+explicit editor targets and actual QUIC continuing combat now pass 65 scoped cases
+plus nine source-art offscreen frames with hit testing and representative visual
+inspection. Normal rejoin, outside safety,
+zero human participants, reconnect, management denial and explicit End are checked.
+Explicit native restart/resource persistence, offline creator display and remaining
+mode combinations stay open; step 4 also retains loading PCM continuity acceptance.
 
 ## Rules for each increment
 

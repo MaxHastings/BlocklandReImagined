@@ -220,6 +220,24 @@ fn test_ui_with(favs_helper: bool) -> Ui {
             ctl("GuiMLTextCtrl", Some("MBOKText"), None, None),
         ]),
     );
+    pack.layouts.insert(
+        "NewPlayerListGui".into(),
+        layout(vec![
+            ctl("GuiTextListCtrl", Some("NPL_List"), None, None),
+            ctl(
+                "GuiBitmapButtonCtrl",
+                None,
+                Some("NewPlayerListGui.clickMiniGameInvite();"),
+                None,
+            ),
+            ctl(
+                "GuiBitmapButtonCtrl",
+                None,
+                Some("NewPlayerListGui.clickMiniGameRemove();"),
+                None,
+            ),
+        ]),
+    );
     if !favs_helper && let Some(l) = pack.layouts.get_mut("CreateMiniGameGui") {
         l.children
             .retain(|c| c.name.as_deref() != Some("CMG_FavsHelper"));
@@ -364,6 +382,319 @@ fn public_join_uses_stable_game_selector_and_fails_closed_without_host_capabilit
     assert_eq!(
         ui.core.pending.get(&actions[0].0),
         Some(&Pending::MiniGame(MiniGameOperation::Join))
+    );
+}
+
+#[test]
+fn creator_can_leave_and_rejoin_a_private_encounter_without_ending_it() {
+    let mut ui = test_ui();
+    ui.core.push(ScreenId::MiniGames);
+    ui.update(0);
+    let mut state = game_state();
+    state.games[0].owner = state.local_player.unwrap();
+    state.games[0].invite_only = true;
+    state.active_game = Some(MiniGameId(42));
+    state.owns_active_game = true;
+    ui.apply(UiUpdate::MiniGames(state.clone()));
+    ui.update(0);
+    click(
+        &mut ui,
+        ScreenId::MiniGames,
+        "JoinMiniGameGui.clickLeave();",
+    );
+    let actions = ui.drain_actions();
+    assert_eq!(
+        actions.len(),
+        1,
+        "creator Leave must send Leave, without offering End"
+    );
+    assert_eq!(
+        actions[0].1,
+        UiAction::LeaveMiniGame {
+            game: MiniGameId(42)
+        }
+    );
+    ui.apply(UiUpdate::ActionResult {
+        id: actions[0].0,
+        result: Ok(()),
+    });
+    state.active_game = None;
+    state.owns_active_game = false;
+    state.revision += 1;
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.update(0);
+    assert!(
+        !ui.core
+            .minigames
+            .can(bri_ui::models::minigames::Operation::Create),
+        "the creator already owns an encounter even while outside"
+    );
+    click(&mut ui, ScreenId::MiniGames, "JoinMiniGameGui.clickJoin();");
+    let actions = ui.drain_actions();
+    assert_eq!(
+        actions.len(),
+        1,
+        "creator can rejoin their invite-only encounter"
+    );
+    assert_eq!(
+        actions[0].1,
+        UiAction::JoinMiniGame {
+            game: MiniGameId(42)
+        }
+    );
+}
+
+#[test]
+fn a_creators_settings_and_reset_target_their_owned_encounter_outside_play() {
+    for active in [None, Some(MiniGameId(99))] {
+        let mut ui = test_ui();
+        let mut state = game_state();
+        state.games[0].owner = state.local_player.unwrap();
+        state.games[0].rules.title = "My running battle".into();
+        state.games[0].title = "My running battle".into();
+        let mut other = state.games[0].clone();
+        other.id = MiniGameId(99);
+        other.owner = MiniGamePlayerId(900);
+        other.title = "Other owner's game".into();
+        other.rules.title = other.title.clone();
+        state.games.push(other);
+        state.active_game = active;
+        state.owns_active_game = false;
+        ui.apply(UiUpdate::MiniGames(state));
+        ui.core.push(ScreenId::MiniGameSettings);
+        ui.update(0);
+        let v = ui.screen(ScreenId::MiniGameSettings).unwrap().view();
+        let title = v
+            .walk()
+            .find(|&n| v.node(n).ctrl.variable.as_deref() == Some("$MiniGame::Title"))
+            .unwrap();
+        assert_eq!(v.edit_text(title), "My running battle", "active={active:?}");
+        click(
+            &mut ui,
+            ScreenId::MiniGameSettings,
+            "CreateMiniGameGui.clickReset();",
+        );
+        assert!(
+            ui.drain_actions().iter().any(|(_, action)| *action
+                == UiAction::ResetMiniGame {
+                    game: MiniGameId(42)
+                }),
+            "outside management must keep its owned game target"
+        );
+    }
+}
+
+#[test]
+fn host_leave_capability_applies_to_creators_too() {
+    let mut ui = test_ui();
+    ui.core.push(ScreenId::MiniGames);
+    ui.update(0);
+    let mut state = game_state();
+    state.games[0].owner = state.local_player.unwrap();
+    state.active_game = Some(MiniGameId(42));
+    state.owns_active_game = true;
+    state.capabilities.leave = false;
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.update(0);
+    let v = ui.screen(ScreenId::MiniGames).unwrap().view();
+    assert!(
+        !v.node(v.by_command("JoinMiniGameGui.clickLeave();").unwrap())
+            .state
+            .active
+    );
+    click(
+        &mut ui,
+        ScreenId::MiniGames,
+        "JoinMiniGameGui.clickLeave();",
+    );
+    assert!(ui.drain_actions().is_empty());
+}
+
+#[test]
+fn f2_invite_and_remove_manage_the_owned_encounter_while_participating_elsewhere() {
+    for active in [None, Some(MiniGameId(99))] {
+        let mut ui = test_ui();
+        let mut state = game_state();
+        state.games[0].owner = state.local_player.unwrap();
+        state.games[0].members = vec![MiniGameTeamMember {
+            id: MiniGamePlayerId(8),
+            name: "Fighter".into(),
+            team: None,
+        }];
+        let mut other = state.games[0].clone();
+        other.id = MiniGameId(99);
+        other.owner = MiniGamePlayerId(900);
+        other.members[0].id = MiniGamePlayerId(9);
+        state.games.push(other);
+        state.active_game = active;
+        state.owns_active_game = false;
+        state.members = [(8, "Fighter"), (9, "Stranger")]
+            .into_iter()
+            .map(|(id, name)| MiniGameMemberRow {
+                id: MiniGamePlayerId(id),
+                name: name.into(),
+                score: 0,
+                admin: false,
+                is_owner: false,
+                in_local_game: active.is_some() && id == 9,
+            })
+            .collect();
+        ui.apply(UiUpdate::MiniGames(state));
+        ui.apply(UiUpdate::Players {
+            rows: [(8, "Fighter"), (9, "Stranger")]
+                .into_iter()
+                .map(|(id, name)| PlayerRow {
+                    id,
+                    name: name.into(),
+                    bot: false,
+                    loading: false,
+                    ignoring: false,
+                    score: 0,
+                    admin: false,
+                    super_admin: false,
+                    bl_id: Some(id),
+                    trust: "None".into(),
+                })
+                .collect(),
+            server_name: "Fixture".into(),
+            max_players: 8,
+            voice_chat: false,
+            voice_muted: vec![],
+            server_voice_muted: vec![],
+            voice_speaking: vec![],
+        });
+        ui.core.push(ScreenId::PlayerList);
+        ui.update(0);
+        let select = |ui: &mut Ui, row| {
+            let i = ui
+                .dialogs
+                .iter()
+                .rposition(|s| s.id() == ScreenId::PlayerList)
+                .unwrap();
+            let list = ui.dialogs[i].view().id("NPL_List").unwrap();
+            ui.dialogs[i].view_mut().select(list, Some(row));
+            let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
+            dialogs[i].on_event(
+                &ViewEvent {
+                    node: list,
+                    kind: EventKind::Changed,
+                },
+                core,
+            );
+        };
+        select(&mut ui, 0);
+        let v = ui.screen(ScreenId::PlayerList).unwrap().view();
+        assert!(
+            !v.node(
+                v.by_command("NewPlayerListGui.clickMiniGameInvite();")
+                    .unwrap()
+            )
+            .state
+            .active,
+            "the selected player already participates in the owned encounter"
+        );
+        click(
+            &mut ui,
+            ScreenId::PlayerList,
+            "NewPlayerListGui.clickMiniGameRemove();",
+        );
+        let actions = ui.drain_actions();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].1,
+            UiAction::RemoveMiniGameMember {
+                target: MiniGamePlayerId(8),
+                game: Some(MiniGameId(42)),
+            }
+        );
+        ui.apply(UiUpdate::ActionResult {
+            id: actions[0].0,
+            result: Ok(()),
+        });
+        select(&mut ui, 1);
+        let v = ui.screen(ScreenId::PlayerList).unwrap().view();
+        assert!(
+            !v.node(
+                v.by_command("NewPlayerListGui.clickMiniGameRemove();")
+                    .unwrap()
+            )
+            .state
+            .active,
+            "being together in another game grants no removal from the owned encounter"
+        );
+        click(
+            &mut ui,
+            ScreenId::PlayerList,
+            "NewPlayerListGui.clickMiniGameInvite();",
+        );
+        assert!(ui.drain_actions().iter().any(|(_, action)| *action
+            == UiAction::InviteMiniGame {
+                target: MiniGamePlayerId(9),
+                game: Some(MiniGameId(42)),
+            }));
+    }
+}
+
+#[test]
+fn an_editor_invites_into_the_explicitly_picked_game_instead_of_their_owned_game() {
+    let mut ui = test_ui();
+    let mut state = game_state();
+    state.games[0].owner = state.local_player.unwrap();
+    let mut selected = state.games[0].clone();
+    selected.id = MiniGameId(99);
+    selected.owner = MiniGamePlayerId(900);
+    state.games.push(selected);
+    state.addon_editable.push(MiniGameId(99));
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.core.players.push(PlayerRow {
+        id: 9,
+        name: "Invitee".into(),
+        bot: false,
+        loading: false,
+        ignoring: false,
+        score: 0,
+        admin: false,
+        super_admin: false,
+        bl_id: Some(9),
+        trust: "None".into(),
+    });
+    ui.core.minigame_addons = Some(MiniGameId(99));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    tab(&mut ui, 3);
+    click_named(&mut ui, ScreenId::MiniGameSettings, "AOS_P9_Invite");
+    assert!(
+        ui.drain_actions().iter().any(|(_, action)| *action
+            == UiAction::InviteMiniGame {
+                target: MiniGamePlayerId(9),
+                game: Some(MiniGameId(99)),
+            }),
+        "a selected editor target must not be redirected to their own encounter"
+    );
+}
+
+#[test]
+fn a_completed_listing_keeps_the_creator_departure_explanation_visible() {
+    let mut ui = test_ui();
+    let mut state = game_state();
+    state.games[0].owner = state.local_player.unwrap();
+    state.active_game = Some(MiniGameId(42));
+    state.owns_active_game = true;
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.core.push(ScreenId::MiniGames);
+    ui.update(0);
+    let (id, _) = ui
+        .drain_actions()
+        .into_iter()
+        .find(|(_, action)| *action == UiAction::RequestMiniGameList)
+        .expect("opening the overview requests its current listing");
+    ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+    ui.update(0);
+    let v = ui.screen(ScreenId::MiniGames).unwrap().view();
+    assert!(
+        v.text_of(v.id("NativeMiniGameListStatus").unwrap())
+            .contains("keeps running"),
+        "a routine successful listing must not hide what creator Leave does"
     );
 }
 

@@ -64,6 +64,8 @@ fn main() -> Result<()> {
     );
     std::fs::create_dir_all(&out)?;
     let voice_review = args.iter().any(|arg| arg == "--voice-review");
+    let minigame_review = args.iter().any(|arg| arg == "--minigame-review");
+    ensure!(!(voice_review && minigame_review), "select one review flow");
     let pack = Rc::new(Pack::load(&pack_path)?);
     let catalog: Catalog = serde_json::from_slice(&std::fs::read(
         "content/stock-catalog-004/stock-catalog.json",
@@ -219,6 +221,134 @@ fn main() -> Result<()> {
             report.push(serde_json::json!({"file":file,"draw_commands":dl.cmds.len(),"glyphs":dl.glyph_count()}));
             Ok(())
         };
+        if minigame_review {
+            // Source-pack controls and real native UI hit testing, without a window.
+            ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+                server_name: "Minigame battle".into(),
+                max_players: 16,
+                local: false,
+                single_player: false,
+                admin: false,
+            }));
+            ui.update(0);
+            let mut state = MiniGameUiState {
+                ready: true,
+                revision: 1,
+                local_player: Some(MiniGamePlayerId(7)),
+                active_game: Some(MiniGameId(42)),
+                owns_active_game: true,
+                capabilities: MiniGameCapabilities {
+                    list: true,
+                    configure: true,
+                    join: true,
+                    leave: true,
+                    create: true,
+                    reset: true,
+                    end: true,
+                    ..Default::default()
+                },
+                player_types: vec![MiniGameChoice {
+                    id: MiniGameRules::default().player_type,
+                    name: "Standard Player".into(),
+                }],
+                items: MiniGameRules::default()
+                    .loadout
+                    .into_iter()
+                    .zip(["Hammer", "Wrench", "Print Gun", "Gun", "Rocket Launcher"])
+                    .filter_map(|(id, name)| {
+                        id.map(|id| MiniGameChoice {
+                            id,
+                            name: name.into(),
+                        })
+                    })
+                    .collect(),
+                games: vec![MiniGameSummary {
+                    id: MiniGameId(42),
+                    title: "Zombies versus everyone".into(),
+                    owner: MiniGamePlayerId(7),
+                    owner_name: "Creator".into(),
+                    color: 0,
+                    member_count: 3,
+                    invite_only: true,
+                    members: [(7, "Creator"), (8, "Fighter"), (9, "Zombie")]
+                        .into_iter()
+                        .map(|(id, name)| MiniGameTeamMember {
+                            id: MiniGamePlayerId(id),
+                            name: name.into(),
+                            team: None,
+                        })
+                        .collect(),
+                    teams: vec![],
+                    addon_settings: Default::default(),
+                    default: false,
+                    paint_color: None,
+                    rules: MiniGameRules {
+                        title: "Zombies versus everyone".into(),
+                        invite_only: true,
+                        ..Default::default()
+                    },
+                }],
+                ..Default::default()
+            };
+            ui.apply(UiUpdate::MiniGames(state.clone()));
+            ui.core.push(ScreenId::EscapeMenu);
+            ui.update(0);
+            click(&mut ui, ScreenId::EscapeMenu, "EM_MiniGames")?;
+            ui.update(0);
+            ensure!(
+                ui.is_open(ScreenId::MiniGames) && !ui.is_open(ScreenId::MiniGameSettings),
+                "Escape menu reaches the overview so creator Leave stays discoverable"
+            );
+            for (id, action) in ui.drain_actions() {
+                ensure!(
+                    action == UiAction::RequestMiniGameList,
+                    "unexpected departure-flow action: {action:?}"
+                );
+                ui.apply(UiUpdate::ActionResult { id, result: Ok(()) });
+            }
+            ui.update(0);
+            render(&ui, "minigame-creator-inside", &mut renderer, &mut report)?;
+            click(
+                &mut ui,
+                ScreenId::MiniGames,
+                "JoinMiniGameGui.clickLeave();",
+            )?;
+            let actions = ui.drain_actions();
+            ensure!(
+                actions.len() == 1
+                    && actions[0].1
+                        == UiAction::LeaveMiniGame {
+                            game: MiniGameId(42)
+                        },
+                "creator Leave must send Leave through source-pack hit testing"
+            );
+            ui.apply(UiUpdate::ActionResult {
+                id: actions[0].0,
+                result: Ok(()),
+            });
+            state.active_game = None;
+            state.owns_active_game = false;
+            state.games[0]
+                .members
+                .retain(|m| m.id != MiniGamePlayerId(7));
+            state.games[0].member_count = state.games[0].members.len() as u32;
+            state.revision += 1;
+            ui.apply(UiUpdate::MiniGames(state));
+            ui.update(0);
+            render(&ui, "minigame-creator-outside", &mut renderer, &mut report)?;
+            click(
+                &mut ui,
+                ScreenId::MiniGames,
+                "JoinMiniGameGui.clickCreate();",
+            )?;
+            ui.update(0);
+            ensure!(
+                ui.is_open(ScreenId::MiniGameSettings),
+                "My Minigame opens retained settings"
+            );
+            render(&ui, "minigame-manage-outside", &mut renderer, &mut report)?;
+            continue;
+        }
         if voice_review {
             use bri_ui::models::admin::*;
             ui.apply(UiUpdate::VoiceDevices(vec![
@@ -722,7 +852,7 @@ fn main() -> Result<()> {
     )?;
     ensure!(missing.is_empty(), "missing rendered textures: {missing:?}");
     println!(
-        "Rendered {} native screen frames; host/cancel flows and external UV check passed.",
+        "Rendered {} native screen frames; selected screen-flow and external UV checks passed.",
         report.len()
     );
     Ok(())

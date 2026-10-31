@@ -1049,11 +1049,7 @@ impl Screen for NativeScreen {
             }
             "escapemenu::clickminigames();" => {
                 core.pop(self.id);
-                core.push(if core.minigames.owns_active_game {
-                    ScreenId::MiniGameSettings
-                } else {
-                    ScreenId::MiniGames
-                });
+                core.push(ScreenId::MiniGames);
             }
             "canvas.popdialog(startmissiongui);"
             | "canvas.popdialog(defaultcontrolsgui);"

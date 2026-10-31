@@ -983,6 +983,8 @@ pub enum UiAction {
     },
     InviteMiniGame {
         target: MiniGamePlayerId,
+        /// The explicitly selected management target, otherwise the creator's game.
+        game: Option<MiniGameId>,
     },
     AcceptMiniGameInvite {
         game: MiniGameId,

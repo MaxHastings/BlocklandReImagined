@@ -737,8 +737,11 @@ impl Core {
             | UiAction::EditMiniGameAddOns { game, .. }
             | UiAction::RemoveMiniGameMember {
                 game: Some(game), ..
+            }
+            | UiAction::InviteMiniGame {
+                game: Some(game), ..
             } => Some(*game),
-            _ => self.minigames.active_game,
+            _ => self.minigames.owned_game().or(self.minigames.active_game),
         };
         let allowed = self.minigames.can_on(
             match operation {
@@ -787,15 +790,10 @@ impl Core {
             self.minigame_draft_created = false;
             return;
         };
-        let Some(game) = self
-            .minigames
-            .active_game
-            .filter(|_| self.minigames.owns_active_game)
-            .filter(|g| {
-                self.minigames
-                    .can_on(crate::models::minigames::Operation::AddOnSettings, Some(*g))
-            })
-        else {
+        let Some(game) = self.minigames.owned_game().filter(|g| {
+            self.minigames
+                .can_on(crate::models::minigames::Operation::AddOnSettings, Some(*g))
+        }) else {
             return;
         };
         if self
@@ -1185,8 +1183,11 @@ impl Core {
     /// help pages, or Options where the Add-On client preferences are.
     fn open_bind_screen(&mut self, screen: &str, package: &str) {
         match screen {
-            "minigame_addons" => match self.minigames.active_game {
-                Some(_) => self.push(ScreenId::MiniGameSettings),
+            "minigame_addons" => match self.minigames.owned_game().or(self.minigames.active_game) {
+                Some(game) => {
+                    self.minigame_addons = Some(game);
+                    self.push(ScreenId::MiniGameSettings);
+                }
                 None => self.push(ScreenId::MiniGames),
             },
             "help" => {

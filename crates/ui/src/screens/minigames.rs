@@ -88,6 +88,7 @@ impl MiniGameScreen {
                 self.selected_game = core
                     .minigames
                     .retain_game_target(old)
+                    .or_else(|| core.minigames.owned_game())
                     .or_else(|| games.first().map(|g| g.id));
                 // Slayer's Default column, while a listed game is the default.
                 let defaults = games.iter().any(|g| g.default);
@@ -148,16 +149,39 @@ impl MiniGameScreen {
                     );
                 }
                 let selected = games.iter().find(|g| Some(g.id) == self.selected_game);
-                let join = selected.is_some_and(|g| !g.invite_only)
+                let join = selected
+                    .is_some_and(|g| !g.invite_only || Some(g.id) == core.minigames.owned_game())
                     && core
                         .minigames
                         .can(crate::models::minigames::Operation::Join)
                     && core.minigames.active_game.is_none()
                     && self.request.is_none();
                 self.set_active("JoinMiniGameGui.clickJoin();", join);
+                if let Some(n) = self.view.by_command("JoinMiniGameGui.clickJoin();") {
+                    self.view.set_text(
+                        n,
+                        if selected.is_some_and(|g| Some(g.id) == core.minigames.owned_game()) {
+                            "Rejoin"
+                        } else {
+                            "Join"
+                        },
+                    );
+                }
+                if let Some(n) = self.view.by_command("JoinMiniGameGui.clickCreate();") {
+                    self.view.set_text(
+                        n,
+                        if core.minigames.owned_game().is_some() {
+                            "My Minigame"
+                        } else {
+                            "Create"
+                        },
+                    );
+                }
                 self.set_active(
                     "JoinMiniGameGui.clickLeave();",
-                    core.minigames.active_game.is_some() && self.request.is_none(),
+                    core.minigames
+                        .can(crate::models::minigames::Operation::Leave)
+                        && self.request.is_none(),
                 );
                 self.set_active(
                     "JoinMiniGameGui.clickCreate();",
@@ -171,7 +195,12 @@ impl MiniGameScreen {
                 );
                 for (name, shown) in [
                     ("JMG_JoinBlocker", !join),
-                    ("JMG_LeaveBlocker", core.minigames.active_game.is_none()),
+                    (
+                        "JMG_LeaveBlocker",
+                        !core
+                            .minigames
+                            .can(crate::models::minigames::Operation::Leave),
+                    ),
                     ("JMG_CreateBlocker", false),
                 ] {
                     if let Some(n) = self.view.id(name) {
@@ -217,6 +246,8 @@ impl MiniGameScreen {
         };
         let status = if !core.minigames.ready {
             "Waiting for the server's mini-games.".to_string()
+        } else if core.minigames.status.is_empty() && core.minigames.owned_game().is_some() {
+            "Your minigame keeps running when you leave. Manage it with My Minigame.".to_string()
         } else {
             core.minigames.status.clone()
         };
@@ -309,9 +340,21 @@ impl Screen for MiniGameScreen {
             return false;
         }
         self.request = None;
-        core.minigames.status = result
-            .as_ref()
-            .map_or_else(|e| e.clone(), |_| "Mini-game request completed.".into());
+        core.minigames.status = match result {
+            Err(error) => error.clone(),
+            Ok(()) => match kind {
+                Some(Pending::MiniGame(MiniGameOperation::List)) => String::new(),
+                Some(Pending::MiniGame(MiniGameOperation::Leave))
+                    if core.minigames.owned_game().is_some() =>
+                {
+                    "You left. Your minigame keeps running.".into()
+                }
+                Some(Pending::MiniGame(MiniGameOperation::Leave)) => {
+                    "You left the minigame.".into()
+                }
+                _ => "Mini-game request completed.".into(),
+            },
+        };
         self.refresh(core);
         true
     }
@@ -369,26 +412,18 @@ impl Screen for MiniGameScreen {
                     }
                 }
                 "joinminigamegui.clickleave();" => {
-                    if let Some(game) = core.minigames.active_game {
-                        if core.minigames.owns_active_game {
-                            core.message_yes_no(
-                                "End Mini-Game?",
-                                "Are you sure you want to end the mini-game?",
-                                Callback::MiniGame {
-                                    game,
-                                    operation: MiniGameOperation::End,
-                                },
-                            );
-                        } else if let Some(id) = core.minigame_request(
+                    if let Some(game) = core.minigames.active_game
+                        && let Some(id) = core.minigame_request(
                             MiniGameOperation::Leave,
                             UiAction::LeaveMiniGame { game },
-                        ) {
-                            self.request = Some(id);
-                            self.refresh(core);
-                        }
+                        )
+                    {
+                        self.request = Some(id);
+                        self.refresh(core);
                     }
                 }
                 "joinminigamegui.clickcreate();" => {
+                    core.minigame_addons = core.minigames.owned_game();
                     core.pop(self.id);
                     core.push(ScreenId::MiniGameSettings);
                 }

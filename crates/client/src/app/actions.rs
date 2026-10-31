@@ -171,13 +171,12 @@ impl App {
             return true;
         }
         if crate::minigame_ui::is_minigame_action(action) {
-            let own = self
-                .network_view()
-                .and_then(|v| v.vitals.get(&v.owner).and_then(|v| v.minigame));
-            let owner = self.network_view().is_some_and(|v| {
-                v.minigames
-                    .iter()
-                    .any(|g| Some(g.id) == own && g.owner == v.owner)
+            let (own, owner) = self.network_view().map_or((None, false), |v| {
+                crate::minigame_ui::management_context(
+                    v.owner,
+                    &v.minigames,
+                    v.vitals.get(&v.owner).and_then(|v| v.minigame),
+                )
             });
             let result = crate::minigame_ui::command(action, own, owner).and_then(|command| {
                 match command {

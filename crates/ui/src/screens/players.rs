@@ -293,18 +293,26 @@ impl Players {
             .and_then(|n| self.view.selected(n))
             .and_then(|i| self.ids.get(i as usize))
             .copied();
-        let selected_member =
-            selected_id.and_then(|id| core.minigames.members.iter().find(|m| m.id.0 == id));
+        // Highlighting/scores above follow participation. Invite/remove follow
+        // the encounter this player manages, even while they play elsewhere.
+        let managed = core
+            .minigames
+            .owned_game()
+            .or(core.minigames.active_game)
+            .and_then(|id| core.minigames.games.iter().find(|g| g.id == id));
+        let selected_in_game = selected_id
+            .is_some_and(|id| managed.is_some_and(|g| g.members.iter().any(|m| m.id.0 == id)));
         let invite = core
             .minigames
             .can(crate::models::minigames::Operation::Invite)
             && selected_id.is_some()
             && selected_id != core.minigames.local_player.map(|p| p.0)
-            && selected_member.is_none_or(|m| !m.in_local_game);
+            && !selected_in_game;
         let remove = core
             .minigames
             .can(crate::models::minigames::Operation::RemoveMember)
-            && selected_member.is_some_and(|m| m.in_local_game && !m.is_owner)
+            && selected_in_game
+            && managed.is_some_and(|g| Some(g.owner.0) != selected_id)
             && selected_id != core.minigames.local_player.map(|p| p.0);
         for (command, active) in [
             ("NewPlayerListGui.clickMiniGameInvite();", invite),
@@ -515,6 +523,7 @@ impl Screen for Players {
                         MiniGameOperation::Invite,
                         UiAction::InviteMiniGame {
                             target: MiniGamePlayerId(id),
+                            game: core.minigames.owned_game().or(core.minigames.active_game),
                         },
                     );
                 }
@@ -534,7 +543,7 @@ impl Screen for Players {
                         MiniGameOperation::RemoveMember,
                         UiAction::RemoveMiniGameMember {
                             target: MiniGamePlayerId(id),
-                            game: core.minigames.active_game,
+                            game: core.minigames.owned_game().or(core.minigames.active_game),
                         },
                     );
                 }
