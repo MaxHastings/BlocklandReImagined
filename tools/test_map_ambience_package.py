@@ -81,8 +81,14 @@ class Palette(unittest.TestCase):
         palette,clips=build_map_ambience.selection()
         self.assertEqual(len(palette['maps']),21)
         self.assertEqual(set(clips),{'indoor-base','outdoor-base','rain','fridge-loop'})
+        self.assertEqual(clips['indoor-base']['source_id'],'user-edit:indoor-base')
+        self.assertEqual(clips['outdoor-base']['source_id'],'user-supplied:outdoor-base')
+        self.assertEqual(clips['outdoor-base']['input_sha256'],
+                         '3c251ff8d582420f4598ff1bce6889b140959bde4a479cb26f416b18a4ae82a9')
+        self.assertNotIn('released_loop',clips['outdoor-base'],
+                         'the new WAV must replace, not retune, the old outdoor recording')
+        self.assertIn('released_loop',clips['indoor-base'])
         for key in ['indoor-base','outdoor-base']:
-            self.assertEqual(clips[key]['source_id'],'user-edit:'+key)
             self.assertTrue(clips[key]['user_edit'])
 
     def test_local_fridge_retains_evidenced_position_and_no_listener_environment_gate(self):

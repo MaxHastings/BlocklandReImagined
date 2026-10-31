@@ -126,7 +126,8 @@ the reported closed-chat-channel exit during friend-server map loading; and
 modder VoIP composition seams as scoped in the detailed plan. Maxwell clarified
 that modders own finished effects/presets and radio add-ons; native bounded
 parameters, routing and lifecycle hooks are the engine deliverable. The current
-prepared ambience stays; no replacement audio or additional playtest is pending. New issues 416/417 have been found
+indoor ambience stays; the outdoor base now uses Maxwell's exact car-park WAV as
+[a loudness-matched OGG](../progress/2026-10-31-v043-outdoor-car-park.md). No additional playtest is pending. New issues 416/417 have been found
 and require explicit owner/scope triage rather than an assumed blanket port.
 
 Routine engineering decisions, evidence-backed pivots and private preview builds

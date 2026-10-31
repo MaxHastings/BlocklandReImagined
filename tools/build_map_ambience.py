@@ -109,6 +109,15 @@ def selection(repo=REPO):
     if released['schema_version'] != 1 or set(released['clips']) != set(selected):
         raise ValueError('Released ambience baseline inventory differs from selected palette')
     for key, row in selected.items():
+        input_kind = row.get('input_kind', 'released-loop')
+        if input_kind not in {'released-loop', 'supplied-recording'}:
+            raise ValueError('Unknown ambience input kind: ' + input_kind)
+        # A newly selected source must never silently use the old release's
+        # same-named recording. Other immutable release baselines stay intact.
+        if input_kind == 'supplied-recording':
+            if not row.get('user_edit'):
+                raise ValueError('Supplied recording must be an explicitly selected user base')
+            continue
         row['released_loop'] = released['clips'][key]
     if any(len(('ma/'+key).encode())>32 for key in selected):
         raise ValueError('ambient operation key exceeds the existing32-byte limit')
@@ -178,10 +187,10 @@ def build(cache, output, content, download=False, audition_only=False):
             elif row.get('user_edit'):
                 original=(cache/row['input']).read_bytes()
                 if sha(original)!=row['input_sha256']:
-                    raise ValueError('user-edited base differs from its explicitly selected file')
+                    raise ValueError('user-selected base differs from its explicitly selected file')
                 raw,processing=user_loop(original)
                 if sha(raw)!=row['loop_sha256']:
-                    raise ValueError('user loop seam differs from the prepared audition candidate')
+                    raise ValueError('user loop seam differs from the pinned preparation')
                 raw,mix_processing=user_mix_gain(raw,row['mix_gain_db'])
                 processing['mix']=dict(mix_processing,authority=row['mix_gain_authority'],
                                        approved_unity_loop_sha256=row['loop_sha256'])

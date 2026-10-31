@@ -894,6 +894,13 @@ private previews and publication once these conditions pass, without repeated
 routine permission requests. Material scope changes or unresolved acceptance
 failures return to Maxwell; they are not silently deferred to make a release.
 
-October 31 audio confirmation: Maxwell will keep the prepared indoor/outdoor OGG
-loops. No replacement assets or further manual audio edits are pending; retain
-the established +4 dB release baseline and balanced output.
+October 31 outdoor replacement supersedes the earlier decision to keep both
+prepared OGGs: Maxwell supplied `350267__simonjeffery13__outside-in-the-car-park.wav`
+and explicitly requested it as the outdoor base, balanced against the existing
+mix and converted to OGG for storage. The indoor base retains its prepared output.
+Use the exact new source once, with the existing 250 ms seam and fixed +18.21 dB
+gain. The decoded 48 kHz stereo Vorbis q6 loop measures -25.19 LUFS versus -25.06
+for the prior v0.4.3 outdoor base, with -9.31 dBTP headroom, and occupies 1,550,859
+bytes. Do not apply an additional +4 dB to this already matched replacement. Source
+WAV and prior baselines stay unchanged; no additional human playtest is requested.
+See [replacement evidence](../progress/2026-10-31-v043-outdoor-car-park.md).

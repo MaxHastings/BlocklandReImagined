@@ -235,6 +235,20 @@
       "quality": "User supplied stereo PCM16 WAV at44.1kHz; derived from approved review recordings, not a claim of original lossless source acquisition",
       "license": "Inherited approved recording provenance; no relicensing",
       "scope": "User explicitly chose this exact supplied file for universal base. Prepared loop seam and final game mix acceptance remain separate."
+    },
+    {
+      "id": "user-supplied:outdoor-base",
+      "author": "simonjeffery13",
+      "source": "https://freesound.org/people/simonjeffery13/sounds/350267/",
+      "title": "Outside in the car park",
+      "input_sha256": "3c251ff8d582420f4598ff1bce6889b140959bde4a479cb26f416b18a4ae82a9",
+      "state": "approved",
+      "approval_evidence": "2026-10-31 Maxwell explicitly requested replacing the outdoor base with E:/Downloads/350267__simonjeffery13__outside-in-the-car-park.wav, delegated loudness balance, and required an OGG game copy. Prior instruction waives further playtests; no new human loop/mix audition is claimed.",
+      "quality": "User-supplied stereo PCM16 WAV, 48 kHz; game copy encoded once as Ogg Vorbis q6 after a standard loop seam and fixed gain. No source resampling or dynamic compression.",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "license_evidence": "Official Freesound sound page retrieved 2026-10-31 identifies simonjeffery13 and links Creative Commons 0. Private HTML evidence retained in release diagnostics.",
+      "scope": "Exact user-selected universal outdoor base, using existing nonstorm exterior routing and bounded OGG streaming; indoor, rain and local profiles retain their prior inputs."
     }
   ]
 }
