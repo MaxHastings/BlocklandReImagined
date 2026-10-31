@@ -873,7 +873,17 @@ mod spawn_tests {
             vec![floor],
         )?);
         restarted.set_lan_host(false);
-        restarted.set_bot_kinds(s.bots.kinds.clone())?;
+        restarted.set_vehicle_pack(
+            bri_vehicles::Pack {
+                schema_version: bri_vehicles::schema::SCHEMA_VERSION,
+                definitions: vec![],
+                assets: vec![],
+                evidence: vec![],
+                unresolved: vec![],
+                animation_aliases: Default::default(),
+            },
+            s.bots.kinds.clone(),
+        )?;
         restarted.hold_minigame(saved_game.expect("creator encounter is saved"));
         let returned = restarted.join_verified(
             "Creator returned".into(),
@@ -886,10 +896,50 @@ mod spawn_tests {
             .game_of(returned)
             .expect("held encounter restored");
         assert_eq!(restarted.simulation.state().bricks[&1].owner, creator);
-        restarted.reconcile_bot_brick(1, Some("fixture:bot/melee"))?;
-        restarted.sync_bot_minigames()?;
-        let restored_bot = restarted.bots.by_brick[&1];
+        restarted.step()?;
+        let restored_bot = *restarted
+            .bots
+            .by_brick
+            .get(&1)
+            .expect("saved source spawns automatically");
+        // Membership synchronization runs on its ordinary 30-tick cadence.
+        for _ in 0..30 {
+            if restarted.game_of(restored_bot) == Some(restored_game) {
+                break;
+            }
+            restarted.step()?;
+        }
         assert_eq!(restarted.game_of(restored_bot), Some(restored_game));
+        restarted.peers.get_mut(&returned).unwrap().player.place(
+            &mut restarted.simulation.physics,
+            Vec3::new(-12., 0.05, -8.),
+            0.,
+            Vec3::ZERO,
+        );
+        let target = restarted.join("New fighter".into(), Vec3::new(6., 0.05, 0.), false)?;
+        restarted.minigame_request(
+            target,
+            crate::session::MiniGameRequest::Join {
+                game: restored_game.0,
+            },
+        )?;
+        restarted.peers.get_mut(&target).unwrap().player.place(
+            &mut restarted.simulation.physics,
+            Vec3::new(6., 0.05, 0.),
+            0.,
+            Vec3::ZERO,
+        );
+        let health = restarted.peers[&target].combat.health;
+        for _ in 0..1440 {
+            restarted.step()?;
+            if restarted.peers[&target].combat.health < health {
+                break;
+            }
+        }
+        assert!(
+            restarted.peers[&target].combat.health < health,
+            "restored bot must resume combat"
+        );
         Ok(())
     }
 

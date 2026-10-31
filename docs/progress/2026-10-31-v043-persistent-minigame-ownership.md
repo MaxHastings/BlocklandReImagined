@@ -290,3 +290,15 @@ The focused bot lifecycle test and warning-free all-target bri-sim Clippy pass.
 This uses explicit bot reconciliation; automatic source initialization and renewed
 combat after restart remain to be verified. Evidence: `minigame-restart-bot.txt`
 and `minigame-restart-bot-clippy.txt` in planning diagnostics.
+
+
+The restart battle case now installs the normal vehicle/bot provider and lets
+Session stepping scan the saved spawn source automatically. It waits through the
+existing 30-tick bot membership synchronization cadence, then joins a fresh player
+and requires actual melee damage. The first assertion immediately after one tick
+failed because the bot had not yet reached that established synchronization
+point; the final focused test passes without manually reconciling or assigning the
+bot. Changed-crate all-target Clippy passes. This is a synthetic headless restart,
+not a networked restart or proof of all saved resource kinds. Diagnostics:
+`minigame-restart-autobot.txt`, `minigame-restart-autobot-green.txt`, and
+`minigame-restart-autobot-clippy.txt`.
