@@ -877,11 +877,16 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
         seq: u16,
         value: u8,
     ) -> anyhow::Result<()> {
+        let pcm = std::array::from_fn(|i| {
+            ((i as f32 * (0.08 + f32::from(value) * 0.001)).sin() * 9000.0) as i16
+        });
+        let payload = bri_audio::voice::Codec::encode(&pcm);
+        assert!(bri_audio::voice::Codec::valid(&payload));
         let mut heard = vec![];
         listen.take_heard(&mut heard);
         heard.clear();
         for n in seq..seq + 3 {
-            talk.send(n, &[value; 60])?;
+            talk.send(n, &payload)?;
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         tokio::time::timeout(Duration::from_secs(3), async {
@@ -889,7 +894,7 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
                 listen.take_heard(&mut heard);
                 if heard
                     .iter()
-                    .any(|f| f.speaker == speaker && f.payload == vec![value; 60])
+                    .any(|f| f.speaker == speaker && f.payload == payload)
                 {
                     break;
                 }
@@ -901,8 +906,18 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
         assert!(
             heard
                 .iter()
-                .filter(|f| f.speaker == speaker && f.payload == vec![value; 60])
+                .filter(|f| f.speaker == speaker && f.payload == payload)
                 .all(|f| f.position.is_none() && f.revision == generation)
+        );
+        let frame = heard
+            .iter()
+            .find(|f| f.speaker == speaker && f.payload == payload)
+            .unwrap();
+        let decoded =
+            bri_audio::voice::Codec::decode(&frame.payload).expect("relayed Opus decodes");
+        assert!(
+            decoded.iter().any(|sample| sample.abs() > 0.01),
+            "decoded speech must not be silent"
         );
         Ok(())
     }
@@ -957,6 +972,15 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
         settings: Default::default(),
     }))
     .await?;
+    let game = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(g) = a.replica.minigames.iter().find(|g| g.owner == a.owner) {
+                return anyhow::Ok(g.id);
+            }
+            a.receive().await?;
+        }
+    })
+    .await??;
     player_route(&mut a, b.owner, false).await?;
     loading_route(&bl, a.owner, false).await?;
     let mut forbidden = vec![];
@@ -1028,21 +1052,9 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
     exchange(&a.voice_link(), &entered.voice_link(), a.owner, 3, 66).await?;
     // Retained authorized game membership is usable while reconnecting, with
     // actual QUIC isolation from the other loading participant still in lobby.
-    a.command(Command::MiniGame(MiniGameRequest::Create {
-        color: 0,
-        settings: Default::default(),
-    }))
-    .await?;
+    a.command(Command::MiniGame(MiniGameRequest::Join { game }))
+        .await?;
     player_route(&mut a, b.owner, false).await?;
-    let game = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            if let Some(g) = a.replica.minigames.iter().find(|g| g.owner == a.owner) {
-                return anyhow::Ok(g.id);
-            }
-            a.receive().await?;
-        }
-    })
-    .await??;
     entered
         .command(Command::MiniGame(MiniGameRequest::Join { game }))
         .await?;
