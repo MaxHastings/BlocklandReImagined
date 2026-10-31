@@ -423,10 +423,25 @@ fn newer(old: u16, new: u16) -> bool {
     ahead != 0 && ahead < 0x8000
 }
 
+/// A route's physical presentation. Nonpositional speech has no invented origin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Playback {
+    Nonpositional,
+    Spatial { position: Vec3, range: f32 },
+}
+impl Playback {
+    fn valid(self) -> bool {
+        match self {
+            Self::Nonpositional => true,
+            Self::Spatial { position, range } => {
+                position.iter().all(|v| v.is_finite()) && range.is_finite() && range > 0.0
+            }
+        }
+    }
+}
 struct Speaker {
-    playback: Option<f32>,
+    playback: Playback,
     effects: effects::Processor,
-    position: Vec3,
     buffer: VecDeque<f32>,
     playing: bool,
     jitter: jitter::Jitter,
@@ -447,11 +462,10 @@ struct Speaker {
 }
 
 impl Speaker {
-    fn new(position: Vec3) -> Self {
+    fn new(playback: Playback) -> Self {
         Self {
-            playback: Some(DEFAULT_RANGE),
+            playback,
             effects: effects::Processor::default(),
-            position,
             buffer: VecDeque::with_capacity(FRAME_SAMPLES),
             playing: false,
             jitter: jitter::Jitter::new(),
@@ -539,13 +553,33 @@ impl Mixer {
     }
     /// A frame from `speaker`, standing at `position`.
     pub fn hear(&mut self, speaker: u64, position: Vec3, sequence: u16, payload: &[u8]) {
-        if !self.shared.enabled() || !position.iter().all(|v| v.is_finite()) {
+        self.hear_routed(
+            speaker,
+            Playback::Spatial {
+                position,
+                range: load(&self.shared.range),
+            },
+            sequence,
+            payload,
+            Effects::default(),
+        );
+    }
+    /// Server-selected physical presentation and native processing.
+    pub fn hear_routed(
+        &mut self,
+        speaker: u64,
+        playback: Playback,
+        sequence: u16,
+        payload: &[u8],
+        effects: Effects,
+    ) {
+        if !self.shared.enabled() || !playback.valid() || !effects.valid() {
             return;
         }
         if !Codec::valid(payload) {
             self.malformed += 1;
             return;
-        };
+        }
         if !self.speakers.contains_key(&speaker) && self.speakers.len() >= MAX_SPEAKERS {
             self.refused += 1;
             return;
@@ -553,29 +587,10 @@ impl Mixer {
         let entry = self
             .speakers
             .entry(speaker)
-            .or_insert_with(|| Speaker::new(position));
-        entry.position = position;
-        entry.playback = Some(load(&self.shared.range));
+            .or_insert_with(|| Speaker::new(playback));
+        entry.playback = playback;
+        entry.effects.set(effects);
         entry.jitter.push(sequence, payload);
-    }
-    /// Server-selected spatial range, or None for centered steady-volume speech.
-    pub fn hear_routed(
-        &mut self,
-        speaker: u64,
-        position: Vec3,
-        sequence: u16,
-        payload: &[u8],
-        range: Option<f32>,
-        effects: Effects,
-    ) {
-        if !effects.valid() {
-            return;
-        }
-        self.hear(speaker, position, sequence, payload);
-        if let Some(s) = self.speakers.get_mut(&speaker) {
-            s.playback = range;
-            s.effects.set(effects);
-        }
     }
     /// The gain a voice `distance` away is heard at.
     pub fn gain_at(distance: f32, range: f32) -> f32 {
@@ -627,15 +642,18 @@ impl Mixer {
         // shade eases off after a sentence ends.
         let decay = (frames as f32 / (0.5 * sample_rate as f32)).clamped(0.0, 1.0);
         for speaker in self.speakers.values_mut() {
-            let distance = length(sub(speaker.position, listener.position));
-            let gain = speaker.playback.map_or(1.0, |r| Self::gain_at(distance, r)) * volume;
-            let (left, right) = if speaker.playback.is_some() {
-                pan_gains(&listener, speaker.position)
-            } else {
-                (
-                    std::f32::consts::FRAC_1_SQRT_2,
-                    std::f32::consts::FRAC_1_SQRT_2,
-                )
+            let (gain, (left, right)) = match speaker.playback {
+                Playback::Spatial { position, range } => (
+                    Self::gain_at(length(sub(position, listener.position)), range) * volume,
+                    pan_gains(&listener, position),
+                ),
+                Playback::Nonpositional => (
+                    volume,
+                    (
+                        std::f32::consts::FRAC_1_SQRT_2,
+                        std::f32::consts::FRAC_1_SQRT_2,
+                    ),
+                ),
             };
             let target = if channels == 1 {
                 (gain, gain)
@@ -867,10 +885,9 @@ mod tests {
             for (n, chunk) in audio.chunks(FRAME_SAMPLES).enumerate() {
                 mixer.hear_routed(
                     owner,
-                    [0.0, 0.0, -2.0],
+                    Playback::Nonpositional,
                     n as u16,
                     &Codec::encode(&pcm(chunk)),
-                    None,
                     Effects {
                         gain: 2.0,
                         high_pass_hz: 300.0,
@@ -933,11 +950,22 @@ mod tests {
     }
 
     #[test]
-    fn global_voice_is_centered_and_audible_beyond_local_range() {
+    fn global_voice_without_an_origin_is_centered_independent_of_listener_location() {
         let shared = Arc::new(Shared::new(Settings::default()));
         let mut mixer = Mixer::new(shared);
-        speak(&mut mixer, 7, [500.0, 0.0, 0.0], 8, 0);
-        mixer.speakers.get_mut(&7).unwrap().playback = None;
+        mixer.set_listener(Listener {
+            position: [5000., 100., -3000.],
+            ..Listener::default()
+        });
+        for (sequence, samples) in tone(8, 0.5).chunks(FRAME_SAMPLES).enumerate() {
+            mixer.hear_routed(
+                7,
+                Playback::Nonpositional,
+                sequence as u16,
+                &Codec::encode(&pcm(samples)),
+                Effects::default(),
+            );
+        }
         let mut out = vec![0.0; 4800 * 2];
         mixer.render(&mut out, 2, 48_000);
         let left = energy(&out, 2, 0);
@@ -946,8 +974,15 @@ mod tests {
         // Compare the exact same decoded/timed signal with the old unity
         // playback gain; Opus and the startup ramp need not reproduce a raw sine peak.
         let mut reference = Mixer::new(Arc::new(Shared::new(Settings::default())));
-        speak(&mut reference, 7, [500.0, 0.0, 0.0], 8, 0);
-        reference.speakers.get_mut(&7).unwrap().playback = None;
+        for (sequence, samples) in tone(8, 0.5).chunks(FRAME_SAMPLES).enumerate() {
+            reference.hear_routed(
+                7,
+                Playback::Nonpositional,
+                sequence as u16,
+                &Codec::encode(&pcm(samples)),
+                Effects::default(),
+            );
+        }
         let mut unity = vec![0.0; out.len()];
         reference.render_with_gain(&mut unity, 2, 48_000, 1.0);
         assert!(

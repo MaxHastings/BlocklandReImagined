@@ -610,12 +610,19 @@ impl VoiceClient {
                 if voice.revision != route.generation {
                     continue;
                 }
+                let playback = match (route.spatial, voice.position) {
+                    (true, Some(position)) => bri_audio::voice::Playback::Spatial {
+                        position,
+                        range: route.range,
+                    },
+                    (false, None) => bri_audio::voice::Playback::Nonpositional,
+                    _ => continue,
+                };
                 chat.hear_routed(
                     voice.speaker,
-                    voice.position,
+                    playback,
                     voice.sequence,
                     &voice.payload,
-                    route.spatial.then_some(route.range),
                     bri_audio::voice::Effects {
                         gain: route.effects.gain,
                         high_pass_hz: route.effects.high_pass_hz,

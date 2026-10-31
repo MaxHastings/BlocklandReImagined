@@ -1,0 +1,1 @@
+Voice downstream frames explicitly tag nonpositional playback or an authoritative finite world origin. Nonpositional frames carry no coordinates. Route generations still gate playback and spatial routes still require physical origins and live range checks.

@@ -137,7 +137,7 @@ fn voice_default_groups_and_radio_compose_without_duplicate_or_cross_group_deliv
 }
 #[test]
 fn voice_revision_audio_and_activity_are_stamped_together() {
-    let audio = voice::encode_routed(9, [1.0, 2.0, 3.0], 4, &[7; 60], 81);
+    let audio = voice::encode_routed(9, Some([1.0, 2.0, 3.0]), 4, &[7; 60], 81);
     assert_eq!(voice::decode_downstream(&audio).unwrap().revision, 81);
     let activity = voice::encode_routed_activity(9, true, 81);
     assert_eq!(
@@ -452,6 +452,21 @@ async fn voice_real_network_revokes_and_regrants_private_routes_on_membership_ch
     .await?;
     wait(&mut b, a.owner, true).await?;
     let first = b.voice_link().routes().routes[&a.owner].generation;
+    // Global frames carry no physical coordinates, despite both actors having bodies.
+    a.voice_link().send(0, &[7; 60])?;
+    let mut global = vec![];
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while global.is_empty() {
+            b.voice_link().take_heard(&mut global);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    assert!(
+        global
+            .iter()
+            .all(|frame| frame.position.is_none() && frame.revision == first)
+    );
     a.command(Command::MiniGame(MiniGameRequest::Create {
         color: 0,
         settings: Default::default(),
@@ -462,7 +477,7 @@ async fn voice_real_network_revokes_and_regrants_private_routes_on_membership_ch
     let mut heard = vec![];
     listen.take_heard(&mut heard);
     heard.clear();
-    for sequence in 0..5 {
+    for sequence in 1..6 {
         a.voice_link().send(sequence, &[7; 60])?;
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

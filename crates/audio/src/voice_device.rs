@@ -157,13 +157,12 @@ impl VoiceChat {
     pub fn hear_routed(
         &self,
         speaker: u64,
-        position: Vec3,
+        playback: crate::voice::Playback,
         sequence: u16,
         payload: &[u8],
-        range: Option<f32>,
         effects: crate::voice::Effects,
     ) {
-        lock(&self.mixer).hear_routed(speaker, position, sequence, payload, range, effects);
+        lock(&self.mixer).hear_routed(speaker, playback, sequence, payload, effects);
     }
     pub fn forget(&self, speaker: u64) {
         lock(&self.mixer).forget(speaker);

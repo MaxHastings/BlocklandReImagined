@@ -7,7 +7,7 @@
 //! decoding. The payload is opaque here: the audio crate's frames.
 //!
 //! Upstream (client to host): marker, [`UPSTREAM`], sequence (u16), payload.
-//! Downstream adds host-stamped speaker, position and per-route generation.
+//! Downstream adds host-stamped speaker, explicit optional position and per-route generation.
 //! Reliable private route tables select positional/global playback and range.
 //! Frames from revoked generations are rejected before entering the mixer.
 use anyhow::{Result, ensure};
@@ -53,7 +53,8 @@ const DOWNSTREAM_ACTIVITY: u8 = 4;
 const ACTIVITY_UPSTREAM_LEN: usize = 3;
 const ACTIVITY_DOWNSTREAM_LEN: usize = 19;
 const UPSTREAM_HEADER: usize = 4;
-const DOWNSTREAM_HEADER: usize = 4 + 8 + 12 + 8;
+const DOWNSTREAM_HEADER: usize = 4 + 8 + 8 + 1;
+const POSITION_BYTES: usize = 12;
 /// Received voice frames waiting for the game; the newest are dropped when
 /// it falls behind.
 const INBOX: usize = 256;
@@ -103,44 +104,49 @@ pub fn decode_upstream(bytes: &[u8]) -> Option<(u16, &[u8])> {
 pub struct Heard {
     pub revision: u64,
     pub speaker: OwnerId,
-    pub position: [f32; 3],
+    pub position: Option<[f32; 3]>,
     pub sequence: u16,
     pub payload: Vec<u8>,
 }
 
 pub fn encode_downstream(
     speaker: OwnerId,
-    position: [f32; 3],
+    position: Option<[f32; 3]>,
     sequence: u16,
     payload: &[u8],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(DOWNSTREAM_HEADER + payload.len());
+    let mut out = Vec::with_capacity(
+        DOWNSTREAM_HEADER + position.map_or(0, |_| POSITION_BYTES) + payload.len(),
+    );
     out.extend_from_slice(&[MARKER, DOWNSTREAM]);
     out.extend_from_slice(&sequence.to_le_bytes());
     out.extend_from_slice(&speaker.to_le_bytes());
-    for axis in position {
-        out.extend_from_slice(&axis.to_le_bytes());
-    }
     out.extend_from_slice(&0u64.to_le_bytes());
+    out.push(u8::from(position.is_some()));
+    if let Some(position) = position {
+        for axis in position {
+            out.extend_from_slice(&axis.to_le_bytes());
+        }
+    }
     out.extend_from_slice(payload);
     out
 }
 
 pub fn encode_routed(
     speaker: OwnerId,
-    position: [f32; 3],
+    position: Option<[f32; 3]>,
     sequence: u16,
     payload: &[u8],
     revision: u64,
 ) -> Vec<u8> {
     let mut bytes = encode_downstream(speaker, position, sequence, payload);
-    bytes[24..32].copy_from_slice(&revision.to_le_bytes());
+    bytes[12..20].copy_from_slice(&revision.to_le_bytes());
     bytes
 }
 
 pub fn decode_downstream(bytes: &[u8]) -> Option<Heard> {
     if bytes.len() <= DOWNSTREAM_HEADER
-        || bytes.len() > DOWNSTREAM_HEADER + MAX_PAYLOAD
+        || bytes.len() > DOWNSTREAM_HEADER + POSITION_BYTES + MAX_PAYLOAD
         || bytes[0] != MARKER
         || bytes[1] != DOWNSTREAM
     {
@@ -148,20 +154,30 @@ pub fn decode_downstream(bytes: &[u8]) -> Option<Heard> {
     }
     let sequence = u16::from_le_bytes([bytes[2], bytes[3]]);
     let speaker = u64::from_le_bytes(bytes[4..12].try_into().ok()?);
-    let mut position = [0.0f32; 3];
-    for (i, axis) in position.iter_mut().enumerate() {
-        let at = 12 + 4 * i;
-        *axis = f32::from_le_bytes(bytes[at..at + 4].try_into().ok()?);
-    }
-    if !position.iter().all(|v| v.is_finite()) {
+    let (position, payload_at) = match bytes[20] {
+        0 => (None, DOWNSTREAM_HEADER),
+        1 if bytes.len() > DOWNSTREAM_HEADER + POSITION_BYTES => {
+            let mut position = [0.0f32; 3];
+            for (i, axis) in position.iter_mut().enumerate() {
+                let at = DOWNSTREAM_HEADER + 4 * i;
+                *axis = f32::from_le_bytes(bytes[at..at + 4].try_into().ok()?);
+            }
+            if !position.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            (Some(position), DOWNSTREAM_HEADER + POSITION_BYTES)
+        }
+        _ => return None,
+    };
+    if bytes.len() <= payload_at || bytes.len() > payload_at + MAX_PAYLOAD {
         return None;
     }
     Some(Heard {
-        revision: u64::from_le_bytes(bytes[24..32].try_into().ok()?),
+        revision: u64::from_le_bytes(bytes[12..20].try_into().ok()?),
         speaker,
         position,
         sequence,
-        payload: bytes[DOWNSTREAM_HEADER..].to_vec(),
+        payload: bytes[payload_at..].to_vec(),
     })
 }
 
@@ -361,18 +377,54 @@ mod tests {
 
     #[test]
     fn downstream_frames_carry_who_and_where() {
-        let bytes = encode_downstream(u64::MAX - 3, [1.5, -2.0, 300.25], 65_535, &[7; 163]);
+        let bytes = encode_downstream(u64::MAX - 3, Some([1.5, -2.0, 300.25]), 65_535, &[7; 163]);
         let heard = decode_downstream(&bytes).unwrap();
         assert_eq!(heard.speaker, u64::MAX - 3);
-        assert_eq!(heard.position, [1.5, -2.0, 300.25]);
+        assert_eq!(heard.position, Some([1.5, -2.0, 300.25]));
         assert_eq!(heard.sequence, 65_535);
         assert_eq!(heard.payload, vec![7; 163]);
         assert!(bytes.len() < crate::protocol::MAX_DATAGRAM);
         // A position that is not a number is never played.
-        let bad = encode_downstream(1, [f32::NAN, 0.0, 0.0], 0, &[1]);
+        let bad = encode_downstream(1, Some([f32::NAN, 0.0, 0.0]), 0, &[1]);
         assert_eq!(decode_downstream(&bad), None);
         assert_eq!(decode_downstream(&bytes[..DOWNSTREAM_HEADER]), None);
         assert_eq!(decode_downstream(&encode_upstream(0, &[1]).unwrap()), None);
+    }
+
+    #[test]
+    fn nonpositional_frames_have_no_coordinates_and_reject_ambiguous_shapes() {
+        for position in [None, Some([1., -2., 3.])] {
+            let bytes = encode_routed(42, position, 17, &[8; MAX_PAYLOAD], 99);
+            let heard = decode_downstream(&bytes).unwrap();
+            assert_eq!(
+                (
+                    heard.speaker,
+                    heard.position,
+                    heard.sequence,
+                    heard.revision
+                ),
+                (42, position, 17, 99)
+            );
+            assert_eq!(heard.payload, vec![8; MAX_PAYLOAD]);
+            assert_eq!(
+                bytes.len(),
+                DOWNSTREAM_HEADER + position.map_or(0, |_| POSITION_BYTES) + MAX_PAYLOAD
+            );
+            let mut oversized = bytes.clone();
+            oversized.push(1);
+            assert!(decode_downstream(&oversized).is_none());
+            let mut unknown_tag = bytes.clone();
+            unknown_tag[20] = 2;
+            assert!(decode_downstream(&unknown_tag).is_none());
+        }
+        let mut truncated = encode_routed(42, None, 17, &[8], 99);
+        truncated[20] = 1;
+        assert!(
+            decode_downstream(&truncated).is_none(),
+            "a spatial tag requires coordinates and audio"
+        );
+        let empty = encode_routed(42, None, 17, &[], 99);
+        assert!(decode_downstream(&empty).is_none());
     }
 
     #[test]

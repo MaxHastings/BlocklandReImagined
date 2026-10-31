@@ -1628,9 +1628,7 @@ fn relay_voice(
     if session.is_voice_muted(speaker) {
         return;
     }
-    let Some(from) = session.voice_origin(speaker) else {
-        return;
-    };
+    let from = session.voice_origin(speaker);
 
     for (owner, peer) in peers {
         if *owner == speaker {
@@ -1642,11 +1640,20 @@ fn relay_voice(
         let Some(route) = table.table.routes.get(&speaker) else {
             continue;
         };
-        let bytes = crate::voice::encode_routed(speaker, from, sequence, payload, route.generation);
+        let position = if route.spatial {
+            let Some(position) = from else {
+                continue;
+            };
+            Some(position)
+        } else {
+            None
+        };
+        let bytes =
+            crate::voice::encode_routed(speaker, position, sequence, payload, route.generation);
         if (!route.spatial
-            || session
-                .viewpoint(*owner)
-                .is_some_and(|at| crate::voice::audible(from, at, route.range)))
+            || from
+                .zip(session.viewpoint(*owner))
+                .is_some_and(|(from, at)| crate::voice::audible(from, at, route.range)))
             && peer.connection.datagram_send_buffer_space() >= bytes.len() + 8 * 1024
             && peer.connection.send_datagram(bytes.clone().into()).is_ok()
         {

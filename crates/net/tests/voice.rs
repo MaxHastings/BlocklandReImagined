@@ -151,7 +151,10 @@ async fn voice_reaches_only_the_players_within_range() -> Result<()> {
         assert_eq!(frame.sequence, i as u16);
         assert_eq!(frame.payload, vec![i as u8 + 1; 163]);
         // The host's own view of the speaker, not anything the client said.
-        assert!(frame.position[0].abs() < 1.0 && frame.position[2].abs() < 1.0);
+        let position = frame
+            .position
+            .expect("spatial frame carries the authoritative origin");
+        assert!(position[0].abs() < 1.0 && position[2].abs() < 1.0);
     }
     assert!(
         hear(&far_link, 1, Duration::from_millis(300))
