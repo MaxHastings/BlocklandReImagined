@@ -53,6 +53,7 @@ impl VoiceChat {
     pub fn open(settings: Settings, input_device: Option<String>) -> Result<Self, AudioError> {
         let shared = Arc::new(Shared::new(settings));
         shared.set_transmit_allowed(false);
+        shared.set_capture_scope(0);
         let mixer = Arc::new(Mutex::new(Mixer::new(shared.clone())));
         let (frames_tx, frames) = rtrb::RingBuffer::new(OUTGOING_FRAMES);
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Opened, AudioError>>();
@@ -112,6 +113,9 @@ impl VoiceChat {
         }
     }
 
+    pub fn set_capture_scope(&self, scope: u64) {
+        self.shared.set_capture_scope(scope);
+    }
     pub fn set_transmit_allowed(&self, allowed: bool) {
         self.shared.set_transmit_allowed(allowed);
     }
@@ -419,6 +423,38 @@ fn open_input(
     Ok(stream)
 }
 
+/// Device clocks keep delayed pre-transition buffers out of a new capture
+/// scope. The baseline is observed on the capture callback, conservatively
+/// after the control change. Subtracting one buffer covers either first- or
+/// last-sample device timestamp conventions. No wall-clock guess or RT lock.
+#[derive(Default)]
+struct CaptureBoundary {
+    scope: u64,
+    not_before: Option<cpal::StreamInstant>,
+}
+impl CaptureBoundary {
+    fn admit(
+        &mut self,
+        scope: u64,
+        time: cpal::InputStreamTimestamp,
+        frames: usize,
+        rate: u32,
+    ) -> bool {
+        if self.scope != scope || self.not_before.is_none() {
+            self.scope = scope;
+            self.not_before = Some(time.callback);
+        }
+        time.capture <= time.callback
+            && time
+                .capture
+                .checked_sub(std::time::Duration::from_secs_f64(
+                    frames as f64 / f64::from(rate.max(1)),
+                ))
+                .zip(self.not_before)
+                .is_some_and(|(start, boundary)| start >= boundary)
+    }
+}
+
 fn build_input<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -434,10 +470,19 @@ where
     let mut down = Downsampler::new(rate);
     let mut encoder = Encoder::new(shared.clone());
     let error_shared = shared.clone();
+    let input_shared = shared.clone();
+    let mut boundary = CaptureBoundary::default();
     device
         .build_input_stream::<T, _, _>(
             *config,
-            move |data: &[T], _| {
+            move |data: &[T], info| {
+                let scope = input_shared.capture_scope();
+                if boundary.scope != scope {
+                    down = Downsampler::new(rate);
+                }
+                if !boundary.admit(scope, info.timestamp(), data.len().div_ceil(channels), rate) {
+                    return;
+                }
                 let mut send = |sequence, payload| {
                     let _ = frames.push(CapturedFrame {
                         sequence,
@@ -448,7 +493,7 @@ where
                 for frame in data.chunks(channels) {
                     let sum: f32 = frame.iter().map(|&s| f32::from_sample(s)).sum();
                     if let Some(sample) = down.push(sum / frame.len() as f32) {
-                        encoder.feed(std::slice::from_ref(&sample), &mut send);
+                        encoder.feed_scoped(scope, std::slice::from_ref(&sample), &mut send);
                     }
                 }
                 // A full ring drops speech while its capture clock advances;
@@ -463,6 +508,27 @@ where
 #[cfg(test)]
 mod input_device_tests {
     use super::*;
+
+    #[test]
+    fn capture_scope_boundary_drops_delayed_buffers_but_preserves_preview_meter_input() {
+        let time = |callback, capture| cpal::InputStreamTimestamp {
+            callback: cpal::StreamInstant::from_millis(callback),
+            capture: cpal::StreamInstant::from_millis(capture),
+        };
+        let mut boundary = CaptureBoundary::default();
+        assert!(!boundary.admit(7, time(100, 80), 320, 16000));
+        assert!(boundary.admit(7, time(140, 120), 320, 16000));
+        // A callback first observes a new authorization while old device
+        // buffers are still being delivered. None can be relabeled as new.
+        assert!(!boundary.admit(8, time(200, 160), 320, 16000));
+        assert!(!boundary.admit(8, time(220, 180), 320, 16000));
+        assert!(!boundary.admit(8, time(230, 210), 320, 16000));
+        assert!(boundary.admit(8, time(240, 220), 320, 16000));
+        assert!(!boundary.admit(8, time(250, 260), 320, 16000));
+        // Scope zero remains useful for an input meter, never transmission.
+        assert!(!boundary.admit(0, time(300, 280), 320, 16000));
+        assert!(boundary.admit(0, time(340, 320), 320, 16000));
+    }
 
     #[test]
     fn input_list_filter_matches_capture_support_without_name_heuristics() {

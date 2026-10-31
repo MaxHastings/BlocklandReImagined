@@ -3,8 +3,7 @@ use super::*;
 use crate::server::{self, ServerOptions};
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn voice_control_survives_a_saturated_world_queue_without_ui_polling() -> Result<()> {
+fn voice_server() -> Result<server::ServerHandle> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages");
     let catalog = bri_package_runtime::Catalog::load(
         &root,
@@ -27,7 +26,7 @@ async fn voice_control_survives_a_saturated_world_queue_without_ui_polling() -> 
         vec![],
     )?);
     session.install_packages(Arc::new(catalog), None)?;
-    let server = server::start(
+    server::start(
         session,
         ServerOptions {
             bind: "127.0.0.1:0".parse()?,
@@ -37,7 +36,12 @@ async fn voice_control_survives_a_saturated_world_queue_without_ui_polling() -> 
             map_loader: None,
             packages: None,
         },
-    )?;
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_control_survives_a_saturated_world_queue_without_ui_polling() -> Result<()> {
+    let server = voice_server()?;
     let mut a = Client::connect_with_host(
         server.address,
         &server.certificate,
@@ -218,6 +222,109 @@ async fn voice_ready_requires_admission_and_closes_a_join_rejected_by_its_observ
     })
     .await?;
     inspector.close();
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_capture_scope_rejects_old_audio_and_activity_after_membership_regrant() -> Result<()>
+{
+    use bri_sim::session::MiniGameRequest;
+    let server = voice_server()?;
+    let mut a = Client::connect(
+        server.address,
+        &server.certificate,
+        "Speaker".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let b = Client::connect(
+        server.address,
+        &server.certificate,
+        "Listener".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let talk = a.voice_link();
+    let listen = b.voice_link();
+    let wait_epoch = |previous: Option<u64>| {
+        let talk = talk.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let epoch = talk.control().metadata.source_epoch;
+                    if epoch > 0 && Some(epoch) != previous {
+                        break epoch;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+        }
+    };
+    let old = wait_epoch(None).await?;
+    a.command(Command::MiniGame(MiniGameRequest::Create {
+        color: 0,
+        settings: Default::default(),
+    }))
+    .await?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while talk.control().metadata.source_epoch != 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    a.command(Command::MiniGame(MiniGameRequest::Leave)).await?;
+    let new = wait_epoch(Some(old)).await?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !listen.routes().routes.contains_key(&a.owner) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let mut heard = vec![];
+    let mut activity = vec![];
+    listen.take_heard(&mut heard);
+    heard.clear();
+    listen.take_activity(&mut activity);
+    activity.clear();
+    // Bypass VoiceLink's local stale-frame check to challenge HOST admission.
+    for sequence in 0..3 {
+        a.connection
+            .send_datagram(crate::voice::encode_upstream(sequence, old, &[99; 60])?.into())?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    a.connection
+        .send_datagram(crate::voice::encode_upstream_activity(true, old).into())?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    listen.take_heard(&mut heard);
+    listen.take_activity(&mut activity);
+    assert!(
+        heard.is_empty(),
+        "old capture cannot be restamped into the regranted conversation"
+    );
+    assert!(
+        activity.iter().all(|a| !a.active),
+        "old capture cannot resurrect speech activity"
+    );
+    talk.send_captured(10, new, &[7; 60])?;
+    talk.send_activity(true)?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            listen.take_heard(&mut heard);
+            listen.take_activity(&mut activity);
+            if heard.iter().any(|f| f.payload == vec![7; 60]) && activity.iter().any(|a| a.active) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    assert!(heard.iter().all(|f| f.payload != vec![99; 60]));
+    a.close();
+    b.close();
     server.stop().await?;
     Ok(())
 }

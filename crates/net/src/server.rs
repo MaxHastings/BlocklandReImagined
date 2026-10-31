@@ -743,6 +743,7 @@ enum Event {
         owner: OwnerId,
         generation: usize,
         sequence: u16,
+        source_epoch: u64,
         payload: Vec<u8>,
         received: std::time::Instant,
     },
@@ -751,6 +752,7 @@ enum Event {
     VoiceActivity {
         owner: OwnerId,
         generation: usize,
+        source_epoch: u64,
         active: bool,
     },
     Lost {
@@ -1352,7 +1354,7 @@ impl VoiceAdmission {
         events: &mpsc::Sender<Event>,
     ) {
         let now = std::time::Instant::now();
-        if let Some((sequence, payload)) = crate::voice::decode_upstream(bytes) {
+        if let Some((sequence, source_epoch, payload)) = crate::voice::decode_upstream(bytes) {
             let fresh = self.sequence.is_none_or(|(last, at)| {
                 now.duration_since(at) > Duration::from_secs(2)
                     || crate::voice::newer(last, sequence)
@@ -1363,16 +1365,18 @@ impl VoiceAdmission {
                     owner,
                     generation,
                     sequence,
+                    source_epoch,
                     payload: payload.to_vec(),
                     received: now,
                 });
             }
-        } else if let Some(active) = crate::voice::decode_upstream_activity(bytes)
+        } else if let Some((active, source_epoch)) = crate::voice::decode_upstream_activity(bytes)
             && self.activity.take(tokio::time::Instant::now())
         {
             let _ = events.try_send(Event::VoiceActivity {
                 owner,
                 generation,
+                source_epoch,
                 active,
             });
         }
@@ -1593,8 +1597,13 @@ struct SentVoiceRoutes {
     table: crate::voice::RouteTable,
     conversations: BTreeMap<OwnerId, Option<bri_sim::session::VoiceConversation>>,
 }
+struct VoiceSource {
+    epoch: u64,
+    audience: BTreeMap<OwnerId, Option<bri_sim::session::VoiceConversation>>,
+}
 #[derive(Default)]
 struct VoiceRouting {
+    sources: BTreeMap<OwnerId, VoiceSource>,
     sent: BTreeMap<OwnerId, SentVoiceRoutes>,
     context: BTreeMap<OwnerId, (usize, bri_sim::session::VoiceContext)>,
     refreshed: Option<std::time::Instant>,
@@ -1602,6 +1611,17 @@ struct VoiceRouting {
     next_revision: u64,
 }
 impl VoiceRouting {
+    fn accepts_source(&self, session: &Session, owner: OwnerId, epoch: u64) -> bool {
+        epoch > 0
+            && self.sources.get(&owner).is_some_and(|s| s.epoch == epoch)
+            && self.current_context(session, owner)
+    }
+    fn current_context(&self, session: &Session, owner: OwnerId) -> bool {
+        self.context.get(&owner).is_some_and(|(_, old)| {
+            let current = session.voice_context(owner);
+            old.game == current.game && old.team == current.team
+        })
+    }
     fn refresh(&mut self, session: &mut Session, peers: VoicePeers<'_>, now: std::time::Instant) {
         let context: BTreeMap<_, _> = peers
             .iter()
@@ -1632,6 +1652,43 @@ impl VoiceRouting {
         self.refreshed = Some(now);
         let owners: Vec<_> = peers.iter().map(|(id, _)| *id).collect();
         let mut routes = session.voice_selections(&owners);
+        // Capture scopes use policy-eligible conversations BEFORE moving
+        // distance filtering. Walking through proximity range must not rotate
+        // the capture clock or codec. Provider keys and participant authority
+        // changes do rotate it, even if the sender hears no inbound routes.
+        let mut audiences: BTreeMap<
+            OwnerId,
+            BTreeMap<OwnerId, Option<bri_sim::session::VoiceConversation>>,
+        > = BTreeMap::new();
+        if session.voice_chat() {
+            for (listener, selected) in &routes {
+                for (speaker, selection) in selected {
+                    if !session.is_voice_muted(*speaker) {
+                        audiences
+                            .entry(*speaker)
+                            .or_default()
+                            .insert(*listener, selection.conversation.clone());
+                    }
+                }
+            }
+        }
+        let old_sources = std::mem::take(&mut self.sources);
+        for (speaker, audience) in audiences {
+            let epoch = old_sources
+                .get(&speaker)
+                .filter(|old| {
+                    old.audience == audience
+                        && unchanged.contains(&speaker)
+                        && audience.keys().all(|id| unchanged.contains(id))
+                })
+                .map(|old| old.epoch)
+                .unwrap_or_else(|| {
+                    self.next_revision += 1;
+                    self.next_revision
+                });
+            self.sources
+                .insert(speaker, VoiceSource { epoch, audience });
+        }
         self.sent.retain(|id, _| peers.contains_key(id));
         for (id, peer) in peers.iter() {
             let mut current = routes.remove(id).unwrap_or_default();
@@ -1646,6 +1703,7 @@ impl VoiceRouting {
             });
             let old = self.sent.get(id);
             let metadata = crate::voice::Metadata {
+                source_epoch: self.sources.get(id).map_or(0, |s| s.epoch),
                 enabled: session.voice_chat(),
                 muted: session.voice_mute_set().clone(),
                 conversation: session
@@ -1769,7 +1827,7 @@ fn relay_voice(
     let from = session.voice_origin(speaker);
 
     for (owner, peer) in peers.iter() {
-        if *owner == speaker {
+        if *owner == speaker || !routing.current_context(session, *owner) {
             continue;
         }
         let Some(table) = routing.sent.get(owner) else {
@@ -1802,6 +1860,7 @@ fn relay_voice(
 /// Relay speech activity only to listeners with an eligible audible route.
 fn relay_voice_activity(
     routing: &VoiceRouting,
+    session: &Session,
     peers: VoicePeers<'_>,
     traffic: &Traffic,
     speaker: OwnerId,
@@ -1815,6 +1874,7 @@ fn relay_voice_activity(
             .map_or(0, |r| r.generation);
         let bytes = crate::voice::encode_routed_activity(speaker, active, revision);
         if *owner != speaker
+            && routing.current_context(session, *owner)
             && routing
                 .sent
                 .get(owner)
@@ -2293,8 +2353,8 @@ async fn run(
                     }
                 }
             },
-            Event::Voice{owner,generation,sequence,payload,received}=>{if received.elapsed()<=std::time::Duration::from_millis(100)&&session.voice_chat()&&(VoicePeers {peers:&peers,lobbies:&lobbies}).get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&voice_routing,&session,VoicePeers {peers:&peers,lobbies:&lobbies},&traffic,owner,sequence,&payload);}},
-            Event::VoiceActivity{owner,generation,active}=>{if session.voice_chat()&&!session.is_voice_muted(owner)&&(VoicePeers {peers:&peers,lobbies:&lobbies}).get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&voice_routing,VoicePeers {peers:&peers,lobbies:&lobbies},&traffic,owner,active);}}},
+            Event::Voice{owner,generation,sequence,source_epoch,payload,received}=>{if voice_routing.accepts_source(&session,owner,source_epoch)&&received.elapsed()<=std::time::Duration::from_millis(100)&&session.voice_chat()&&(VoicePeers {peers:&peers,lobbies:&lobbies}).get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&voice_routing,&session,VoicePeers {peers:&peers,lobbies:&lobbies},&traffic,owner,sequence,&payload);}},
+            Event::VoiceActivity{owner,generation,source_epoch,active}=>{if voice_routing.accepts_source(&session,owner,source_epoch)&&session.voice_chat()&&!session.is_voice_muted(owner)&&(VoicePeers {peers:&peers,lobbies:&lobbies}).get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&voice_routing,&session,VoicePeers {peers:&peers,lobbies:&lobbies},&traffic,owner,active);}}},
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=recorder.seat_report(&mut session,owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=recorder.movement(&mut session,owner,sequence,input);}if let Some(camera)=movement.camera{let _=recorder.camera_report(&mut session,owner,camera);}}},
         }},
         _=ticker.tick()=>{
@@ -2308,7 +2368,7 @@ async fn run(
                 .collect();
             for owner in stale_speakers {
                 voice_active.remove(&owner);
-                relay_voice_activity(&voice_routing,VoicePeers {peers:&peers,lobbies:&lobbies}, &traffic, owner, false);
+                relay_voice_activity(&voice_routing,&session,VoicePeers {peers:&peers,lobbies:&lobbies}, &traffic, owner, false);
             }
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             // Ticks the clock dropped still passed for every client.

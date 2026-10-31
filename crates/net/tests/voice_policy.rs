@@ -746,6 +746,18 @@ async fn voice_package_channel_rekeys_without_changing_the_audio_profile() -> an
     .await?;
     let first = fresh_voice_grant(&mut b, a.owner, None).await?;
     let profile = b.voice_link().routes().routes[&a.owner].playback.clone();
+    let talk = a.voice_link();
+    let source = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let epoch = talk.control().metadata.source_epoch;
+            if epoch > 0 {
+                break epoch;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let incoming = talk.routes();
     a.command(Command::Package(PackageCommand {
         package: "custom-voice".into(),
         command: "fixture_channel".into(),
@@ -754,6 +766,18 @@ async fn voice_package_channel_rekeys_without_changing_the_audio_profile() -> an
     .await?;
     fresh_voice_grant(&mut b, a.owner, Some(first)).await?;
     assert_eq!(b.voice_link().routes().routes[&a.owner].playback, profile);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while talk.control().metadata.source_epoch == source {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    assert!(talk.control().metadata.source_epoch > 0);
+    assert_eq!(
+        talk.routes(),
+        incoming,
+        "outgoing channel changes rekey capture even with identical inbound grants"
+    );
     server.stop().await?;
     Ok(())
 }

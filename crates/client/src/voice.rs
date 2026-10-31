@@ -577,6 +577,12 @@ impl VoiceState {
             .map_or_else(bri_net::voice::RouteTable::default, |c| c.routes.clone());
         self.apply_routes(routes);
         if let Some(chat) = &self.chat {
+            chat.set_capture_scope(
+                control
+                    .as_ref()
+                    .filter(|_| link.is_some())
+                    .map_or(0, |c| c.metadata.source_epoch),
+            );
             chat.set_transmit_allowed(self.active && self.focused && !self.server_blocked);
         }
         // State packets are independent of the audio playback device and
@@ -643,7 +649,11 @@ impl VoiceState {
                 // The connection may be closing; a lost frame is a gap in
                 // someone's ears, nothing more.
                 let sequence = self.sequence_base.wrapping_add(frame.sequence);
-                let _ = link.send(sequence, frame.payload.as_bytes());
+                let _ = link.send_captured(
+                    sequence,
+                    frame.payload.capture_scope(),
+                    frame.payload.as_bytes(),
+                );
                 self.sequence = sequence;
             }
             // Everyone else's voice, in.

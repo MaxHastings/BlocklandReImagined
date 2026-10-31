@@ -14,7 +14,7 @@
 //! `voice_device` (feature `cpal-output`).
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use bri_console::Clamp;
 
@@ -124,7 +124,9 @@ pub struct Shared {
     range: AtomicU32,
     transmitting: AtomicBool,
     transmit_allowed: AtomicBool,
+    capture_scope: AtomicU64,
     activity: AtomicBool,
+    activity_scope: AtomicU64,
     level: AtomicU32,
     pub(crate) broken: AtomicBool,
 }
@@ -141,6 +143,7 @@ impl Shared {
         let shared = Self::default();
         shared.apply(settings);
         shared.transmit_allowed.store(true, Ordering::Relaxed);
+        shared.capture_scope.store(1, Ordering::Relaxed);
         shared
     }
     pub fn apply(&self, settings: Settings) {
@@ -162,19 +165,35 @@ impl Shared {
             self.transmitting.store(false, Ordering::Relaxed);
         }
     }
+    /// Opaque capture authorization, independent of input device ownership.
+    /// Changing it invalidates partial and queued speech; zero cannot transmit.
+    pub fn set_capture_scope(&self, scope: u64) {
+        if self.capture_scope.swap(scope, Ordering::AcqRel) != scope {
+            self.transmitting.store(false, Ordering::Relaxed);
+            self.activity.store(false, Ordering::Relaxed);
+        }
+    }
+    pub fn capture_scope(&self) -> u64 {
+        self.capture_scope.load(Ordering::Acquire)
+    }
     /// The push-to-talk control went down or up.
     pub fn set_talking(&self, talking: bool) {
         self.talking.store(talking, Ordering::Relaxed);
     }
     /// Whether frames are being sent right now.
     pub fn transmitting(&self) -> bool {
-        self.transmitting.load(Ordering::Relaxed)
+        let scope = self.capture_scope();
+        scope > 0
+            && self.activity_scope.load(Ordering::Acquire) == scope
+            && self.transmit_allowed.load(Ordering::Relaxed)
+            && self.transmitting.load(Ordering::Relaxed)
     }
     /// Whether the microphone heard a voice a moment ago: its level was above
     /// the threshold within the last 200 ms. Independent of whether anything
     /// is being sent, so a meter can show it while Push To Talk is held.
     pub fn activity(&self) -> bool {
-        self.activity.load(Ordering::Relaxed)
+        self.activity_scope.load(Ordering::Acquire) == self.capture_scope()
+            && self.activity.load(Ordering::Relaxed)
     }
     /// The microphone's recent level, 0..=1 (for a meter).
     pub fn level(&self) -> f32 {
@@ -195,6 +214,7 @@ mod jitter;
 /// packet allocation. Byte zero marks the start of a new talk spurt.
 #[derive(Clone, Copy)]
 pub struct EncodedFrame {
+    capture_scope: u64,
     bytes: [u8; FRAME_BYTES],
     len: usize,
 }
@@ -204,11 +224,15 @@ impl EncodedFrame {
             return None;
         }
         let mut frame = Self {
+            capture_scope: 0,
             bytes: [0; FRAME_BYTES],
             len: bytes.len(),
         };
         frame.bytes[..bytes.len()].copy_from_slice(bytes);
         Some(frame)
+    }
+    pub fn capture_scope(&self) -> u64 {
+        self.capture_scope
     }
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len]
@@ -305,6 +329,7 @@ impl Downsampler {
 
 /// Microphone samples in, voice frames out.
 pub struct Encoder {
+    capture_scope: u64,
     shared: std::sync::Arc<Shared>,
     pending: Vec<f32>,
     codec: Option<opus::Encoder>,
@@ -327,6 +352,7 @@ const VOICE_HANG: u32 = 15;
 impl Encoder {
     pub fn new(shared: std::sync::Arc<Shared>) -> Self {
         Self {
+            capture_scope: shared.capture_scope(),
             shared,
             pending: Vec::with_capacity(FRAME_SAMPLES * 2),
             codec: Codec::encoder(),
@@ -339,6 +365,22 @@ impl Encoder {
     /// Take microphone samples at [`SAMPLE_RATE`]; `send` gets each finished
     /// frame that should go out.
     pub fn feed(&mut self, samples: &[f32], send: &mut impl FnMut(u16, EncodedFrame)) {
+        self.feed_scoped(self.shared.capture_scope(), samples, send);
+    }
+    /// The caller tags the samples when captured, never when dequeued.
+    pub fn feed_scoped(
+        &mut self,
+        scope: u64,
+        samples: &[f32],
+        send: &mut impl FnMut(u16, EncodedFrame),
+    ) {
+        if self.capture_scope != scope {
+            self.capture_scope = scope;
+            self.pending.clear();
+            self.sending = false;
+            self.hang = 0;
+            self.active_hang = 0;
+        }
         for &sample in samples {
             self.pending
                 .push(if sample.is_finite() { sample } else { 0.0 });
@@ -371,12 +413,17 @@ impl Encoder {
         self.shared
             .activity
             .store(self.active_hang > 0, Ordering::Relaxed);
+        self.shared
+            .activity_scope
+            .store(self.capture_scope, Ordering::Release);
         let open = if voice {
             loud
         } else {
             self.shared.talking.load(Ordering::Relaxed)
         };
-        let enabled = self.shared.enabled()
+        let enabled = self.capture_scope > 0
+            && self.capture_scope == self.shared.capture_scope()
+            && self.shared.enabled()
             && !self.shared.disabled.load(Ordering::Relaxed)
             && self.shared.transmit_allowed.load(Ordering::Relaxed);
         if !enabled {
@@ -392,6 +439,7 @@ impl Encoder {
         if sending {
             if let Some(codec) = &mut self.codec {
                 let mut frame = EncodedFrame {
+                    capture_scope: self.capture_scope,
                     bytes: [0; FRAME_BYTES],
                     len: 0,
                 };
@@ -769,6 +817,47 @@ mod tests {
         let mut frames = Vec::new();
         encoder.feed(samples, &mut |_, f| frames.push(f.as_bytes().to_vec()));
         frames
+    }
+
+    #[test]
+    fn capture_scope_keeps_queued_frames_tagged_and_resets_partial_pcm_and_codec() {
+        let shared = settings(Activation::PushToTalk);
+        shared.set_talking(true);
+        shared.set_capture_scope(7);
+        let mut encoder = Encoder::new(shared.clone());
+        let mut queued = vec![];
+        encoder.feed(&tone(2, 0.8), &mut |_, f| queued.push(f));
+        encoder.feed(&vec![0.8; FRAME_SAMPLES / 2], &mut |_, _| panic!("partial"));
+        shared.set_capture_scope(8);
+        assert!(!shared.transmitting());
+        assert!(queued.iter().all(|f| f.capture_scope() == 7));
+        // A capture callback still holding the old scope cannot finish speech
+        // into a currently authorized packet.
+        encoder.feed_scoped(7, &vec![0.8; FRAME_SAMPLES], &mut |_, _| panic!("revoked"));
+        assert!(
+            !shared.activity(),
+            "old capture cannot relabel speech activity"
+        );
+        assert!(!shared.transmitting());
+        let mut fresh = vec![];
+        encoder.feed_scoped(8, &vec![0.0; FRAME_SAMPLES / 2], &mut |_, f| fresh.push(f));
+        assert!(
+            fresh.is_empty(),
+            "old partial samples must not complete a new frame"
+        );
+        encoder.feed_scoped(8, &vec![0.0; FRAME_SAMPLES / 2], &mut |_, f| fresh.push(f));
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].capture_scope(), 8);
+        let mut clean = Encoder::new(shared.clone());
+        let expected = feed(&mut clean, &vec![0.0; FRAME_SAMPLES]);
+        assert_eq!(
+            fresh[0].as_bytes(),
+            expected[0],
+            "old Opus/FEC state must not cross the scope"
+        );
+        shared.set_capture_scope(0);
+        assert!(feed(&mut encoder, &tone(2, 0.8)).is_empty());
+        assert!(shared.level() > 0.0, "preview meter still reads its input");
     }
 
     #[test]

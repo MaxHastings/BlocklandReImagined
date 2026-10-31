@@ -6,7 +6,7 @@
 //! state datagram (both MessagePack) and the readers tell them apart without
 //! decoding. The payload is opaque here: the audio crate's frames.
 //!
-//! Upstream (client to host): marker, [`UPSTREAM`], sequence (u16), payload.
+//! Upstream (client to host): marker, [`UPSTREAM`], sequence (u16), source epoch (u64), payload.
 //! Downstream adds host-stamped speaker, explicit optional position and per-route generation.
 //! Reliable private route tables select positional/global playback and range.
 //! Frames from revoked generations are rejected before entering the mixer.
@@ -41,6 +41,8 @@ pub struct Conversation {
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
+    /// Host-issued capture scope; zero permits no transmission.
+    pub source_epoch: u64,
     pub enabled: bool,
     pub muted: std::collections::BTreeSet<OwnerId>,
     pub conversation: Option<Conversation>,
@@ -68,6 +70,8 @@ impl Control {
     }
     fn valid(&self) -> bool {
         self.revision > 0
+            && self.metadata.source_epoch <= self.revision
+            && (self.metadata.enabled || self.metadata.source_epoch == 0)
             && self.routes.revision <= self.revision
             && self.routes.routes.len() <= bri_admin::MAX_CONNECTIONS
             && (self.metadata.enabled || self.routes.routes.is_empty())
@@ -118,9 +122,9 @@ const UPSTREAM: u8 = 1;
 const DOWNSTREAM: u8 = 2;
 const UPSTREAM_ACTIVITY: u8 = 3;
 const DOWNSTREAM_ACTIVITY: u8 = 4;
-const ACTIVITY_UPSTREAM_LEN: usize = 3;
+const ACTIVITY_UPSTREAM_LEN: usize = 11;
 const ACTIVITY_DOWNSTREAM_LEN: usize = 19;
-const UPSTREAM_HEADER: usize = 4;
+const UPSTREAM_HEADER: usize = 12;
 const DOWNSTREAM_HEADER: usize = 4 + 8 + 8 + 1;
 const POSITION_BYTES: usize = 12;
 /// Received voice frames waiting for the game; the newest are dropped when
@@ -139,7 +143,7 @@ pub fn is_voice(bytes: &[u8]) -> bool {
 }
 
 /// A voice frame as a client sends it.
-pub fn encode_upstream(sequence: u16, payload: &[u8]) -> Result<Vec<u8>> {
+pub fn encode_upstream(sequence: u16, source_epoch: u64, payload: &[u8]) -> Result<Vec<u8>> {
     ensure!(
         !payload.is_empty() && payload.len() <= MAX_PAYLOAD,
         "A voice frame is 1 to {MAX_PAYLOAD} bytes"
@@ -147,13 +151,14 @@ pub fn encode_upstream(sequence: u16, payload: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(UPSTREAM_HEADER + payload.len());
     out.extend_from_slice(&[MARKER, UPSTREAM]);
     out.extend_from_slice(&sequence.to_le_bytes());
+    out.extend_from_slice(&source_epoch.to_le_bytes());
     out.extend_from_slice(payload);
     Ok(out)
 }
 
 /// The sequence and payload of a client's voice datagram, or None when it
 /// is not a well-formed one.
-pub fn decode_upstream(bytes: &[u8]) -> Option<(u16, &[u8])> {
+pub fn decode_upstream(bytes: &[u8]) -> Option<(u16, u64, &[u8])> {
     if bytes.len() <= UPSTREAM_HEADER
         || bytes.len() > UPSTREAM_HEADER + MAX_PAYLOAD
         || bytes[0] != MARKER
@@ -163,6 +168,7 @@ pub fn decode_upstream(bytes: &[u8]) -> Option<(u16, &[u8])> {
     }
     Some((
         u16::from_le_bytes([bytes[2], bytes[3]]),
+        u64::from_le_bytes(bytes[4..12].try_into().ok()?),
         &bytes[UPSTREAM_HEADER..],
     ))
 }
@@ -261,19 +267,22 @@ pub struct VoiceActivity {
 }
 
 /// Client-to-host speech activity (marker, opcode, active byte).
-pub fn encode_upstream_activity(active: bool) -> Vec<u8> {
-    vec![MARKER, UPSTREAM_ACTIVITY, u8::from(active)]
+pub fn encode_upstream_activity(active: bool, source_epoch: u64) -> Vec<u8> {
+    let mut out = vec![MARKER, UPSTREAM_ACTIVITY, u8::from(active)];
+    out.extend_from_slice(&source_epoch.to_le_bytes());
+    out
 }
 
-pub fn decode_upstream_activity(bytes: &[u8]) -> Option<bool> {
+pub fn decode_upstream_activity(bytes: &[u8]) -> Option<(bool, u64)> {
     if bytes.len() != ACTIVITY_UPSTREAM_LEN || bytes[0] != MARKER || bytes[1] != UPSTREAM_ACTIVITY {
         return None;
     }
-    match bytes[2] {
-        0 => Some(false),
-        1 => Some(true),
-        _ => None,
-    }
+    let active = match bytes[2] {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    Some((active, u64::from_le_bytes(bytes[3..11].try_into().ok()?)))
 }
 
 /// Host-to-client speech activity (marker, opcode, owner u64, active byte).
@@ -386,6 +395,7 @@ impl VoiceLink {
                 {
                     let mut held = state.lock().unwrap_or_else(|e| e.into_inner());
                     held.metadata.enabled = false;
+                    held.metadata.source_epoch = 0;
                     held.routes.routes.clear();
                 }
                 // EOF/reset accompanies ordinary kick, map handoff or shutdown:
@@ -436,7 +446,20 @@ impl VoiceLink {
     /// Send one voice frame. Voice is never retransmitted: a frame the
     /// network drops is a 20 ms gap.
     pub fn send(&self, sequence: u16, payload: &[u8]) -> Result<()> {
-        let bytes = encode_upstream(sequence, payload)?;
+        self.send_captured(sequence, self.control().metadata.source_epoch, payload)
+    }
+    /// Send a frame tagged at capture time. Never assign a queued frame the
+    /// current scope: it may have been captured for another conversation.
+    pub fn send_captured(&self, sequence: u16, source_epoch: u64, payload: &[u8]) -> Result<()> {
+        let bytes = encode_upstream(sequence, source_epoch, payload)?;
+        let control = self.control();
+        if self.is_closed()
+            || !control.metadata.enabled
+            || source_epoch == 0
+            || source_epoch != control.metadata.source_epoch
+        {
+            return Ok(());
+        }
         if self.connection.datagram_send_buffer_space() >= bytes.len() + 8 * 1024 {
             self.connection.send_datagram(bytes.into())?;
         }
@@ -446,8 +469,9 @@ impl VoiceLink {
     /// not a claim that the microphone is enabled; callers must gate it with
     /// voice activity detection first.
     pub fn send_activity(&self, active: bool) -> Result<()> {
-        self.connection
-            .send_datagram(encode_upstream_activity(active).into())?;
+        self.connection.send_datagram(
+            encode_upstream_activity(active, self.control().metadata.source_epoch).into(),
+        )?;
         Ok(())
     }
     /// Move the frames received so far into `out`, oldest first.
@@ -515,10 +539,10 @@ mod tests {
 
     #[test]
     fn upstream_frames_round_trip_and_bad_ones_are_refused() {
-        let bytes = encode_upstream(513, &[9; 163]).unwrap();
-        assert_eq!(decode_upstream(&bytes), Some((513, &[9u8; 163][..])));
-        assert!(encode_upstream(0, &[]).is_err());
-        assert!(encode_upstream(0, &[0; MAX_PAYLOAD + 1]).is_err());
+        let bytes = encode_upstream(513, 42, &[9; 163]).unwrap();
+        assert_eq!(decode_upstream(&bytes), Some((513, 42, &[9u8; 163][..])));
+        assert!(encode_upstream(0, 42, &[]).is_err());
+        assert!(encode_upstream(0, 42, &[0; MAX_PAYLOAD + 1]).is_err());
         assert_eq!(decode_upstream(&[MARKER, UPSTREAM, 0, 0]), None);
         assert_eq!(decode_upstream(&[MARKER, DOWNSTREAM, 0, 0, 1]), None);
         assert_eq!(decode_upstream(&[0x95, UPSTREAM, 0, 0, 1]), None);
@@ -540,7 +564,10 @@ mod tests {
         let bad = encode_downstream(1, Some([f32::NAN, 0.0, 0.0]), 0, &[1]);
         assert_eq!(decode_downstream(&bad), None);
         assert_eq!(decode_downstream(&bytes[..DOWNSTREAM_HEADER]), None);
-        assert_eq!(decode_downstream(&encode_upstream(0, &[1]).unwrap()), None);
+        assert_eq!(
+            decode_downstream(&encode_upstream(0, 42, &[1]).unwrap()),
+            None
+        );
     }
 
     #[test]
@@ -582,12 +609,12 @@ mod tests {
     #[test]
     fn activity_packets_round_trip_and_reject_bad_shapes() {
         assert_eq!(
-            decode_upstream_activity(&encode_upstream_activity(true)),
-            Some(true)
+            decode_upstream_activity(&encode_upstream_activity(true, 42)),
+            Some((true, 42))
         );
         assert_eq!(
-            decode_upstream_activity(&encode_upstream_activity(false)),
-            Some(false)
+            decode_upstream_activity(&encode_upstream_activity(false, 42)),
+            Some((false, 42))
         );
         assert_eq!(
             decode_upstream_activity(&[MARKER, UPSTREAM_ACTIVITY, 2]),

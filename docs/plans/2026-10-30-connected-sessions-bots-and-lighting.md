@@ -178,6 +178,15 @@ declarative profiles and parameters rather than scripts running on audio packets
 Packages choose the experience; the engine supplies bounded reusable DSP and
 conversation routing. Ordinary voice remains clean by default.
 
+October 31 scope clarification from Maxwell: do not let voice customization
+become a runaway feature. Cap this release at the bounded gain/high-pass/low-pass
+surface already implemented and the necessary routing/lifecycle corrections.
+Do not add further DSP algorithms, finished presets, an effect graph, plug-in
+hosting, or a general profile-authoring framework. Keep examples small; remaining
+engine seam work must serve the listed use cases without growing this list.
+Capture-scope privacy and ordinary loading voice are correctness work, not new
+customization scope.
+
 The first useful surface should expose composable, bounded gain and filter
 parameters, reusing the listener low-pass/acoustics path where appropriate.
 Add high-pass/band-pass and dynamics primitives only where needed for the

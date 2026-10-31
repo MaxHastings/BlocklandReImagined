@@ -49,7 +49,11 @@ worker runs independently of game frames. Authenticated loading and early gamepl
 connections are published before world assembly through a revocable join lease;
 planned Add-On preparation retains accepted ownership. Cancellation or supersession
 cannot install a late link, and an old loading link cannot replace gameplay.
-Combined PCM continuity and captured-source scope verification remain pending.
+Captured speech carries a host-issued outgoing-conversation epoch from capture
+through the host relay. Queued/partial speech and speech activity from a revoked
+epoch cannot be reassigned to the next conversation; provider keys are evaluated
+before proximity distance filtering. Combined PCM continuity verification remains
+pending.
 
 ## Independent control snapshots
 
@@ -71,8 +75,11 @@ The loading UI uses that independent snapshot for voice state and its plain-text
 conversation caption. Accepted loading permits bound keyboard/side-mouse PTT,
 with held PTT preserved through downloading/loading/game screen transitions.
 Without a rendered gameplay listener, eligible spatial routes play centrally;
-host range checks still apply. Combined PCM continuity and captured-source scope
-remain under development.
+host range checks still apply. Capture-clock boundaries also discard delayed
+pre-transition device buffers while preserving the local input meter. A scope
+change can therefore discard a partial/buffered syllable; this is intentional
+revocation, not a promise of sample-perfect continuity across conversations.
+Combined loading/gameplay PCM continuity remains under development.
 
 ## Native processing parameters
 
