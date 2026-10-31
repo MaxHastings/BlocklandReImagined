@@ -1314,6 +1314,138 @@ fn chat_key_stays_out_of_confirmations() {
     assert!(actions(&mut u).is_empty());
 }
 #[test]
+fn accepted_loading_and_package_download_keep_chat_history_and_the_player_list() {
+    for state in [
+        ConnectionState::Loading {
+            map: "Bedroom".into(),
+            preview: IconRef::None,
+            status: "LOADING".into(),
+            progress: 0.5,
+        },
+        ConnectionState::DownloadingPackages(PackageDownload {
+            server: "Host".into(),
+            packages: vec![],
+            done_bytes: 1,
+            total_bytes: 2,
+        }),
+    ] {
+        let mut u = Ui::new(
+            bri_ui::testing::screens_pack(),
+            UiConfig {
+                size: (800, 600),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        u.core.globals.bind(
+            BindInput::Key(Chord::plain(Key::Escape)),
+            "escapeMenu.toggle();",
+        );
+        u.core.binds.bind(
+            BindInput::Key(Chord {
+                key: Key::Letter('o'),
+                mods: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                },
+            }),
+            "openOptionsWindow",
+        );
+        for (key, cmd) in [
+            (Key::PageUp, "pageUpNewChatHud"),
+            (Key::PageDown, "pageDownNewChatHud"),
+            (Key::F(2), "showPlayerList"),
+            (Key::Letter('t'), "globalChat"),
+            (Key::Letter('w'), "moveforward"),
+            (Key::Space, "jump"),
+        ] {
+            u.core.binds.bind(BindInput::Key(Chord::plain(key)), cmd);
+        }
+        u.apply(UiUpdate::Connection(state));
+        actions(&mut u);
+        for i in 0..40 {
+            u.apply(UiUpdate::Chat {
+                text: format!("line {i}"),
+            });
+        }
+        down(&mut u, Key::F(2));
+        assert_ne!(u.top_id(), ScreenId::PlayerList, "not yet accepted");
+        up(&mut u, Key::F(2));
+        u.handle_input(InputEvent::KeyDown {
+            key: Key::Letter('o'),
+            mods: Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+            repeat: false,
+        });
+        assert_eq!(
+            u.top_id(),
+            ScreenId::Options,
+            "Options works before acceptance"
+        );
+        down(&mut u, Key::Escape);
+        up(&mut u, Key::Escape);
+        assert!(!u.is_open(ScreenId::Options));
+        let utility_actions = actions(&mut u);
+        assert!(
+            utility_actions
+                .iter()
+                .any(|a| matches!(a, UiAction::SaveSettings(_))),
+            "the authored Escape/Done action still saves Options"
+        );
+        assert!(
+            utility_actions.iter().all(|a| matches!(
+                a,
+                UiAction::RefreshVoiceDevices
+                    | UiAction::SetVolume { .. }
+                    | UiAction::SaveSettings(_)
+            )),
+            "Options may apply local settings, never cancel the join or send gameplay commands"
+        );
+        u.apply(UiUpdate::LoadingChat(true));
+        down(&mut u, Key::PageUp);
+        up(&mut u, Key::PageUp);
+        down(&mut u, Key::PageUp);
+        up(&mut u, Key::PageUp);
+        assert!(u.core.chat.scrolled_up(), "loading chat history scrolls");
+        for _ in 0..3 {
+            down(&mut u, Key::PageDown);
+            up(&mut u, Key::PageDown);
+        }
+        assert!(!u.core.chat.scrolled_up(), "can return to live chat");
+        down(&mut u, Key::F(2));
+        up(&mut u, Key::F(2));
+        assert_eq!(u.top_id(), ScreenId::PlayerList);
+        down(&mut u, Key::F(2));
+        up(&mut u, Key::F(2));
+        assert_ne!(u.top_id(), ScreenId::PlayerList);
+        down(&mut u, Key::Letter('t'));
+        up(&mut u, Key::Letter('t'));
+        assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+        down(&mut u, Key::Escape);
+        up(&mut u, Key::Escape);
+        assert!(!u.is_open(ScreenId::MessageInput(ChatChannel::Say)));
+        assert!(
+            !actions(&mut u).contains(&UiAction::CancelConnect),
+            "closing chat does not cancel loading"
+        );
+        down(&mut u, Key::Letter('w'));
+        up(&mut u, Key::Letter('w'));
+        down(&mut u, Key::Space);
+        up(&mut u, Key::Space);
+        assert!(
+            actions(&mut u).is_empty(),
+            "loading shortcuts never enable gameplay binds"
+        );
+    }
+}
+
+#[test]
 fn a_player_the_host_accepted_chats_from_the_loading_screen() {
     let mut u = ui();
     u.apply(UiUpdate::Connection(ConnectionState::Loading {

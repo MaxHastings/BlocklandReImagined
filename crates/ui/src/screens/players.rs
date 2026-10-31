@@ -325,7 +325,7 @@ impl Players {
         let lan = core.players.iter().any(|p| !p.bot && p.trust == "LAN");
         let trust = row.map_or("", |p| p.trust.as_str());
         let (invite_build, invite_full, remove_build, remove_full) = match trust {
-            _ if lan || row.is_none() => (false, false, false, false),
+            _ if !core.in_game() || lan || row.is_none() => (false, false, false, false),
             "Build" => (false, true, true, false),
             "Full" => (false, false, true, true),
             "You" => (false, false, false, false),

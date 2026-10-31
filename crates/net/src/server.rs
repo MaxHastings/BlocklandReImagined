@@ -1310,6 +1310,7 @@ struct Lobby {
     ticket: [u8; 32],
     principal: Option<Principal>,
     shown_talking: Option<Vec<String>>,
+    shown_players: Option<Vec<bri_sim::session::ConnectedPlayer>>,
 }
 /// Unauthenticated connections (QUIC handshake through Welcome) may take at
 /// most this long in total.
@@ -2061,7 +2062,7 @@ async fn run(
                     let name=session.arrivals().remove(&owner).unwrap_or_default();
                     let bytes=match codec::encode(&Message::Arrived{owner,name,arrival:arrival.clone(),chat_cursor:session.chat_cursor()}) {Ok(bytes)=>bytes,Err(error)=>{let _=recorder.disconnect(&mut session,owner);return Err(error)}};
                     if out.try_send(Frame::Ready(Arc::new(bytes))).is_err(){let _=recorder.disconnect(&mut session,owner);anyhow::bail!("Connection writer unavailable");}
-                    lobbies.insert(owner,Lobby{peer:Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk:Arc::new(AtomicBool::new(false))},ticket:token_key(&arrival),principal,shown_talking:None});
+                    lobbies.insert(owner,Lobby{peer:Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk:Arc::new(AtomicBool::new(false))},ticket:token_key(&arrival),principal,shown_talking:None,shown_players:None});
                     Ok(owner)
                 })())? {Ok(arrived)=>arrived,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if arrived.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}
@@ -2173,7 +2174,9 @@ async fn run(
                 // Their typing names still come from authoritative identities.
                 if !lobbies.is_empty(){
                     let talking_names:Vec<_>=session.talking_names().into_values().collect();
+                    let connected=session.connected_players();
                     for lobby in lobbies.values_mut(){if lobby.shown_talking.as_ref()!=Some(&talking_names){lobby.peer.send_message(Kind::Notice,&Message::LobbyTalking(talking_names.clone()));lobby.shown_talking=Some(talking_names.clone());}}
+                    for lobby in lobbies.values_mut(){if lobby.shown_players.as_ref()!=Some(&connected){lobby.peer.send_message(Kind::Notice,&Message::LobbyPlayers(connected.clone()));lobby.shown_players=Some(connected.clone());}}
                 }
                 // Players still loading read and send chat (v20's loading screen).
                 if !chat.is_empty()&&!lobbies.is_empty(){broadcast(lobbies.values().map(|l|&l.peer),Kind::Notice,&Message::LobbyChat(chat.clone()));}

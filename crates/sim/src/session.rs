@@ -14,6 +14,21 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 /// Shared admission and replicated roster budget, including bots and loading players.
 pub const MAX_PARTICIPANTS: usize = bri_package_runtime::ops::MAX_PARTICIPANTS;
+
+/// Public connected-player information, available before the viewer has a body.
+/// Contains no addresses, credentials, administrative settings or control state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectedPlayer {
+    pub owner: OwnerId,
+    pub name: String,
+    pub bot: bool,
+    pub loading: bool,
+    pub score: i64,
+    pub administrator: bool,
+    pub super_admin: bool,
+    pub principal: Option<[u8; 32]>,
+}
 mod admin;
 mod animation;
 mod body_pose;
@@ -1871,6 +1886,36 @@ impl Session {
         self.arrivals
             .iter()
             .map(|(owner, a)| (*owner, a.name.clone()))
+            .collect()
+    }
+    /// A live public roster for accepted connections, including those still
+    /// downloading. This is presentation data and grants no gameplay authority.
+    pub fn connected_players(&self) -> Vec<ConnectedPlayer> {
+        self.peers
+            .iter()
+            .map(|(&owner, p)| ConnectedPlayer {
+                owner,
+                name: p.name.clone(),
+                bot: self.is_bot(owner),
+                loading: false,
+                score: self
+                    .minigames
+                    .player(p.combat.player)
+                    .map_or(0, |s| s.score),
+                administrator: p.actor.administrator,
+                super_admin: self.admin.rank(owner).0,
+                principal: p.principal.map(|p| p.0),
+            })
+            .chain(self.arrivals.iter().map(|(&owner, a)| ConnectedPlayer {
+                owner,
+                name: a.name.clone(),
+                bot: false,
+                loading: true,
+                score: 0,
+                administrator: a.role.is_admin(),
+                super_admin: self.admin.rank(owner).0,
+                principal: a.principal.map(|p| p.0),
+            }))
             .collect()
     }
     /// Authoritative typing names, including accepted connections still loading.

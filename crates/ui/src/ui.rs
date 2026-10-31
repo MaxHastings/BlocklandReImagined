@@ -1915,6 +1915,14 @@ impl Ui {
         self.content.id() == ScreenId::Play && self.core.in_game()
     }
 
+    fn loading_session_active(&self) -> bool {
+        self.core.loading_chat
+            && matches!(
+                self.content.id(),
+                ScreenId::Loading | ScreenId::PackageDownload
+            )
+    }
+
     fn text_focus(&self) -> bool {
         self.dialogs.last().map_or_else(
             || self.content.view().focus.is_some(),
@@ -2834,6 +2842,15 @@ impl Ui {
         } else {
             self.core.globals.command_for_key(key, mods)
         };
+        // Escape belongs to an open dialog/dropdown before the connection's
+        // global escape binding. Closing chat or Options during loading must
+        // not also cancel the join beneath it.
+        let overlay_owns_escape = key == Key::Escape
+            && (self.dialogs.iter().any(|d| !d.passive())
+                || self.content.view().open_popup_node().is_some());
+        let global = global.filter(|cmd| {
+            !(overlay_owns_escape && cmd.eq_ignore_ascii_case("escapeMenu.toggle();"))
+        });
         if !repeat && let Some(cmd) = global.map(str::to_string) {
             self.core.run_command(&cmd, true);
             self.swallow_char = true;
@@ -2901,18 +2918,39 @@ impl Ui {
             self.flush();
             return;
         }
-        // 4c. LoadingGui pushes the move map too, so the chat key opens the
-        // chat box while the player loads, once the host has accepted them.
+        // 4c. Accepted loading connections retain conversation controls.
+        // Resolve the player's bindings, while keeping gameplay commands out
+        // of both map loading and package downloads.
         if !repeat
             && !self.text_focus()
-            && self.content.id() == ScreenId::Loading
-            && self.core.loading_chat
-            && self.dialogs.iter().all(|d| d.passive())
+            && matches!(
+                self.content.id(),
+                ScreenId::Loading | ScreenId::PackageDownload
+            )
+            && self
+                .dialogs
+                .iter()
+                .all(|d| d.passive() || d.id() == ScreenId::PlayerList)
             && let Some(cmd) = self
                 .core
                 .binds
                 .command_for_key(key, mods)
-                .filter(|c| c.eq_ignore_ascii_case("globalChat"))
+                .filter(|c| {
+                    if c.eq_ignore_ascii_case("openOptionsWindow") {
+                        return true;
+                    }
+                    if !self.core.loading_chat {
+                        return false;
+                    }
+                    [
+                        "globalChat",
+                        "pageUpNewChatHud",
+                        "pageDownNewChatHud",
+                        "showPlayerList",
+                    ]
+                    .iter()
+                    .any(|allowed| c.eq_ignore_ascii_case(allowed))
+                })
                 .map(str::to_string)
         {
             self.core.run_command(&cmd, true);
@@ -3242,7 +3280,7 @@ impl Ui {
         let mut dl = DrawList::new(Rect::new(0, 0, w, h));
         let pack = &self.core.pack;
         self.content.draw(pack, &mut dl, &self.core);
-        if self.content.id() == ScreenId::Loading && self.core.loading_chat {
+        if self.loading_session_active() {
             crate::screens::play::loading_chat(pack, &mut dl, &self.core);
         }
         for d in &self.dialogs {

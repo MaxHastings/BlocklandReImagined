@@ -940,7 +940,12 @@ impl App {
                 if let Some(held) = &self.net.arrival
                     && !self.net.attempt.as_ref().is_some_and(|a| a.entered)
                 {
-                    return held.arrival.talking(talking);
+                    // Presence is best-effort, like movement/activity edges.
+                    // A full queue or a lobby writer replaced by the game
+                    // connection cannot make this UI notification fatal.
+                    // The connection worker owns join failures and handoff.
+                    let _ = held.arrival.talking(talking);
+                    return Ok(());
                 }
                 if self.network_view().is_none() {
                     return Ok(());

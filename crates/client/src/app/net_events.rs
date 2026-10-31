@@ -39,6 +39,42 @@ impl App {
         }
         for event in events {
             match event {
+                bri_net::client::ArrivalEvent::Players(players) => {
+                    let Some(held) = &self.net.arrival else {
+                        continue;
+                    };
+                    self.ui.apply_session(
+                        id,
+                        UiUpdate::Players {
+                            rows: players
+                                .into_iter()
+                                .map(|p| PlayerRow {
+                                    id: p.owner,
+                                    name: plain_chat(&p.name),
+                                    bot: p.bot,
+                                    score: p.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                                    admin: p.administrator,
+                                    super_admin: p.super_admin,
+                                    bl_id: p.principal.as_ref().map(crate::trust_list::display_id),
+                                    loading: p.loading,
+                                    ignoring: false,
+                                    // Trust editing is unavailable until gameplay entry.
+                                    trust: if p.owner == held.arrival.owner {
+                                        "You".into()
+                                    } else {
+                                        String::new()
+                                    },
+                                })
+                                .collect(),
+                            server_name: plain_chat(&held.arrival.listing.name),
+                            max_players: held.arrival.listing.max_players,
+                            voice_chat: false,
+                            voice_muted: vec![],
+                            server_voice_muted: vec![],
+                            voice_speaking: vec![],
+                        },
+                    );
+                }
                 bri_net::client::ArrivalEvent::Talking(names) => {
                     self.ui.apply_session(
                         id,

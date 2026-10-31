@@ -772,7 +772,7 @@ fn voice_style(core: &Core) -> Option<bri_content::hud::SpeakerStyle> {
         });
     }
     Some(bri_content::hud::SpeakerStyle {
-        rect: [4.0, 18.0, 300.0, 72.0],
+        rect: [4.0, 18.0, (core.logical.0 - 8).max(24) as f32, 72.0],
         color: [0.7, 0.85, 1.0, 1.0],
         rows: 3,
     })
@@ -781,57 +781,100 @@ fn voice_list_height(core: &Core) -> i32 {
     if core.hud_claimed(bri_content::hud::Region::Voice) || core.voice_speakers.is_empty() {
         return 0;
     }
-    (core.voice_speakers.len().min(3) as i32 + i32::from(core.voice_speakers.len() > 3)) * 18
+    let Some(style) = voice_style(core) else {
+        return 0;
+    };
+    voice_entries(core, &style)
+        .last()
+        .map_or(0, |e| e.rect.bottom() - style.rect[1] as i32)
+}
+struct VoiceEntry {
+    label: String,
+    rect: Rect,
+    alpha: f32,
+    microphone: bool,
+}
+fn voice_entries(core: &Core, style: &bri_content::hud::SpeakerStyle) -> Vec<VoiceEntry> {
+    let count = core.voice_speakers.len().min(usize::from(style.rows));
+    let labels = core
+        .voice_speakers
+        .iter()
+        .take(count)
+        .map(|speaker| {
+            (
+                if speaker.label.is_empty() {
+                    speaker.name.clone()
+                } else {
+                    format!("{} · {}", speaker.name, speaker.label)
+                },
+                speaker.alpha,
+                true,
+            )
+        })
+        .chain((core.voice_speakers.len() > count).then(|| {
+            (
+                format!("+{} speaking", core.voice_speakers.len() - count),
+                1.0,
+                false,
+            )
+        }));
+    let width = (style.rect[2] as i32).max(1);
+    let (mut x, mut y) = (0, 0);
+    let mut entries = Vec::new();
+    for (label, alpha, microphone) in labels {
+        let entry_width = (View::profile_text_width(&core.pack, "MM_LeftProfile", &label)
+            + if microphone { 19 } else { 0 })
+        .clamp(1, width);
+        if x > 0 && x + entry_width > width {
+            x = 0;
+            y += 18;
+        }
+        if y + 18 > style.rect[3] as i32 {
+            break;
+        }
+        entries.push(VoiceEntry {
+            label,
+            alpha,
+            microphone,
+            rect: Rect::new(
+                style.rect[0] as i32 + x,
+                style.rect[1] as i32 + y,
+                entry_width,
+                18,
+            ),
+        });
+        x += entry_width + 12;
+    }
+    entries
 }
 fn add_voice_names(v: &mut View, core: &Core) {
     let Some(style) = voice_style(core) else {
         return;
     };
-    let count = core.voice_speakers.len().min(usize::from(style.rows));
-    for (row, speaker) in core.voice_speakers.iter().take(count).enumerate() {
-        let label = if speaker.label.is_empty() {
-            speaker.name.clone()
-        } else {
-            format!("{} · {}", speaker.name, speaker.label)
-        };
-        let rect = Rect::new(
-            style.rect[0] as i32,
-            style.rect[1] as i32 + row as i32 * 18,
-            style.rect[2] as i32,
-            18,
-        );
+    for entry in voice_entries(core, &style) {
+        let rect = entry.rect;
         // Plain text never interprets player names as ML markup.
-        icon(
-            v,
-            Rect::new(rect.x, rect.y + 1, 14, 14),
-            &IconRef::External(crate::api::VOICE_ICON_MICROPHONE),
-            [180, 218, 255, (255.0 * speaker.alpha) as u8],
-        );
+        if entry.microphone {
+            icon(
+                v,
+                Rect::new(rect.x, rect.y + 1, 14, 14),
+                &IconRef::External(crate::api::VOICE_ICON_MICROPHONE),
+                [180, 218, 255, (255.0 * entry.alpha) as u8],
+            );
+        }
+        let inset = if entry.microphone { 19 } else { 0 };
         let node = v.add(
             v.root,
             text(
                 "MM_LeftProfile",
-                Rect::new(rect.x + 19, rect.y, rect.w - 19, rect.h),
-                &label,
+                Rect::new(rect.x + inset, rect.y, (rect.w - inset).max(1), rect.h),
+                &entry.label,
             ),
         );
         v.state(node).text_color = Some(style.color.map(|c| (c * 255.0) as u8));
         if let Some(tint) = &mut v.state(node).text_color {
-            tint[3] = (f32::from(tint[3]) * speaker.alpha) as u8;
+            tint[3] = (f32::from(tint[3]) * entry.alpha) as u8;
         }
-    }
-    if core.voice_speakers.len() > count {
-        named_text(
-            v,
-            "MM_LeftProfile",
-            Rect::new(
-                style.rect[0] as i32,
-                style.rect[1] as i32 + count as i32 * 18,
-                style.rect[2] as i32,
-                18,
-            ),
-            &format!("+{} speaking", core.voice_speakers.len() - count),
-        );
     }
 }
 /// NewChatHud's text, and the "VVV" indicator on its last line while
@@ -1413,7 +1456,14 @@ mod voice_speaker_tests {
         assert!(labels.iter().any(|t| t.contains("Player0 · Radio 1")));
         assert!(labels.contains(&"+2 speaking"));
         assert!(!labels.iter().any(|t| t.contains("Player3")));
-        assert_eq!(voice_list_height(&ui.core), 72);
+        assert_eq!(voice_list_height(&ui.core), 18);
+        let names: Vec<_> = v
+            .nodes
+            .iter()
+            .filter(|n| n.ctrl.text.as_ref().is_some_and(|t| t.contains("Player")))
+            .collect();
+        assert_eq!(names[0].ctrl.position[1], names[1].ctrl.position[1]);
+        assert!(names[0].ctrl.position[0] < names[1].ctrl.position[0]);
         assert!(
             v.nodes
                 .iter()

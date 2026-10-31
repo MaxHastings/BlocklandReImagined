@@ -11,6 +11,7 @@ use bri_net::{
 use bri_package::{environment::Environment, packages::PackageSet, sync::Cache};
 use bri_progress::Progress;
 use bri_sim::session::{Command, Notice};
+use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Arc, time::Duration};
 
 mod common;
@@ -94,6 +95,24 @@ async fn loading_until(
             client.receive().await?;
         }
         anyhow::Ok(())
+    })
+    .await?
+}
+
+/// Read the loading connection until its live public roster meets the condition.
+async fn arrival_players(
+    arrival: &mut Arrival,
+    wanted: impl Fn(&[bri_sim::session::ConnectedPlayer]) -> bool,
+) -> Result<Vec<bri_sim::session::ConnectedPlayer>> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match arrival.next().await {
+                Some(ArrivalEvent::Players(rows)) if wanted(&rows) => return Ok(rows),
+                Some(ArrivalEvent::Closed(reason)) => anyhow::bail!("closed: {reason}"),
+                None => anyhow::bail!("the loading connection ended"),
+                _ => {}
+            }
+        }
     })
     .await?
 }
@@ -230,6 +249,33 @@ async fn a_joiner_is_connected_and_chats_while_downloading_then_spawns() -> Resu
     // He is on her player list already, as loading.
     let bob_owner = bob.owner;
     loading_until(&mut ann, |l| l.get(&bob_owner).is_some_and(|n| n == "Bob")).await?;
+    let rows = arrival_players(&mut bob, |rows| {
+        rows.iter().any(|p| p.name == "Ann" && !p.loading)
+            && rows.iter().any(|p| p.owner == bob_owner && p.loading)
+    })
+    .await?;
+    assert_eq!(
+        rows.iter()
+            .find(|p| p.owner == bob_owner)
+            .unwrap()
+            .principal,
+        Some(Sha256::digest(bob_identity.public_key()).into())
+    );
+    let cara = Arrival::open(
+        server.address,
+        &pin,
+        "Cara".into(),
+        None,
+        &identity(ids.path(), "cara")?,
+    )
+    .await?;
+    let cara_owner = cara.owner;
+    arrival_players(&mut bob, |rows| {
+        rows.iter().any(|p| p.owner == cara_owner && p.loading)
+    })
+    .await?;
+    cara.close();
+    arrival_players(&mut bob, |rows| !rows.iter().any(|p| p.owner == cara_owner)).await?;
 
     // Both ways while he waits.
     bob.say("hi, still loading".into())?;

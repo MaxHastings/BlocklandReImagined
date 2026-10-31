@@ -1306,6 +1306,8 @@ impl From<&[u8]> for HostPin {
 /// What a loading connection ([`Arrival`]) hears from the host.
 #[derive(Debug, Clone)]
 pub enum ArrivalEvent {
+    /// Current public roster, including accepted loading connections.
+    Players(Vec<bri_sim::session::ConnectedPlayer>),
     /// New chat lines, oldest first; each id above every one before.
     Chat(Vec<bri_sim::session::ChatLine>),
     /// Current typing names, including accepted players without a body yet.
@@ -1415,6 +1417,11 @@ impl Arrival {
                         ArrivalEvent::Chat(lines)
                     }
                     Ok(Message::LobbyTalking(names)) => ArrivalEvent::Talking(names),
+                    Ok(Message::LobbyPlayers(players))
+                        if players.len() <= bri_sim::session::MAX_PARTICIPANTS =>
+                    {
+                        ArrivalEvent::Players(players)
+                    }
                     Ok(Message::Notice(notice)) => ArrivalEvent::Notice(notice),
                     Ok(_) => continue,
                     Err(error) => {

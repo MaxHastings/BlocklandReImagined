@@ -1,5 +1,5 @@
 #[test]
-fn accepted_loading_chat_routes_real_ui_typing_to_authority_and_back() -> anyhow::Result<()> {
+fn accepted_loading_chat_routes_ui_typing_and_survives_transport_close() -> anyhow::Result<()> {
     use super::*;
     use bri_ui::input::{InputEvent, Key, Modifiers};
     let f = ContentRoot::synthetic()?;
@@ -89,6 +89,12 @@ fn accepted_loading_chat_routes_real_ui_typing_to_authority_and_back() -> anyhow
                 .iter()
                 .map(String::as_str)
                 .eq(expected.iter().copied())
+                && app
+                    .ui
+                    .core
+                    .players
+                    .iter()
+                    .any(|p| p.name == "Bob" && p.loading)
             {
                 return Ok(());
             }
@@ -102,20 +108,51 @@ fn accepted_loading_chat_routes_real_ui_typing_to_authority_and_back() -> anyhow
     };
     wait(&mut app, &["Bob"])?;
     assert!(
+        app.ui
+            .core
+            .players
+            .iter()
+            .any(|p| p.name == "Bob" && p.loading),
+        "the accepted loading connection receives the authoritative roster"
+    );
+    assert!(
         app.network_view().is_none(),
         "loading typing needs no spawned body"
     );
     let named = app.ui.draw().cmds;
     app.ui.handle_input(InputEvent::KeyDown {
-        key: Key::Escape,
+        key: Key::Return,
         mods: Modifiers::NONE,
         repeat: false,
     });
     app.dispatch()?;
     wait(&mut app, &[])?;
     assert_ne!(app.ui.draw().cmds, named);
-    app.net.arrival.take();
     app.runtime.block_on(server.stop())?;
+    // The same closed-writer boundary occurs when a successful game join
+    // replaces its loading connection. A late typing edge is UI presence,
+    // never an application-fatal network operation.
+    let start = std::time::Instant::now();
+    while app
+        .net
+        .arrival
+        .as_ref()
+        .context("Loading arrival ended before the transport-close regression")?
+        .arrival
+        .talking(false)
+        .is_ok()
+    {
+        anyhow::ensure!(
+            start.elapsed() < Duration::from_secs(5),
+            "loading writer never closed"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    app.ui.core.request(UiAction::StartTyping);
+    app.dispatch()?;
+    app.ui.core.request(UiAction::StopTyping);
+    app.dispatch()?;
+    app.net.arrival.take();
     Ok(())
 }
 

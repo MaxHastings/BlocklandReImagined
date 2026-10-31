@@ -88,6 +88,14 @@ long-run movement report and destroyed-brick attachments/spawners. Newly arrivin
 reports get explicit triage; they do not silently expand or reduce the baseline.
 This is a release workload agreement, not a project-wide feature freeze.
 
+October 31 explicit additions: loading chat paging/F2 with a real roster;
+the reported closed-chat-channel exit during friend-server map loading; and
+modder VoIP composition seams as scoped in the detailed plan. Maxwell clarified
+that modders own finished effects/presets and radio add-ons; native bounded
+parameters, routing and lifecycle hooks are the engine deliverable. The current
+prepared ambience stays; no replacement audio or additional playtest is pending. New issues 416/417 have been found
+and require explicit owner/scope triage rather than an assumed blanket port.
+
 Routine engineering decisions, evidence-backed pivots and private preview builds
 proceed autonomously once approved. Return to Maxwell for a material acceptance
 scope change or a consequential unresolved product choice. Maxwell subsequently

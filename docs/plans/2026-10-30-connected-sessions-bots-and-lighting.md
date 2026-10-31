@@ -138,6 +138,15 @@ game notices, team messages and kill feeds when reproducing the report.
 
 ### Implementation and acceptance
 
+October 31 reports extend this same loading experience: preserve bound chat
+Page Up/Page Down and F2/live roster during accepted add-on download and map
+loading, plus Ctrl+O/Options throughout loading even before acceptance, with no
+gameplay-input leakage. Speaking names use a horizontal row with a microphone
+beside each name and bounded wrapping, per Maxwell's supplied screenshot feedback.
+A closed loading typing channel must
+not exit the application; verify both transport replacement and failed joins.
+See the [incident/input receipt](../progress/2026-10-31-v043-loading-input-and-exit.md).
+
 Extend the arrival protocol and read-only policy view with the minimal necessary
 connection/conversation state. Reuse VoiceLink, Opus, route revisions and existing
 audio queues; maintain one capture/playout lifecycle across connection replacement.
@@ -160,6 +169,51 @@ for death eligibility; independently configurable death policy can use the exist
 package settings mechanism if needed, rather than forcing extra settings into this
 increment. Test live changes between modes so buffered speech cannot restore an
 obsolete route or carry Global eligibility into a restricted conversation.
+
+### Modder VoIP effects (October 31 addition)
+
+Maxwell explicitly requested useful creative voice-filter capabilities for modders.
+Build on the existing authoritative route policy and native audio pipeline; expose
+declarative profiles and parameters rather than scripts running on audio packets.
+Packages choose the experience; the engine supplies bounded reusable DSP and
+conversation routing. Ordinary voice remains clean by default.
+
+The first useful surface should expose composable, bounded gain and filter
+parameters, reusing the listener low-pass/acoustics path where appropriate.
+Add high-pass/band-pass and dynamics primitives only where needed for the
+supported package interface. Maxwell clarified that finished radio, telephone,
+helmet, robot or other effect presets are not release requirements: modders own
+those choices, tuning, channels, interference, clicks and HUD presentation.
+Small documented examples and known-signal fixtures demonstrate composition;
+they are not bundled replacement add-ons. No scripts run on audio packets.
+
+Allow an authorized route to select a profile, gain and spatial presentation per
+receiver: a personal radio is nonpositional; an intercom/PA can originate at an
+authored world speaker; helmets, sealed rooms, walls or water can muffle an
+otherwise eligible route. Those world conditions come from grounded native data
+or explicit package policy, not content-name guesses. Prefer one intelligible
+route when proximity and radio both reach the same receiver, with explicit
+mix/priority policy to avoid accidental echo. Transmit-start/end hooks or cues
+let packages add radio clicks, squelch and HUD indicators without polling every
+audio frame. Channel/team/range/transmitter eligibility remains host-authoritative.
+
+Effects never grant access to a conversation, bypass mute/death/team rules, send
+raw microphone audio to scripts, or select arbitrary native plug-ins/files.
+Preserve each player's voice-volume/mute controls and provide an intelligibility
+preference that can soften optional distortion without expanding eligibility.
+Validate finite bounded parameters and profile count, smooth live changes, and
+clear decoder/filter/noise state when a route is revoked or replaced so stale
+speech cannot leak through a new effect profile. Reuse stable package/profile
+identity and version any wire/save additions under the existing alpha rules.
+
+Acceptance: device-free known-signal tests prove the requested frequency response
+and gain without clipping/nonfinite output; actual authorized QUIC conversations
+prove profile selection, world-speaker versus personal-radio placement, route
+priority, live changes/mute/revocation and clean loading-to-game handoff. Check
+bounded DSP/queue cost under the supported speaker count. Keep ambitious pitch
+shifting/convolution and arbitrary effect graphs out unless existing mechanisms
+support them with clear product value; this addition is useful modder control,
+not a replacement audio workstation.
 
 ## A creator can leave a running minigame
 
@@ -830,3 +884,7 @@ Recommended approval contract: approval of this plan authorizes implementation,
 private previews and publication once these conditions pass, without repeated
 routine permission requests. Material scope changes or unresolved acceptance
 failures return to Maxwell; they are not silently deferred to make a release.
+
+October 31 audio confirmation: Maxwell will keep the prepared indoor/outdoor OGG
+loops. No replacement assets or further manual audio edits are pending; retain
+the established +4 dB release baseline and balanced output.

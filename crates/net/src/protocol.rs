@@ -1585,6 +1585,8 @@ pub enum Message {
     LobbyChat(Vec<bri_sim::session::ChatLine>),
     /// Authoritative typing names visible to a client still loading.
     LobbyTalking(Vec<String>),
+    /// Public live player-list rows for an accepted loading connection.
+    LobbyPlayers(Vec<bri_sim::session::ConnectedPlayer>),
     /// The join was refused because these shared packages differ. A client
     /// can fetch what it lacks from the server and join again
     /// ([`crate::client::Client::connect_fetching`]).

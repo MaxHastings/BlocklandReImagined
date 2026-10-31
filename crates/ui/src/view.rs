@@ -930,8 +930,11 @@ impl View {
 
     /// `getPixelWidth`: the width of a control's text in its profile font.
     pub fn pixel_width(&self, pack: &Pack, id: NodeId) -> i32 {
-        Self::profile_font(pack, &self.nodes[id].ctrl.style)
-            .map_or(0, |font| font.width(&self.text_of(id)))
+        Self::profile_text_width(pack, &self.nodes[id].ctrl.style, &self.text_of(id))
+    }
+
+    pub fn profile_text_width(pack: &Pack, profile: &str, text: &str) -> i32 {
+        Self::profile_font(pack, profile).map_or(0, |font| font.width(text))
     }
 
     /// Line height of a control's profile font.
