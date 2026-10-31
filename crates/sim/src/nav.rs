@@ -2193,6 +2193,20 @@ impl Search {
     pub fn explored(&self) -> usize {
         self.came.len()
     }
+    /// A fully exhausted frontier stayed within `radius` of its start.
+    /// A time-slice or expansion limit is never evidence of confinement.
+    pub fn confined(&self, radius: f32) -> bool {
+        radius.is_finite()
+            && radius > 0.0
+            && self.bound > radius
+            && self.start.is_some()
+            && self.pending.is_none()
+            && self.open.is_empty()
+            && self
+                .came
+                .keys()
+                .all(|node| node.feet().distance(self.started) <= radius)
+    }
     /// Search on until done or the tick's sampling budget is spent.
     pub fn step(&mut self, nav: &mut Nav, ground: &Ground, body: &Body) -> Option<Found> {
         // Where a jet leg would land: the goal's own floor, or, where
@@ -2605,6 +2619,10 @@ mod tests {
                 );
                 if search.resume() {
                     continued = true;
+                    assert!(
+                        !search.confined(1.0),
+                        "a retained frontier is not confinement"
+                    );
                 } else {
                     break;
                 }
@@ -2612,6 +2630,10 @@ mod tests {
         }
         assert!(continued, "the first limit allowed only one expansion");
         assert!(search.came.len() <= MAX_SAMPLES);
+        assert!(
+            !search.confined(1.0),
+            "reachable space outside the radius is not confined"
+        );
         assert!(
             !search.resume(),
             "an exhausted graph remains a bounded failure"

@@ -182,7 +182,10 @@ bot does through the same code.
    that keeps trying to get somewhere and stays within 2 units of where it
    began is trapped (bricks respawned round it): if the kind opts in, past 10 s its Respawn
    option rises, and once sure it gives the command a player gives
-   (Ctrl+K). Respawn scores 0 with an enemy in sight, when hurt, or while
+   (Ctrl+K). An exhausted, small navigation region can also establish
+   confinement for an opted-in kind, even if it paces inside; the observation
+   is invalidated when geometry, nearby actors or control changes. A search
+   stopped by a work limit never establishes confinement. Respawn scores 0 with an enemy in sight, when hurt, or while
    carrying, so it is never a way out of a fight; drivers instead brake, replan and
    relinquish an unproductive seat. Shared claims are exclusive advisory
    intentions, released on success, preemption or invalidation. A claim never

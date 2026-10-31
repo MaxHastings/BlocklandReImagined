@@ -330,6 +330,18 @@ fn trap_distance(a: Vec3, b: Vec3, height_progress: bool) -> f32 {
         flat(a - b).length()
     }
 }
+/// A confined-area observation cannot outlive its geometry, actor occupancy,
+/// or the bot moving outside the explored region.
+fn valid_confinement(
+    observation: Option<(Vec3, u64, u64)>,
+    feet: Vec3,
+    epoch: u64,
+    other_near: bool,
+) -> Option<(Vec3, u64, u64)> {
+    observation.filter(|(at, _, observed_epoch)| {
+        *observed_epoch == epoch && !other_near && at.distance(feet) <= 2.0 * PINNED
+    })
+}
 /// How far either way a search sweeps its view (all round), and the
 /// ticks between the points it looks to.
 const SWEEP: f32 = std::f32::consts::PI;
@@ -567,6 +579,8 @@ struct Brain {
     /// Where it has been trying to get away from, since when, and when it
     /// last tried (`trapped`).
     pinned: Option<(Vec3, u64, u64)>,
+    /// Exhausted local walk graph, tied to the collision revision and pose.
+    confined: Option<(Vec3, u64, u64)>,
     /// Where this life began, and whether it began by respawning itself:
     /// trapped again there, a respawn would only bring it back (`trapped`).
     life: Option<(Vec3, bool)>,
@@ -832,6 +846,7 @@ impl Brain {
             pressed: MoveInput::default(),
             sweep_from: None,
             pinned: None,
+            confined: None,
             life: None,
             yaw: 0.0,
             pitch: 0.0,
@@ -942,6 +957,7 @@ impl Brain {
     }
     fn navigate_as(&mut self, body: &Body) {
         if self.path_body.as_ref() != Some(body) {
+            self.confined = None;
             self.path_body = Some(body.clone());
             self.drive_departure = None;
             self.vehicle_detour = None;
@@ -1761,6 +1777,7 @@ impl Session {
             brain.breach = breach::State::default();
             brain.chase_offset = Vec3::ZERO;
             brain.pinned = None;
+            brain.confined = None;
             // A life it ended itself begins where respawning brought it.
             brain.life = brain
                 .life
@@ -1776,6 +1793,7 @@ impl Session {
         // Held still by the rules: it stands, holding its fire.
         if self.bots.brains.get(&bot).is_some_and(|b| b.resting) {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.confined = None;
             brain.objective.suspend(tick);
             brain.native_combat_tick = None;
             brain.objective_tool = false;
@@ -1799,6 +1817,7 @@ impl Session {
         // (`mountObject`): its brain rests.
         if self.riding.driver_of(bot).is_some() || self.riding.is_riding(bot) {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.confined = None;
             brain.objective.suspend(tick);
             brain.native_combat_tick = None;
             brain.objective_tool = false;
@@ -2289,6 +2308,30 @@ impl Session {
                         return None;
                     }
                     let explored = brain.search.as_ref().map_or(0, Search::explored);
+                    let confinement_radius = 2.0 * PINNED;
+                    if brain.kind.weight("respawn") > 0.0
+                        && !body.conservative
+                        && !ground.bodies.iter().any(|(min, max)| {
+                            let centre = (*min + *max) * 0.5;
+                            centre.distance(feet)
+                                < confinement_radius + (*max - *min).length() * 0.5
+                        })
+                        && flat(point - feet).length() > confinement_radius
+                        && matches!(found, Found::Partial(_))
+                        && brain
+                            .search
+                            .as_ref()
+                            .is_some_and(|s| s.confined(confinement_radius))
+                    {
+                        let epoch = simulation.support_epoch();
+                        let since = brain
+                            .confined
+                            .filter(|(at, _, old_epoch)| {
+                                *old_epoch == epoch && at.distance(feet) <= confinement_radius
+                            })
+                            .map_or(tick, |(_, since, _)| since);
+                        brain.confined = Some((feet, since, epoch));
+                    }
                     brain.search = None;
                     if let Found::Partial(path) = &found
                         && let Some(goal) = brain.goal
@@ -2880,6 +2923,15 @@ impl Session {
         // Whether it may respawn itself, trapped: not while it rides, nor
         // where a respawn it chose brought it (it would only come back),
         // and only as the game's rules let a player (`allow_suicide`).
+        let confinement_radius = 2.0 * PINNED;
+        let epoch = self.simulation.support_epoch();
+        let other_near = self.bots.brains[&bot].confined.is_some()
+            && self.peers.iter().any(|(owner, peer)| {
+                *owner != bot
+                    && peer.combat.alive
+                    && Vec3::from(peer.player.state().feet).distance(feet)
+                        < confinement_radius + peer.player.tuning().width
+            });
         let respawn_worth = {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             let (began, ended) = match brain.life {
@@ -2891,7 +2943,13 @@ impl Session {
                 && trap_distance(feet, began, state.grounded || wet || state.jetting)
                     <= 2.0 * PINNED;
             brain.life = Some((began, ended));
-            let worth = trapped(brain.pinned);
+            brain.confined = valid_confinement(brain.confined, feet, epoch, other_near)
+                .filter(|_| brain.kind.weight("respawn") > 0.0);
+            let confined_worth = brain
+                .confined
+                .filter(|_| state.grounded && !wet)
+                .map_or(0.0, |(at, since, _)| trapped(Some((at, since, tick))));
+            let worth = trapped(brain.pinned).max(confined_worth);
             if worth > 0.0
                 && !ended
                 && self.mounted(bot).is_none()
@@ -4648,6 +4706,15 @@ mod footwork_tests {
 #[cfg(test)]
 mod trap_progress_tests {
     use super::*;
+
+    #[test]
+    fn confinement_evidence_expires_on_geometry_actor_or_location_change() {
+        let observed = Some((Vec3::ZERO, 100, 7));
+        assert_eq!(valid_confinement(observed, Vec3::X, 7, false), observed);
+        assert!(valid_confinement(observed, Vec3::X, 8, false).is_none());
+        assert!(valid_confinement(observed, Vec3::X, 7, true).is_none());
+        assert!(valid_confinement(observed, Vec3::X * 5.0, 7, false).is_none());
+    }
 
     #[test]
     fn climbing_is_progress_but_a_stationary_bot_can_still_be_trapped() {
