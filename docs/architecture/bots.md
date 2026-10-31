@@ -13,7 +13,10 @@ bot does through the same code.
    from, and an enemy that went through a portal. Memory fades after the
    kind's `memory_seconds`. Evidence stores the enemy identity, observed
    position, observation tick and expiry. Hidden movement never refreshes it;
-   death, removal or a changed alliance invalidates hostility. A kind with
+   death, removal or a changed alliance invalidates hostility. A separate
+   local search commitment pauses while its pursuit route is being calculated
+   or followed; it does not change the observation's timestamp or make it
+   fresh news for allies. A kind with
    `alerts_allies` (on by default; Bot_Hole's `hAlertOtherBots`) shares sightings and hits with
    nearby allies (`hear_alerts`, after every bot has stepped). A receiver keeps
    the observation's original age and accepts newer evidence, without extending

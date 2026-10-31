@@ -21,6 +21,9 @@ pub(super) struct State {
     /// for it, and again whenever it stops waiting for its route.
     until: Option<u64>,
     expired: bool,
+    /// Local search commitment, separate from the observation's expiry.
+    intent_until: Option<u64>,
+    last_route_tick: Option<u64>,
 }
 impl State {
     pub(super) fn clear(&mut self) {
@@ -64,15 +67,40 @@ impl State {
         self.next = 0;
         self.until = None;
         self.expired = false;
+        self.intent_until = Some(evidence.expires);
+        self.last_route_tick = Some(evidence.observed);
     }
 
     /// The bot is still finding its route to the current destination: the
     /// time it is given there starts after computation and traversal, so a
     /// search that waits its turn or climbs a long staircase is not over
     /// before reaching its destination. The caller still enforces evidence
-    /// expiry and physical stall recovery while following the route.
-    pub(super) fn routing(&mut self) {
+    /// expiry remains unchanged; only this bot's search commitment pauses.
+    /// Repeated calls in one tick and gaps between route attempts add no time.
+    pub(super) fn routing(&mut self, tick: u64) {
         self.until = None;
+        if self
+            .last_route_tick
+            .is_some_and(|last| last.checked_add(1) == Some(tick))
+            && let Some(until) = self.intent_until.as_mut()
+        {
+            *until = until.saturating_add(1);
+        }
+        self.last_route_tick = Some(tick);
+    }
+
+    /// The original dated observation while the local search commitment is
+    /// alive. Its expiry is never rewritten or offered as fresh allied news.
+    pub(super) fn retained(&self, tick: u64) -> Option<Knowledge> {
+        self.evidence
+            .filter(|_| !self.expired && self.intent_until.is_some_and(|until| tick < until))
+    }
+
+    pub(super) fn superseded_by(&self, newer: Knowledge) -> bool {
+        self.evidence.is_some_and(|old| {
+            newer.observed > old.observed
+                || newer.observed == old.observed && newer.subject != old.subject
+        })
     }
 
     /// Whether every destination for this evidence was tried and none
@@ -108,8 +136,18 @@ impl State {
             self.observe(evidence, feet);
             route_failed = false;
         }
-        // Keep the earlier expiry if the same evidence was re-shared.
-        let expires = self.evidence?.expires.min(evidence.expires);
+        // A shorter expiry from the same observation also shortens the
+        // commitment; later re-shares cannot increase it.
+        if let Some(stored) = self.evidence.as_mut()
+            && evidence.expires < stored.expires
+        {
+            let reduction = stored.expires - evidence.expires;
+            stored.expires = evidence.expires;
+            self.intent_until = self
+                .intent_until
+                .map(|until| until.saturating_sub(reduction));
+        }
+        let expires = self.intent_until?;
         if tick >= expires {
             self.expired = true;
             return None;
@@ -223,7 +261,7 @@ mod tests {
         assert_eq!(s.next(e, feet, 0, false, 0.0), Some(Vec3::ZERO));
         // Its route takes ten seconds to find.
         for tick in 1..1200 {
-            s.routing();
+            s.routing(tick);
             assert_eq!(s.next(e, feet, tick, false, 0.0), Some(Vec3::ZERO));
         }
         // If the caller stops reporting route work/traversal, the ordinary
@@ -231,6 +269,24 @@ mod tests {
         assert_eq!(s.next(e, feet, 1200, false, 0.0), Some(Vec3::ZERO));
         assert_eq!(s.next(e, feet, 1199 + 359, false, 0.0), Some(Vec3::ZERO));
         assert_ne!(s.next(e, feet, 1199 + 360, false, 0.0), Some(Vec3::ZERO));
+    }
+    #[test]
+    fn navigation_pauses_search_intent_without_refreshing_observation() {
+        let mut s = State::default();
+        let mut e = evidence(1, Vec3::ZERO);
+        e.expires = 5;
+        let feet = Vec3::Z * 8.0;
+        assert_eq!(s.next(e, feet, 1, false, 0.0), Some(Vec3::ZERO));
+        for tick in 2..=20 {
+            s.routing(tick);
+            assert_eq!(s.retained(tick).unwrap().expires, 5);
+            assert_eq!(s.next(e, feet, tick, false, 0.0), Some(Vec3::ZERO));
+        }
+        assert!(
+            s.retained(23).is_some(),
+            "remaining search time survives the route"
+        );
+        assert!(s.retained(24).is_none(), "time resumes once routing stops");
     }
     #[test]
     fn exhaustion_is_for_the_evidence_it_searched() {
@@ -254,6 +310,20 @@ mod tests {
         assert_eq!(s.next(e, Vec3::Z * 8.0, 11, false, 0.0), None);
     }
     #[test]
+    fn a_shorter_relay_deadline_stays_short_and_duplicate_route_ticks_do_not_extend_it() {
+        let mut s = State::default();
+        let mut e = evidence(1, Vec3::ZERO);
+        e.expires = 100;
+        assert!(s.next(e, Vec3::Z * 8.0, 2, false, 0.0).is_some());
+        s.routing(2);
+        s.routing(2);
+        e.expires = 10;
+        assert!(s.next(e, Vec3::Z * 8.0, 3, false, 0.0).is_some());
+        e.expires = 1000;
+        assert!(s.next(e, Vec3::Z * 8.0, 10, false, 0.0).is_some());
+        assert_eq!(s.next(e, Vec3::Z * 8.0, 11, false, 0.0), None);
+    }
+    #[test]
     fn newer_observation_restarts_with_the_new_anchor() {
         let mut s = State::default();
         let old = evidence(1, Vec3::ZERO);
@@ -262,5 +332,17 @@ mod tests {
         let new = evidence(4, Vec3::X * 12.0);
         assert_eq!(s.next(new, Vec3::Z * 8.0, 5, true, 0.0), Some(new.at));
         assert_eq!(s.phase(), "last observed position");
+    }
+
+    #[test]
+    fn an_older_relay_does_not_supersede_a_retained_search() {
+        let mut s = State::default();
+        s.observe(evidence(10, Vec3::ZERO), Vec3::Z);
+        assert!(!s.superseded_by(evidence(9, Vec3::X)));
+        assert!(!s.superseded_by(evidence(10, Vec3::ZERO)));
+        assert!(s.superseded_by(evidence(11, Vec3::X)));
+        let mut other = evidence(10, Vec3::X);
+        other.subject = 18;
+        assert!(s.superseded_by(other));
     }
 }

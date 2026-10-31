@@ -373,7 +373,7 @@ fn an_unseen_enemy_keeps_its_observed_position_and_timestamp() {
 }
 
 #[test]
-fn expired_evidence_stops_searching_without_refresh_from_the_hidden_actor() {
+fn expired_observation_finishes_the_route_then_stops_without_fresh_sight() {
     let mut g = Game::new(1.0, false);
     let old = thought(&g.s, g.bot).remembered.unwrap();
     g.hide(HIDDEN);
@@ -386,8 +386,49 @@ fn expired_evidence_stops_searching_without_refresh_from_the_hidden_actor() {
     let after = thought(&g.s, g.bot);
     assert!(after.remembered.is_none(), "expired evidence: {after:?}");
     assert!(after.task.is_none());
-    assert_ne!(after.behaviour, "search");
-    assert_ne!(after.goal, Some(old.position));
+    assert_eq!(after.behaviour, "search", "finish the route: {after:?}");
+    assert_eq!(after.goal, Some(old.position));
+    let mut finished = false;
+    for _ in 0..120 * 45 {
+        g.steps(1);
+        let now = thought(&g.s, g.bot);
+        assert!(
+            now.remembered.is_none(),
+            "old sight must not become fresh: {now:?}"
+        );
+        if now.behaviour != "search" {
+            finished = true;
+            break;
+        }
+        assert_ne!(
+            now.goal,
+            Some(HIDDEN.to_array()),
+            "no hidden live coordinates"
+        );
+    }
+    assert!(finished, "search must eventually end without new evidence");
+}
+
+#[test]
+fn a_dead_subject_cancels_a_route_after_its_observation_expires() {
+    let mut g = Game::new(1.0, false);
+    let old = thought(&g.s, g.bot).remembered.unwrap();
+    g.hide(HIDDEN);
+    while g.s.simulation().state().tick <= old.expires {
+        g.steps(1);
+    }
+    let after = thought(&g.s, g.bot);
+    assert!(after.remembered.is_none());
+    assert_eq!(after.behaviour, "search", "the route is still in progress");
+    g.send(g.human, Command::Suicide);
+    g.steps(2);
+    assert!(!g.s.vitals()[&g.human].alive);
+    let after_death = thought(&g.s, g.bot);
+    assert_ne!(
+        after_death.behaviour, "search",
+        "dead subject: {after_death:?}"
+    );
+    assert_ne!(after_death.goal, Some(old.position));
 }
 
 #[test]
@@ -509,30 +550,39 @@ fn set_team(g: &mut Game, target: OwnerId, team: Option<u32>) {
 }
 
 #[test]
-fn becoming_an_ally_invalidates_remembered_hostility_before_expiry() {
-    let mut g = Game::with_rules(8.0, false);
-    g.send(g.human, rules("teams"));
-    g.steps(1);
-    let team = g.s.minigame_views()[0].teams[0].id.0;
-    let bot = g.bot;
-    set_team(&mut g, bot, Some(team));
-    g.steps(2);
-    g.hide(HIDDEN);
-    let old = thought(&g.s, g.bot).remembered.unwrap();
-    assert_eq!(thought(&g.s, g.bot).behaviour, "search");
-    let human = g.human;
-    set_team(&mut g, human, Some(team));
-    g.steps(2);
-    assert_eq!(g.s.vitals()[&g.human].team, Some(team));
-    assert_eq!(g.s.vitals()[&g.bot].team, Some(team));
-    assert!(g.s.simulation().state().tick < old.expires);
-    let after = thought(&g.s, g.bot);
-    assert!(
-        after.remembered.is_none() && after.task.is_none(),
-        "{after:?}"
-    );
-    assert_ne!(after.behaviour, "search");
-    assert_ne!(after.goal, Some(old.position));
+fn becoming_an_ally_invalidates_hostility_before_and_after_observation_expiry() {
+    for expired in [false, true] {
+        let mut g = Game::with_rules(if expired { 1.0 } else { 8.0 }, false);
+        g.send(g.human, rules("teams"));
+        g.steps(1);
+        let team = g.s.minigame_views()[0].teams[0].id.0;
+        let bot = g.bot;
+        set_team(&mut g, bot, Some(team));
+        g.steps(2);
+        g.hide(HIDDEN);
+        let old = thought(&g.s, g.bot).remembered.unwrap();
+        assert_eq!(thought(&g.s, g.bot).behaviour, "search");
+        if expired {
+            while g.s.simulation().state().tick <= old.expires {
+                g.steps(1);
+            }
+            assert!(thought(&g.s, g.bot).remembered.is_none());
+            assert_eq!(thought(&g.s, g.bot).behaviour, "search");
+        }
+        let human = g.human;
+        set_team(&mut g, human, Some(team));
+        g.steps(2);
+        assert_eq!(g.s.vitals()[&g.human].team, Some(team));
+        assert_eq!(g.s.vitals()[&g.bot].team, Some(team));
+        assert_eq!(g.s.simulation().state().tick >= old.expires, expired);
+        let after = thought(&g.s, g.bot);
+        assert!(
+            after.remembered.is_none() && after.task.is_none(),
+            "{after:?}"
+        );
+        assert_ne!(after.behaviour, "search");
+        assert_ne!(after.goal, Some(old.position));
+    }
 }
 
 #[test]

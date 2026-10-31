@@ -76,9 +76,19 @@ impl Session {
         tick: u64,
     ) -> (Option<Knowledge>, Option<Knowledge>) {
         let brain = self.bots.brains.get_mut(&bot).unwrap();
+        if target.is_none()
+            && matches!(brain.behaviour, Behaviour::Chase | Behaviour::Search)
+            && matches!(brain.goal, Some(Goal::Chase(_) | Goal::Search(_)))
+            && (brain.search.is_some() || !brain.plan.is_empty())
+        {
+            brain.evidence_search.routing(tick);
+        }
         if let Some(k) = brain.perception.heard(tick)
             && brain.target.is_none()
-            && brain.memory.is_none_or(|old| old.observed < k.observed)
+            && brain
+                .memory
+                .or_else(|| brain.evidence_search.retained(tick))
+                .is_none_or(|old| old.observed < k.observed)
         {
             brain.memory = Some(k);
         }
@@ -99,12 +109,36 @@ impl Session {
                 ..k
             },
         });
-        if self.bots.brains[&bot].memory.is_some_and(|k| {
-            tick >= k.expires || !self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject)
-        }) {
+        let remembered = self.bots.brains[&bot].memory;
+        if remembered.is_some_and(|k| self.bots.brains[&bot].evidence_search.superseded_by(k)) {
+            self.bots
+                .brains
+                .get_mut(&bot)
+                .unwrap()
+                .evidence_search
+                .clear();
+        }
+        let retained = self.bots.brains[&bot].evidence_search.retained(tick);
+        let invalid = remembered
+            .or(retained)
+            .is_some_and(|k| !self.bot_enemy(bot, &self.bots.brains[&bot].kind, k.subject));
+        if invalid {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.memory = None;
             brain.evidence_search.clear();
+        } else if remembered.is_some_and(|k| tick >= k.expires) {
+            let brain = self.bots.brains.get_mut(&bot).unwrap();
+            brain.memory = None;
+            if retained.is_none() {
+                brain.evidence_search.clear();
+            }
+        } else if remembered.is_none() && retained.is_none() {
+            self.bots
+                .brains
+                .get_mut(&bot)
+                .unwrap()
+                .evidence_search
+                .clear();
         }
         let threat = hurt_by
             .or(self.bots.brains[&bot].objective_threat)

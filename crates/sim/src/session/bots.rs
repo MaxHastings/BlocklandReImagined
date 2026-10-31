@@ -1037,6 +1037,13 @@ impl Brain {
         }
         self.set_goal(goal);
     }
+    /// Search can remain committed to an old observation while navigation
+    /// progresses, without making that observation fresh again.
+    fn search_knowledge(&self, tick: u64) -> Option<Knowledge> {
+        self.memory
+            .filter(|k| tick < k.expires)
+            .or_else(|| self.evidence_search.retained(tick))
+    }
     /// The goal of going after an enemy: standing its ground in its band
     /// (`fight`), at the place it chose to fight from (`spots`), after the
     /// enemy in sight, or to where one was. Whether it stands.
@@ -1050,7 +1057,7 @@ impl Brain {
         reach: f32,
         tick: u64,
     ) -> bool {
-        match (enemy, self.memory) {
+        match (enemy, self.search_knowledge(tick)) {
             (Some(_), _) if fight => {
                 self.set_goal(self.spot.map(|a| Goal::Stand(a.at)));
                 true
@@ -1108,7 +1115,7 @@ impl Brain {
                     .is_none_or(|body| !body.conservative);
                 if self.search.is_some() && self.plan.is_empty() || walking && !self.plan.is_empty()
                 {
-                    self.evidence_search.routing();
+                    self.evidence_search.routing(tick);
                 }
                 let next = self
                     .evidence_search
@@ -3134,7 +3141,7 @@ impl Session {
             // the memory fades.
             hunted: threat.is_some() && sight.target.is_none(),
             remembers: brain
-                .memory
+                .search_knowledge(tick)
                 .is_some_and(|m| brain.may_pursue(m.at) && !brain.evidence_search.exhausted_for(m)),
             // Strayed past where it strolls; while it works a body or a
             // seat (an interaction, idle play's included) its leash is
