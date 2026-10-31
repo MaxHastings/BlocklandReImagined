@@ -806,6 +806,9 @@ impl Session {
         let Some(brick) = self.simulation.state().bricks.get(&brick_id).cloned() else {
             return Ok(());
         };
+        if brick.damage_hidden {
+            return Ok(());
+        }
         let Some(spawn) = &brick.vehicle else {
             return Ok(());
         };
@@ -1142,14 +1145,13 @@ impl Session {
             // Bot kinds share the spawn brick's list but are not vehicles.
             let wanted = wanted.filter(|id| !self.is_bot_kind(id));
             let current = self.vehicles.by_brick.get(&brick_id).copied();
-            let current_definition = current.and_then(|id| {
-                self.vehicles
-                    .world
-                    .as_ref()?
-                    .vehicle_snapshot(&self.simulation.physics, id)
-                    .map(|v| v.definition)
-            });
-            if wanted == current_definition && (current.is_some() || wanted.is_none()) {
+            let current_definition = self
+                .vehicles
+                .world
+                .as_ref()
+                .and_then(|world| world.spawn_definition(SpawnId(brick_id)))
+                .map(str::to_owned);
+            if wanted == current_definition {
                 if let Some(vehicle) = current {
                     self.follow_brick_paint(brick_id, vehicle);
                 }
@@ -1188,6 +1190,10 @@ impl Session {
             .bricks
             .get(&brick_id)
             .context("Unknown brick")?;
+        // Suspension changes production, never the already-running actor.
+        if brick.damage_hidden {
+            return Ok(());
+        }
         if let Some(kind) = self
             .brick_spawn_kind(brick)
             .filter(|id| self.is_bot_kind(id))

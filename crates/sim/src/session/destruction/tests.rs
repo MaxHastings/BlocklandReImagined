@@ -10,6 +10,10 @@ fn session() -> (Session, OwnerId) {
 }
 
 fn session_with_vehicles(vehicles: bool) -> (Session, OwnerId) {
+    session_with_vehicle_pack(vehicles.then(bri_vehicles::testing::pack))
+}
+
+fn session_with_vehicle_pack(pack: Option<bri_vehicles::Pack>) -> (Session, OwnerId) {
     let mut definitions = Definitions {
         entries: Default::default(),
     };
@@ -33,10 +37,8 @@ fn session_with_vehicles(vehicles: bool) -> (Session, OwnerId) {
         )
         .unwrap(),
     );
-    if vehicles {
-        session
-            .set_vehicle_pack(bri_vehicles::testing::pack(), vec![])
-            .unwrap();
+    if let Some(pack) = pack {
+        session.set_vehicle_pack(pack, vec![]).unwrap();
     }
     session.set_lan_host(true);
     let owner = session
@@ -1148,4 +1150,231 @@ fn render_admission_counts_instanced_geometry_not_only_unique_meshes() {
     assert!(ids.iter().all(|&id| s.live_damage_brick(id)));
     assert!(s.take_cues().is_empty());
     assert!(s.destruction.work.capacity_holds > 0);
+}
+
+#[test]
+fn destroyed_sources_suspend_new_actors_without_replacing_existing_ones() {
+    for bot in [false, true] {
+        let (mut s, owner) = session_with_vehicles(true);
+        s.set_bot_kinds(
+            crate::bot_kind::BotPack::from_json(include_bytes!(
+                "../../../../../packages/blockhead_bot/assets/bots.json"
+            ))
+            .unwrap()
+            .bots,
+        )
+        .unwrap();
+        // Use the actual supported one-plate spawn shape. A three-plate
+        // ordinary brick intersects the bot's established spawn placement.
+        s.simulation.definitions.entries.insert(
+            crate::testing::VEHICLE_SPAWN.into(),
+            crate::testing::definitions().entries[crate::testing::VEHICLE_SPAWN].clone(),
+        );
+        let source = place(
+            &mut s,
+            owner,
+            crate::testing::VEHICLE_SPAWN,
+            [10., 0.1, 10.],
+            false,
+        );
+        let kind = if bot {
+            "bot.blockhead"
+        } else {
+            bri_vehicles::testing::CAR
+        };
+        s.simulation
+            .mutate(source, |b| {
+                // Authored invisible/noncolliding spawners remain usable.
+                b.visible = false;
+                b.raycast = false;
+                b.colliding = false;
+                b.vehicle = Some(Box::new(bri_world::VehicleSpawn {
+                    vehicle: ContentRef::Resolved(kind.into()),
+                    recolor: true,
+                    team: None,
+                }));
+            })
+            .unwrap();
+        s.fake_kill_brick(
+            source,
+            super::super::debris::BrickBlast::fake_kill(Vec3::Y, Vec3::ZERO),
+            10_000,
+        )
+        .unwrap();
+        s.step().unwrap();
+        let actors = |s: &Session| -> Vec<u64> {
+            if bot {
+                s.peers.keys().copied().filter(|o| s.is_bot(*o)).collect()
+            } else {
+                s.vehicle_infos().iter().map(|v| v.id).collect()
+            }
+        };
+        assert!(
+            actors(&s).is_empty(),
+            "destroyed source created an actor: bot={bot}"
+        );
+        s.respawn_bricks(&[source]).unwrap();
+        s.step().unwrap();
+        let original = actors(&s);
+        assert_eq!(
+            original.len(),
+            1,
+            "bot={bot}, source={:?}, choices={:?}, peers={:?}",
+            s.simulation.state().bricks.get(&source),
+            s.bot_choices(),
+            s.peers.keys().collect::<Vec<_>>()
+        );
+        s.fake_kill_brick(
+            source,
+            super::super::debris::BrickBlast::fake_kill(Vec3::Y, Vec3::ZERO),
+            10_000,
+        )
+        .unwrap();
+        s.step().unwrap();
+        assert_eq!(
+            actors(&s),
+            original,
+            "destruction must keep an existing actor"
+        );
+        s.respawn_vehicle_brick(source).unwrap();
+        assert_eq!(
+            actors(&s),
+            original,
+            "respawn events must respect the destroyed source"
+        );
+        if bot {
+            let actor = original[0];
+            s.kill(
+                actor,
+                Some(actor),
+                crate::session::combat::DamageKind::Suicide,
+                None,
+            )
+            .unwrap();
+            // A pending natural respawn remains blocked after its ordinary wait.
+            for _ in 0..480 {
+                s.step().unwrap();
+            }
+            assert!(!s.is_alive(actor));
+            assert!(s.request_respawn(actor).is_err());
+            s.respawn_bricks(&[source]).unwrap();
+            for _ in 0..240 {
+                s.step().unwrap();
+            }
+            assert!(
+                s.is_alive(actor),
+                "the overdue bot resumes at its restored source"
+            );
+            assert_eq!(actors(&s), original);
+        } else {
+            s.respawn_bricks(&[source]).unwrap();
+            s.step().unwrap();
+            assert_eq!(actors(&s), original);
+        }
+    }
+}
+
+#[test]
+fn destroyed_vehicle_source_retains_pending_deadline_across_restore() {
+    for restore_before_due in [true, false] {
+        let pack = bri_vehicles::testing::pack_with(|d| {
+            // Exercise the spawn clock, without burn/explosion presentation.
+            d.burn_ticks = 0;
+            d.invulnerable_ticks = 0;
+            d.initial_explosion = None;
+            d.final_explosion = None;
+        });
+        let (mut s, owner) = session_with_vehicle_pack(Some(pack));
+        s.simulation.definitions.entries.insert(
+            crate::testing::VEHICLE_SPAWN.into(),
+            crate::testing::definitions().entries[crate::testing::VEHICLE_SPAWN].clone(),
+        );
+        let source = place(
+            &mut s,
+            owner,
+            crate::testing::VEHICLE_SPAWN,
+            [10., 0.1, 10.],
+            false,
+        );
+        s.simulation
+            .mutate(source, |b| {
+                b.vehicle = Some(Box::new(bri_world::VehicleSpawn {
+                    vehicle: ContentRef::Resolved(bri_vehicles::testing::CAR.into()),
+                    recolor: true,
+                    team: None,
+                }));
+            })
+            .unwrap();
+        s.step().unwrap();
+        let old = s.vehicle_infos()[0].id;
+        let position = s.vehicle_poses()[0].position;
+        s.damage_vehicle(
+            old,
+            10000.,
+            owner,
+            "test",
+            Vec3::from(position),
+            super::super::vehicles::VehicleHarm::Package,
+        )
+        .unwrap();
+        s.step().unwrap();
+        assert!(s.vehicle_infos().is_empty());
+        let pending = s
+            .vehicles
+            .world
+            .as_ref()
+            .unwrap()
+            .checkpoint(&s.simulation.physics)
+            .unwrap()
+            .pending_respawns;
+        assert_eq!(pending.len(), 1);
+        let due = pending[0].due_tick;
+        assert!(due > s.simulation.state().tick + 4);
+        s.fake_kill_brick(
+            source,
+            super::super::debris::BrickBlast::fake_kill(Vec3::Y, Vec3::ZERO),
+            10_000,
+        )
+        .unwrap();
+        s.step().unwrap();
+        let pending = s
+            .vehicles
+            .world
+            .as_ref()
+            .unwrap()
+            .checkpoint(&s.simulation.physics)
+            .unwrap()
+            .pending_respawns;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].due_tick, due,
+            "destruction cannot reset the native clock"
+        );
+        let restore_at = if restore_before_due { due - 4 } else { due + 4 };
+        while s.simulation.state().tick < restore_at {
+            s.step().unwrap();
+        }
+        assert!(
+            s.vehicle_infos().is_empty(),
+            "a destroyed source cannot produce at its deadline"
+        );
+        s.respawn_bricks(&[source]).unwrap();
+        s.step().unwrap();
+        if restore_before_due {
+            assert!(
+                s.vehicle_infos().is_empty(),
+                "restoration cannot skip a remaining cooldown"
+            );
+            while s.simulation.state().tick < due {
+                s.step().unwrap();
+            }
+        }
+        let fresh = s.vehicle_infos();
+        assert_eq!(fresh.len(), 1);
+        assert_ne!(fresh[0].id, old);
+        for _ in 0..12 {
+            s.step().unwrap();
+        }
+        assert_eq!(s.vehicle_infos()[0].id, fresh[0].id);
+    }
 }

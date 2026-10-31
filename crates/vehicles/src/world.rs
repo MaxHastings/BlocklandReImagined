@@ -741,6 +741,16 @@ impl VehiclesWorld {
     pub fn definition_of(&self, id: VehicleId) -> Option<&Definition> {
         self.catalog.get(&self.instances.get(&id)?.spawn.definition)
     }
+    /// The source's registered kind, including a pending respawn. Reconciliation
+    /// must not cancel its due-time merely because no live body remains.
+    pub fn spawn_definition(&self, source: SpawnId) -> Option<&str> {
+        self.instances
+            .values()
+            .map(|v| &v.spawn)
+            .chain(self.respawns.iter().map(|p| &p.spawn))
+            .find(|s| s.spawn_id == Some(source))
+            .map(|s| s.definition.as_str())
+    }
     /// An authored gun still usable on the current body. Occupancy and
     /// trigger state remain separate from this physical capability.
     pub fn weapon_available(&self, id: VehicleId) -> bool {

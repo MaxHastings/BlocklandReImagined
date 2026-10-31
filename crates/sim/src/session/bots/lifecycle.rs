@@ -115,6 +115,9 @@ impl Session {
         let Some(brick) = self.simulation.state().bricks.get(&brick_id) else {
             return Ok(());
         };
+        if brick.damage_hidden {
+            return Ok(());
+        }
         let (home, builder) = (Vec3::from(brick.position) + Vec3::Y * 0.3, brick.owner);
         let yaw = spawn_yaw(brick);
         let name = self.brick_bot_name(&kind, brick_id, None);
@@ -176,6 +179,15 @@ impl Session {
         brick_id: BrickId,
         kind: &str,
     ) -> Result<()> {
+        if self
+            .simulation
+            .state()
+            .bricks
+            .get(&brick_id)
+            .is_some_and(|b| b.damage_hidden)
+        {
+            return Ok(());
+        }
         let current = self.bots.by_brick.get(&brick_id).copied().filter(|bot| {
             self.peers.contains_key(bot)
                 && self

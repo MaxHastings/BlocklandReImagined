@@ -68,6 +68,13 @@ implements bounded package-selected filters/gain; it does not complete loading
 voice, world-speaker placement or transmit lifecycle integration. None of these
 scoped checks replace final platform CI, release gates or package verification.
 
+Current destruction handoff: [partition bindings](../progress/2026-10-31-v043-partition-attachment-bindings.md)
+and [actor source lifecycle](../progress/2026-10-31-v043-actor-source-lifecycle.md)
+add authoritative carrier identity, delivery/restore checks and destroyed-source
+actor suspension without resetting native deadlines. Static item suspension is
+already checked. Brick looping audio and final effect pixels remain open; these
+increments do not complete the broader release scope.
+
 ## Rules for each increment
 
 1. Pin the source and content inputs; identify the existing seam owner. Keep one

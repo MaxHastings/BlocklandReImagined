@@ -1987,6 +1987,16 @@ impl Session {
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         ensure!(!peer.combat.alive, "You are alive");
         ensure!(tick >= peer.combat.respawn_tick, "Not ready to respawn yet");
+        ensure!(
+            self.bots.spawn_brick(owner).is_none_or(|source| {
+                self.simulation
+                    .state()
+                    .bricks
+                    .get(&source)
+                    .is_some_and(|b| !b.damage_hidden)
+            }),
+            "The bot's spawn brick is destroyed"
+        );
         self.package_policy("respawn", owner)?;
         let peer = self.peers.get(&owner).context("Unknown connection")?;
         let effects = self
