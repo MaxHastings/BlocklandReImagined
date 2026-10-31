@@ -2831,6 +2831,7 @@ impl Session {
             // `spawnPlayer` hands control back to the new body.
             peer.control = super::ControlObject::Player;
         }
+        self.reset_bot_facing(owner);
         // Skiing belongs to the old Player object: a new body starts off skis.
         let _ = self.weapons.cancel_skis(ActorId(owner));
         self.new_animation_life(owner)?;
@@ -2936,8 +2937,8 @@ impl Session {
     /// Where this player should appear, if anywhere more specific than a map
     /// drop point: a bot's home, a checkpoint, or a spawn brick.
     fn spawn_choice(&mut self, owner: OwnerId) -> Option<(Vec3, f32)> {
-        if let Some(home) = self.bot_home(owner) {
-            return Some((home, 0.0));
+        if let Some(choice) = self.bot_spawn_choice(owner) {
+            return Some(choice);
         }
         if let Some(checkpoint) = self.checkpoint_spawn(owner) {
             return Some(checkpoint);

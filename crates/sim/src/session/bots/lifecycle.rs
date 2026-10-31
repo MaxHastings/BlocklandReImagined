@@ -3,6 +3,13 @@
 //! about them.
 use super::*;
 
+/// Motor yaw is positive right; derive it from the actual authored brick frame
+/// rather than copying the opposite-sign native rotation angle.
+fn spawn_yaw(brick: &bri_world::Brick) -> f32 {
+    let forward = brick.transform().transform_vector3(Vec3::NEG_Z);
+    forward.x.atan2(-forward.z)
+}
+
 impl Session {
     pub(in crate::session) fn bot_spawn_properties(
         &self,
@@ -51,8 +58,21 @@ impl Session {
     pub fn is_bot_kind(&self, id: &str) -> bool {
         self.bots.kind(id).is_some()
     }
-    pub(in crate::session) fn bot_home(&self, owner: OwnerId) -> Option<Vec3> {
-        self.bots.home(owner)
+    pub(in crate::session) fn bot_spawn_choice(&self, owner: OwnerId) -> Option<(Vec3, f32)> {
+        let home = self.bots.home(owner)?;
+        let yaw = self
+            .bots
+            .spawn_brick(owner)
+            .and_then(|id| self.simulation.state().bricks.get(&id))
+            .map_or(0.0, spawn_yaw);
+        Some((home, yaw))
+    }
+    pub(in crate::session) fn reset_bot_facing(&mut self, owner: OwnerId) {
+        if let Some(brain) = self.bots.brains.get_mut(&owner) {
+            // A surviving brain starts its next control in the new body's frame.
+            brain.yaw = self.peers[&owner].player.state().yaw;
+            brain.pitch = 0.0;
+        }
     }
     /// The owner of the spawn brick that placed this bot.
     pub(in crate::session) fn bot_brick_owner(&self, bot: OwnerId) -> Option<OwnerId> {
@@ -96,6 +116,7 @@ impl Session {
             return Ok(());
         };
         let (home, builder) = (Vec3::from(brick.position) + Vec3::Y * 0.3, brick.owner);
+        let yaw = spawn_yaw(brick);
         let name = self.brick_bot_name(&kind, brick_id, None);
         // A refused bot is never silent: the brick's builder is told why,
         // as for a vehicle the server has no room for.
@@ -135,6 +156,10 @@ impl Session {
             }
             self.bots.by_brick.insert(brick_id, bot);
             let mut brain = Brain::new(Some(brick_id), kind, home, bot, crossed);
+            let peer = self.peers.get_mut(&bot).expect("newly embodied bot");
+            peer.player
+                .teleport(&mut self.simulation.physics, home, yaw)?;
+            brain.yaw = peer.player.state().yaw;
             brain.named = name;
             self.bots.brains.insert(bot, brain);
             self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
@@ -710,5 +735,67 @@ impl Session {
             .iter()
             .map(|k| (k.id.clone(), k.name.clone()))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    #[test]
+    fn brick_bots_inherit_the_spawn_frame_on_creation_and_reset() -> Result<()> {
+        for turns in 0..4 {
+            let mut world = bri_world::World::new("Facing".into(), "test".into(), vec![[1.0; 4]]);
+            let mut brick = bri_world::Brick::new(
+                bri_world::ContentRef::Resolved(crate::testing::VEHICLE_SPAWN.into()),
+                [4.0, 0.1, 8.0],
+                0,
+            );
+            brick.quarter_turns = turns;
+            let forward = brick.transform().transform_vector3(Vec3::NEG_Z);
+            world.bricks.insert(1, brick);
+            world.next_brick_id = 2;
+            let mut session = Session::new(crate::simulation::Simulation::new(
+                world,
+                crate::testing::definitions(),
+                vec![],
+            )?);
+            session.set_bot_kinds(
+                crate::bot_kind::BotPack::from_json(include_bytes!(
+                    "../../../../../packages/blockhead_bot/assets/bots.json"
+                ))?
+                .bots,
+            )?;
+            session.reconcile_bot_brick(1, Some("bot.blockhead"))?;
+            let bot = session.bots.by_brick[&1];
+            let check = |session: &Session| {
+                let yaw = session.peers[&bot].player.state().yaw;
+                let facing = Vec3::new(yaw.sin(), 0.0, -yaw.cos());
+                assert!(
+                    facing.dot(forward) > 0.999,
+                    "turns {turns}: yaw {yaw}, forward {forward}"
+                );
+                assert!(
+                    wrap(session.bots.brains[&bot].yaw - yaw).abs() < 0.001,
+                    "the brain must keep the body's new facing on its next control"
+                );
+            };
+            check(&session);
+            // Reset an already-running brain, whose sequence must not restart.
+            session.bots.brains.get_mut(&bot).unwrap().sequence = 40;
+            session.bots.brains.get_mut(&bot).unwrap().yaw = 0.37;
+            let player = session.peers[&bot].combat.player;
+            let effects = session
+                .minigames
+                .execute(bri_minigames::Command::ForceRespawn { target: player })
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            session.apply_minigame_effects(effects)?;
+            check(&session);
+            session.bots.brains.get_mut(&bot).unwrap().yaw = -0.37;
+            session.respawn_brick_bot(1, "bot.blockhead")?;
+            check(&session);
+            assert_eq!(session.bots.brains[&bot].sequence, 40);
+        }
+        Ok(())
     }
 }
