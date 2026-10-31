@@ -43,8 +43,10 @@ an unrelated invite-only game supplies no grant.
 The stock policy uses nonpositional routes when either participant is loading.
 It does not infer a loading team or dead-player channel. The optional radio
 example denies private transmissions to loading listeners with no established
-channel. These policy/query foundations do **not** establish continuous loading
-audio transport: arrival VoiceLink and background audio handoff remain pending.
+channel. Accepted arrivals now expose the same bounded VoiceLink transport as gameplay,
+including reliable route updates and audio/activity datagrams. This does **not**
+establish continuous client loading audio: background capture/send/playout and
+stable audio ownership across transport replacement remain pending.
 
 ## Native processing parameters
 

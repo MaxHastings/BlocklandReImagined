@@ -22,11 +22,13 @@ impl Session {
     /// An admin muted `owner`'s voice: the host relays none of it, and no
     /// speech state of theirs reaches anyone.
     pub fn mute_voice(&mut self, owner: OwnerId) -> anyhow::Result<()> {
-        let peer = self
+        let principal = self
             .peers
             .get(&owner)
+            .map(|p| p.principal)
+            .or_else(|| self.arrivals.get(&owner).map(|a| a.principal))
             .ok_or_else(|| anyhow::anyhow!("Unknown voice owner"))?;
-        if let Some(principal) = peer.principal {
+        if let Some(principal) = principal {
             anyhow::ensure!(
                 self.voice_muted_principals.contains(&principal)
                     || self.voice_muted_principals.len() < bri_admin::MAX_BANS,
@@ -37,7 +39,13 @@ impl Session {
                 self.peers
                     .iter()
                     .filter(|(_, peer)| peer.principal == Some(principal))
-                    .map(|(owner, _)| *owner),
+                    .map(|(owner, _)| *owner)
+                    .chain(
+                        self.arrivals
+                            .iter()
+                            .filter(|(_, a)| a.principal == Some(principal))
+                            .map(|(owner, _)| *owner),
+                    ),
             );
         } else {
             self.voice_muted.insert(owner);
@@ -56,15 +64,29 @@ impl Session {
     /// Unmute this verified identity, including its other active connections.
     pub fn unmute_voice(&mut self, owner: OwnerId) {
         self.voice_muted.remove(&owner);
-        if let Some(principal) = self.peers.get(&owner).and_then(|peer| peer.principal) {
+        if let Some(principal) = self
+            .peers
+            .get(&owner)
+            .and_then(|peer| peer.principal)
+            .or_else(|| self.arrivals.get(&owner).and_then(|a| a.principal))
+        {
             self.voice_muted_principals.remove(&principal);
-            self.voice_muted.retain(|owner| {
-                self.peers
-                    .get(owner)
-                    .is_none_or(|peer| peer.principal != Some(principal))
-            });
+            let same: BTreeSet<_> = self
+                .peers
+                .iter()
+                .filter(|(_, p)| p.principal == Some(principal))
+                .map(|(id, _)| *id)
+                .chain(
+                    self.arrivals
+                        .iter()
+                        .filter(|(_, a)| a.principal == Some(principal))
+                        .map(|(id, _)| *id),
+                )
+                .collect();
+            self.voice_muted.retain(|id| !same.contains(id));
         }
     }
+
     /// Whether `owner`'s voice is muted by an admin right now.
     pub fn is_voice_muted(&self, owner: OwnerId) -> bool {
         self.voice_muted.contains(&owner)

@@ -843,13 +843,7 @@ impl Client {
                 // Voice is told apart by its first byte and goes straight to
                 // the audio; a full inbox drops the frame.
                 if crate::voice::is_voice(&bytes) {
-                    if let Some(heard) = crate::voice::decode_downstream(&bytes) {
-                        let _ = voice_inbox.try_send((std::time::Instant::now(), heard));
-                    } else if let Some(activity) = crate::voice::decode_downstream_activity(&bytes)
-                    {
-                        let _ =
-                            voice_activity_inbox.try_send((std::time::Instant::now(), activity));
-                    }
+                    crate::voice::receive_downstream(&bytes, &voice_inbox, &voice_activity_inbox);
                     continue;
                 }
                 let Ok(items) = codec::decode_datagram::<Vec<Datagram>>(&bytes) else {
@@ -1335,6 +1329,7 @@ pub struct Arrival {
     /// The certificate the host presented, to pin for the game join.
     pub certificate: Vec<u8>,
     pub listing: Listing,
+    voice: crate::voice::VoiceLink,
     say: mpsc::Sender<LobbyRequest>,
     events: mpsc::Receiver<ArrivalEvent>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -1403,6 +1398,16 @@ impl Arrival {
             Message::Rejected(reason) => return Err(JoinError::Rejected(reason).into()),
             _ => anyhow::bail!("Expected the host to accept the connection"),
         };
+        let (voice_inbox, voice_heard) = crate::voice::inbox();
+        let (activity_inbox, voice_activity) = crate::voice::activity_inbox();
+        let voice = crate::voice::VoiceLink::new(connection.clone(), voice_heard, voice_activity);
+        let route_link = voice.clone();
+        let datagram_connection = connection.clone();
+        let datagrams = tokio::spawn(async move {
+            while let Ok(bytes) = datagram_connection.read_datagram().await {
+                crate::voice::receive_downstream(&bytes, &voice_inbox, &activity_inbox);
+            }
+        });
         let (events_tx, events) = mpsc::channel(64);
         let closed = events_tx.clone();
         let reader_connection = connection.clone();
@@ -1421,6 +1426,14 @@ impl Arrival {
                         if players.len() <= bri_sim::session::MAX_PARTICIPANTS =>
                     {
                         ArrivalEvent::Players(players)
+                    }
+                    Ok(Message::VoiceRoutes(routes)) => {
+                        if let Err(error) = route_link.set_routes(routes) {
+                            reader_connection.close(3_u32.into(), b"Invalid voice routes");
+                            let _ = closed.send(ArrivalEvent::Closed(error.to_string())).await;
+                            break;
+                        }
+                        continue;
                     }
                     Ok(Message::Notice(notice)) => ArrivalEvent::Notice(notice),
                     Ok(_) => continue,
@@ -1463,8 +1476,13 @@ impl Arrival {
             listing,
             say,
             events,
-            tasks: vec![reader, writer],
+            voice,
+            tasks: vec![reader, writer, datagrams],
         })
+    }
+    /// Voice transport is available after acceptance, independently of a body.
+    pub fn voice_link(&self) -> crate::voice::VoiceLink {
+        self.voice.clone()
     }
     /// Send a chat line. A full queue (more than a player types) drops it.
     pub fn say(&self, text: String) -> Result<()> {

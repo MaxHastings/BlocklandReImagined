@@ -809,3 +809,321 @@ fn loading_connection_has_no_implicit_private_radio_channel() {
     );
     assert!(s.take_package_problems().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry()
+-> anyhow::Result<()> {
+    use bri_net::{
+        client::{Arrival, Client, HostPin},
+        server,
+        voice::VoiceLink,
+    };
+    use std::time::Duration;
+    async fn player_route(client: &mut Client, speaker: u64, allowed: bool) -> anyhow::Result<()> {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let table = client.voice_link().routes();
+                if table.revision > 0 && table.routes.contains_key(&speaker) == allowed {
+                    break;
+                }
+                client.receive().await?;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+    async fn loading_route(link: &VoiceLink, speaker: u64, allowed: bool) -> anyhow::Result<()> {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let table = link.routes();
+                if table.revision > 0 && table.routes.contains_key(&speaker) == allowed {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        Ok(())
+    }
+    async fn exchange(
+        talk: &VoiceLink,
+        listen: &VoiceLink,
+        speaker: u64,
+        seq: u16,
+        value: u8,
+    ) -> anyhow::Result<()> {
+        let mut heard = vec![];
+        listen.take_heard(&mut heard);
+        heard.clear();
+        for n in seq..seq + 3 {
+            talk.send(n, &[value; 60])?;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                listen.take_heard(&mut heard);
+                if heard
+                    .iter()
+                    .any(|f| f.speaker == speaker && f.payload == vec![value; 60])
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let generation = listen.routes().routes[&speaker].generation;
+        assert!(
+            heard
+                .iter()
+                .filter(|f| f.speaker == speaker && f.payload == vec![value; 60])
+                .all(|f| f.position.is_none() && f.revision == generation)
+        );
+        Ok(())
+    }
+    let server = server::start(session(false), common::options())?;
+    let mut a = Client::connect_with_host(
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        vec![],
+        None,
+        Some(server.host_token.clone()),
+    )
+    .await?;
+    let root = tempfile::tempdir()?;
+    let identity = bri_identity::ClientIdentity::load_or_create(root.path().join("b.identity"))?;
+    let other_identity =
+        bri_identity::ClientIdentity::load_or_create(root.path().join("c.identity"))?;
+    let pin = HostPin::from(&server.certificate[..]);
+    let b = Arrival::open(server.address, &pin, "Loading".into(), None, &identity).await?;
+    let c = Arrival::open(
+        server.address,
+        &pin,
+        "Other loading".into(),
+        None,
+        &other_identity,
+    )
+    .await?;
+    let bl = b.voice_link();
+    let cl = c.voice_link();
+    player_route(&mut a, b.owner, true).await?;
+    loading_route(&bl, a.owner, true).await?;
+    loading_route(&cl, b.owner, true).await?;
+    assert!(!a.replica.names.contains_key(&b.owner) && !a.replica.names.contains_key(&c.owner));
+    exchange(&a.voice_link(), &bl, a.owner, 0, 11).await?;
+    exchange(&bl, &a.voice_link(), b.owner, 0, 22).await?;
+    exchange(&bl, &cl, b.owner, 3, 33).await?;
+    bl.send_activity(true)?;
+    let mut activity = vec![];
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !activity
+            .iter()
+            .any(|v: &voice::VoiceActivity| v.speaker == b.owner && v.active)
+        {
+            a.voice_link().take_activity(&mut activity);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // An ordinary game change revokes loading/lobby eligibility in both directions.
+    a.command(Command::MiniGame(MiniGameRequest::Create {
+        color: 0,
+        settings: Default::default(),
+    }))
+    .await?;
+    player_route(&mut a, b.owner, false).await?;
+    loading_route(&bl, a.owner, false).await?;
+    let mut forbidden = vec![];
+    a.voice_link().take_heard(&mut forbidden);
+    forbidden.clear();
+    bl.send(6, &[44; 60])?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    a.voice_link().take_heard(&mut forbidden);
+    assert!(
+        !forbidden
+            .iter()
+            .any(|f| f.speaker == b.owner && f.payload == vec![44; 60])
+    );
+    a.command(Command::MiniGame(MiniGameRequest::Leave)).await?;
+    player_route(&mut a, b.owner, true).await?;
+    loading_route(&bl, a.owner, true).await?;
+    a.command(Command::Admin(bri_admin::Request::new(
+        bri_admin::Action::VoiceMute {
+            target: bri_admin::ConnectionId(b.owner),
+        },
+    )))
+    .await?;
+    player_route(&mut a, b.owner, false).await?;
+    loading_route(&cl, b.owner, false).await?;
+    a.command(Command::Admin(bri_admin::Request::new(
+        bri_admin::Action::VoiceUnmute {
+            target: bri_admin::ConnectionId(b.owner),
+        },
+    )))
+    .await?;
+    player_route(&mut a, b.owner, true).await?;
+    loading_route(&cl, b.owner, true).await?;
+    let old = a.voice_link().routes().routes[&b.owner].generation;
+    let cache = bri_package::sync::Cache::open(&root.path().join("cache"))?;
+    let (mut entered, _, _) = Client::connect_arriving(
+        server.address,
+        pin,
+        "Loading".into(),
+        vec![],
+        None,
+        None,
+        None,
+        &identity,
+        &cache,
+        bri_progress::Progress::default(),
+        |_, _| Ok(vec![]),
+        Some(b.ticket.clone()),
+        async { Ok(()) },
+    )
+    .await?;
+    assert_eq!(entered.owner, b.owner);
+    player_route(&mut a, b.owner, true).await?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while a
+            .voice_link()
+            .routes()
+            .routes
+            .get(&b.owner)
+            .is_none_or(|r| r.generation == old)
+        {
+            a.receive().await?;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    player_route(&mut entered, a.owner, true).await?;
+    exchange(&entered.voice_link(), &a.voice_link(), b.owner, 0, 55).await?;
+    exchange(&a.voice_link(), &entered.voice_link(), a.owner, 3, 66).await?;
+    // Retained authorized game membership is usable while reconnecting, with
+    // actual QUIC isolation from the other loading participant still in lobby.
+    a.command(Command::MiniGame(MiniGameRequest::Create {
+        color: 0,
+        settings: Default::default(),
+    }))
+    .await?;
+    player_route(&mut a, b.owner, false).await?;
+    let game = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(g) = a.replica.minigames.iter().find(|g| g.owner == a.owner) {
+                return anyhow::Ok(g.id);
+            }
+            a.receive().await?;
+        }
+    })
+    .await??;
+    entered
+        .command(Command::MiniGame(MiniGameRequest::Join { game }))
+        .await?;
+    player_route(&mut a, b.owner, true).await?;
+    entered.close();
+    player_route(&mut a, b.owner, false).await?;
+    let returning = Arrival::open(
+        server.address,
+        &HostPin::from(&server.certificate[..]),
+        "Loading".into(),
+        None,
+        &identity,
+    )
+    .await?;
+    assert_eq!(returning.owner, b.owner);
+    let returning_link = returning.voice_link();
+    player_route(&mut a, b.owner, true).await?;
+    loading_route(&returning_link, a.owner, true).await?;
+    loading_route(&cl, b.owner, false).await?;
+    assert!(!returning_link.routes().routes.contains_key(&c.owner));
+    exchange(&a.voice_link(), &returning_link, a.owner, 6, 77).await?;
+    exchange(&returning_link, &a.voice_link(), b.owner, 0, 88).await?;
+    returning.close();
+    player_route(&mut a, b.owner, false).await?;
+    c.close();
+    entered.close();
+    a.close();
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loading_voice_routes_are_revoked_when_the_new_map_has_no_voice_policy()
+-> anyhow::Result<()> {
+    use bri_net::{
+        client::{Arrival, Client, HostPin},
+        server,
+    };
+    use bri_sim::session::MapListing;
+    use std::time::Duration;
+    let maps = vec![
+        MapListing {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+        },
+        MapListing {
+            id: "quiet".into(),
+            name: "Quiet".into(),
+        },
+    ];
+    let mut initial = session(false);
+    initial.set_map_list(maps.clone())?;
+    let mut options = common::options();
+    options.map_loader = Some(Arc::new(move |map: &str| {
+        anyhow::ensure!(map == "quiet", "unexpected map");
+        let mut next = common::session();
+        next.set_map_list(maps.clone())?;
+        Ok(next)
+    }));
+    let server = server::start(initial, options)?;
+    let mut a = Client::connect_with_host(
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        vec![],
+        None,
+        Some(server.host_token.clone()),
+    )
+    .await?;
+    let root = tempfile::tempdir()?;
+    let identity =
+        bri_identity::ClientIdentity::load_or_create(root.path().join("loading.identity"))?;
+    let loading = Arrival::open(
+        server.address,
+        &HostPin::from(&server.certificate[..]),
+        "Loading".into(),
+        None,
+        &identity,
+    )
+    .await?;
+    let link = loading.voice_link();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !link.routes().routes.contains_key(&a.owner) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let old = link.routes().revision;
+    a.command(Command::Admin(bri_admin::Request::new(
+        bri_admin::Action::ChangeMap {
+            map: "quiet".into(),
+        },
+    )))
+    .await?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let table = link.routes();
+            if table.revision > old && table.routes.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    loading.close();
+    a.close();
+    server.stop().await?;
+    Ok(())
+}

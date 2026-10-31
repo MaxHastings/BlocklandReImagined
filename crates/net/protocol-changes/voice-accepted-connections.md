@@ -1,0 +1,1 @@
+Accepted Lobby connections participate in authenticated private VoiceRoutes and bounded voice audio/activity datagrams before body creation. Eligibility follows authorized pending conversation; transport replacement retires old grants. Loading still grants no movement/gameplay command path.

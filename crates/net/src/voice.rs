@@ -261,6 +261,14 @@ pub(crate) fn activity_inbox() -> (ActivityInbox, mpsc::Receiver<(Instant, Voice
     mpsc::sync_channel(64)
 }
 
+pub(crate) fn receive_downstream(bytes: &[u8], audio: &Inbox, activity: &ActivityInbox) {
+    if let Some(frame) = decode_downstream(bytes) {
+        let _ = audio.try_send((Instant::now(), frame));
+    } else if let Some(state) = decode_downstream_activity(bytes) {
+        let _ = activity.try_send((Instant::now(), state));
+    }
+}
+
 /// A client's voice connection: send frames to the host, take the frames
 /// the host relayed. Cheap to clone, usable from any thread, and it never
 /// waits on the network.

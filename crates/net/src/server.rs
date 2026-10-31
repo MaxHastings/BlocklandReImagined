@@ -1088,7 +1088,16 @@ async fn connection_task(
             #[allow(unreachable_code)]
             Result::<()>::Ok(())
         };
-        tokio::select! {_ = write=>{},_ = read=>{}}
+        let datagrams = async {
+            let mut admission = VoiceAdmission::new();
+            loop {
+                let bytes = connection.read_datagram().await?;
+                admission.receive(&bytes, owner, generation, &events);
+            }
+            #[allow(unreachable_code)]
+            Result::<()>::Ok(())
+        };
+        tokio::select! {_ = write=>{},_ = read=>{},_ = datagrams=>{}}
         connection.close(0_u32.into(), b"Session ended");
         let _ = events.send(Event::LobbyLost { owner, generation }).await;
         return Ok(());
@@ -1201,40 +1210,11 @@ async fn connection_task(
         // tick. Excess is dropped here so one flooding peer cannot crowd the
         // shared event queue that every other player's commands pass through.
         let mut allowance = MovementAllowance::new(tokio::time::Instant::now());
-        // Voice has its own allowance, so talking never costs movement.
-        let mut voice_allowance = MovementAllowance::voice(tokio::time::Instant::now());
-        let mut activity_allowance = MovementAllowance::with(tokio::time::Instant::now(), 6.0, 3.0);
-        let mut voice_sequence: Option<(u16, std::time::Instant)> = None;
+        let mut voice_admission = VoiceAdmission::new();
         loop {
             let bytes = connection.read_datagram().await?;
             if crate::voice::is_voice(&bytes) {
-                let now = std::time::Instant::now();
-                if let Some((sequence, payload)) = crate::voice::decode_upstream(&bytes) {
-                    let fresh = voice_sequence.is_none_or(|(last, at)| {
-                        now.duration_since(at) > std::time::Duration::from_secs(2)
-                            || crate::voice::newer(last, sequence)
-                    });
-                    if fresh && voice_allowance.take(tokio::time::Instant::now()) {
-                        voice_sequence = Some((sequence, now));
-                        // Voice may drop under load; never block the reader
-                        // that carries this player's movement behind audio.
-                        let _ = events.try_send(Event::Voice {
-                            owner,
-                            generation,
-                            sequence,
-                            payload: payload.to_vec(),
-                            received: now,
-                        });
-                    }
-                } else if let Some(active) = crate::voice::decode_upstream_activity(&bytes)
-                    && activity_allowance.take(tokio::time::Instant::now())
-                {
-                    let _ = events.try_send(Event::VoiceActivity {
-                        owner,
-                        generation,
-                        active,
-                    });
-                }
+                voice_admission.receive(&bytes, owner, generation, &events);
                 continue;
             }
             if !allowance.take(tokio::time::Instant::now()) {
@@ -1299,6 +1279,79 @@ impl MovementAllowance {
         }
         self.tokens -= 1.0;
         true
+    }
+}
+/// One transport's bounded voice admission; loading confers no movement path.
+struct VoiceAdmission {
+    audio: MovementAllowance,
+    activity: MovementAllowance,
+    sequence: Option<(u16, std::time::Instant)>,
+}
+impl VoiceAdmission {
+    fn new() -> Self {
+        let now = tokio::time::Instant::now();
+        Self {
+            audio: MovementAllowance::voice(now),
+            activity: MovementAllowance::with(now, 6.0, 3.0),
+            sequence: None,
+        }
+    }
+    fn receive(
+        &mut self,
+        bytes: &[u8],
+        owner: OwnerId,
+        generation: usize,
+        events: &mpsc::Sender<Event>,
+    ) {
+        let now = std::time::Instant::now();
+        if let Some((sequence, payload)) = crate::voice::decode_upstream(bytes) {
+            let fresh = self.sequence.is_none_or(|(last, at)| {
+                now.duration_since(at) > Duration::from_secs(2)
+                    || crate::voice::newer(last, sequence)
+            });
+            if fresh && self.audio.take(tokio::time::Instant::now()) {
+                self.sequence = Some((sequence, now));
+                let _ = events.try_send(Event::Voice {
+                    owner,
+                    generation,
+                    sequence,
+                    payload: payload.to_vec(),
+                    received: now,
+                });
+            }
+        } else if let Some(active) = crate::voice::decode_upstream_activity(bytes)
+            && self.activity.take(tokio::time::Instant::now())
+        {
+            let _ = events.try_send(Event::VoiceActivity {
+                owner,
+                generation,
+                active,
+            });
+        }
+    }
+}
+/// A borrowed view of accepted human transports; no per-audio-packet map allocation.
+#[derive(Clone, Copy)]
+struct VoicePeers<'a> {
+    peers: &'a BTreeMap<OwnerId, Peer>,
+    lobbies: &'a BTreeMap<OwnerId, Lobby>,
+}
+impl VoicePeers<'_> {
+    fn iter(&self) -> impl Iterator<Item = (&OwnerId, &Peer)> {
+        self.peers.iter().chain(
+            self.lobbies
+                .iter()
+                .filter(|(id, _)| !self.peers.contains_key(id))
+                .map(|(id, lobby)| (id, &lobby.peer)),
+        )
+    }
+    fn get(&self, id: &OwnerId) -> Option<&Peer> {
+        self.peers
+            .get(id)
+            .or_else(|| self.lobbies.get(id).map(|l| &l.peer))
+    }
+    fn contains_key(&self, id: &OwnerId) -> bool {
+        self.get(id).is_some()
     }
 }
 /// Requests a loading client may send in one second; more are dropped.
@@ -1500,12 +1553,7 @@ struct VoiceRouting {
     next_revision: u64,
 }
 impl VoiceRouting {
-    fn refresh(
-        &mut self,
-        session: &mut Session,
-        peers: &BTreeMap<OwnerId, Peer>,
-        now: std::time::Instant,
-    ) {
+    fn refresh(&mut self, session: &mut Session, peers: VoicePeers<'_>, now: std::time::Instant) {
         let context: BTreeMap<_, _> = peers
             .iter()
             .map(|(id, peer)| (*id, (peer.generation, session.voice_context(*id))))
@@ -1533,10 +1581,10 @@ impl VoiceRouting {
         self.context = context;
         self.muted = session.voice_mute_set().clone();
         self.refreshed = Some(now);
-        let owners: Vec<_> = peers.keys().copied().collect();
+        let owners: Vec<_> = peers.iter().map(|(id, _)| *id).collect();
         let mut routes = session.voice_selections(&owners);
         self.sent.retain(|id, _| peers.contains_key(id));
-        for (id, peer) in peers {
+        for (id, peer) in peers.iter() {
             let mut current = routes.remove(id).unwrap_or_default();
             current.retain(|speaker, selection| {
                 let route = &selection.playback;
@@ -1618,7 +1666,7 @@ impl VoiceRouting {
 fn relay_voice(
     routing: &VoiceRouting,
     session: &Session,
-    peers: &BTreeMap<OwnerId, Peer>,
+    peers: VoicePeers<'_>,
     traffic: &Traffic,
     speaker: OwnerId,
     sequence: u16,
@@ -1630,7 +1678,7 @@ fn relay_voice(
     }
     let from = session.voice_origin(speaker);
 
-    for (owner, peer) in peers {
+    for (owner, peer) in peers.iter() {
         if *owner == speaker {
             continue;
         }
@@ -1664,12 +1712,12 @@ fn relay_voice(
 /// Relay speech activity only to listeners with an eligible audible route.
 fn relay_voice_activity(
     routing: &VoiceRouting,
-    peers: &BTreeMap<OwnerId, Peer>,
+    peers: VoicePeers<'_>,
     traffic: &Traffic,
     speaker: OwnerId,
     active: bool,
 ) {
-    for (owner, peer) in peers {
+    for (owner, peer) in peers.iter() {
         let revision = routing
             .sent
             .get(owner)
@@ -2016,7 +2064,9 @@ async fn run(
                 Ok((new,package_save))=>{
                     if let Some(host)=&options.map_loader{host.outgoing(&session);}
                     recorder.map_changed(&mut session,new,admin,&map,package_save)?;
-                    voice_routing.sent.clear(); voice_routing.refreshed=None; voice_active.clear();
+                    // Preserve sent tables until refresh can explicitly revoke old grants,
+                    // including for loading clients when the next map has no voice policy.
+                    voice_routing.context.clear(); voice_routing.refreshed=None; voice_active.clear();
                     // Players the new map could not place are let go with the reason.
                     close_admin_disconnects(&mut session,&mut recorder,&mut peers,&mut lobbies);
                     if let Ok(mut listing)=listing.lock(){listing.map=session.simulation().state().map_id.clone();}
@@ -2153,22 +2203,22 @@ async fn run(
                     }
                 }
             },
-            Event::Voice{owner,generation,sequence,payload,received}=>{if received.elapsed()<=std::time::Duration::from_millis(100)&&session.voice_chat()&&peers.get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&voice_routing,&session,&peers,&traffic,owner,sequence,&payload);}},
-            Event::VoiceActivity{owner,generation,active}=>{if session.voice_chat()&&!session.is_voice_muted(owner)&&peers.get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&voice_routing,&peers,&traffic,owner,active);}}},
+            Event::Voice{owner,generation,sequence,payload,received}=>{if received.elapsed()<=std::time::Duration::from_millis(100)&&session.voice_chat()&&(VoicePeers {peers:&peers,lobbies:&lobbies}).get(&owner).is_some_and(|p|p.generation==generation){relay_voice(&voice_routing,&session,VoicePeers {peers:&peers,lobbies:&lobbies},&traffic,owner,sequence,&payload);}},
+            Event::VoiceActivity{owner,generation,active}=>{if session.voice_chat()&&!session.is_voice_muted(owner)&&(VoicePeers {peers:&peers,lobbies:&lobbies}).get(&owner).is_some_and(|p|p.generation==generation){let changed=if active{voice_active.insert(owner,std::time::Instant::now()).is_none()}else{voice_active.remove(&owner).is_some()};if changed||active{relay_voice_activity(&voice_routing,VoicePeers {peers:&peers,lobbies:&lobbies},&traffic,owner,active);}}},
             Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=recorder.seat_report(&mut session,owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=recorder.movement(&mut session,owner,sequence,input);}if let Some(camera)=movement.camera{let _=recorder.camera_report(&mut session,owner,camera);}}},
         }},
         _=ticker.tick()=>{
             players.store((peers.len()+lobbies.len()) as u32,std::sync::atomic::Ordering::Relaxed);
             let now=std::time::Instant::now();
-            voice_routing.refresh(&mut session, &peers, now);
+            voice_routing.refresh(&mut session, VoicePeers {peers:&peers,lobbies:&lobbies}, now);
             // A lost final state packet or a wedged client must not leave a
             // permanent talking indicator. Active clients refresh every 500 ms.
             let stale_speakers: Vec<_> = voice_active.iter()
-                .filter_map(|(owner, seen)| (session.is_voice_muted(*owner) || !peers.contains_key(owner) || now.saturating_duration_since(*seen) > Duration::from_millis(1_500)).then_some(*owner))
+                .filter_map(|(owner, seen)| (session.is_voice_muted(*owner) || !(VoicePeers {peers:&peers,lobbies:&lobbies}).contains_key(owner) || now.saturating_duration_since(*seen) > Duration::from_millis(1_500)).then_some(*owner))
                 .collect();
             for owner in stale_speakers {
                 voice_active.remove(&owner);
-                relay_voice_activity(&voice_routing,&peers, &traffic, owner, false);
+                relay_voice_activity(&voice_routing,VoicePeers {peers:&peers,lobbies:&lobbies}, &traffic, owner, false);
             }
             let steps=clock.advance(now.duration_since(previous).mul_f32(session.time_scale()));previous=now;
             // Ticks the clock dropped still passed for every client.
