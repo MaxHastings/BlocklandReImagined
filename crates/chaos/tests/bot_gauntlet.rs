@@ -1054,6 +1054,91 @@ fn a_run_longer_than_the_approach_timeout() {
     assert!(caps > 0, "both ran the far flag home: {:?}", r.progress);
 }
 
+#[test]
+fn a_flag_above_the_runner_is_reached_by_stairs() {
+    const RUNNER: &str = "gauntlet:bot/runner";
+    let mut spec = Spec::new(
+        "a_flag_above_the_runner_is_reached_by_stairs",
+        vec![Vec3::new(-50.0, 0.0, 50.0)],
+        vec![Vec3::new(-85.0, 0.0, 80.0)],
+        &[],
+    );
+    spec.kinds = [RUNNER, RUNNER];
+    spec.extra_kinds = vec![kind(RUNNER, |k| {
+        for b in ["fight", "chase", "search", "arm", "fly", "return"] {
+            k.behaviours.insert(b.into(), 0.0);
+        }
+    })];
+    spec.settings.player_type = NO_JETS.into();
+    spec.bricks = floor(Vec3::new(-58.0, 0.0, 42.0), [2, 2], 6.0);
+    spec.bricks
+        .extend(stairs(Vec3::new(-68.0, 0.0, 47.0), 10, 0.6, 3));
+    let posts = [
+        Vec3::new(-73.75, 0.1, 40.25),
+        Vec3::new(-73.75, 0.1, 44.25),
+        Vec3::new(-49.75, 6.1, 50.25),
+        Vec3::new(-53.75, 6.1, 54.25),
+    ];
+    let report = flags(spec, posts, 90);
+    assert!(
+        report.progress["captures_side0"] > 0,
+        "the lower runner must take the upper flag home: {:?}",
+        report.progress
+    );
+    let first = report.progress["first_capture_side0"];
+    assert!(
+        first < 120 * 30,
+        "the upper flag took {first} ticks to capture"
+    );
+}
+
+#[test]
+fn a_flag_above_four_full_floors_requires_a_stairwell() {
+    const RUNNER: &str = "gauntlet:bot/runner";
+    let mut spec = Spec::new(
+        "a_flag_above_four_full_floors_requires_a_stairwell",
+        vec![Vec3::new(-94.0, 0.0, 52.0)],
+        vec![Vec3::new(80.0, 0.0, 80.0)],
+        &[],
+    );
+    spec.kinds = [RUNNER, RUNNER];
+    spec.extra_kinds = vec![kind(RUNNER, |k| {
+        for b in ["fight", "chase", "search", "arm", "fly", "return"] {
+            k.behaviours.insert(b.into(), 0.0);
+        }
+    })];
+    spec.settings.player_type = NO_JETS.into();
+    for level in 0..4 {
+        let y = level as f32 * 6.0;
+        // Each flight ends at the occupied floor; the next begins on the
+        // opposite side of the stairwell, reached around its end landing.
+        let mut flight = stairs(Vec3::new(-82.0, 0.0, 40.0 + level as f32 * 6.0), 10, 0.6, 3);
+        for b in &mut flight {
+            b.position[1] += y;
+        }
+        spec.bricks.extend(flight);
+        let top = y + 6.0;
+        spec.bricks
+            .extend(floor(Vec3::new(-72.0, 0.0, 32.0), [4, 5], top));
+        spec.bricks
+            .extend(floor(Vec3::new(-88.0, 0.0, 32.0), [1, 5], top));
+        spec.bricks
+            .extend(floor(Vec3::new(-80.0, 0.0, 32.0), [1, 1], top));
+    }
+    let posts = [
+        Vec3::new(-95.75, 0.1, 55.25),
+        Vec3::new(-95.75, 0.1, 51.25),
+        Vec3::new(-49.75, 24.1, 50.25),
+        Vec3::new(-45.75, 24.1, 54.25),
+    ];
+    let report = flags(spec, posts, 180);
+    assert!(
+        report.progress["captures_side0"] > 0,
+        "runner must climb four floors and bring the flag home: {:?}",
+        report.progress
+    );
+}
+
 /// Capture the flag in `spec`'s layout and arsenal, for `seconds`: each
 /// side takes the other's flag from `posts` back to its base.
 fn flags(mut spec: Spec, posts: Posts, seconds: usize) -> Report {
@@ -1061,10 +1146,13 @@ fn flags(mut spec: Spec, posts: Posts, seconds: usize) -> Report {
     const BASE: &str = "gauntlet-ctf:brick/base";
     const FLAG_ITEM: &str = "gauntlet-ctf:weapon/flag";
     const FLAG_IMAGE: &str = "gauntlet-ctf:image/flag";
-    spec.brick_defs = vec![(FLAG, fixture::PLATE), (BASE, fixture::PLATE)];
-    spec.item_defs = vec![(FLAG_ITEM, FLAG_IMAGE)];
-    spec.bricks = vec![brick(FLAG, posts[0]), brick(BASE, posts[1])];
-    spec.blue_bricks = vec![brick(FLAG, posts[2]), brick(BASE, posts[3])];
+    spec.brick_defs
+        .extend([(FLAG, fixture::PLATE), (BASE, fixture::PLATE)]);
+    spec.item_defs.push((FLAG_ITEM, FLAG_IMAGE));
+    spec.bricks
+        .extend([brick(FLAG, posts[0]), brick(BASE, posts[1])]);
+    spec.blue_bricks
+        .extend([brick(FLAG, posts[2]), brick(BASE, posts[3])]);
     let script = r#"
 fn flag() { "gauntlet-ctf:weapon/flag" }
 fn image() { "gauntlet-ctf:image/flag" }
@@ -1149,6 +1237,7 @@ fn bot_objectives(p) {
         );
     });
     let sides = b.sides.clone();
+    let began = b.arena.s.simulation().state().tick;
     b.play(0.0, seconds, |s, report| {
         let state = s.package_state();
         let Some(ns) = state.packages.get("gauntlet-ctf") else {
@@ -1161,6 +1250,12 @@ fn bot_objectives(p) {
                 .filter_map(|(o, _)| ns.players.get(o)?.get("done")?.as_i64())
                 .sum();
             report.progress.insert(format!("captures_side{side}"), caps);
+            if caps > 0 {
+                report
+                    .progress
+                    .entry(format!("first_capture_side{side}"))
+                    .or_insert(s.simulation().state().tick.saturating_sub(began) as i64);
+            }
         }
         let carrying = sides
             .keys()

@@ -47,8 +47,9 @@ pub(super) const SCAN_RAYS: usize = 2 * DIRECTIONS;
 /// What a bot keeps for exploring.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Explore {
-    /// When it was last in each cell.
-    visited: BTreeMap<(i32, i32), u64>,
+    /// Visited heights in each horizontal cell, without quantizing floor levels.
+    visited: BTreeMap<(i32, i32), Vec<(f32, u64)>>,
+    visits: usize,
     /// Where enemies were last known, and when.
     leads: Vec<(Vec3, u64)>,
     /// The place it is going to, while it explores.
@@ -60,24 +61,59 @@ pub(super) struct Explore {
 fn cell(at: Vec3) -> (i32, i32) {
     ((at.x / CELL).floor() as i32, (at.z / CELL).floor() as i32)
 }
+fn same_scan_location(a: Vec3, b: Vec3, step: f32) -> bool {
+    flat(a - b).length() < RESCAN_MOVE && (a.y - b.y).abs() <= step + 0.5
+}
 
 impl Explore {
     /// It is at `feet` at `tick`, knowing `memory`: the cell is visited, a
     /// known enemy is a lead, and a place within `arrive` (its body's
     /// width at least, a chassis's included) is reached and done.
-    pub(super) fn note(&mut self, feet: Vec3, memory: Option<Knowledge>, arrive: f32, tick: u64) {
+    pub(super) fn note(
+        &mut self,
+        feet: Vec3,
+        memory: Option<Knowledge>,
+        arrive: f32,
+        step: f32,
+        height: f32,
+        tick: u64,
+    ) {
         let here = cell(feet);
-        if !self.visited.contains_key(&here)
-            && self.visited.len() >= CELLS
-            && let Some(stalest) = self
-                .visited
+        let band = height * 0.5;
+        let seen = self.visited.get(&here).and_then(|levels| {
+            levels
                 .iter()
-                .min_by_key(|(c, at)| (**at, **c))
-                .map(|(c, _)| *c)
-        {
-            self.visited.remove(&stalest);
+                .enumerate()
+                .filter(|(_, (y, _))| (feet.y - *y).abs() <= band)
+                .min_by(|(_, a), (_, b)| (feet.y - a.0).abs().total_cmp(&(feet.y - b.0).abs()))
+                .map(|(index, _)| index)
+        });
+        if let Some(index) = seen {
+            self.visited.get_mut(&here).unwrap()[index].1 = tick;
+        } else {
+            if self.visits >= CELLS
+                && let Some((key, index)) = self
+                    .visited
+                    .iter()
+                    .flat_map(|(key, levels)| {
+                        levels
+                            .iter()
+                            .enumerate()
+                            .map(move |(index, (_, seen))| (*key, index, *seen))
+                    })
+                    .min_by_key(|(key, index, seen)| (*seen, *key, *index))
+                    .map(|(key, index, _)| (key, index))
+            {
+                let levels = self.visited.get_mut(&key).unwrap();
+                levels.remove(index);
+                if levels.is_empty() {
+                    self.visited.remove(&key);
+                }
+                self.visits -= 1;
+            }
+            self.visited.entry(here).or_default().push((feet.y, tick));
+            self.visits += 1;
         }
-        self.visited.insert(here, tick);
         if let Some(k) = memory
             && self.leads.last().is_none_or(|(_, at)| *at < k.observed)
         {
@@ -86,24 +122,30 @@ impl Explore {
             }
             self.leads.push((k.at, k.observed));
         }
-        if self
-            .to
-            .is_some_and(|to| flat(to - feet).length() < ARRIVED.max(arrive))
-        {
+        if self.to.is_some_and(|to| {
+            flat(to - feet).length() < ARRIVED.max(arrive) && (to.y - feet.y).abs() <= step + 0.5
+        }) {
             self.to = None;
         }
     }
     /// How long since it was at a place, 0 (just now) to 1 (a while, or
     /// never).
-    fn stale(&self, at: Vec3, tick: u64) -> f32 {
-        self.visited.get(&cell(at)).map_or(1.0, |seen| {
-            (tick.saturating_sub(*seen) as f32 / (STALE_SECONDS * 120.0)).min(1.0)
+    fn stale(&self, at: Vec3, height: f32, tick: u64) -> f32 {
+        let seen = self.visited.get(&cell(at)).and_then(|levels| {
+            levels
+                .iter()
+                .filter(|(y, _)| (at.y - *y).abs() <= height * 0.5)
+                .map(|(_, seen)| *seen)
+                .max()
+        });
+        seen.map_or(1.0, |seen| {
+            (tick.saturating_sub(seen) as f32 / (STALE_SECONDS * 120.0)).min(1.0)
         })
     }
     /// How worth looking at a place is: how long since it was there (a
     /// place never visited is new), and how near a recent lead.
-    fn worth(&self, at: Vec3, tick: u64) -> f32 {
-        let stale = self.stale(at, tick);
+    fn worth(&self, at: Vec3, height: f32, tick: u64) -> f32 {
+        let stale = self.stale(at, height, tick);
         let lead = self
             .leads
             .iter()
@@ -146,7 +188,7 @@ impl Session {
             return Some(to);
         }
         if brain.explore.boxed_in.is_some_and(|(at, when)| {
-            flat(at - feet).length() < RESCAN_MOVE && tick < when + (RESCAN_SECONDS * 120.0) as u64
+            same_scan_location(at, feet, body.step) && tick < when + (RESCAN_SECONDS * 120.0) as u64
         }) || !self.bot_spend_rays(bot, SCAN_RAYS)
         {
             return None;
@@ -207,13 +249,14 @@ impl Session {
                 .iter()
                 .filter(|(_, i)| i.option == Behaviour::Explore as u8)
                 .filter_map(|(_, i)| i.place)
-                .any(|p| flat(p - at).length() < CELL * 2.0);
+                .any(|p| flat(p - at).length() < CELL * 2.0 && (p.y - at.y).abs() <= body.height);
             // Farther is more ground opened up, and a walk with a purpose
             // rather than a turn about in the same room.
-            let worth =
-                brain.explore.worth(at, tick) + FAR * open / reach + AHEAD * way.dot(facing)
-                    - if crowd { CROWD } else { 0.0 }
-                    + variety;
+            let worth = brain.explore.worth(at, body.height, tick)
+                + FAR * open / reach
+                + AHEAD * way.dot(facing)
+                - if crowd { CROWD } else { 0.0 }
+                + variety;
             if best.is_none_or(|(b, _)| worth > b) {
                 best = Some((worth, at));
             }
@@ -229,21 +272,80 @@ mod tests {
     #[test]
     fn a_place_not_seen_lately_or_near_a_lead_is_worth_more() {
         let mut e = Explore::default();
-        e.note(Vec3::ZERO, None, 0.0, 0);
+        e.note(Vec3::ZERO, None, 0.0, 0.6, 2.8, 0);
         let here = Vec3::new(1.0, 0.0, 1.0);
         let away = Vec3::new(100.0, 0.0, 100.0);
         assert!(
-            e.worth(away, 10) > e.worth(here, 10),
+            e.worth(away, 2.8, 10) > e.worth(here, 2.8, 10),
             "new beats just visited"
         );
-        assert!(e.worth(here, 120 * 200) > 0.99, "stale again after a while");
+        assert!(
+            e.worth(here, 2.8, 120 * 200) > 0.99,
+            "stale again after a while"
+        );
         let lead = Knowledge {
             subject: 9,
             at: Vec3::new(-100.0, 0.0, 0.0),
             observed: 5,
             expires: 10,
         };
-        e.note(Vec3::ZERO, Some(lead), 0.0, 6);
-        assert!(e.worth(lead.at, 20) > e.worth(away, 20), "a lead draws it");
+        e.note(Vec3::ZERO, Some(lead), 0.0, 0.6, 2.8, 6);
+        assert!(
+            e.worth(lead.at, 2.8, 20) > e.worth(away, 2.8, 20),
+            "a lead draws it"
+        );
+    }
+
+    #[test]
+    fn stacked_floors_have_separate_visits_and_arrival() {
+        let mut e = Explore::default();
+        let lower = Vec3::new(2.0, 0.0, 2.0);
+        let upper = lower + Vec3::Y * 3.0;
+        assert!(!same_scan_location(lower, upper, 0.6));
+        assert!(same_scan_location(lower, lower + Vec3::X, 0.6));
+        e.note(lower, None, 1.0, 0.6, 2.8, 10);
+        assert_eq!(e.stale(lower, 2.8, 11), 1.0 / (STALE_SECONDS * 120.0));
+        assert_eq!(
+            e.stale(upper, 2.8, 11),
+            1.0,
+            "an unvisited floor remains interesting"
+        );
+        e.to = Some(upper);
+        e.note(lower, None, 1.0, 0.6, 2.8, 12);
+        assert_eq!(e.to, Some(upper), "standing directly below is not arrival");
+        e.note(upper, None, 1.0, 0.6, 2.8, 13);
+        assert_eq!(e.to, None);
+        assert!(
+            e.stale(lower, 2.8, 14) < 0.01,
+            "visiting upstairs does not erase downstairs"
+        );
+        assert!(e.stale(upper, 2.8, 14) < 0.01);
+    }
+
+    #[test]
+    fn visited_floor_memory_remains_bounded() {
+        let mut e = Explore::default();
+        for i in 0..(CELLS + 20) {
+            e.note(
+                Vec3::new(1.0, i as f32 * 3.0, 1.0),
+                None,
+                1.0,
+                0.6,
+                2.8,
+                i as u64,
+            );
+        }
+        assert_eq!(e.visits, CELLS);
+        assert_eq!(
+            e.stale(Vec3::new(1.0, 0.0, 1.0), 2.8, CELLS as u64 + 20),
+            1.0
+        );
+        assert!(
+            e.stale(
+                Vec3::new(1.0, (CELLS + 19) as f32 * 3.0, 1.0),
+                2.8,
+                CELLS as u64 + 20
+            ) < 0.01
+        );
     }
 }

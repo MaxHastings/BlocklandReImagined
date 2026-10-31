@@ -1399,9 +1399,13 @@ fn floor_below(simulation: &crate::simulation::Simulation, at: Vec3, body: &Body
 /// against it is the work. An item is armed by reaching it, so on the way
 /// there (`routed`: a waypoint still ahead, such as a step up near as it
 /// is across) getting nowhere is a stall.
-fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool) -> bool {
+fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool, feet_only: bool) -> bool {
     match goal {
-        Some(Goal::Objective(p) | Goal::Interact(p)) => flat(p - feet).length() < body.width + 1.0,
+        Some(Goal::Objective(p)) => {
+            flat(p - feet).length() < body.width + 1.0
+                && (!feet_only || (p.y - feet.y).abs() <= body.height)
+        }
+        Some(Goal::Interact(p)) => flat(p - feet).length() < body.width + 1.0,
         Some(Goal::Arm(p)) => !routed && flat(p - feet).length() < body.width + 1.0,
         _ => false,
     }
@@ -2301,15 +2305,16 @@ impl Session {
                 let brain = brains.get_mut(&bot).unwrap();
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
                     // A lookahead limit is not proof that the way ends here.
-                    // A pedestrian pursuing an enemy must also retain the
-                    // frontier when its early best endpoint makes horizontal
-                    // headway: the real route may climb a distant staircase.
+                    // A pedestrian pursuing an enemy or objective must also
+                    // retain the frontier when its early best endpoint makes
+                    // horizontal headway: the real route may climb a distant
+                    // staircase.
                     // A soft planning limit does not prove that target is out
                     // of reach. Existing per-tick and hard node bounds remain.
                     let no_headway = matches!(&found, Found::Partial(path)
                         if path.last().is_none_or(|end| feet.distance(end.feet) <= crate::nav::CELL));
                     let pursuit = !body.conservative
-                        && matches!(goal, Goal::Chase(_) | Goal::Search(_))
+                        && matches!(goal, Goal::Chase(_) | Goal::Search(_) | Goal::Objective(_))
                         && matches!(found, Found::Partial(_));
                     if (no_headway || pursuit) && brain.search.as_mut().unwrap().resume() {
                         return None;
@@ -2909,13 +2914,15 @@ impl Session {
         let carries = driving.as_ref().and_then(|_| self.team_carries(bot, feet));
         // Going to find the game (`explore`): a place to look, when it
         // knows of no fight, has no objective, and enemies play.
-        let memory = self.bots.brains[&bot].memory;
-        self.bots
-            .brains
-            .get_mut(&bot)
-            .unwrap()
-            .explore
-            .note(feet, memory, body.width, tick);
+        let memory = self.bots.brains[&bot].search_knowledge(tick);
+        self.bots.brains.get_mut(&bot).unwrap().explore.note(
+            feet,
+            memory,
+            body.width,
+            body.step,
+            body.height,
+            tick,
+        );
         let explore_to = (!self.bots.brains[&bot].tethered()
             && sight.target.is_none()
             && memory.is_none()
@@ -4383,7 +4390,13 @@ impl Session {
             .and_then(|p| p.walk)
             .is_some_and(|walk| walk != Vec3::ZERO);
         let brain = self.bots.brains.get_mut(&bot).unwrap();
-        let at_work = at_work(brain.goal, feet, &body, wanted.is_some());
+        let at_work = at_work(
+            brain.goal,
+            feet,
+            &body,
+            wanted.is_some(),
+            selected_objective.is_some_and(|v| v.feet_only()),
+        );
         let walking = driving.is_none()
             && trying
             && pushing.is_none()
@@ -4620,9 +4633,51 @@ mod work_tests {
     fn near_a_weapon_with_a_step_still_to_climb_is_not_at_work() {
         let body = Body::of(&crate::player::PlayerTuning::default(), 1.0);
         let (feet, item) = (Vec3::new(-84.36, 16.4, 37.5), Vec3::new(-85.5, 17.9, 37.77));
-        assert!(!at_work(Some(Goal::Arm(item)), feet, &body, true));
-        assert!(at_work(Some(Goal::Arm(item)), feet, &body, false));
-        assert!(at_work(Some(Goal::Interact(item)), feet, &body, true));
+        assert!(!at_work(Some(Goal::Arm(item)), feet, &body, true, false));
+        assert!(at_work(Some(Goal::Arm(item)), feet, &body, false, false));
+        assert!(at_work(
+            Some(Goal::Interact(item)),
+            feet,
+            &body,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn an_objective_on_another_floor_does_not_suppress_stall_recovery() {
+        let body = Body::of(&crate::player::PlayerTuning::default(), 1.0);
+        let feet = Vec3::ZERO;
+        let close = Vec3::new(0.5, body.height * 0.5, 0.0);
+        let upstairs = close + Vec3::Y * (body.height * 2.0);
+        assert!(at_work(
+            Some(Goal::Objective(close)),
+            feet,
+            &body,
+            true,
+            true
+        ));
+        assert!(!at_work(
+            Some(Goal::Objective(upstairs)),
+            feet,
+            &body,
+            true,
+            true
+        ));
+        assert!(at_work(
+            Some(Goal::Objective(upstairs)),
+            feet,
+            &body,
+            true,
+            false
+        ));
+        assert!(!at_work(
+            Some(Goal::Objective(-upstairs)),
+            feet,
+            &body,
+            true,
+            true
+        ));
     }
 }
 
@@ -5096,6 +5151,49 @@ mod navigation_body_tests {
         assert!(
             found,
             "the retained frontier must find the walk around the wall"
+        );
+    }
+
+    #[test]
+    fn an_objective_keeps_its_frontier_for_a_detour_after_a_soft_limit() {
+        use rapier3d::prelude::ColliderBuilder;
+        let from = Vec3::new(-2.0, 0.05, 0.0);
+        let to = Vec3::new(4.0, 0.05, 0.0);
+        let simulation = crate::simulation::Simulation::new(
+            bri_world::World::new("Objective detour".into(), "fixture".into(), vec![[1.0; 4]]),
+            crate::testing::definitions(),
+            vec![
+                ColliderBuilder::cuboid(12.0, 0.5, 12.0).translation(Vec3::new(0.0, -0.5, 0.0)),
+                ColliderBuilder::cuboid(0.2, 5.0, 8.0).translation(Vec3::new(0.0, 5.0, 0.0)),
+            ],
+        )
+        .unwrap();
+        let mut session = Session::new(simulation);
+        let bot = session.join("Searcher".into(), from, true).unwrap();
+        let mut brain = Brain::new(None, BotKind::default(), from, bot, 0);
+        brain.goal = Some(Goal::Objective(to));
+        brain.search = Some(Search::new(from, to, 24.0).limited(64));
+        session.bots.brains.insert(bot, brain);
+        let body = Body::of(session.peers[&bot].player.tuning(), 1.0);
+        let state = session.peers[&bot].player.state().clone();
+        let mut found = false;
+        for tick in 1..=600 {
+            for (_, nav) in &mut session.bots.navs {
+                nav.begin_tick();
+            }
+            session.bot_path(bot, from, &body, Default::default(), None, &state, tick);
+            let brain = &session.bots.brains[&bot];
+            if brain.search.is_none() {
+                found = brain
+                    .plan
+                    .last()
+                    .is_some_and(|way| way.feet.distance(to) < 2.0);
+                break;
+            }
+        }
+        assert!(
+            found,
+            "the objective search must retain its frontier and find the route around the wall"
         );
     }
 
