@@ -45,6 +45,15 @@ consumer is waiting for evidence. Root may reorder independent corrections using
 the evidence. No additional agents are assumed; delegation requires an explicit
 applicable instruction and assigned paths/model requirements.
 
+Current increments: recorded burst starvation is corrected with red/green evidence;
+bot creation/respawn facing passes its lifecycle regression; requested audio
+derivatives and preserved release baselines pass scoped/native checks. The first
+private preview is being assembled with local movement logging. All five bot worlds
+now have native headless baselines, plus a farther house-egress control. See
+[movement and bot diagnostics](../progress/2026-10-30-v043-movement-and-bot-diagnostics.md)
+and the adjacent movement, facing and audio receipts. These implementation checks
+do not close Maxwell's local-feel, mix or combined gameplay acceptance.
+
 ## Rules for each increment
 
 1. Pin the source and content inputs; identify the existing seam owner. Keep one

@@ -22,6 +22,8 @@ use bri_world::OwnerId;
 use glam::Vec3;
 use std::{collections::BTreeMap, f32::consts::PI, sync::Arc};
 
+mod health;
+
 const TICK: f32 = bri_physics::FIXED_DT;
 const TICK_RATE: f64 = 120.0;
 /// At most this many fixed ticks per frame; a longer stall drops time rather
@@ -93,6 +95,7 @@ pub(crate) struct DriveState {
 }
 #[derive(Default)]
 pub struct Motion {
+    health: health::Health,
     pub(crate) drive_state: DriveState,
     mirror: Option<CollisionMirror>,
     predictor: Option<Predictor>,
@@ -664,6 +667,7 @@ impl Motion {
             self.finish_target_frame(pose.passage_frame);
         }
         self.observed_spawn = Some(pose.spawn_tick);
+        self.health.observe(pose, self.local_seconds);
         if (self.mounted || pose.passage_vehicle.is_some())
             && let Some(predictor) = &mut self.predictor
         {
@@ -686,6 +690,7 @@ impl Motion {
                 pose.player.clone(),
                 pose.passage_frame,
             )? {
+                self.health.reconciled(offset.length());
                 let frame = predictor.passage_frame(false);
                 let current = predictor.state().clone();
                 if self.reconcile_presentation_frame(frame) {
@@ -726,6 +731,13 @@ impl Motion {
         input: MoveInput,
         redundancy: usize,
     ) -> Result<Option<(u64, Vec<MoveInput>)>> {
+        self.health.sample(
+            self.local_seconds,
+            self.predictor.as_ref(),
+            input,
+            self.correction.length(),
+            self.mounted,
+        );
         let seconds = if seconds.is_finite() {
             seconds.clamped(0.0, 0.25)
         } else {

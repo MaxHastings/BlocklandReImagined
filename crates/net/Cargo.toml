@@ -72,3 +72,8 @@ test = false
 name = "network_probe"
 path = "src/bin/network_probe.rs"
 test = false
+
+[[bin]]
+name = "bot_scenario_probe"
+path = "src/bin/bot_scenario_probe.rs"
+test = false
