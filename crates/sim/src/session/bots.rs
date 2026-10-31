@@ -298,6 +298,33 @@ fn trapped(pinned: Option<(Vec3, u64, u64)>) -> f32 {
         ((last.saturating_sub(since) as f32 / 120.0 - TRAPPED_AFTER) / TRAPPED_RAMP).clamp(0.0, 1.0)
     })
 }
+/// Keep a trap interval only while the body has remained near its starting
+/// position. Landed height changes and deliberate swimming or jetting count;
+/// an airborne hop that returns to the same spot does not.
+fn update_pinned(
+    pinned: Option<(Vec3, u64, u64)>,
+    feet: Vec3,
+    tick: u64,
+    tries: bool,
+    height_progress: bool,
+) -> Option<(Vec3, u64, u64)> {
+    let retained = pinned.filter(|(at, _, last)| {
+        trap_distance(feet, *at, height_progress) <= PINNED && tick.saturating_sub(*last) < TRY_GAP
+    });
+    if tries {
+        let (at, since, _) = retained.unwrap_or((feet, tick, tick));
+        Some((at, since, tick))
+    } else {
+        retained
+    }
+}
+fn trap_distance(a: Vec3, b: Vec3, height_progress: bool) -> f32 {
+    if height_progress {
+        a.distance(b)
+    } else {
+        flat(a - b).length()
+    }
+}
 /// How far either way a search sweeps its view (all round), and the
 /// ticks between the points it looks to.
 const SWEEP: f32 = std::f32::consts::PI;
@@ -2855,7 +2882,9 @@ impl Session {
                 Some((_, ended)) => (feet, ended),
                 None => (feet, false),
             };
-            let ended = ended && flat(feet - began).length() <= 2.0 * PINNED;
+            let ended = ended
+                && trap_distance(feet, began, state.grounded || wet || state.jetting)
+                    <= 2.0 * PINNED;
             brain.life = Some((began, ended));
             let worth = trapped(brain.pinned);
             if worth > 0.0
@@ -4312,13 +4341,13 @@ impl Session {
             && pushing.is_none()
             && !at_work
             && (walking || wanted.is_none());
-        brain.pinned = brain
-            .pinned
-            .filter(|(at, _, last)| flat(feet - *at).length() <= PINNED && tick < last + TRY_GAP);
-        if tries {
-            let (at, since, _) = brain.pinned.unwrap_or((feet, tick, tick));
-            brain.pinned = Some((at, since, tick));
-        }
+        brain.pinned = update_pinned(
+            brain.pinned,
+            feet,
+            tick,
+            tries,
+            state.grounded || wet || state.jetting,
+        );
         // A goof's, an extra's, an objective's (into a body) or the stall
         // judge's hop, which safety lets through where it comes down on
         // floor. The first window gone nowhere hops (off a body it stands
@@ -4608,6 +4637,32 @@ mod footwork_tests {
         for bot in 1..=4 {
             assert!((0..1200).all(|t| footwork(bot, t, forward, right, false).dot(forward) >= 0.0));
         }
+    }
+}
+
+#[cfg(test)]
+mod trap_progress_tests {
+    use super::*;
+
+    #[test]
+    fn climbing_is_progress_but_a_stationary_bot_can_still_be_trapped() {
+        let mut climbing = None;
+        let mut stationary = None;
+        let mut hopping = None;
+        for tick in 0..=3600 {
+            // Three units every ten seconds: slower than an ordinary stair,
+            // yet enough physical headway to leave each two-unit trap area.
+            let feet = Vec3::Y * (tick as f32 * 3.0 / 1200.0);
+            climbing = update_pinned(climbing, feet, tick, true, true);
+            stationary = update_pinned(stationary, Vec3::ZERO, tick, true, true);
+            let airborne = tick % 120 < 60;
+            let hop_feet = if airborne { Vec3::Y * 3.0 } else { Vec3::ZERO };
+            hopping = update_pinned(hopping, hop_feet, tick, true, !airborne);
+            assert_eq!(trapped(climbing), 0.0, "climbing at tick {tick}");
+        }
+        assert_eq!(trapped(stationary), 1.0);
+        assert_eq!(trapped(hopping), 1.0, "hopping in place is not progress");
+        assert!(update_pinned(stationary, Vec3::ZERO, 3600 + TRY_GAP, false, true).is_none());
     }
 }
 
