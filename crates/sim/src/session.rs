@@ -853,6 +853,9 @@ struct Peer {
     taps: [Option<u64>; 4],
     input_budget: f32,
     last_sequence: u64,
+    /// Highest valid input classified by admission, including rate-limited
+    /// drops. Redundant copies must not retry dropped old controls ahead of
+    /// fresh ones; later consumed sequences acknowledge those gaps normally.
     last_move_sequence: u64,
     /// A transport client joined and has not sent a move yet: it is still loading the world, and nothing
     /// can hurt a player who is not there to see it ([`Session::join_client`]).
@@ -2229,13 +2232,18 @@ impl Session {
         if sequence <= peer.last_move_sequence {
             return Ok(());
         }
+        // A valid input is either admitted once or dropped once. Otherwise a
+        // burst empties the allowance and every redundant datagram spends its
+        // next refill on old refused controls, keeping healthy movement late.
+        // Invalid inputs never advance this mark, and no dropped input drives
+        // the motor or receives an acknowledgement ahead of the queued ones.
+        peer.last_move_sequence = sequence;
         ensure!(peer.input_budget >= 1.0, "Movement input rate exceeded");
         peer.input_budget -= 1.0;
         if peer.inputs.len() == INPUT_QUEUE {
             peer.inputs.pop_front();
         }
         peer.inputs.push_back((sequence, input));
-        peer.last_move_sequence = sequence;
         peer.awaiting_client = false;
         Ok(())
     }

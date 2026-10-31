@@ -167,13 +167,79 @@ fn server_input_queue_ignores_duplicates_and_bounds_rate() {
             .is_err();
     }
     assert!(rejected);
+    assert_eq!(
+        session.motion_states()[0].1,
+        3,
+        "drops do not acknowledge ahead of queued controls"
+    );
+    session.step().unwrap();
+    // Malformed input must not poison the valid sequence high-water mark.
+    assert!(
+        session
+            .movement(
+                owner,
+                4000,
+                MoveInput {
+                    yaw: f32::NAN,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+    );
+    session.movement(owner, 200, MoveInput::default()).unwrap();
+}
+
+#[test]
+fn an_excess_burst_does_not_make_redundancy_starve_fresh_inputs() {
+    let mut session = server();
+    let owner = session
+        .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let walk = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    // A stalled link releases more distinct inputs than the admission burst.
+    // Refusing excess work is intentional; retrying those refused old controls
+    // forever must not consume the allowance ahead of current controls.
+    let mut sequence = 80;
+    let mut burst_refused = 0;
+    for seq in 1..=sequence {
+        burst_refused += usize::from(session.movement(owner, seq, walk).is_err());
+    }
+    assert!(burst_refused > 0, "the flood allowance still applies");
+    let mut late_refused = 0;
+    let mut worst_late_trail = 0;
+    for tick in 1..=600 {
+        sequence += 1;
+        // The ordinary transport repeats twelve controls, in order, every
+        // other tick. Both clocks now advance at exactly the same rate.
+        if tick % 2 == 0 {
+            for seq in sequence - 11..=sequence {
+                let refused = session.movement(owner, seq, walk).is_err();
+                if tick > 120 {
+                    late_refused += usize::from(refused);
+                }
+            }
+        }
+        session.step().unwrap();
+        if tick > 120 {
+            let acknowledged = session.motion_states()[0].1;
+            worst_late_trail = worst_late_trail.max(sequence - acknowledged);
+        }
+    }
+    assert_eq!(late_refused, 0, "old retries keep starving fresh input");
+    assert!(
+        worst_late_trail <= 2,
+        "persistent input trail: {worst_late_trail}"
+    );
 }
 
 /// A host stall (its clock skips the ticks it could not run) while a
 /// client kept making a move a tick, as a hosting player's own client
 /// does. Returns the moves the host refused over the last five seconds and
 /// how many moves the host's acknowledgement trailed by at the end.
-fn after_a_host_stall(credit_skipped: bool) -> (u32, u64) {
+fn after_a_host_stall() -> (u32, u64) {
     let mut session = server();
     let owner = session
         .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
@@ -213,7 +279,7 @@ fn after_a_host_stall(credit_skipped: bool) -> (u32, u64) {
         for _ in 0..1 + catch_up.min(8) {
             session.step().unwrap();
         }
-        if credit_skipped && catch_up > 8 {
+        if catch_up > 8 {
             session.skipped_ticks(catch_up - 8);
         }
     }
@@ -223,19 +289,53 @@ fn after_a_host_stall(credit_skipped: bool) -> (u32, u64) {
 
 #[test]
 fn a_host_stall_does_not_leave_a_players_moves_refused() {
-    // The bug: the allowance only refilled with ticks the host ran, so the
-    // moves the client made through the stall used it up for good, and
-    // every later move was refused on arrival and taken late from a
-    // later datagram's copy, or lost when it fell out of the datagrams.
-    let (refused, behind) = after_a_host_stall(false);
-    assert!(refused > 100, "{refused} refused");
-    // The host credits the ticks its clock skipped: no move is refused
-    // and the host runs each one as soon as it arrives.
-    let (refused, trail) = after_a_host_stall(true);
+    let (refused, trail) = after_a_host_stall();
     assert_eq!(refused, 0);
     assert!(
-        trail < behind,
-        "{trail} moves behind, {behind} without credit"
+        trail < 12,
+        "acknowledgement fell outside the transport's redundancy: {trail}"
+    );
+}
+
+#[test]
+fn skipped_host_ticks_preserve_credit_without_running_the_motor() {
+    let run = |credit| {
+        let mut session = server();
+        let owner = session
+            .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        for sequence in 1..=40 {
+            session
+                .movement(owner, sequence, MoveInput::default())
+                .unwrap();
+        }
+        // Sixteen real ticks passed which the host did not simulate. Their
+        // credit must admit those controls without allowing extra motor steps.
+        if credit {
+            session.skipped_ticks(16);
+        }
+        let refused = (41..=56)
+            .filter(|sequence| {
+                session
+                    .movement(owner, *sequence, MoveInput::default())
+                    .is_err()
+            })
+            .count();
+        assert_eq!(
+            session.motion_states()[0].1,
+            0,
+            "credit is not simulated movement"
+        );
+        refused
+    };
+    assert!(
+        run(false) > 0,
+        "uncredited time still meets the flood bound"
+    );
+    assert_eq!(
+        run(true),
+        0,
+        "real skipped time retains its admission credit"
     );
 }
 
