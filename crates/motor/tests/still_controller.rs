@@ -143,3 +143,31 @@ fn a_body_whose_controller_owns_its_running_is_not_pushed_through_the_floor() {
         }
     }
 }
+
+#[test]
+fn a_living_body_supports_another_until_it_becomes_a_corpse() {
+    let mut world = floor();
+    let tuning = PlayerTuning::default();
+    let height = tuning.stand_height;
+    let mut lower = Player::spawn(&mut world, 1, Vec3::new(0., 0.05, 0.), tuning.clone()).unwrap();
+    let mut upper = Player::spawn(&mut world, 2, Vec3::new(0., height + 0.6, 0.), tuning).unwrap();
+    for _ in 0..240 {
+        lower.step(&mut world, MoveInput::default()).unwrap();
+        upper.step(&mut world, MoveInput::default()).unwrap();
+    }
+    assert!(
+        upper.state().grounded && upper.state().feet[1] > height - 0.1,
+        "living body must support the upper body: {:?}",
+        upper.state()
+    );
+    lower.set_corpse(&mut world, true);
+    for _ in 0..240 {
+        lower.step(&mut world, MoveInput::default()).unwrap();
+        upper.step(&mut world, MoveInput::default()).unwrap();
+    }
+    assert!(
+        upper.state().grounded && upper.state().feet[1] < 0.1,
+        "death must revoke support: {:?}",
+        upper.state()
+    );
+}
