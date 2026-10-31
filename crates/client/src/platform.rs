@@ -649,14 +649,19 @@ fn display_modes(window: &Window) -> Option<DisplayModes> {
     })
 }
 
-/// v20's windowed list: the monitor's modes strictly inside the desktop
-/// minus the window frame, at least 640 x 480.
+/// Reported and common window sizes strictly inside the desktop minus the
+/// window frame, at least 640 x 480.
 pub fn windowed_sizes(
     modes: impl IntoIterator<Item = (u32, u32)>,
     desk: (u32, u32),
 ) -> Vec<(u32, u32)> {
     let mut list: Vec<_> = modes
         .into_iter()
+        .chain(
+            bri_ui::screens::options::COMMON_WINDOWED_SIZES
+                .iter()
+                .copied(),
+        )
         .filter(|&(w, h)| w >= 640 && h >= 480 && w < desk.0 && h < desk.1)
         .collect();
     list.sort_unstable();
@@ -2569,15 +2574,39 @@ mod tests {
             (1280, 720),
             (1280, 720),
             (1600, 900),
+            (1501, 901),
             (1904, 1000),
             (320, 200),
         ];
         let list = windowed_sizes(modes, (1904, 1041));
-        assert_eq!(list, vec![(640, 480), (1280, 720), (1600, 900)]);
+        assert!(
+            list.contains(&(640, 480))
+                && list.contains(&(1280, 720))
+                && list.contains(&(1600, 900))
+        );
+        assert!(
+            list.contains(&(1501, 901)),
+            "nonstandard reported modes remain available"
+        );
+        assert!(!list.contains(&(1904, 1000)) && !list.contains(&(320, 200)));
+        assert!(
+            list.windows(2).all(|w| w[0] < w[1]),
+            "sizes are sorted and unique"
+        );
         assert!(fits(&list, (1280, 720)));
         assert!(fits(&list, (1000, 700)));
         assert!(!fits(&list, (1920, 1080)));
         assert!(fits(&[], (1920, 1080)));
+    }
+    #[test]
+    fn common_window_sizes_do_not_depend_on_exclusive_monitor_modes() {
+        let list = windowed_sizes([(1920, 1080), (1280, 720)], (1904, 1041));
+        for size in [(1280, 1024), (1440, 960), (1440, 900), (1680, 720)] {
+            assert!(list.contains(&size), "missing usable window size {size:?}");
+        }
+        let large = windowed_sizes([(2560, 1600)], (2544, 1561));
+        assert!(large.contains(&(2048, 1536)), "QXGA fits this desktop");
+        assert!(list.iter().all(|&(w, h)| w < 1904 && h < 1041));
     }
     #[test]
     fn activating_click_only_refocuses_the_game() {

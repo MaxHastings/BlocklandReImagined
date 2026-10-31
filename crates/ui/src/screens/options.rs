@@ -643,14 +643,30 @@ pub fn record_display(p: &mut Prefs, resolution: (u32, u32), fullscreen: bool) {
     );
 }
 
-/// Headless and pre-window fallback when the platform has not reported the
-/// monitor's modes.
-const FALLBACK_RESOLUTIONS: &[(u32, u32)] = &[
+/// Common window sizes, including aspect ratios often absent from a monitor's
+/// exclusive video modes. The platform filters these to the available desktop.
+/// Also used before a monitor has been reported to the options screen.
+pub const COMMON_WINDOWED_SIZES: &[(u32, u32)] = &[
     (640, 480),
     (800, 600),
     (1024, 768),
+    (1280, 960),
+    (1600, 1200),
+    (2048, 1536),
+    (1280, 1024),
     (1280, 720),
     (1280, 800),
+    (1440, 900),
+    (1680, 1050),
+    (1920, 1200),
+    (2560, 1600),
+    (1440, 960),
+    (1920, 1280),
+    (2160, 1440),
+    (1680, 720),
+    (2560, 1080),
+    (3440, 1440),
+    (5120, 2160),
     (1366, 768),
     (1600, 900),
     (1920, 1080),
@@ -670,7 +686,7 @@ fn resolution_list(
         Some(m) if fullscreen => vec![m.native],
         Some(m) if !m.windowed.is_empty() => m.windowed.clone(),
         _ => {
-            let mut l = FALLBACK_RESOLUTIONS.to_vec();
+            let mut l = COMMON_WINDOWED_SIZES.to_vec();
             l.push(current);
             l
         }
@@ -5075,7 +5091,37 @@ mod tests {
         toggle_audio(&mut s, &mut ui, FULLSCREEN, true);
         toggle_audio(&mut s, &mut ui, FULLSCREEN, false);
         assert_eq!(s.selected_display().resolution, (1280, 720));
-        assert_eq!(resolution_list(None, true, (1000, 700)).len(), 11);
+        let fallback = resolution_list(None, true, (1000, 700));
+        assert!(fallback.contains(&(1000, 700)) && fallback.contains(&(1280, 1024)));
+    }
+    #[test]
+    fn a_five_by_four_window_size_remains_selectable() {
+        let mut ui = fixture();
+        ui.core.display_modes = Some(DisplayModes {
+            native: (1920, 1080),
+            windowed: vec![(800, 600), (1280, 720), (1280, 1024)],
+        });
+        let mut screen = Options::new(&ui.core);
+        let menu = screen.view.id("OptGraphicsResolutionMenu").unwrap();
+        let index = screen
+            .resolutions
+            .iter()
+            .position(|size| *size == (1280, 1024))
+            .unwrap();
+        screen.view.select(menu, Some(index as i64));
+        assert_eq!(screen.selected_display().resolution, (1280, 1024));
+        click(&mut screen, "apply", &mut ui);
+        assert!(matches!(
+            ui.drain_actions().first(),
+            Some((
+                _,
+                UiAction::ApplyDisplay {
+                    resolution: (1280, 1024),
+                    fullscreen: false,
+                    ..
+                }
+            ))
+        ));
     }
     #[test]
     fn display_rejection_does_not_commit_then_success_retains_applied_boundary() {

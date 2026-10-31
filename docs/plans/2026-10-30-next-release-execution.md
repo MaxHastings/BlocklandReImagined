@@ -143,6 +143,9 @@ instruction to address open issues: [#416](https://github.com/MaxHastings/Blockl
 (automatic draw distance). Audit the underlying needs, source behavior and
 existing implementation; apply judgment to the proposed solutions and record
 what is justified rather than adopting every suggestion automatically.
+Issue 416's fullscreen path was already borderless; the missing window-size
+choices are addressed in the [display receipt](../progress/2026-10-31-v043-display-resolutions.md),
+subject to platform CI and window-manager verification. Issue 417 remains open.
 
 October 31 explicit additions: loading chat paging/F2 with a real roster;
 the reported closed-chat-channel exit during friend-server map loading; and
