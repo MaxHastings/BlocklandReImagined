@@ -623,8 +623,51 @@ struct Peer {
     generation: usize,
     /// May send bulk requests (administrators); read by the connection task.
     bulk: Arc<AtomicBool>,
+    voice: watch::Sender<crate::voice::Control>,
+    voice_task: tokio::task::JoinHandle<()>,
 }
 impl Peer {
+    fn new(
+        connection: Connection,
+        out: Outbox,
+        traffic: Arc<Traffic>,
+        bulk: Arc<AtomicBool>,
+    ) -> Self {
+        let (voice, mut latest) = watch::channel(crate::voice::Control::default());
+        let link = connection.clone();
+        let counters = traffic.clone();
+        let voice_task = tokio::spawn(async move {
+            let result: Result<()> = async {
+                let mut send = link.open_uni().await?;
+                send.set_priority(10)?;
+                while latest.changed().await.is_ok() {
+                    let control = latest.borrow_and_update().clone();
+                    let bytes = control.encode()?;
+                    tokio::time::timeout(
+                        Duration::from_secs(10),
+                        codec::write_frame(&mut send, &bytes),
+                    )
+                    .await??;
+                    counters.add(Kind::Voice, bytes.len(), 1);
+                }
+                Ok(())
+            }
+            .await;
+            if result.is_err() {
+                link.close(3_u32.into(), b"Voice control delivery failed");
+            }
+        });
+        Self {
+            generation: connection.stable_id(),
+            connection,
+            out,
+            traffic,
+            bulk,
+            voice,
+            voice_task,
+        }
+    }
+
     /// Queue a reliable frame. A peer too far behind is disconnected rather
     /// than buffered without bound.
     fn send(&self, frame: Frame) {
@@ -646,6 +689,11 @@ impl Peer {
                     .close(2_u32.into(), b"Host state exceeds transfer budget");
             }
         }
+    }
+}
+impl Drop for Peer {
+    fn drop(&mut self) {
+        self.voice_task.abort();
     }
 }
 /// Encode once and queue for every peer. A message that cannot be encoded
@@ -1541,6 +1589,7 @@ fn send_package_views(
 }
 
 struct SentVoiceRoutes {
+    metadata: crate::voice::Metadata,
     table: crate::voice::RouteTable,
     conversations: BTreeMap<OwnerId, Option<bri_sim::session::VoiceConversation>>,
 }
@@ -1596,9 +1645,31 @@ impl VoiceRouting {
                             .is_some_and(|(from, to)| crate::voice::audible(from, to, route.range)))
             });
             let old = self.sent.get(id);
+            let metadata = crate::voice::Metadata {
+                enabled: session.voice_chat(),
+                muted: session.voice_mute_set().clone(),
+                conversation: session
+                    .connection_conversation(*id)
+                    .map(|(game, title)| crate::voice::Conversation { game, title }),
+            };
             // A host without voice has no routing state to announce. Keep
             // revocation messages when a previously active table is cleared.
-            if current.is_empty() && old.is_none() && !session.voice_chat() {
+            if current.is_empty() && old.is_none() && !metadata.enabled {
+                self.next_revision += 1;
+                let table = crate::voice::RouteTable::default();
+                peer.voice.send_replace(crate::voice::Control {
+                    revision: self.next_revision,
+                    routes: table.clone(),
+                    metadata: metadata.clone(),
+                });
+                self.sent.insert(
+                    *id,
+                    SentVoiceRoutes {
+                        table,
+                        metadata,
+                        conversations: BTreeMap::new(),
+                    },
+                );
                 continue;
             }
             if unchanged.contains(id)
@@ -1615,6 +1686,19 @@ impl VoiceRouting {
                         })
                 })
             {
+                if old.is_some_and(|s| s.metadata == metadata) {
+                    continue;
+                }
+                self.next_revision += 1;
+                peer.voice.send_replace(crate::voice::Control {
+                    revision: self.next_revision,
+                    routes: old.expect("same routes have prior state").table.clone(),
+                    metadata: metadata.clone(),
+                });
+                self.sent
+                    .get_mut(id)
+                    .expect("same routes have prior state")
+                    .metadata = metadata;
                 continue;
             }
             let mut routed = BTreeMap::new();
@@ -1648,10 +1732,16 @@ impl VoiceRouting {
                 revision: self.next_revision,
                 routes: routed,
             };
-            peer.send_message(Kind::Voice, &Message::VoiceRoutes(table.clone()));
+            self.next_revision += 1;
+            peer.voice.send_replace(crate::voice::Control {
+                revision: self.next_revision,
+                routes: table.clone(),
+                metadata: metadata.clone(),
+            });
             self.sent.insert(
                 *id,
                 SentVoiceRoutes {
+                    metadata,
                     table,
                     conversations,
                 },
@@ -2140,7 +2230,7 @@ async fn run(
                     let welcome=encode_transfer(WorldTransfer{head:Message::Welcome{owner,administrator:session.is_administrator(owner),resume:token,checkpoint},bricks,focus},traffic.clone(),1);
                     if out.try_send(welcome).is_err(){let _=recorder.disconnect(&mut session,owner);anyhow::bail!("Join writer unavailable");}
                     bulk.store(session.is_administrator(owner),Ordering::Relaxed);
-                    peers.insert(owner,Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk});package_views.sent.insert(owner,view);Ok(owner)
+                    peers.insert(owner,Peer::new(connection,out,traffic.clone(),bulk));package_views.sent.insert(owner,view);Ok(owner)
                 })())? {Ok(join)=>join,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if join.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}let _=answer.send(join.map_err(|e|match e.downcast::<crate::client::PackagesDiffer>(){Ok(d)=>Message::PackagesDiffer(d.0),Err(e)=>Message::Rejected(e.to_string())}));
             },
@@ -2154,7 +2244,7 @@ async fn run(
                     let name=session.arrivals().remove(&owner).unwrap_or_default();
                     let bytes=match codec::encode(&Message::Arrived{owner,name,arrival:arrival.clone(),chat_cursor:session.chat_cursor()}) {Ok(bytes)=>bytes,Err(error)=>{let _=recorder.disconnect(&mut session,owner);return Err(error)}};
                     if out.try_send(Frame::Ready(Arc::new(bytes))).is_err(){let _=recorder.disconnect(&mut session,owner);anyhow::bail!("Connection writer unavailable");}
-                    lobbies.insert(owner,Lobby{peer:Peer{generation:connection.stable_id(),connection,out,traffic:traffic.clone(),bulk:Arc::new(AtomicBool::new(false))},ticket:token_key(&arrival),principal,shown_talking:None,shown_players:None});
+                    lobbies.insert(owner,Lobby{peer:Peer::new(connection,out,traffic.clone(),Arc::new(AtomicBool::new(false))),ticket:token_key(&arrival),principal,shown_talking:None,shown_players:None});
                     Ok(owner)
                 })())? {Ok(arrived)=>arrived,Err(fault)=>Err(anyhow::anyhow!("{fault}"))};
                 if arrived.is_err(){rejected+=1;}else{broadcast_admin_snapshots(&session,&peers);}

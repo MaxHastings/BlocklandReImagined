@@ -48,6 +48,24 @@ including reliable route updates and audio/activity datagrams. This does **not**
 establish continuous client loading audio: background capture/send/playout and
 stable audio ownership across transport replacement remain pending.
 
+## Independent control snapshots
+
+Each accepted transport receives a private, reliable voice-control stream separate
+from world replication. VoiceLink exposes one coherent snapshot: enabled state,
+administrator mutes, the authorized native conversation (game ID/title or Server
+Lobby), and generation-stamped playback routes. A stalled world/UI receive queue
+does not defer this control path. It grants no body, team or extra conversation
+rights. Metadata-only updates retain unchanged route decoder state.
+
+Control is bounded uncompressed MessagePack, not the world's compressed framing.
+The latest pending snapshot replaces superseded pending updates; clients validate
+the whole snapshot before using it. Ended or invalid control retires playable
+grants. Ordinary kick/drop reasons stay owned by the connection lifecycle.
+The native worker consumes control independently of frames and does not open
+capture before an enabled snapshot. Existing device ownership may stay warm,
+without transmitting, during a verified same-session transport handoff.
+Loading UI/link integration and combined PCM continuity remain under development.
+
 ## Native processing parameters
 
 An eligible route may include `effects`. Omitted fields mean clean speech:

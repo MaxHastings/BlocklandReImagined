@@ -1038,6 +1038,16 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
     loading_route(&returning_link, a.owner, true).await?;
     loading_route(&cl, b.owner, false).await?;
     assert!(!returning_link.routes().routes.contains_key(&c.owner));
+    assert_eq!(
+        returning_link
+            .control()
+            .metadata
+            .conversation
+            .as_ref()
+            .map(|c| c.game),
+        Some(Some(game)),
+        "loading presentation must name its authorized retained game, not the lobby"
+    );
     exchange(&a.voice_link(), &returning_link, a.owner, 6, 77).await?;
     exchange(&returning_link, &a.voice_link(), b.owner, 0, 88).await?;
     returning.close();
@@ -1124,6 +1134,67 @@ async fn loading_voice_routes_are_revoked_when_the_new_map_has_no_voice_policy()
     .await?;
     loading.close();
     a.close();
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_control_teardown_preserves_the_authoritative_kick_reason() -> anyhow::Result<()> {
+    use bri_net::{client::Client, server};
+    use std::time::Duration;
+    let server = server::start(session(false), common::options())?;
+    let mut host = Client::connect_with_host(
+        server.address,
+        &server.certificate,
+        "Host".into(),
+        vec![],
+        None,
+        Some(server.host_token.clone()),
+    )
+    .await?;
+    let mut guest = Client::connect(
+        server.address,
+        &server.certificate,
+        "Guest".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let link = guest.voice_link();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while link.control().revision == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    host.command(Command::Admin(bri_admin::Request::new(
+        bri_admin::Action::Kick {
+            target: bri_admin::ConnectionId(guest.owner),
+        },
+    )))
+    .await?;
+    let reason = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Err(error) = guest.receive().await {
+                return error.to_string();
+            }
+        }
+    })
+    .await?;
+    assert!(
+        reason.to_ascii_lowercase().contains("kick"),
+        "actual kick reason was lost: {reason}"
+    );
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !link.is_closed()
+            || link.control().metadata.enabled
+            || !link.routes().routes.is_empty()
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    host.close();
     server.stop().await?;
     Ok(())
 }

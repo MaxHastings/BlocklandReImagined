@@ -433,13 +433,30 @@ impl VoiceState {
             self.sent_activity = None;
             self.activity_sent_at = None;
         }
-        let link = transport.filter(|_| self.config.settings.enabled);
+        let control = transport.map(VoiceLink::control);
+        if let (Some(link), Some(control)) = (transport, control.as_ref()) {
+            self.set_server_muted(&control.metadata.muted, link.owner());
+        }
+        let link = transport.filter(|_| {
+            self.config.settings.enabled
+                && !transport.is_some_and(VoiceLink::is_closed)
+                && control.as_ref().is_some_and(|c| c.metadata.enabled)
+        });
         self.active = link.is_some();
-        let keep_capture = self.active
+        // A verified replacement transport may not have delivered its first
+        // control snapshot yet. Keep existing device ownership, with transmit
+        // gated off; this never starts a new capture or inherits old grants.
+        let awaiting_control = self.config.settings.enabled
+            && transport.is_some()
+            && (control.as_ref().is_some_and(|c| c.revision == 0)
+                || transport.is_some_and(VoiceLink::is_closed))
+            && (self.chat.is_some() || self.opening.is_some());
+        let can_open = self.active
             || (self.preview_active
                 && self.focused
                 && self.config.settings.enabled
                 && self.config.mode != VoiceMode::Disabled);
+        let keep_capture = can_open || awaiting_control;
         if !keep_capture {
             if self.sent_activity == Some(true)
                 && let Some(transport) = transport
@@ -522,7 +539,10 @@ impl VoiceState {
                 }
             }
         }
-        if self.chat.is_none() && self.opening.is_none() && self.retry_at.is_none_or(|at| now >= at)
+        if can_open
+            && self.chat.is_none()
+            && self.opening.is_none()
+            && self.retry_at.is_none_or(|at| now >= at)
         {
             let settings = self.audio_settings();
             let device = self.config.device.clone();
@@ -539,7 +559,12 @@ impl VoiceState {
             }
         }
 
-        let routes = link.map_or_else(bri_net::voice::RouteTable::default, |l| l.routes());
+        // Routes and moderation are one host snapshot, even if a newer control
+        // revision arrives concurrently while this iteration is processing.
+        let routes = control
+            .as_ref()
+            .filter(|_| link.is_some())
+            .map_or_else(bri_net::voice::RouteTable::default, |c| c.routes.clone());
         self.apply_routes(routes);
         if let Some(chat) = &self.chat {
             chat.set_transmit_allowed(self.active && self.focused && !self.server_blocked);
@@ -734,9 +759,6 @@ impl VoiceClient {
     }
     pub fn set_preview_active(&mut self, active: bool) {
         self.shared().state.set_preview_active(active);
-    }
-    pub fn set_server_muted(&mut self, muted: &BTreeSet<OwnerId>, local_owner: OwnerId) {
-        self.shared().state.set_server_muted(muted, local_owner);
     }
     pub fn mute(&mut self, owner: OwnerId) {
         self.shared().state.mute(owner);

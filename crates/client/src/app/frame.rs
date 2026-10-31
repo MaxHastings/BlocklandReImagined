@@ -206,7 +206,6 @@ impl App {
             building.set_passages(&self.motion.passages());
         }
         if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
-            self.voice.set_server_muted(&view.voice_muted, view.owner);
             let muted = self
                 .voice
                 .muted()
@@ -230,9 +229,6 @@ impl App {
             .filter(|a| a.entered && a.view.as_ref().is_some_and(|view| view.voice_chat))
             .and_then(|a| a.worker.probes.get())
             .map(|probes| &probes.voice);
-        if let Some(view) = self.net.attempt.as_ref().and_then(|a| a.view.as_ref()) {
-            self.voice.set_server_muted(&view.voice_muted, view.owner);
-        }
         self.voice
             .set_preview_active(self.ui.core.voice_preview_active);
         self.voice.update(

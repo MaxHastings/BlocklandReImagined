@@ -118,7 +118,7 @@ pub fn decode_datagram<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     from_bytes(bytes)
 }
 /// Strict decode: the whole buffer is exactly one message.
-fn from_bytes<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+pub(crate) fn from_bytes<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     let mut cursor = std::io::Cursor::new(bytes);
     let value = rmp_serde::from_read(&mut cursor).context("Malformed message")?;
     ensure!(

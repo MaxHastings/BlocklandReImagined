@@ -45,6 +45,21 @@ impl Session {
             position: None,
         })
     }
+    /// The already-authorized human conversation, for loading presentation.
+    pub fn connection_conversation(&self, owner: OwnerId) -> Option<(Option<u64>, String)> {
+        let connection = self.connection(owner)?;
+        let title = match connection.minigame {
+            Some(game) => self
+                .minigames
+                .game(GameId(game))
+                .ok()?
+                .settings
+                .title
+                .clone(),
+            None => "Server Lobby".into(),
+        };
+        Some((connection.minigame, title))
+    }
     pub(super) fn conversation_recipients(&self, game: GameId) -> Vec<OwnerId> {
         let mut recipients: BTreeSet<_> = self
             .minigames

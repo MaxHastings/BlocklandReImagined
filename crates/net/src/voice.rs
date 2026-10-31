@@ -30,6 +30,67 @@ pub struct RouteTable {
     pub routes: BTreeMap<OwnerId, RouteState>,
 }
 
+/// Critical private voice state is independent of world replication and UI polling.
+pub const CONTROL_BYTES: usize = 64 * 1024;
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Conversation {
+    pub game: Option<u64>,
+    pub title: String,
+}
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Metadata {
+    pub enabled: bool,
+    pub muted: std::collections::BTreeSet<OwnerId>,
+    pub conversation: Option<Conversation>,
+}
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Control {
+    pub revision: u64,
+    pub routes: RouteTable,
+    pub metadata: Metadata,
+}
+impl Control {
+    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
+        ensure!(self.valid(), "invalid voice control state");
+        crate::codec::encode_request(self, CONTROL_BYTES)
+    }
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        ensure!(
+            bytes.len() <= CONTROL_BYTES,
+            "oversized voice control state"
+        );
+        let control: Self = crate::codec::from_bytes(bytes)?;
+        ensure!(control.valid(), "invalid voice control state");
+        Ok(control)
+    }
+    fn valid(&self) -> bool {
+        self.revision > 0
+            && self.routes.revision <= self.revision
+            && self.routes.routes.len() <= bri_admin::MAX_CONNECTIONS
+            && (self.metadata.enabled || self.routes.routes.is_empty())
+            && self
+                .routes
+                .routes
+                .values()
+                .all(|r| r.valid() && r.generation > 0 && r.generation <= self.routes.revision)
+            && self.metadata.muted.len() <= bri_sim::session::MAX_PARTICIPANTS
+            && self
+                .metadata
+                .conversation
+                .as_ref()
+                .is_none_or(|c| c.title.len() <= 1024 && !c.title.chars().any(char::is_control))
+    }
+}
+struct ControlReader(tokio::task::JoinHandle<()>);
+impl Drop for ControlReader {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 use bri_world::OwnerId;
 use std::{
     sync::{Arc, Mutex, mpsc},
@@ -277,39 +338,81 @@ pub struct VoiceLink {
     connection: quinn::Connection,
     heard: Arc<Mutex<mpsc::Receiver<(Instant, Heard)>>>,
     activity: Arc<Mutex<mpsc::Receiver<(Instant, VoiceActivity)>>>,
-    routes: Arc<Mutex<RouteTable>>,
+    control: Arc<Mutex<Control>>,
+    _reader: Arc<ControlReader>,
+    owner: OwnerId,
+    stopped: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl VoiceLink {
     pub(crate) fn new(
         connection: quinn::Connection,
+        owner: OwnerId,
         heard: mpsc::Receiver<(Instant, Heard)>,
         activity: mpsc::Receiver<(Instant, VoiceActivity)>,
     ) -> Self {
+        let control = Arc::new(Mutex::new(Control::default()));
+        let state = control.clone();
+        let transport = connection.clone();
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ended = stopped.clone();
+        // Do not capture VoiceLink or its reader lease: dropping the last link
+        // aborts this reader even if a join fails before Client is constructed.
+        let reader = tokio::spawn(async move {
+            let mut invalid = false;
+            let result: Result<()> = async {
+                let mut receive = transport.accept_uni().await?;
+                loop {
+                    let bytes = crate::codec::read_frame(&mut receive, CONTROL_BYTES).await?;
+                    let next = Control::decode(&bytes).inspect_err(|_| invalid = true)?;
+                    let mut held = state.lock().unwrap_or_else(|e| e.into_inner());
+                    if next.revision > held.revision {
+                        *held = next;
+                    }
+                }
+            }
+            .await;
+            if result.is_err() {
+                ended.store(true, std::sync::atomic::Ordering::Release);
+                // A stopped/invalid control stream cannot leave playable grants
+                // behind while the frame thread is stalled.
+                {
+                    let mut held = state.lock().unwrap_or_else(|e| e.into_inner());
+                    held.metadata.enabled = false;
+                    held.routes.routes.clear();
+                }
+                // EOF/reset accompanies ordinary kick, map handoff or shutdown:
+                // let the world's connection reader preserve its actual reason.
+                if invalid {
+                    transport.close(3_u32.into(), b"Invalid voice control state");
+                }
+            }
+        });
         Self {
             connection,
+            owner,
             heard: Arc::new(Mutex::new(heard)),
             activity: Arc::new(Mutex::new(activity)),
-            routes: Arc::new(Mutex::new(RouteTable::default())),
+            control,
+            _reader: Arc::new(ControlReader(reader)),
+            stopped,
         }
     }
-    pub(crate) fn set_routes(&self, table: RouteTable) -> Result<()> {
-        anyhow::ensure!(
-            table.routes.len() <= bri_admin::MAX_CONNECTIONS
-                && table.routes.values().all(|p| p.valid()),
-            "invalid voice routes"
-        );
-        let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
-        if table.revision > routes.revision {
-            *routes = table;
-        }
-        Ok(())
+    pub fn is_closed(&self) -> bool {
+        self.stopped.load(std::sync::atomic::Ordering::Acquire)
+            || self.connection.close_reason().is_some()
     }
-    pub fn routes(&self) -> RouteTable {
-        self.routes
+    pub fn owner(&self) -> OwnerId {
+        self.owner
+    }
+    pub fn control(&self) -> Control {
+        self.control
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+    pub fn routes(&self) -> RouteTable {
+        self.control().routes
     }
     /// Identifies a transport lifetime; local moderation/audio cannot leak
     /// across sessions that happen to reuse an owner number.
@@ -357,6 +460,33 @@ impl VoiceLink {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn control_snapshot_codec_is_uncompressed_strict_and_bounded() {
+        let control = Control {
+            revision: 1,
+            metadata: Metadata {
+                enabled: false,
+                conversation: Some(Conversation {
+                    game: None,
+                    title: "Server Lobby".into(),
+                }),
+                ..Metadata::default()
+            },
+            routes: RouteTable::default(),
+        };
+        let bytes = control.encode().unwrap();
+        assert_eq!(Control::decode(&bytes).unwrap(), control);
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(Control::decode(&trailing).is_err());
+        assert!(Control::decode(&vec![0; CONTROL_BYTES + 1]).is_err());
+        let compressed_world_frame = crate::codec::encode(&control).unwrap();
+        assert!(
+            Control::decode(&compressed_world_frame).is_err(),
+            "control must not invoke the much larger world's decompression budget"
+        );
+    }
+
     use super::*;
 
     #[test]

@@ -716,6 +716,10 @@ impl Client {
             }
             _ => anyhow::bail!("Expected welcome"),
         };
+        let (voice_inbox, voice_heard) = crate::voice::inbox();
+        let (voice_activity_inbox, voice_activity) = crate::voice::activity_inbox();
+        let voice =
+            crate::voice::VoiceLink::new(connection.clone(), owner, voice_heard, voice_activity);
         // The Welcome is small; the world streams after it in chunks.
         progress.set_subject(&checkpoint.world.map_id);
         progress.begin(
@@ -835,9 +839,6 @@ impl Client {
         let datagram_connection = connection.clone();
         let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let heard_tick = heard.clone();
-        let (voice_inbox, voice_heard) = crate::voice::inbox();
-        let (voice_activity_inbox, voice_activity) = crate::voice::activity_inbox();
-        let voice = crate::voice::VoiceLink::new(connection.clone(), voice_heard, voice_activity);
         let datagrams = tokio::spawn(async move {
             while let Ok(bytes) = datagram_connection.read_datagram().await {
                 // Voice is told apart by its first byte and goes straight to
@@ -1024,10 +1025,6 @@ impl Client {
             }
             return match incoming {
                 Incoming::Reliable(message) => match *message {
-                    Message::VoiceRoutes(table) => {
-                        self.voice.set_routes(table)?;
-                        continue;
-                    }
                     Message::Update(delta) => {
                         let world_changed = !delta.bricks.is_empty() || delta.palette.is_some();
                         let changed_bricks = delta.bricks.keys().copied().collect();
@@ -1400,8 +1397,8 @@ impl Arrival {
         };
         let (voice_inbox, voice_heard) = crate::voice::inbox();
         let (activity_inbox, voice_activity) = crate::voice::activity_inbox();
-        let voice = crate::voice::VoiceLink::new(connection.clone(), voice_heard, voice_activity);
-        let route_link = voice.clone();
+        let voice =
+            crate::voice::VoiceLink::new(connection.clone(), owner, voice_heard, voice_activity);
         let datagram_connection = connection.clone();
         let datagrams = tokio::spawn(async move {
             while let Ok(bytes) = datagram_connection.read_datagram().await {
@@ -1426,14 +1423,6 @@ impl Arrival {
                         if players.len() <= bri_sim::session::MAX_PARTICIPANTS =>
                     {
                         ArrivalEvent::Players(players)
-                    }
-                    Ok(Message::VoiceRoutes(routes)) => {
-                        if let Err(error) = route_link.set_routes(routes) {
-                            reader_connection.close(3_u32.into(), b"Invalid voice routes");
-                            let _ = closed.send(ArrivalEvent::Closed(error.to_string())).await;
-                            break;
-                        }
-                        continue;
                     }
                     Ok(Message::Notice(notice)) => ArrivalEvent::Notice(notice),
                     Ok(_) => continue,
@@ -1634,7 +1623,13 @@ pub(crate) async fn handshake(
     wait: Duration,
 ) -> Result<quinn::Connection> {
     let mut config = quinn::ClientConfig::new(Arc::new(pinned_config(pin.clone())?));
-    config.transport_config(Arc::new(transport()));
+    let mut flow = transport();
+    // One world stream and one server-only voice stream. Their combined stream
+    // windows stay below connection credit, reserving independent control space.
+    flow.max_concurrent_uni_streams(1_u32.into())
+        .stream_receive_window((2_u32 * 1024 * 1024).into())
+        .receive_window((8_u32 * 1024 * 1024).into());
+    config.transport_config(Arc::new(flow));
     match tokio::time::timeout(
         wait,
         endpoint.connect_with(config, address, "blockland.local")?,
@@ -1741,3 +1736,7 @@ pub const COMMAND_TICKS: u64 = 1200;
 /// How long [`Client::command`] waits with nothing at all from the host.
 pub const COMMAND_STALL: Duration = Duration::from_secs(60);
 pub const CONNECTION_LOST: &str = "Lost the connection to the server";
+
+#[cfg(test)]
+#[path = "client/control_tests.rs"]
+mod control_tests;
