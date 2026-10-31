@@ -18,6 +18,12 @@ passed. Initial compilation exposed a `bail!` return-type mistake and the
 integration fixture initially looked for a name on `PlayerState`; both were
 corrected before the passing tests.
 
-Save/reload, replacement-life spawn rows, multiplayer name replication and
-source Bot-target adaptation still require direct coverage. Other bot event
+Follow-up: the bot-builder fixture now encodes and decodes its `SavedBuild`
+using the native packed format before loading it. The wave-lifecycle case
+installs `onBotSpawn -> setBotName`, changes the name temporarily, kills the
+bot, then checks that the spawn event names its replacement life. All eight
+`cargo test --locked --profile playtest -p bri-chaos --test bot_builder` cases
+and `cargo clippy --locked --profile playtest -p bri-chaos --test bot_builder --
+-D warnings` passed. This covers the saved event row and replacement life, not
+multiplayer name replication or source Bot-target adaptation. Other bot event
 groups and exact-player tracking remain open.

@@ -116,11 +116,14 @@ impl Game {
         );
         world.bricks.insert(1, brick);
         world.next_brick_id = 2;
+        // Exercise the same packed save format used when a build is loaded.
+        let saved = SavedBuild::new(world);
+        let saved = bri_world::build::decode(&bri_world::build::encode(&saved).unwrap()).unwrap();
         s.command(
             human,
             1,
             Command::LoadBuild {
-                build: Box::new(SavedBuild::new(world)),
+                build: Box::new(saved),
                 ownership: false,
             },
         )
@@ -367,6 +370,18 @@ fn spawn_and_death_events_configure_each_life_and_can_schedule_a_wave_respawn() 
         row(
             "onBotSpawn",
             Slot::SelfBrick,
+            "setBotName",
+            vec![Value::Text("Wave guard".into())],
+        ),
+        row(
+            "onActivate",
+            Slot::SelfBrick,
+            "setBotName",
+            vec![Value::Text("Temporary".into())],
+        ),
+        row(
+            "onBotSpawn",
+            Slot::SelfBrick,
             "setBotAutoRespawn",
             vec![Value::Bool(false)],
         ),
@@ -380,6 +395,10 @@ fn spawn_and_death_events_configure_each_life_and_can_schedule_a_wave_respawn() 
         revive,
     ]);
     assert_eq!(g.s.vitals()[&g.bot].health, 30.0);
+    assert_eq!(g.s.names()[&g.bot], "Wave guard");
+    g.s.fire_brick_input(1, "onActivate", Some(g.human));
+    g.steps(1);
+    assert_eq!(g.s.names()[&g.bot], "Temporary");
     let color = |g: &Game| {
         let w = g.s.simulation().state();
         w.palette[w.bricks[&1].color as usize]
@@ -406,6 +425,11 @@ fn spawn_and_death_events_configure_each_life_and_can_schedule_a_wave_respawn() 
         "spawn policy reapplied to the new body"
     );
     assert_eq!(color(&g), [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(
+        g.s.names()[&g.bot],
+        "Wave guard",
+        "spawn event names the replacement life"
+    );
     assert_eq!(g.s.names().keys().filter(|id| g.s.is_bot(**id)).count(), 1);
     assert!(g.s.take_event_diagnostics().is_empty());
 }
