@@ -921,6 +921,68 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
         );
         Ok(())
     }
+    async fn pcm_exchange(
+        talk: &VoiceLink,
+        listen: &VoiceLink,
+        speaker: u64,
+        seq: u16,
+    ) -> anyhow::Result<()> {
+        use bri_audio::voice::{
+            Effects, Encoder, FRAME_SAMPLES, Mixer, Playback, SAMPLE_RATE, Settings, Shared,
+        };
+        let capture = Arc::new(Shared::new(Settings::default()));
+        capture.set_talking(true);
+        capture.set_capture_scope(talk.control().metadata.source_epoch);
+        let mut encoder = Encoder::new(capture);
+        let samples: Vec<f32> = (0..FRAME_SAMPLES * 3)
+            .map(|i| (i as f32 * 0.12).sin() * 0.4)
+            .collect();
+        let mut outgoing = Vec::new();
+        encoder.feed(&samples, &mut |index, frame| {
+            outgoing.push((seq.wrapping_add(index), frame))
+        });
+        assert_eq!(
+            outgoing.len(),
+            3,
+            "push-to-talk must capture three audio frames"
+        );
+        let mut discarded = vec![];
+        listen.take_heard(&mut discarded);
+        for (index, frame) in outgoing {
+            talk.send_captured(index, frame.capture_scope(), frame.as_bytes())?;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let mut heard = vec![];
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while heard
+                .iter()
+                .filter(|frame: &&voice::Heard| frame.speaker == speaker)
+                .count()
+                < 2
+            {
+                listen.take_heard(&mut heard);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let mut mixer = Mixer::new(Arc::new(Shared::new(Settings::default())));
+        for frame in heard.iter().filter(|frame| frame.speaker == speaker) {
+            mixer.hear_routed(
+                speaker,
+                Playback::Nonpositional,
+                frame.sequence,
+                &frame.payload,
+                Effects::default(),
+            );
+        }
+        let mut output = vec![0.0; FRAME_SAMPLES * 6];
+        mixer.render(&mut output, 1, SAMPLE_RATE);
+        assert!(
+            output.iter().any(|sample| sample.abs() > 0.01),
+            "captured PCM must reach mixer output"
+        );
+        Ok(())
+    }
     let server = server::start(session(false), common::options())?;
     let mut a = Client::connect_with_host(
         server.address,
@@ -954,6 +1016,7 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
     exchange(&a.voice_link(), &bl, a.owner, 0, 11).await?;
     exchange(&bl, &a.voice_link(), b.owner, 0, 22).await?;
     exchange(&bl, &cl, b.owner, 3, 33).await?;
+    pcm_exchange(&bl, &a.voice_link(), b.owner, 20).await?;
     bl.send_activity(true)?;
     let mut activity = vec![];
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -1050,6 +1113,7 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
     player_route(&mut entered, a.owner, true).await?;
     exchange(&entered.voice_link(), &a.voice_link(), b.owner, 0, 55).await?;
     exchange(&a.voice_link(), &entered.voice_link(), a.owner, 3, 66).await?;
+    pcm_exchange(&entered.voice_link(), &a.voice_link(), b.owner, 30).await?;
     // Retained authorized game membership is usable while reconnecting, with
     // actual QUIC isolation from the other loading participant still in lobby.
     a.command(Command::MiniGame(MiniGameRequest::Join { game }))
