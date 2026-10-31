@@ -19,12 +19,11 @@ for rendering overload. The GPU timer is optional and asynchronous. No indoor
 heuristic should be introduced without evidence that it improves the existing
 zone/frustum culling and does not cut sightlines through windows or doors.
 
-Next implementation must connect an explicit, persisted opt-in to an effective
-per-view visibility limit that actually reaches scene culling and the other
-distance consumers; preserve map fog semantics, reflection/secondary cameras,
-shadow fitting and the manual maximum. Use bounded, smoothed load evidence
-with hysteresis and recovery, accounting for focus and intentional frame caps;
-validate geometry submission and frame cost on representative scenes, plus
-focus, loading spikes, capped FPS, toggling and a fog-disabled control. The
-issue's suggested interior heuristic remains an evaluation, not an assumed
-requirement. This audit establishes the gap and design constraints, not a fix.
+Maxwell questioned whether automatic distance is desirable given proper culling.
+Prioritize measurements of existing frustum, zone, depth and occlusion behavior
+and fix demonstrated unnecessary work first. Automatic distance is a possible
+technique to evaluate, not an agreed feature: it can cause visible popping and
+will not address unrelated bottlenecks. If evidence later supports it, any
+design must preserve map fog, secondary views and the manual maximum, account
+for focus and intentional frame caps, and demonstrate actual culling and frame
+cost rather than fog alone. Do not assume an indoor heuristic is needed.

@@ -568,6 +568,27 @@ mod tests {
     }
 
     #[test]
+    fn soft_cone_falls_even_when_physics_is_over_budget() {
+        let mut json = serde_json::to_value(ragdoll()).unwrap();
+        json["bones"][1]["joint"]["cone_stiffness"] = 100.0.into();
+        json["bones"][1]["joint"]["cone_damping"] = 3.0.into();
+        let ragdoll: Ragdoll = serde_json::from_value(json).unwrap();
+        let mut ragdolls = Ragdolls::default();
+        ragdolls.start(7, &frames(2.0), &death(&ragdoll)).unwrap();
+        let building = crate::brick_debris::tests::building(&[]).0;
+        for _ in 0..180 {
+            ragdolls.advance(1.0 / 60.0, &building).unwrap();
+            ragdolls.physics.settle_oldest();
+        }
+        let nodes = ragdolls.nodes(7);
+        let (hip, thigh, shin) = (at(&nodes, 0), at(&nodes, 1), at(&nodes, 2));
+        assert!(hip.is_finite() && thigh.is_finite() && shin.is_finite());
+        assert!(hip.y < 0.5, "hip must fall even under load: {hip:?}");
+        assert!((hip.distance(thigh) - 0.4).abs() < 0.08);
+        assert!((thigh.distance(shin) - 0.4).abs() < 0.08);
+    }
+
+    #[test]
     fn a_bone_with_none_listed_above_it_in_the_rig_is_refused_and_named() {
         let ragdoll = ragdoll();
         let mut ragdolls = Ragdolls::default();

@@ -401,7 +401,10 @@ impl AddOnPhysics {
     /// Add-On's bodies took longer than its budget, and old bodies come to
     /// rest while new ones keep moving. Bodies in the air are never stopped
     /// there. A settled body moves again when something hits or holds it.
-    /// Returns whether a group was settled.
+    /// Only groups whose vertical and angular movement has slowed are
+    /// eligible: first contact by a foot does not mean the body has fallen.
+    /// Horizontal sliding can still be stopped under pressure. Returns
+    /// whether a group was settled.
     pub fn settle_oldest(&mut self) -> bool {
         let mut seen = std::collections::HashSet::new();
         for handle in self.bodies.values().map(|b| b.handle) {
@@ -410,7 +413,11 @@ impl AddOnPhysics {
             }
             let group = Self::jointed(&self.world, handle);
             seen.extend(group.iter().copied());
-            if self.lies_on_world(&group) {
+            let nearly_settled = group.iter().all(|handle| {
+                let body = &self.world.bodies[*handle];
+                body.linvel().y.abs() < 0.3 && body.angvel().length() < 1.0
+            });
+            if nearly_settled && self.lies_on_world(&group) {
                 for handle in group {
                     self.world.bodies[handle].sleep();
                 }
