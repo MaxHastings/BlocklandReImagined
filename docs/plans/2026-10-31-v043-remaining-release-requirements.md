@@ -8,6 +8,13 @@ assert that unchecked work is unstarted. Maxwell tried preview.1 and waived
 further interactive playtests; use automated, headless and offscreen evidence
 and report what has not had a human playtest.
 
+Maxwell's investigation boundary: when a report remains vague and the initial
+trace reveals no concrete defect or poor design, record it as incomplete and
+move on. Make a well-supported correction or worthwhile general cleanup when
+the evidence warrants it; do not keep guessing or claim an unverified fix.
+Carry any unresolved release outcome into the final handoff explicitly rather
+than silently marking it complete.
+
 ## Bots, objectives and saves
 
 - [ ] **Pursuit and navigation:** Bots keep pursuing visible elevated players,
