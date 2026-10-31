@@ -15,7 +15,7 @@ fn voice_routes(speaker, listeners) {
         let allowed = target.minigame == source.minigame
             && (source.minigame == () || source.alive || !target.alive)
             && get_player(id, "channel") == channel;
-        routes.push(#{ listener: id, hear: allowed, spatial: false, range: 48.0, label: "Radio " + channel, priority: 10 });
+        routes.push(#{ listener: id, hear: allowed, spatial: false, range: 48.0, label: "Radio " + channel, conversation: "radio/" + channel, priority: 10 });
     }
     routes
 }

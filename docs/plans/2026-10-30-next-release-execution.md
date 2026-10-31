@@ -65,7 +65,11 @@ through normal headless gameplay; see the
 Cube stacking and the other unchecked baseline items remain open. The
 [voice-processing increment](../progress/2026-10-31-v043-voice-processing.md)
 implements bounded package-selected filters/gain; it does not complete loading
-voice, world-speaker placement or transmit lifecycle integration. None of these
+voice, world-speaker placement or transmit lifecycle integration.
+[Conversation grants](../progress/2026-10-31-v043-voice-conversation-grants.md)
+now bind sender/receiver transport, game/team and provider conversation identity;
+policy errors fail closed, with actual QUIC and client checks. Accepted-loading
+audience, transport continuity and background audio pumping still remain. None of these
 scoped checks replace final platform CI, release gates or package verification.
 
 Current destruction handoff: [partition bindings](../progress/2026-10-31-v043-partition-attachment-bindings.md)

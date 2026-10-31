@@ -291,10 +291,76 @@ fn voice_policy_requires_authorization_and_queries_cannot_write() {
     }
 }
 
+fn authored_voice_session(
+    script: &str,
+    base_voice: bool,
+) -> (bri_sim::session::Session, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("custom-voice");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        serde_json::json!({
+            "schema_version":1,"id":"custom-voice","version":"1.0.0","api":1,
+            "name":"Voice parameter fixture","license":"CC0-1.0","capabilities":["voice"],
+            "provides":[
+                {"kind":"behaviour","id":"custom-voice:behaviour/rules","file":"behaviour.json"},
+                {"kind":"script","id":"custom-voice:script/rules","file":"rules.rhai"}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("behaviour.json"),
+        r#"{"schema_version":1,"script":"rules.rhai","on_voice":true,
+          "commands":[{"name":"fixture_channel","args":["int"],"while_dead":true}],
+          "state":{"player":{"channel":{"default":1,"visible":"server"}}}}"#,
+    )
+    .unwrap();
+    let command = r#"fn cmd_fixture_channel(id, value) { set_player(id, "channel", value); }"#;
+    std::fs::write(dir.join("rules.rhai"), [command, script].join("\n")).unwrap();
+    let mut packages = vec![PackageEntry {
+        id: "custom-voice".into(),
+        version: "1.0.0".into(),
+        dir: "custom-voice".into(),
+        side: Side::Server,
+        role: None,
+    }];
+    if base_voice {
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/voice_chat");
+        let destination = tmp.path().join("voice_chat");
+        std::fs::create_dir(&destination).unwrap();
+        for file in std::fs::read_dir(base).unwrap() {
+            let file = file.unwrap();
+            if file.file_type().unwrap().is_file() {
+                std::fs::copy(file.path(), destination.join(file.file_name())).unwrap();
+            }
+        }
+        packages.push(PackageEntry {
+            id: "voice_chat".into(),
+            version: "1.0.0".into(),
+            dir: "voice_chat".into(),
+            side: Side::Server,
+            role: None,
+        });
+    }
+    let catalog = Catalog::load(
+        tmp.path(),
+        &PackageSet {
+            schema_version: 1,
+            packages,
+        },
+        true,
+    )
+    .unwrap();
+    let mut s = common::session();
+    s.install_packages(Arc::new(catalog), None).unwrap();
+    (s, tmp)
+}
+
 #[test]
 fn authorized_voice_effects_are_native_parameters_and_invalid_routes_report_problems() {
     use bri_sim::session::VoiceEffects;
-    use serde_json::json;
     for (field, expected) in [
         ("", Some(VoiceEffects::default())),
         (
@@ -313,24 +379,7 @@ fn authorized_voice_effects_are_native_parameters_and_invalid_routes_report_prob
         ),
         ("effects: #{ arbitrary_plugin: 1 },", None),
     ] {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("custom-voice");
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::write(dir.join("package.json"), json!({
-            "schema_version":1,"id":"custom-voice","version":"1.0.0","api":1,
-            "name":"Voice parameter fixture","license":"CC0-1.0","capabilities":["voice"],
-            "provides":[
-                {"kind":"behaviour","id":"custom-voice:behaviour/rules","file":"behaviour.json"},
-                {"kind":"script","id":"custom-voice:script/rules","file":"rules.rhai"}]
-        }).to_string()).unwrap();
-        std::fs::write(
-            dir.join("behaviour.json"),
-            r#"{"schema_version":1,"script":"rules.rhai","on_voice":true}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("rules.rhai"),
-            r#"
+        let script = r#"
             fn voice_routes(speaker, listeners) {
                 let routes = [];
                 for id in listeners {
@@ -342,26 +391,8 @@ fn authorized_voice_effects_are_native_parameters_and_invalid_routes_report_prob
                 routes
             }
         "#
-            .replace("EFFECTS", field),
-        )
-        .unwrap();
-        let catalog = Catalog::load(
-            tmp.path(),
-            &PackageSet {
-                schema_version: 1,
-                packages: vec![PackageEntry {
-                    id: "custom-voice".into(),
-                    version: "1.0.0".into(),
-                    dir: "custom-voice".into(),
-                    side: Side::Server,
-                    role: None,
-                }],
-            },
-            true,
-        )
-        .unwrap();
-        let mut s = common::session();
-        s.install_packages(Arc::new(catalog), None).unwrap();
+        .replace("EFFECTS", field);
+        let (mut s, _tmp) = authored_voice_session(&script, false);
         let a = s
             .join("Speaker".into(), Vec3::new(0.0, 0.05, 0.0), false)
             .unwrap();
@@ -468,4 +499,280 @@ fn voice_roster_is_independent_of_the_concurrent_mixer_limit() {
     assert_eq!(routes.len(), 33);
     assert!(routes.values().all(|r| r.len() == 32));
     assert!(s.package_diagnostics().is_empty());
+}
+
+async fn fresh_voice_grant(
+    client: &mut bri_net::client::Client,
+    speaker: u64,
+    previous: Option<u64>,
+) -> anyhow::Result<u64> {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(route) = client.voice_link().routes().routes.get(&speaker)
+                && Some(route.generation) != previous
+            {
+                return Ok(route.generation);
+            }
+            client.receive().await?;
+        }
+    })
+    .await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_identical_playback_gets_fresh_grants_when_either_conversation_changes()
+-> anyhow::Result<()> {
+    use bri_net::{client::Client, server};
+    use bri_sim::session::TeamEdit;
+    use std::time::Duration;
+    let (s, _tmp) = authored_voice_session(
+        r#"
+        fn voice_routes(speaker, listeners) {
+            let routes = [];
+            for id in listeners {
+                if id != speaker { routes.push(#{ listener:id, spatial:false, range:48.0,
+                    label:"Same audio shape", priority:10 }); }
+            }
+            routes
+        }
+    "#,
+        false,
+    );
+    let server = server::start(s, common::options())?;
+    let mut a = Client::connect(
+        server.address,
+        &server.certificate,
+        "A".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let mut b = Client::connect(
+        server.address,
+        &server.certificate,
+        "B".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let c = Client::connect(
+        server.address,
+        &server.certificate,
+        "C".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let first = fresh_voice_grant(&mut b, a.owner, None).await?;
+    let unrelated = fresh_voice_grant(&mut b, c.owner, None).await?;
+    let playback = b.voice_link().routes().routes[&a.owner].playback.clone();
+    a.command(Command::MiniGame(MiniGameRequest::Create {
+        color: 0,
+        settings: Default::default(),
+    }))
+    .await?;
+    let after_speaker = fresh_voice_grant(&mut b, a.owner, Some(first)).await?;
+    assert_eq!(b.voice_link().routes().routes[&a.owner].playback, playback);
+    assert_eq!(
+        b.voice_link().routes().routes[&c.owner].generation,
+        unrelated,
+        "one speaker changing scope cannot restart unrelated conversations"
+    );
+    let game = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(game) = b.replica.minigames.iter().find(|g| g.owner == a.owner) {
+                return anyhow::Ok(game.id);
+            }
+            b.receive().await?;
+        }
+    })
+    .await??;
+    b.command(Command::MiniGame(MiniGameRequest::Join { game }))
+        .await?;
+    let after_listener = fresh_voice_grant(&mut b, a.owner, Some(after_speaker)).await?;
+    assert_eq!(b.voice_link().routes().routes[&a.owner].playback, playback);
+    a.command(Command::MiniGame(MiniGameRequest::AddOnSettings {
+        game,
+        settings: vec![],
+        teams: Some(vec![
+            TeamEdit {
+                id: None,
+                name: "Red".into(),
+                color: 0,
+                settings: vec![],
+            },
+            TeamEdit {
+                id: None,
+                name: "Blue".into(),
+                color: 1,
+                settings: vec![],
+            },
+        ]),
+        quiet: true,
+        reset: false,
+    }))
+    .await?;
+    let teams = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(g) = b.replica.minigames.iter().find(|g| g.id == game)
+                && g.teams.len() == 2
+            {
+                return anyhow::Ok([g.teams[0].id.0, g.teams[1].id.0]);
+            }
+            b.receive().await?;
+        }
+    })
+    .await??;
+    a.command(Command::MiniGame(MiniGameRequest::SetTeam {
+        game,
+        target: a.owner,
+        team: Some(teams[0]),
+    }))
+    .await?;
+    let after_speaker_team = fresh_voice_grant(&mut b, a.owner, Some(after_listener)).await?;
+    a.command(Command::MiniGame(MiniGameRequest::SetTeam {
+        game,
+        target: b.owner,
+        team: Some(teams[1]),
+    }))
+    .await?;
+    fresh_voice_grant(&mut b, a.owner, Some(after_speaker_team)).await?;
+    assert_eq!(b.voice_link().routes().routes[&a.owner].playback, playback);
+    server.stop().await?;
+    Ok(())
+}
+
+#[test]
+fn voice_conversation_keys_are_bounded_host_metadata_separate_from_playback() {
+    for (key, valid) in [
+        (String::new(), true),
+        ("radio/one".to_string(), true),
+        ("x".repeat(96), true),
+        ("x".repeat(97), false),
+        ("bad\nkey".to_string(), false),
+    ] {
+        let script = r#"
+            fn voice_routes(speaker, listeners) {
+                let routes = [];
+                for id in listeners {
+                    if id != speaker { routes.push(#{listener:id, spatial:false, range:48.0,
+                        label:"Same", priority:10, conversation:CONVERSATION}); }
+                }
+                routes
+            }
+        "#
+        .replace("CONVERSATION", &serde_json::to_string(&key).unwrap());
+        let (mut s, _tmp) = authored_voice_session(&script, false);
+        let a = s.join("A".into(), Vec3::new(0., 0.05, 0.), false).unwrap();
+        let b = s.join("B".into(), Vec3::new(4., 0.05, 0.), false).unwrap();
+        let selected = s.voice_selections(&[a, b]);
+        if valid {
+            let route = &selected[&b][&a];
+            if key.is_empty() {
+                assert!(
+                    route.conversation.is_none(),
+                    "an omitted key uses the native conversation"
+                );
+            } else {
+                let conversation = route.conversation.as_ref().unwrap();
+                assert_eq!(conversation.provider, "custom-voice");
+                assert_eq!(conversation.key, key);
+            }
+            assert!(
+                serde_json::to_value(&route.playback)
+                    .unwrap()
+                    .get("conversation")
+                    .is_none()
+            );
+        } else {
+            assert!(selected.is_empty());
+            assert!(
+                s.package_diagnostics()
+                    .iter()
+                    .any(|d| d.code == "voice.conversation")
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_package_channel_rekeys_without_changing_the_audio_profile() -> anyhow::Result<()> {
+    use bri_net::{client::Client, server};
+    let (s, _tmp) = authored_voice_session(
+        r#"
+        fn voice_routes(speaker, listeners) {
+            let routes = [];
+            let key = "channel/" + get_player(speaker, "channel");
+            for id in listeners {
+                if id != speaker { routes.push(#{listener:id, spatial:false, range:48.0,
+                    label:"Same audio shape", priority:10, conversation:key}); }
+            }
+            routes
+        }
+    "#,
+        false,
+    );
+    let server = server::start(s, common::options())?;
+    let mut a = Client::connect(
+        server.address,
+        &server.certificate,
+        "A".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let mut b = Client::connect(
+        server.address,
+        &server.certificate,
+        "B".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let first = fresh_voice_grant(&mut b, a.owner, None).await?;
+    let profile = b.voice_link().routes().routes[&a.owner].playback.clone();
+    a.command(Command::Package(PackageCommand {
+        package: "custom-voice".into(),
+        command: "fixture_channel".into(),
+        args: vec![PackageArg::Int(2)],
+    }))
+    .await?;
+    fresh_voice_grant(&mut b, a.owner, Some(first)).await?;
+    assert_eq!(b.voice_link().routes().routes[&a.owner].playback, profile);
+    server.stop().await?;
+    Ok(())
+}
+
+#[test]
+fn a_failed_voice_policy_cannot_fall_through_to_a_public_route() {
+    for body in [
+        "[]".to_string(),
+        "throw \"private policy failed\";".to_string(),
+        r#"let routes=[]; for id in listeners { if id != speaker {
+            routes.push(#{listener:id, spatial:false, range:48.0, label:"Private",
+                priority:10, effects:#{gain:9.0}}); } } routes"#
+            .to_string(),
+        r#"let routes=[]; for id in listeners { if id != speaker {
+            routes.push(#{listener:id, spatial:false, range:48.0, label:"Private",
+                priority:10, conversation:"KEY"}); } } routes"#
+            .replace("KEY", &"x".repeat(97)),
+    ] {
+        let script = ["fn voice_routes(speaker, listeners) {", &body, "}"].join("\n");
+        let (mut s, _tmp) = authored_voice_session(&script, true);
+        let a = s.join("A".into(), Vec3::new(0., 0.05, 0.), false).unwrap();
+        let b = s.join("B".into(), Vec3::new(4., 0.05, 0.), false).unwrap();
+        let routes = s.voice_routes(&[a, b]);
+        if body == "[]" {
+            assert!(
+                routes[&b].contains_key(&a),
+                "valid abstention retains ordinary public voice"
+            );
+        } else {
+            assert!(
+                routes.is_empty(),
+                "an undecided private policy cannot grant public fallback: {body}"
+            );
+            assert!(!s.package_diagnostics().is_empty());
+        }
+    }
 }

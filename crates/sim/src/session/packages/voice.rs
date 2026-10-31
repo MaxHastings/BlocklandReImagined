@@ -1,12 +1,31 @@
 //! Package policy is evaluated off the audio packet path, in a read-only sandbox.
 use super::*;
-use crate::session::{VoicePlayback, VoiceRoute};
+use crate::session::{VoiceConversation, VoicePlayback, VoiceRoute, VoiceSelection};
 
 impl Session {
     pub fn voice_routes(
         &mut self,
         owners: &[OwnerId],
     ) -> BTreeMap<OwnerId, BTreeMap<OwnerId, VoicePlayback>> {
+        self.voice_selections(owners)
+            .into_iter()
+            .map(|(listener, routes)| {
+                (
+                    listener,
+                    routes
+                        .into_iter()
+                        .map(|(speaker, selection)| (speaker, selection.playback))
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+    /// Evaluate one authoritative route selection, retaining its host-only
+    /// conversation identity for grant/decoder lifetime decisions.
+    pub fn voice_selections(
+        &mut self,
+        owners: &[OwnerId],
+    ) -> BTreeMap<OwnerId, BTreeMap<OwnerId, VoiceSelection>> {
         let mut result = BTreeMap::new();
         if owners.len() > bri_admin::MAX_CONNECTIONS {
             return result;
@@ -55,12 +74,14 @@ impl Session {
                 .map(|id| Dynamic::from_int(*id as i64))
                 .collect(),
         );
-        for &speaker in owners {
-            let mut chosen: BTreeMap<u64, (u8, Option<VoicePlayback>)> = BTreeMap::new();
+        // A valid [] abstains. An error/budget failure cannot safely fall
+        // through to a more permissive provider, including public voice.
+        'speaker: for &speaker in owners {
+            let mut chosen: BTreeMap<u64, (u8, Option<VoiceSelection>)> = BTreeMap::new();
             for package in &providers {
                 let host = self.packages.as_mut().unwrap();
                 if host.shares.work.available(package, tick) <= 0 {
-                    continue;
+                    continue 'speaker;
                 }
                 let state = host.store.namespace(package).cloned().unwrap_or_default();
                 let vars = vars[package].clone();
@@ -101,14 +122,27 @@ impl Session {
                             Diagnostic::error("voice.routes", "too many voice recipients")
                                 .at(package),
                         );
-                        continue;
+                        continue 'speaker;
                     }
                     Err(d) => {
                         note(self.packages.as_mut().unwrap(), d);
-                        continue;
+                        continue 'speaker;
                     }
                 };
                 for route in routes {
+                    if route.conversation.len() > 96
+                        || route.conversation.chars().any(char::is_control)
+                    {
+                        note(
+                            self.packages.as_mut().unwrap(),
+                            Diagnostic::error(
+                                "voice.conversation",
+                                "conversation is at most 96 bytes without control characters",
+                            )
+                            .at(package),
+                        );
+                        continue 'speaker;
+                    }
                     let playback = VoicePlayback {
                         spatial: route.spatial,
                         range: route.range,
@@ -124,12 +158,18 @@ impl Session {
                             )
                             .at(package),
                         );
-                        continue;
+                        continue 'speaker;
                     }
                     if route.listener == speaker || !owners.contains(&route.listener) {
                         continue;
                     }
-                    let playback = route.hear.then_some(playback);
+                    let playback = route.hear.then_some(VoiceSelection {
+                        playback,
+                        conversation: (!route.conversation.is_empty()).then(|| VoiceConversation {
+                            provider: package.clone(),
+                            key: route.conversation,
+                        }),
+                    });
                     match chosen.entry(route.listener) {
                         std::collections::btree_map::Entry::Vacant(e) => {
                             e.insert((route.priority, playback.clone()));

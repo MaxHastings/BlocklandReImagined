@@ -1487,10 +1487,14 @@ fn send_package_views(
     }
 }
 
+struct SentVoiceRoutes {
+    table: crate::voice::RouteTable,
+    conversations: BTreeMap<OwnerId, Option<bri_sim::session::VoiceConversation>>,
+}
 #[derive(Default)]
 struct VoiceRouting {
-    sent: BTreeMap<OwnerId, crate::voice::RouteTable>,
-    context: Vec<(OwnerId, Option<u64>, bool)>,
+    sent: BTreeMap<OwnerId, SentVoiceRoutes>,
+    context: BTreeMap<OwnerId, (usize, bri_sim::session::VoiceContext)>,
     refreshed: Option<std::time::Instant>,
     muted: std::collections::BTreeSet<OwnerId>,
     next_revision: u64,
@@ -1502,12 +1506,9 @@ impl VoiceRouting {
         peers: &BTreeMap<OwnerId, Peer>,
         now: std::time::Instant,
     ) {
-        let context: Vec<_> = peers
-            .keys()
-            .map(|id| {
-                let (game, alive) = session.voice_context(*id);
-                (*id, game, alive)
-            })
+        let context: BTreeMap<_, _> = peers
+            .iter()
+            .map(|(id, peer)| (*id, (peer.generation, session.voice_context(*id))))
             .collect();
         if self.context == context
             && self.muted == *session.voice_mute_set()
@@ -1517,15 +1518,28 @@ impl VoiceRouting {
         {
             return;
         }
+        // Life changes refresh policy, but an unchanged allowed Global route
+        // remains the same conversation. Membership/transport changes do not.
+        let unchanged: std::collections::BTreeSet<_> = context
+            .iter()
+            .filter_map(|(id, (generation, current))| {
+                let (old_generation, old) = self.context.get(id)?;
+                (*generation == *old_generation
+                    && current.game == old.game
+                    && current.team == old.team)
+                    .then_some(*id)
+            })
+            .collect();
         self.context = context;
         self.muted = session.voice_mute_set().clone();
         self.refreshed = Some(now);
         let owners: Vec<_> = peers.keys().copied().collect();
-        let mut routes = session.voice_routes(&owners);
+        let mut routes = session.voice_selections(&owners);
         self.sent.retain(|id, _| peers.contains_key(id));
         for (id, peer) in peers {
             let mut current = routes.remove(id).unwrap_or_default();
-            current.retain(|speaker, route| {
+            current.retain(|speaker, selection| {
+                let route = &selection.playback;
                 !session.is_voice_muted(*speaker)
                     && (!route.spatial
                         || session
@@ -1539,30 +1553,45 @@ impl VoiceRouting {
             if current.is_empty() && old.is_none() && !session.voice_chat() {
                 continue;
             }
-            if old.is_some_and(|t| {
-                t.routes.len() == current.len()
-                    && current
-                        .iter()
-                        .all(|(speaker, p)| t.routes.get(speaker).is_some_and(|r| &r.playback == p))
-            }) {
+            if unchanged.contains(id)
+                && old.is_some_and(|sent| {
+                    sent.table.routes.len() == current.len()
+                        && current.iter().all(|(speaker, selection)| {
+                            unchanged.contains(speaker)
+                                && sent.conversations.get(speaker) == Some(&selection.conversation)
+                                && sent
+                                    .table
+                                    .routes
+                                    .get(speaker)
+                                    .is_some_and(|r| r.playback == selection.playback)
+                        })
+                })
+            {
                 continue;
             }
             let mut routed = BTreeMap::new();
-            for (speaker, playback) in current {
+            let mut conversations = BTreeMap::new();
+            for (speaker, selection) in current {
                 let generation = if let Some(route) = old
-                    .and_then(|t| t.routes.get(&speaker))
-                    .filter(|r| r.playback == playback)
+                    .filter(|sent| {
+                        unchanged.contains(id)
+                            && unchanged.contains(&speaker)
+                            && sent.conversations.get(&speaker) == Some(&selection.conversation)
+                    })
+                    .and_then(|sent| sent.table.routes.get(&speaker))
+                    .filter(|r| r.playback == selection.playback)
                 {
                     route.generation
                 } else {
                     self.next_revision += 1;
                     self.next_revision
                 };
+                conversations.insert(speaker, selection.conversation);
                 routed.insert(
                     speaker,
                     crate::voice::RouteState {
                         generation,
-                        playback,
+                        playback: selection.playback,
                     },
                 );
             }
@@ -1572,7 +1601,13 @@ impl VoiceRouting {
                 routes: routed,
             };
             peer.send_message(Kind::Voice, &Message::VoiceRoutes(table.clone()));
-            self.sent.insert(*id, table);
+            self.sent.insert(
+                *id,
+                SentVoiceRoutes {
+                    table,
+                    conversations,
+                },
+            );
         }
     }
 }
@@ -1604,7 +1639,7 @@ fn relay_voice(
         let Some(table) = routing.sent.get(owner) else {
             continue;
         };
-        let Some(route) = table.routes.get(&speaker) else {
+        let Some(route) = table.table.routes.get(&speaker) else {
             continue;
         };
         let bytes = crate::voice::encode_routed(speaker, from, sequence, payload, route.generation);
@@ -1631,14 +1666,14 @@ fn relay_voice_activity(
         let revision = routing
             .sent
             .get(owner)
-            .and_then(|t| t.routes.get(&speaker))
+            .and_then(|t| t.table.routes.get(&speaker))
             .map_or(0, |r| r.generation);
         let bytes = crate::voice::encode_routed_activity(speaker, active, revision);
         if *owner != speaker
             && routing
                 .sent
                 .get(owner)
-                .is_some_and(|t| t.routes.contains_key(&speaker))
+                .is_some_and(|t| t.table.routes.contains_key(&speaker))
             && peer.connection.send_datagram(bytes.clone().into()).is_ok()
         {
             traffic.add(Kind::Voice, bytes.len(), 1);

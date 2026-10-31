@@ -40,7 +40,8 @@ An eligible route may include `effects`. Omitted fields mean clean speech:
 
 When both filters are enabled, the high-pass cutoff must be below the low-pass
 cutoff. All values must be finite. Unknown fields and invalid values report a
-package problem and contribute no route. Combining the filters narrows the
+package problem and deny that speaker's refresh, including fallback to a lower
+priority public provider. A successful empty route list explicitly abstains. Combining the filters narrows the
 frequency band; these numbers illustrate composition, rather than a required
 radio sound. Packages own tuning, channel policy and presentation.
 
@@ -52,6 +53,29 @@ discards the previous decoder, queued speech and filter state together. A mute
 or revocation clears them immediately; changing effects never grants eligibility
 or bypasses a listener's mute/volume. No package code receives microphone PCM,
 runs on an audio callback, or loads arbitrary native plug-ins.
+
+## Conversation identity
+
+A route may return `conversation: "radio/3"`, a stable key of at most 96 UTF-8
+bytes without control characters. The host namespaces it by the authorized
+provider package. An omitted or empty key selects the native conversation,
+so agreeing default providers can still compose. It is host-only metadata, separate from the displayed `label`
+and audio effects. Keep it stable during a conversation; change it when a radio
+channel or another logical audience changes. Per-frame keys cause decoder resets.
+The optional radio example uses `"radio/" + channel`.
+
+A changed key retires the old grant even when its label, range and filters are
+identical. The host also binds grants to both participants' current transport,
+minigame and team. Unrelated unchanged routes keep their generation; a life-state
+change refreshes policy and preserves an unchanged allowed Global conversation.
+Revocation/new generation uses the existing client decoder, speech and activity
+reset path. A key does not grant eligibility, join a game, select arbitrary audio
+code or replace personal/admin mute rules. Equal-priority providers selecting
+different conversations conflict and deny that route; use explicit priorities.
+A policy error, malformed selection or exhausted policy budget denies that
+speaker's refresh; it cannot fall back to a more permissive public route. A
+successful empty list remains a valid abstention.
+No new audio packet, world or saved-build field is added by these host keys.
 
 ## Optional radio example
 

@@ -130,10 +130,34 @@ impl VoicePlayback {
             && !self.label.chars().any(char::is_control)
     }
 }
+/// Host-only selection metadata; the opaque conversation key never travels
+/// as an audio effect or grants access to a listener.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceSelection {
+    pub playback: VoicePlayback,
+    /// None uses the native conversation; explicit keys are provider-owned.
+    pub conversation: Option<VoiceConversation>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceConversation {
+    /// Assigned by the host, never selected by a script's returned record.
+    pub provider: String,
+    pub key: String,
+}
+/// Authoritative conversation boundary, independent of audio presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoiceContext {
+    pub game: Option<u64>,
+    pub team: Option<u32>,
+    pub alive: bool,
+}
 /// One route returned by `voice_routes` (higher priority replaces lower).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoiceRoute {
+    /// Optional stable package conversation identity, e.g. a radio channel.
+    #[serde(default)]
+    pub conversation: String,
     #[serde(default = "route_allowed")]
     pub hear: bool,
     pub listener: u64,
@@ -146,11 +170,16 @@ pub struct VoiceRoute {
 }
 
 impl Session {
-    pub fn voice_context(&self, owner: OwnerId) -> (Option<u64>, bool) {
-        (
-            self.game_of(owner).map(|g| g.0),
-            self.peers.get(&owner).is_some_and(|p| p.combat.alive),
-        )
+    pub fn voice_context(&self, owner: OwnerId) -> VoiceContext {
+        VoiceContext {
+            game: self.game_of(owner).map(|g| g.0),
+            team: self
+                .peers
+                .get(&owner)
+                .and_then(|p| self.minigames.team_of(p.combat.player))
+                .map(|t| t.0),
+            alive: self.peers.get(&owner).is_some_and(|p| p.combat.alive),
+        }
     }
 }
 
