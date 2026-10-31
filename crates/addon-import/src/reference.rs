@@ -81,6 +81,28 @@ pub fn required_addons(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// A converted native package beside a legacy source is not another
+/// Torque archive. Its contents must not participate in source selection.
+fn native_folder(path: &Path, addon: &str) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let Ok(id) = crate::namespace_for(addon) else {
+        return false;
+    };
+    let Ok(file) = bri_package::path::inside(path, "package.json") else {
+        return false;
+    };
+    if !std::fs::metadata(&file).is_ok_and(|m| m.len() <= bri_package::library::MAX_MANIFEST_BYTES)
+    {
+        return false;
+    }
+    let Ok(bytes) = std::fs::read(file) else {
+        return false;
+    };
+    bri_package_runtime::manifest::Manifest::parse(&bytes, &id).is_ok()
+}
+
 /// The Add-Ons v20 shipped with (`docs/vanilla-reference-inventory.json`).
 /// Only these are the base game's; any other Add-On, whatever its prefix
 /// (`Weapon_Tier1`), is a community one the player imports themselves.
@@ -398,24 +420,49 @@ impl Reference {
     /// turn, from `folder` (the one the imported copy is in, as v20's
     /// Add-Ons folder held them side by side) where the reference lacks
     /// them.
-    pub fn add_beside(&mut self, folder: &Path, required: &[String]) {
+    pub fn add_beside(&mut self, folder: &Path, required: &[String]) -> Result<()> {
         let Ok(entries) = std::fs::read_dir(folder) else {
-            return;
+            return Ok(());
         };
-        let near: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        let mut near: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        near.sort();
         let mut wanted: Vec<String> = required.iter().map(|a| a.to_ascii_lowercase()).collect();
         let mut tried = std::collections::BTreeSet::new();
         while let Some(a) = wanted.pop() {
             if self.addons.contains_key(&a) || !tried.insert(a.clone()) {
                 continue;
             }
-            let found = near.iter().find(|p| {
-                let name = p
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_ascii_lowercase());
-                name.as_deref() == Some(a.as_str()) || name == Some(format!("{a}.zip"))
-            });
-            if let Some(path) = found
+            let found: Vec<_> = near
+                .iter()
+                .filter(|p| {
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_ascii_lowercase());
+                    (name.as_deref() == Some(a.as_str()) || name == Some(format!("{a}.zip")))
+                        && !native_folder(p, &a)
+                })
+                .collect();
+            if found.len() > 1 {
+                let first = source::read(found[0])
+                    .with_context(|| format!("reading required Add-On {}", found[0].display()))?;
+                for path in &found[1..] {
+                    let other = source::read(path)
+                        .with_context(|| format!("reading required Add-On {}", path.display()))?;
+                    let identical = first.refused.is_empty()
+                        && other.refused.is_empty()
+                        && first.files.len() == other.files.len()
+                        && first.files.iter().all(|(key, file)| {
+                            other.files.get(key).is_some_and(|f| f.bytes == file.bytes)
+                        });
+                    anyhow::ensure!(
+                        identical,
+                        "conflicting sources for required Add-On {a}: {} and {}",
+                        found[0].display(),
+                        path.display()
+                    );
+                }
+            }
+            if let Some(path) = found.first()
                 && self.add_addon(path)
             {
                 wanted.extend(
@@ -427,6 +474,7 @@ impl Reference {
                 );
             }
         }
+        Ok(())
     }
 
     /// Read only geometry explicitly attributed to a required installed

@@ -3,6 +3,88 @@ use bri_addon_import::{Options, import};
 use std::collections::BTreeSet;
 
 #[test]
+fn an_installed_native_folder_is_not_a_conflicting_legacy_source() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let mut zip =
+        zip::ZipWriter::new(std::fs::File::create(root.path().join("Brick_Lender.zip")).unwrap());
+    zip.start_file("shape.blb", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"1 1 3\nBRICK\n").unwrap();
+    zip.finish().unwrap();
+    let native = root.path().join("brick_lender");
+    std::fs::create_dir_all(&native).unwrap();
+    std::fs::write(native.join("package.json"), r#"{"schema_version":1,"id":"brick_lender","version":"1.0.0","api":1,"name":"Native","license":"CC0-1.0","provides":[]}"#).unwrap();
+    let borrower = root.path().join("Brick_Borrower");
+    std::fs::create_dir_all(&borrower).unwrap();
+    std::fs::write(
+        borrower.join("server.cs"),
+        r#"LoadRequiredAddOn("Brick_Lender");
+        datablock fxDTSBrickData(BrickBorrowData) { brickFile="Add-Ons/Brick_Lender/shape.blb";
+        category="Special"; subCategory="Test"; uiName="Borrowed"; };"#,
+    )
+    .unwrap();
+    let out = root.path().join("output");
+    import(&Options {
+        input: borrower,
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let dir = out.join("assets/brick-catalog");
+    assert_eq!(
+        bri_sim::definitions::Definitions::load(&dir, &dir)
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn conflicting_sibling_sources_are_rejected_instead_of_choosing_arbitrarily() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("Brick_Lender");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("shape.blb"), b"1 1 3\nBRICK\n").unwrap();
+    let mut zip =
+        zip::ZipWriter::new(std::fs::File::create(root.path().join("Brick_Lender.zip")).unwrap());
+    zip.start_file("shape.blb", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"2 2 3\nBRICK\n").unwrap();
+    zip.finish().unwrap();
+    let borrower = root.path().join("Brick_Borrower");
+    std::fs::create_dir_all(&borrower).unwrap();
+    std::fs::write(
+        borrower.join("server.cs"),
+        r#"LoadRequiredAddOn("Brick_Lender");
+        datablock fxDTSBrickData(BrickBorrowData) { brickFile="Add-Ons/Brick_Lender/shape.blb";
+        category="Special"; subCategory="Test"; uiName="Borrowed"; };"#,
+    )
+    .unwrap();
+    let error = import(&Options {
+        input: borrower.clone(),
+        out: root.path().join("output"),
+        ..Default::default()
+    })
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("conflicting"), "{error:#}");
+    let mut zip =
+        zip::ZipWriter::new(std::fs::File::create(root.path().join("Brick_Lender.zip")).unwrap());
+    zip.start_file("shape.blb", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"1 1 3\nBRICK\n").unwrap();
+    zip.finish().unwrap();
+    import(&Options {
+        input: borrower,
+        out: root.path().join("identical"),
+        ..Default::default()
+    })
+    .expect("identical folder and ZIP are not ambiguous");
+}
+
+#[test]
 #[ignore = "needs a private Bot_Town import; set BRI_BOT_TOWN_OUTPUT"]
 fn supplied_bot_town_catalog_loads_all_eight_native_shapes() {
     let root = std::path::PathBuf::from(

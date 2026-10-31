@@ -30,6 +30,9 @@ proptest = "1"
 bri-addon-import = { path = "../addon-import" }
 bri-bls = { path = "../bls" }
 bri-events = { path = "../events" }
+bri-identity = { path = "../identity" }
 bri-minigames = { path = "../minigames" }
 bri-package-runtime = { path = "../package-runtime" }
+bri-progress = { path = "../progress" }
+tempfile.workspace = true
 zstd.workspace = true

@@ -81,6 +81,13 @@ now follows those same carrier rules with preserved playback handles and tested
 queue-pressure retries. Final effect pixels remain open; these increments do not
 complete the broader release scope.
 
+Issue 414 now has installed-dependency geometry resolution, an incomplete-brick
+checker, and private Bot_Town evidence covering menu catalog/icons, placement,
+collision, save/reload, and package download plus late join. See the
+[runtime and conflict receipt](../progress/2026-10-31-v043-bot-town-runtime-and-conflicts.md).
+Explicit-reference provider conflicts, cyclic dependency diagnosis, invalid
+metadata diagnostics, final integration and release validation remain open.
+
 Current creator-departure handoff: [persistent ownership](../progress/2026-10-31-v043-persistent-minigame-ownership.md)
 now separates management accounts from membership/session lifetimes, preserves
 owned-game save/recovery while outside, and passes 94 scoped cases plus changed-crate

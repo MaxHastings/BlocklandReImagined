@@ -569,7 +569,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         } else {
             folder
         };
-        reference.add_beside(folder, &required);
+        reference.add_beside(folder, &required)?;
     }
     if let Some(content) = &opts.installed {
         reference.add_installed_dependencies(content, &required)?;
