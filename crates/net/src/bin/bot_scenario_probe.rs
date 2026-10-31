@@ -112,12 +112,13 @@ fn sample(session: &Session) -> Value {
 fn main() -> Result<()> {
     let mut args: Vec<_> = std::env::args().skip(1).collect();
     let audit = args.last().is_some_and(|arg| arg == "--static-route-audit");
-    if audit {
+    let trace = args.last().is_some_and(|arg| arg == "--every-tick");
+    if audit || trace {
         args.pop();
     }
     ensure!(
         args.len() == 7,
-        "Usage: bot_scenario_probe <content> <save> <feet-x> <feet-y> <feet-z> <ticks> <report.json> [--static-route-audit]"
+        "Usage: bot_scenario_probe <content> <save> <feet-x> <feet-y> <feet-z> <ticks> <report.json> [--static-route-audit|--every-tick]"
     );
     let content = PathBuf::from(&args[0]);
     let save = PathBuf::from(&args[1]);
@@ -126,6 +127,10 @@ fn main() -> Result<()> {
     ensure!(
         target.is_finite() && (1..=14400).contains(&ticks),
         "Invalid target/tick budget"
+    );
+    ensure!(
+        !trace || ticks <= 3600,
+        "Every-tick trace is bounded to 3600 ticks"
     );
     let build = bri_world::persistence::load_startup(&save)?;
     let saved_bricks = build.world.bricks.len();
@@ -202,7 +207,7 @@ fn main() -> Result<()> {
         sequence += 1;
         session.movement(owner, sequence, MoveInput::default())?;
         session.step()?;
-        if tick % 120 == 0 || tick == ticks {
+        if trace || tick % 120 == 0 || tick == ticks {
             snapshots.push(sample(session));
         }
     }

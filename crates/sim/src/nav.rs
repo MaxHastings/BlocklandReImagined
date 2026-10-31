@@ -157,20 +157,16 @@ impl Body {
     fn seconds(&self, distance: f32) -> f32 {
         self.walk_seconds(distance, false)
     }
-    /// The box a clearance test uses: narrower by one cell so a body that
-    /// fits a gap passes whichever cell centre it is aligned to, and without
-    /// the bottom half step, which the motor steps over.
+    /// The motor-width box above the bottom half step, which the motor steps
+    /// over. Grid alignment is handled by `Ground::place` moving the sampled
+    /// position within its cell; it cannot shrink the body through a wall.
     fn clearance(&self, crouched: bool) -> (f32, f32, f32) {
         let height = if crouched {
             self.crouch_height
         } else {
             self.height
         };
-        let half_width = if self.conservative {
-            self.width * 0.5
-        } else {
-            ((self.width - CELL) * 0.5).max(self.width * 0.25)
-        };
+        let half_width = self.width * 0.5;
         // A chassis spans both sides while its wheels cross a low step.
         // Sampling the lower floor must not treat the old support top as a
         // wall through the back half of its footprint. Admit the same step
@@ -357,7 +353,7 @@ impl<'a> Ground<'a> {
     }
     /// Where the full-width body stands at a grid node's `feet`: there, or
     /// pushed sideways out of what it overlaps by no more than the half
-    /// cell the grid's narrower clearance box left it (`Body::clearance`),
+    /// cell around its sampled position,
     /// onto a floor it stands on. `None` when it fits nowhere in that slack.
     /// So a route through a gap only just wider than the body crosses where
     /// the whole body fits, not on the cell line beside it.
@@ -487,9 +483,54 @@ impl<'a> Ground<'a> {
         let (half_width, lift, tall) = body.clearance(crouched);
         self.settle_box(body, half_width, lift, tall, centre)
             .filter(|at| self.clear(body, *at, crouched) && (at.y - centre.y).abs() < f32::EPSILON)
+            .or_else(|| self.step_onto(body, centre, crouched))
+    }
+    /// An overlapping stair tread may support the front of the real body
+    /// above the centre ray's floor. Find that support with a full-body down
+    /// cast within the motor's measured step, rather than shrinking its width
+    /// to pretend it can stand through the next riser.
+    fn step_onto(&self, body: &Body, feet: Vec3, crouched: bool) -> Option<Vec3> {
+        let step = if crouched { body.crawl_step } else { body.step };
+        self.support_below(body, feet, crouched, step)
+    }
+    /// Support under any part of the motor footprint, including the last
+    /// portion of a ledge after the centre ray has crossed its edge.
+    fn support_below(&self, body: &Body, feet: Vec3, crouched: bool, down: f32) -> Option<Vec3> {
+        if body.conservative {
+            return None;
+        }
+        let step = if crouched { body.crawl_step } else { body.step };
+        let height = if crouched {
+            body.crouch_height
+        } else {
+            body.height
+        };
+        let shape = Cuboid::new(Vector::new(
+            body.width * 0.5,
+            height * 0.5,
+            body.width * 0.5,
+        ));
+        let raised = feet + Vec3::Y * step;
+        let pose = Pose::translation(raised.x, raised.y + height * 0.5, raised.z);
+        let query = self.physics.query_pipeline_with_filter(self.filter());
+        if query.intersect_shape(pose, &shape).next().is_some() {
+            return None;
+        }
+        let (_, hit) = query.cast_shape(
+            &pose,
+            -Vector::Y,
+            &shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: down,
+                stop_at_penetration: true,
+                ..Default::default()
+            },
+        )?;
+        (hit.normal1.y >= body.floor_cos)
+            .then_some(raised - Vec3::Y * hit.time_of_impact + Vec3::Y * SETTLE_GAP)
     }
     /// Whether a body stands (or crouches) at `feet` without touching
-    /// fixed collision, allowing for grid alignment.
+    /// fixed collision at this exact position.
     fn clear(&self, body: &Body, feet: Vec3, crouched: bool) -> bool {
         let (half_width, lift, tall) = body.clearance(crouched);
         self.empty(feet, half_width, lift, tall)
@@ -1048,14 +1089,18 @@ impl Nav {
         if farthest <= 0.0 {
             return Some(Leapt::from(out));
         }
-        let level = |f: &Floor| !f.low && (f.y - from.y).abs() <= body.step + STEP_SLACK;
+        let level =
+            |f: &Floor| !f.overhang && !f.low && (f.y - from.y).abs() <= body.step + STEP_SLACK;
         // No edge round it (every cell beside it walked onto, or a wall):
         // nothing to leap off.
         let mut edge = false;
         for (dx, dz) in NEIGHBOURS {
             let floors = self.floor(ground, body, node.x + dx, node.z + dz, from.y)?;
             edge |= !floors.iter().any(level)
-                && floors.first().is_none_or(|f| f.y <= from.y + body.step);
+                && floors
+                    .iter()
+                    .find(|f| !f.overhang)
+                    .is_none_or(|f| f.y <= from.y + body.step);
         }
         if !edge {
             return Some(Leapt::from(out));
@@ -1077,7 +1122,9 @@ impl Nav {
                 let beside = last == (node.x, node.z);
                 last = (x, z);
                 let floors = self.floor(ground, body, x, z, from.y)?;
-                let highest = floors.first().map(|f| f.y);
+                // Footprint-only supports do not end the gap scan: keep
+                // looking for a centred landing beyond their edge.
+                let highest = floors.iter().find(|f| !f.overhang).map(|f| f.y);
                 let take = if !gap {
                     // Only off an edge: floor at its own level beside it is
                     // walked on, and a ledge or a wall there jumped onto
@@ -1089,10 +1136,10 @@ impl Nav {
                         break;
                     }
                     gap = true;
-                    highest.is_some()
+                    !floors.is_empty()
                 } else {
                     match (highest, support) {
-                        (None, _) => false,
+                        (None, _) => !floors.is_empty(),
                         (Some(_), None) => true,
                         // The far side rising out of what the first
                         // support is the bottom of.
@@ -1111,7 +1158,9 @@ impl Nav {
                         continue;
                     };
                     if self.arc(ground, body, node, to)? {
-                        out.push((to, seconds));
+                        // Prefer a centred landing when available; a footprint-only
+                        // contact is useful under an overhang but less stable.
+                        out.push((to, seconds, f.overhang));
                     }
                 }
                 // Onto a ledge, the far side, or past the bottom of the
@@ -1529,7 +1578,7 @@ fn edge(body: &Body, from: f32, to: Floor) -> Option<bool> {
 /// Shared: a remembered column is handed out without copying it.
 type Floors = std::sync::Arc<[Floor]>;
 /// The leaps off a node: where each lands and the seconds it takes.
-type Leapt = std::sync::Arc<[(Node, f32)]>;
+type Leapt = std::sync::Arc<[(Node, f32, bool)]>;
 
 /// The floors of a column a body coming in at height `from` gets onto:
 /// the one it walks or drops onto (the highest no more than a step above
@@ -1567,12 +1616,14 @@ fn nearest(floors: &[Floor], feet: f32, body: &Body) -> Option<Floor> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Floor {
     y: f32,
+    /// Only the edge of the footprint is supported; the centre is over air.
+    /// A legal departure/landing, less stable than centred support.
+    overhang: bool,
     /// Where in its cell the body stands on it, in [`SPOT_UNIT`]s off the
     /// cell's centre: the centre unless only part of the cell holds it.
     spot: (i8, i8),
-    /// The whole body touches something standing here: fine to pass,
-    /// better avoided, so paths keep off walls and through the middle of
-    /// doors.
+    /// The full body fits but is within half a cell of fixed collision:
+    /// passable, with a preference for the middle of doors and corridors.
     snug: bool,
     /// Only a crouched body fits.
     low: bool,
@@ -1630,9 +1681,13 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
             if let Some((feet, low)) = placed {
                 let offset = |v: f32| (v / SPOT_UNIT).round() as i8;
                 floors.push(Floor {
-                    y: hit,
+                    y: feet.y - 0.01,
+                    overhang: false,
                     spot: (offset(feet.x - px), offset(feet.z - pz)),
-                    snug: !ground.fits(body, feet, low),
+                    snug: {
+                        let (half, lift, tall) = body.clearance(low);
+                        !ground.empty(feet, half + CELL * 0.5, lift, tall)
+                    },
                     low,
                     wet: ground.floats(body, feet).is_some(),
                 });
@@ -1640,14 +1695,46 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
         }
         top = hit - 0.02;
     }
+    if !body.conservative {
+        // A body can still stand with its centre just past a ledge. Such a
+        // takeoff matters under an overhang: jumping before the full body
+        // clears the roof clips it. The full footprint finds that supported
+        // departure without inventing a midair node or narrowing the body.
+        for low in [false, true] {
+            if let Some(feet) = ground.support_below(
+                body,
+                Vec3::new(px, from + 0.01, pz),
+                low,
+                body.step + body.drop,
+            ) {
+                let (half, lift, tall) = body.clearance(low);
+                let floor = Floor {
+                    y: feet.y - SETTLE_GAP,
+                    overhang: !ground.stands(body, feet),
+                    spot: (0, 0),
+                    low,
+                    snug: !ground.empty(feet, half + CELL * 0.5, lift, tall),
+                    wet: ground.floats(body, feet).is_some(),
+                };
+                if !floors
+                    .iter()
+                    .any(|f| (f.y - floor.y).abs() < 0.02 && f.spot == floor.spot)
+                {
+                    floors.push(floor);
+                }
+                break;
+            }
+        }
+        floors.sort_by(|a, b| b.y.total_cmp(&a.y));
+    }
     floors.into()
 }
 
 /// How far across from its column's centre a [`sample`] looks: the full
-/// body's half width (`Ground::fits`), off a centre pushed by up to half a
-/// cell (`Ground::place`), past touching by `SETTLE_GAP`, and a margin.
+/// body's half width, the half-cell obstacle preference, off a centre pushed
+/// by up to half a cell (`Ground::place`), past touching and a margin.
 fn sample_reach(body: &Body) -> f32 {
-    CELL * 0.5 + body.width * 0.5 + SETTLE_GAP + 0.05
+    CELL + body.width * 0.5 + SETTLE_GAP + 0.05
 }
 
 /// Surfaces one column's sample looks through, top to bottom.
@@ -2029,7 +2116,7 @@ impl Search {
         ground: &Ground,
         body: &Body,
         node: Node,
-    ) -> Option<Vec<(Node, f32)>> {
+    ) -> Option<Vec<(Node, f32, bool)>> {
         let swum = self.came.get(&node).is_none_or(|c| c.mode == Mode::Swim);
         if swum || ground.floats(body, node.feet()).is_some() {
             return Some(Vec::new());
@@ -2038,7 +2125,7 @@ impl Search {
         Some(
             all.iter()
                 .copied()
-                .filter(|(to, _)| !nav.avoided(node, to.x, to.z, to.feet().y, body))
+                .filter(|(to, _, _)| !nav.avoided(node, to.x, to.z, to.feet().y, body))
                 .collect(),
         )
     }
@@ -2232,7 +2319,7 @@ impl Search {
                     },
                 );
             }
-            for (to, seconds) in leaps {
+            for (to, seconds, overhang) in leaps {
                 let offset = to.feet() - start.feet();
                 if Vec3::new(offset.x, 0.0, offset.z).length() > self.bound {
                     continue;
@@ -2247,7 +2334,9 @@ impl Search {
                         // Stopping still to take off, then the leap; no
                         // quicker than walking there, so the estimate stays
                         // a lower bound.
-                        cost: here.cost + (body.motion.stop() + seconds).max(body.seconds(flat_d)),
+                        cost: here.cost
+                            + (body.motion.stop() + seconds).max(body.seconds(flat_d))
+                            + if overhang { body.seconds(SNUG) } else { 0.0 },
                         through: None,
                         crouch: false,
                         mode: Mode::Leap {
@@ -2531,6 +2620,33 @@ mod tests {
                 "bounded detour ended at {at:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_pedestrian_cannot_route_through_a_gap_narrower_than_its_body() {
+        let body = body();
+        let half_gap = body.width * 0.5 - 0.05;
+        let physics = world(&[
+            floor(),
+            (Vec3::new(-4.0, 0.0, -2.0), Vec3::new(-half_gap, 4.0, 2.0)),
+            (Vec3::new(half_gap, 0.0, -2.0), Vec3::new(4.0, 4.0, 2.0)),
+        ]);
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &NO_PASSAGES,
+            waters: &[],
+            bodies: &[],
+            motions: &[],
+            solid: &all_solid,
+        };
+        assert!(!ground.fits(&body, Vec3::ZERO, false));
+        let mut nav = Nav::default();
+        nav.begin_tick();
+        assert!(
+            nav.node_at(&ground, &body, Vec3::ZERO).unwrap().is_none(),
+            "grid alignment cannot make the authoritative body narrower"
+        );
     }
 
     #[test]
@@ -3870,7 +3986,10 @@ mod tests {
             let leapt = leaps(&p);
             assert_eq!(leapt.len(), 1, "rise {rise}: {p:?}");
             let (from, onto) = leapt[0];
-            assert!(from.x <= 0.0 && onto.x >= gap, "rise {rise}: {from} {onto}");
+            assert!(
+                from.x <= body().width * 0.5 && onto.x >= gap,
+                "departure must remain supported by its full footprint, rise {rise}: {from} {onto}"
+            );
             assert!((onto.y - rise).abs() < 0.1, "rise {rise}: {onto}");
             // Too wide to land across.
             let wide = far + 2.0;
@@ -3951,6 +4070,88 @@ mod tests {
         assert!(leaps(&up).len() >= levels, "{up:?}");
         let down = path(search(&physics, deck, bottom).0);
         assert!(leaps(&down).len() >= levels - 1, "{down:?}");
+    }
+
+    /// The motor, not just the graph, supports an edge departure and a
+    /// footprint-only landing under an upper ledge. Neither narrows its body.
+    #[test]
+    fn footprint_edge_leaps_are_executable_by_the_full_motor() {
+        use bri_motor::player::{MoveInput, Player, PlayerTuning};
+        let fixtures = [
+            (
+                vec![
+                    column(-8.0, 0.0, -3.0, 3.0, 0.0),
+                    column(2.0, 10.0, -3.0, 3.0, 0.0),
+                ],
+                Vec3::new(0.5, 0.0, 0.0),
+                Vec3::new(2.0, 0.0, 0.0),
+            ),
+            (
+                vec![
+                    floor(),
+                    (Vec3::new(-1.0, 4.6, 0.0), Vec3::new(0.0, 4.8, 3.0)),
+                    (Vec3::new(2.5, 2.2, 0.0), Vec3::new(3.5, 2.4, 3.0)),
+                    (Vec3::new(3.0, 7.0, 0.0), Vec3::new(4.0, 7.2, 3.0)),
+                ],
+                Vec3::new(0.5, 4.8, 1.5),
+                Vec3::new(2.0, 2.4, 1.5),
+            ),
+        ];
+        for (boxes, from, to) in fixtures {
+            let tuning = PlayerTuning::default();
+            let mut physics = world(&boxes);
+            let mut player =
+                Player::spawn(&mut physics, 1, from + Vec3::Y * 0.05, tuning.clone()).unwrap();
+            for _ in 0..120 {
+                player.step(&mut physics, MoveInput::default()).unwrap();
+                physics.step();
+                if player.state().grounded {
+                    break;
+                }
+            }
+            assert!(
+                player.state().grounded,
+                "departure {from:?}: {:?}",
+                player.state()
+            );
+            let feet = Vec3::from(player.state().feet);
+            let mut leg = crate::route::LeapLeg::start(to, feet, feet, &tuning, 0);
+            let mut landed = false;
+            for tick in 0..360 {
+                let state = player.state();
+                let feet = Vec3::from(state.feet);
+                if leg.flown && state.grounded {
+                    assert!(
+                        (feet.y - to.y).abs() < 0.1 && (feet - to).with_y(0.0).length() < CELL,
+                        "{from:?} -> {to:?} landed at {feet:?}"
+                    );
+                    landed = true;
+                    break;
+                }
+                let control = crate::route::leap(
+                    &mut leg,
+                    feet,
+                    Vec3::from(state.velocity),
+                    state.grounded,
+                    &tuning,
+                    tick,
+                );
+                assert!(!control.jet);
+                player
+                    .step(
+                        &mut physics,
+                        MoveInput {
+                            forward: -control.direction.z,
+                            right: control.direction.x,
+                            jump: control.jump,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                physics.step();
+            }
+            assert!(landed, "{from:?} -> {to:?}: {:?}", player.state());
+        }
     }
 
     /// A leap a body missed is avoided alone: the route leaps the gap
