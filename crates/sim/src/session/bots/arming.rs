@@ -126,12 +126,11 @@ fn best_item(
     let passed = |source: Source| skipped.cooling(&source, tick);
     let statics = session
         .item_spawners
-        .items
-        .iter()
-        .filter(|(_, item)| tick >= item.available_at)
-        .map(|(id, item)| {
+        .present()
+        .filter(|item| tick >= item.available_at)
+        .map(|item| {
             (
-                Source::Brick(*id),
+                Source::Brick(item.brick),
                 item.item.as_str(),
                 Vec3::from(item.position),
             )

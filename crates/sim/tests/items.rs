@@ -275,6 +275,54 @@ fn broadphase_includes_boundary_contacts_negative_cells_and_large_shapes() {
 }
 
 #[test]
+fn destroyed_startup_sources_keep_author_intent_and_invisible_sources_still_work() {
+    let mut s = ItemSpawners::new(bounds());
+    let mut b = brick();
+    b.damage_hidden = true;
+    b.visible = false;
+    b.raycast = false;
+    b.colliding = false;
+    let contact = ItemBounds {
+        min: [-2.0; 3],
+        max: [2.0; 3],
+    };
+    s.reconcile(1, Some(&b), &definitions(), 42).unwrap();
+    assert_eq!(
+        s.present().count(),
+        0,
+        "a hidden saved source starts suspended"
+    );
+    assert!(s.contacts(contact).is_empty());
+    assert!(!s.available(1, 1000));
+    assert!(s.picked_up(1, 1000, Some(1120)).is_err());
+    // Explicit author operations still affect the retained clock, but do not
+    // grant pickup or presentation while the source is destroyed.
+    s.hide(1);
+    s.reconcile(1, Some(&b), &definitions(), 80).unwrap();
+    assert_eq!(s.items[&1].available_at, bri_sim::item_spawners::NEVER);
+    s.restock(1, 100);
+    assert_eq!(s.items[&1].available_at, 100);
+    assert_eq!(s.present().count(), 0);
+    b.damage_hidden = false;
+    // All presentation/collision flags remain off intentionally. This is an
+    // authored invisible source, and destruction must not be inferred from it.
+    s.reconcile(1, Some(&b), &definitions(), 110).unwrap();
+    assert_eq!(s.present().count(), 1);
+    assert!(s.available(1, 110));
+    assert!(s.contacts(contact).contains(&1));
+    b.damage_hidden = true;
+    s.reconcile(1, Some(&b), &definitions(), 120).unwrap();
+    s.reconcile(1, None, &definitions(), 121).unwrap();
+    assert!(s.items.is_empty());
+    assert_eq!(s.present().count(), 0);
+    // A removed source must not leave stale suspension behind on restoration.
+    b.damage_hidden = false;
+    s.reconcile(1, Some(&b), &definitions(), 130).unwrap();
+    assert_eq!(s.present().count(), 1);
+    assert!(s.available(1, 130));
+}
+
+#[test]
 fn item_catalog_and_capacity_are_preflighted_before_world_mutation() {
     let spawners = ItemSpawners::new(bounds());
     let mut world = World::new("Capacity".into(), "test".into(), vec![[1.; 4]]);

@@ -164,7 +164,10 @@ impl Stamp {
         match self.source {
             PickupSource::Brick { brick } => {
                 let item = session.item_spawners.items.get(&brick)?;
-                if item.item != self.item || source.item != self.item || tick < item.available_at {
+                if item.item != self.item
+                    || source.item != self.item
+                    || !session.item_spawners.available(brick, tick)
+                {
                     return None;
                 }
                 let at = Vec3::from(item.position);

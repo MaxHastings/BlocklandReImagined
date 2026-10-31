@@ -170,7 +170,7 @@ impl Session {
     }
     pub fn weapon_view(&self) -> WeaponView {
         WeaponView {
-            static_items: self.item_spawners.items.values().cloned().collect(),
+            static_items: self.item_spawners.present().cloned().collect(),
             images: self
                 .peers
                 .keys()

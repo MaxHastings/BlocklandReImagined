@@ -177,7 +177,7 @@ impl Session {
                 let Some(item) = self.item_spawners.items.get(&id) else {
                     continue;
                 };
-                if locked || tick < item.available_at {
+                if locked || !self.item_spawners.available(id, tick) {
                     continue;
                 }
                 let item = item.item.clone();
@@ -274,6 +274,104 @@ impl Session {
                     self.package_collected(owner, &item, Some(id), None);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod destruction_tests {
+    use super::*;
+
+    #[test]
+    fn destroyed_source_suspends_pickup_and_retains_elapsed_or_remaining_cooldown() {
+        for due in [80, 240] {
+            let mut world =
+                bri_world::World::new("Item destruction".into(), "fixture".into(), vec![[1.0; 4]]);
+            let mut brick = bri_world::Brick::new(
+                ContentRef::Resolved(crate::testing::PLATE.into()),
+                [0.25, 0.1, 0.25],
+                77,
+            );
+            brick.item_spawn.item = Some(ContentRef::Resolved(bri_weapons::CORE_TOOLS[3].into()));
+            world.bricks.insert(1, brick);
+            world.next_brick_id = 2;
+            let mut s = Session::new(
+                crate::simulation::Simulation::new(
+                    world,
+                    crate::testing::definitions(),
+                    vec![
+                        rapier3d::prelude::ColliderBuilder::cuboid(100.0, 0.5, 100.0)
+                            .translation(rapier3d::prelude::Vector::new(0.0, -0.5, 0.0)),
+                    ],
+                )
+                .unwrap(),
+            );
+            s.set_item_bounds(BTreeMap::new()).unwrap();
+            s.item_spawners.picked_up(1, 0, Some(due)).unwrap();
+            let dropped = s
+                .spawn_event_item(
+                    bri_weapons::CORE_TOOLS[0],
+                    Vec3::new(5.0, 0.5, 0.0),
+                    Vec3::ZERO,
+                )
+                .unwrap();
+            s.fake_kill_brick(
+                1,
+                super::super::debris::BrickBlast::fake_kill(Vec3::new(0.25, 0.1, 0.25), Vec3::Y),
+                120,
+            )
+            .unwrap();
+            let visitor = s
+                .join(
+                    "Visitor while destroyed".into(),
+                    Vec3::new(0.25, 0.35, 0.25),
+                    false,
+                )
+                .unwrap();
+            for _ in 0..60 {
+                s.step().unwrap();
+            }
+            assert!(s.simulation.state().bricks[&1].damage_hidden);
+            assert!(
+                s.weapon_view().static_items.is_empty(),
+                "destroyed item must not be published"
+            );
+            assert!(
+                !s.item_spawners.available(1, 1000),
+                "elapsed cooldown cannot override destruction"
+            );
+            assert!(s.tool_inventories()[&visitor].slots[3].is_none());
+            assert!(
+                s.weapon_view().drops.iter().any(|d| d.id == dropped),
+                "independent drop survives"
+            );
+            s.disconnect(visitor).unwrap();
+            for _ in 0..61 {
+                s.step().unwrap();
+            }
+            assert!(!s.simulation.state().bricks[&1].damage_hidden);
+            let shown = s.weapon_view().static_items;
+            assert_eq!(shown.len(), 1);
+            assert_eq!(
+                shown[0].available_at, due,
+                "restoration must preserve the original timer"
+            );
+            let collector = s
+                .join(
+                    "Collector after restoration".into(),
+                    Vec3::new(0.25, 0.35, 0.25),
+                    false,
+                )
+                .unwrap();
+            s.step().unwrap();
+            assert_eq!(
+                s.tool_inventories()[&collector].slots[3].is_some(),
+                due <= 122
+            );
+            while s.simulation.state().tick <= 241 {
+                s.step().unwrap();
+            }
+            assert!(s.tool_inventories()[&collector].slots[3].is_some());
         }
     }
 }

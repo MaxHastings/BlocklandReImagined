@@ -89,6 +89,9 @@ pub struct ItemSpawners {
     pub items: BTreeMap<BrickId, StaticItem>,
     /// Items that take the paint of the brick they stand on.
     pub painted: BTreeSet<String>,
+    /// Destruction suspends presentation/contact, independently of the item's
+    /// pickup clock. Authored invisible bricks remain ordinary sources.
+    suspended: BTreeSet<BrickId>,
     contacts: ContactIndex,
 }
 impl ItemSpawners {
@@ -154,7 +157,16 @@ impl ItemSpawners {
     }
     fn remove(&mut self, id: BrickId) {
         self.items.remove(&id);
+        self.suspended.remove(&id);
         self.contacts.remove(id);
+    }
+    /// Sources published to players and considered by navigation. A picked-up
+    /// source is still present (its fade/cooldown is client-visible); a
+    /// destroyed brick is not, even when that cooldown has elapsed.
+    pub fn present(&self) -> impl Iterator<Item = &StaticItem> {
+        self.items
+            .values()
+            .filter(|item| !self.suspended.contains(&item.brick))
     }
     pub fn reconcile(
         &mut self,
@@ -188,10 +200,16 @@ impl ItemSpawners {
             .get(&id)
             .filter(|old| old.item == *item)
             .map_or(tick, |old| old.available_at);
-        self.contacts.insert(
-            id,
-            bounds.transformed(position, facing(brick.item_spawn.direction)),
-        );
+        if brick.damage_hidden {
+            self.suspended.insert(id);
+            self.contacts.remove(id);
+        } else {
+            self.suspended.remove(&id);
+            self.contacts.insert(
+                id,
+                bounds.transformed(position, facing(brick.item_spawn.direction)),
+            );
+        }
         self.items.insert(
             id,
             StaticItem {
@@ -226,6 +244,10 @@ impl ItemSpawners {
         tick: u64,
         available_again: Option<u64>,
     ) -> Result<()> {
+        ensure!(
+            !self.suspended.contains(&brick),
+            "Static item source is destroyed"
+        );
         let item = self.items.get_mut(&brick).context("Missing static item")?;
         ensure!(tick >= item.available_at, "Static item has not respawned");
         item.available_at = available_again.unwrap_or(NEVER);
@@ -242,7 +264,7 @@ impl ItemSpawners {
     pub fn available(&self, brick: BrickId, tick: u64) -> bool {
         self.items
             .get(&brick)
-            .is_some_and(|i| tick >= i.available_at)
+            .is_some_and(|i| !self.suspended.contains(&brick) && tick >= i.available_at)
     }
 }
 
