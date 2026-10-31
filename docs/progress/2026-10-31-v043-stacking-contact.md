@@ -46,3 +46,15 @@ candidate and a trajectory/clearance check using the actual body dimensions,
 lifetime and motor, not a blanket inclusion of players in world rays. The v21
 collision handler's synchronized jumps are evidence for timing, not evidence of
 native clearance or stability. No cube success is claimed.
+
+
+A second existing behavior matters for cooperation: `bots.rs` treats a grounded
+bot with no nearby world-ray floor as perched and may direct it to step off when
+its route is missing or starts below its feet. That heuristic also covers narrow
+static geometry; it is not proof that a living actor is actually supporting the
+bot. The same `on_body` heuristic suppresses idle surprise. A stacking change
+must identify the real living support and override step-off only for an active,
+valid cooperative attempt; broadly disabling this recovery would regress ordinary
+navigation and ledge behavior. The bot's seen-target data already carries the
+observed target position, so ordinary stacking can use known pursuit evidence
+without reading a hidden target's live transform.
