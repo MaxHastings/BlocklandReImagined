@@ -281,3 +281,12 @@ creator_minigame_save_and_offline_recovery`. Warning-free all-target
 passes. This verifies identity and settings restoration, not restoration of bot
 resources or autonomous play before the creator rejoins; those remain open.
 Diagnostics: `minigame-restart-reclaim.txt` and `minigame-restart-clippy.txt`.
+
+
+The existing headless battle regression now also reconstructs the saved world,
+restores the held encounter on the verified creator's return, reconciles its
+saved bot spawn brick and checks that the resulting bot joins the restored game.
+The focused bot lifecycle test and warning-free all-target bri-sim Clippy pass.
+This uses explicit bot reconciliation; automatic source initialization and renewed
+combat after restart remain to be verified. Evidence: `minigame-restart-bot.txt`
+and `minigame-restart-bot-clippy.txt` in planning diagnostics.

@@ -779,7 +779,13 @@ mod spawn_tests {
         )?);
         s.set_lan_host(false);
         s.spawn_points = vec![Vec3::new(-12., 0.05, -8.)];
-        let creator = s.join("Creator".into(), Vec3::new(-8., 0.05, 0.), false)?;
+        let principal = bri_admin::Principal([0x5b; 32]);
+        let creator = s.join_verified(
+            "Creator".into(),
+            Vec3::new(-8., 0.05, 0.),
+            false,
+            Some(principal),
+        )?;
         let fighter = s.join("Fighter".into(), Vec3::new(6., 0.05, 0.), false)?;
         let other = s.join("Other owner".into(), Vec3::new(-20., 0.05, 0.), false)?;
         s.simulation.mutate(1, |b| b.owner = creator)?;
@@ -856,6 +862,34 @@ mod spawn_tests {
         s.sync_bot_minigames()?;
         assert_eq!(s.game_of(bot), Some(encounter));
         assert!(s.minigames.game(mg::GameId(encounter.0)).is_ok());
+
+        // A restart restores the saved brick and the creator's held game when
+        // their verified identity returns; bot membership follows that game.
+        let (world, saved_game) = s.recovery_snapshot();
+        let floor = ColliderBuilder::cuboid(30., 0.5, 30.).translation(Vector::new(0., -0.5, 0.));
+        let mut restarted = Session::new(crate::simulation::Simulation::new(
+            world,
+            crate::testing::definitions(),
+            vec![floor],
+        )?);
+        restarted.set_lan_host(false);
+        restarted.set_bot_kinds(s.bots.kinds.clone())?;
+        restarted.hold_minigame(saved_game.expect("creator encounter is saved"));
+        let returned = restarted.join_verified(
+            "Creator returned".into(),
+            Vec3::new(-8., 0.05, 0.),
+            false,
+            Some(principal),
+        )?;
+        assert_eq!(returned, creator);
+        let restored_game = restarted
+            .game_of(returned)
+            .expect("held encounter restored");
+        assert_eq!(restarted.simulation.state().bricks[&1].owner, creator);
+        restarted.reconcile_bot_brick(1, Some("fixture:bot/melee"))?;
+        restarted.sync_bot_minigames()?;
+        let restored_bot = restarted.bots.by_brick[&1];
+        assert_eq!(restarted.game_of(restored_bot), Some(restored_game));
         Ok(())
     }
 
