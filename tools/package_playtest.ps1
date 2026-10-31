@@ -435,14 +435,20 @@ try {
         foreach ($child in Get-ChildItem -LiteralPath $mod.path -Force) {
             Copy-Item -LiteralPath $child.FullName -Destination (Join-Path $destination $child.Name) -Recurse
         }
-        if ($null -ne $mod.PSObject.Properties['enabled'] -and -not $mod.enabled) { continue }
         # An installed content/packages.json may already list bundled Add-Ons.
-        # Files were refreshed above; keep one identity with current metadata.
+        # Files were refreshed above; declared shipping defaults also replace
+        # the source installation's enabled choices.
         $existing = @($list.packages | Where-Object { $_.id -eq $mod.id -or $_.dir -eq $mod.dir })
         if ($existing.Count -gt 0) {
             if ($existing.Count -ne 1 -or $existing[0].id -ne $mod.id -or $existing[0].dir -ne $mod.dir) {
                 throw "Conflicting package identity or directory for $($mod.id): $($mod.dir)"
             }
+        }
+        if ($null -ne $mod.PSObject.Properties['enabled'] -and -not $mod.enabled) {
+            $list.packages = @($list.packages | Where-Object { $_.id -ne $mod.id })
+            continue
+        }
+        if ($existing.Count -gt 0) {
             $existing[0].version = $mod.version
             $existing[0].side = $mod.side
         } else {
