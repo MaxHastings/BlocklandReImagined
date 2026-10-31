@@ -48,11 +48,12 @@ applicable instruction and assigned paths/model requirements.
 Current increments: recorded burst starvation is corrected with red/green evidence;
 bot creation/respawn facing passes its lifecycle regression; requested audio
 derivatives and preserved release baselines pass scoped/native checks. The first
-private preview is being assembled with local movement logging. All five bot worlds
+private preview was packaged, verified and tried by Maxwell; further interactive
+playtests are waived. All five bot worlds
 now have native headless baselines, plus a farther house-egress control. See
 [movement and bot diagnostics](../progress/2026-10-30-v043-movement-and-bot-diagnostics.md)
 and the adjacent movement, facing and audio receipts. These implementation checks
-do not close Maxwell's local-feel, mix or combined gameplay acceptance.
+do not establish that the rare local movement symptom can never recur.
 
 ## Rules for each increment
 
@@ -67,9 +68,9 @@ do not close Maxwell's local-feel, mix or combined gameplay acceptance.
 4. Run formatting, warning-free changed-crate Clippy, meaningful unit/direct-consumer
    and relevant integration checks. Affected content gets actual startup validation.
    Record failed first runs and flaky retries; do not relabel scoped checks as full.
-5. Build the private folder with `--profile playtest`, verify packaged startup and
-   hand Maxwell concise scenario instructions. No ZIP/LTO/full-gate prerequisite
-   for that preview. Keep its source/content version fixed during acceptance.
+5. Use `--profile playtest` for fast integrated checks and verify affected packaged
+   startup. Preview.1 has been tried; Maxwell waived further interactive playtests.
+   Complete remaining automated/offscreen acceptance before final release checks.
 6. Record technical checks, source comparison and Maxwell's acceptance separately.
    Mark an item complete only against its defined behavior. Merge with required CI
    and guarded history/protocol checks; keep the pre-push hook enabled.

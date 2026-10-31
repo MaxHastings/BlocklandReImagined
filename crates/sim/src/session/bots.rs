@@ -946,6 +946,27 @@ impl Brain {
             self.set_goal(Some(goal));
         }
     }
+    /// Losing or regaining sight changes the evidence, not the route's
+    /// geometry. Keep unfinished work toward a nearby pursuit destination.
+    /// In particular, noisy allied reports must not restart a large staircase
+    /// search every time another warning arrives. Once routing finishes,
+    /// ordinary arrival/replanning checks resolve the remaining displacement.
+    fn set_pursuit_goal(&mut self, goal: Option<Goal>) {
+        if (self.search.is_some() || !self.plan.is_empty())
+            && let Some(Goal::Chase(old) | Goal::Search(old)) = self.goal
+            && let Some(Goal::Chase(new) | Goal::Search(new)) = goal
+            && old.distance(new) <= CHASE_SLACK
+        {
+            // The frontier still targets `old`; keep the reported goal honest
+            // about that destination while updating the pursuit state.
+            self.goal = goal.map(|g| match g {
+                Goal::Chase(_) => Goal::Chase(old),
+                _ => Goal::Search(old),
+            });
+            return;
+        }
+        self.set_goal(goal);
+    }
     /// The goal of going after an enemy: standing its ground in its band
     /// (`fight`), at the place it chose to fight from (`spots`), after the
     /// enemy in sight, or to where one was. Whether it stands.
@@ -992,7 +1013,7 @@ impl Brain {
                     _ => true,
                 };
                 if moved_on {
-                    self.set_goal(Some(Goal::Chase(to)));
+                    self.set_pursuit_goal(Some(Goal::Chase(to)));
                 }
                 false
             }
@@ -1003,13 +1024,18 @@ impl Brain {
                 let failed = matches!(self.goal, Some(Goal::Search(_)))
                     && self.settled
                     && self.plan.is_empty();
-                if self.search.is_some() && self.plan.is_empty() {
+                // Route computation and actual traversal both precede
+                // searching the destination. A long staircase must not spend
+                // the local probe timeout before the bot reaches that floor.
+                // The dated evidence expiry and physical stall recovery still
+                // bound the pursuit.
+                if self.search.is_some() || !self.plan.is_empty() {
                     self.evidence_search.routing();
                 }
                 let next = self
                     .evidence_search
                     .next(knowledge, feet, tick, failed, reach);
-                self.set_goal(next.map(Goal::Search));
+                self.set_pursuit_goal(next.map(Goal::Search));
                 next.is_none()
             }
             (None, None) => false,
@@ -4752,6 +4778,76 @@ mod hop_tests {
 #[cfg(test)]
 mod navigation_body_tests {
     use super::*;
+
+    #[test]
+    fn brief_lost_sight_and_nearby_warnings_keep_the_pursuit_frontier() {
+        let feet = Vec3::ZERO;
+        let target = Vec3::new(10.0, 30.0, 0.0);
+        let mut brain = Brain::new(None, BotKind::default(), feet, 1, 0);
+        brain.set_goal(Some(Goal::Chase(target)));
+        brain.search = Some(Search::new(feet, target, 72.0));
+        for (tick, offset) in [(1, 0.0), (2, 0.4), (3, -0.4)] {
+            brain.memory = Some(Knowledge {
+                subject: 2,
+                at: target + Vec3::X * offset,
+                observed: tick,
+                expires: 1200,
+            });
+            brain.pursue(None, false, 1.0, feet, 0.5, tick);
+            assert!(
+                brain.search.is_some(),
+                "a nearby report must not discard an unfinished route"
+            );
+        }
+        let seen = Seen {
+            owner: 2,
+            real: target,
+            feet: target,
+            eye: target,
+            aim: target,
+            way: Way {
+                aim: target,
+                carry: None,
+                length: target.length(),
+            },
+        };
+        brain.pursue(Some(seen), false, 1.0, feet, 0.5, 4);
+        assert!(
+            brain.search.is_some(),
+            "regaining sight of the same destination keeps the frontier"
+        );
+        brain.search = None;
+        brain.plan = vec![Waypoint::walk(Vec3::X), Waypoint::walk(target)];
+        brain.pursue(None, false, 1.0, feet, 0.5, 4);
+        assert_eq!(
+            brain.plan.len(),
+            2,
+            "lost sight also keeps an existing route"
+        );
+        brain.pursue(Some(seen), false, 1.0, feet, 0.5, 4);
+        assert_eq!(brain.plan.len(), 2, "regained sight keeps that route");
+        for tick in 5..600 {
+            brain.pursue(None, false, 1.0, feet, 0.5, tick);
+            assert_eq!(
+                brain.plan.len(),
+                2,
+                "travel is not time spent searching the destination"
+            );
+        }
+        brain.plan.clear();
+        brain.search = Some(Search::new(feet, target, 72.0));
+        brain.memory = Some(Knowledge {
+            subject: 2,
+            at: target + Vec3::X * 12.0,
+            observed: 600,
+            expires: 1200,
+        });
+        brain.pursue(None, false, 1.0, feet, 0.5, 600);
+        assert!(
+            brain.search.is_none(),
+            "materially displaced evidence needs a new route"
+        );
+    }
 
     #[test]
     fn a_budget_partial_with_headway_does_not_reject_a_reachable_enemy() {

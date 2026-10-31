@@ -67,9 +67,10 @@ impl State {
     }
 
     /// The bot is still finding its route to the current destination: the
-    /// time it is given there starts once it has one (or none), so a
-    /// search that waits its turn for route finding is not over before it
-    /// takes a step.
+    /// time it is given there starts after computation and traversal, so a
+    /// search that waits its turn or climbs a long staircase is not over
+    /// before reaching its destination. The caller still enforces evidence
+    /// expiry and physical stall recovery while following the route.
     pub(super) fn routing(&mut self) {
         self.until = None;
     }
@@ -225,8 +226,8 @@ mod tests {
             s.routing();
             assert_eq!(s.next(e, feet, tick, false, 0.0), Some(Vec3::ZERO));
         }
-        // Then it has the whole bound to walk it, from the last tick it
-        // waited.
+        // If the caller stops reporting route work/traversal, the ordinary
+        // local timeout still runs from the last reported tick.
         assert_eq!(s.next(e, feet, 1200, false, 0.0), Some(Vec3::ZERO));
         assert_eq!(s.next(e, feet, 1199 + 359, false, 0.0), Some(Vec3::ZERO));
         assert_ne!(s.next(e, feet, 1199 + 360, false, 0.0), Some(Vec3::ZERO));
