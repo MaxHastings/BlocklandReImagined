@@ -38,7 +38,7 @@ No compilation, link, SDK check or full gate is claimed by the tool version chec
 | 6 | Physical zombie stacking. | Depends on supported living-body contacts, death/support revocation and ordinary movement; cube attack, moving/dead supports and observer agreement. Recheck indoor routes independently. |
 | 7 | Destroyed-brick light/emitter following and authoritative spawner lifecycle. | Reuse debris identity and frames; check fake kill, fragment multiplicity, fade/respawn, invisible-brick distinction and pickups. Independent drops retain their lifetime. |
 | 8 | Lit overlays, BadDream animated lighting, issue 415 behavior/control parity and subtle material detail across applicable world families. | Reuse native renderer/settings/sandbox. Original v21 reference and custom shader evidence remain separate. Small reviewed gallery before broad material rollout; measure relevant budgets. |
-| 9 | Combined acceptance and final release. | All agreed items accounted for, Maxwell's combined playtest accepted, required exact-source CI/history/protocol/extended release checks passed, actual three-platform archives independently verified. Publish immutable tag/assets and verify public digests. |
+| 9 | Combined acceptance and final release. | All agreed items accounted for; Maxwell tried preview.1 and waived further playtests. Remaining integrated automated/offscreen acceptance, exact-source CI/history/protocol/extended release checks and actual three-platform archive verification pass. Publish immutable tag/assets and verify public digests. |
 
 These are dependency boundaries, not a requirement to stop all progress while one
 consumer is waiting for evidence. Root may reorder independent corrections using
@@ -89,7 +89,9 @@ This is a release workload agreement, not a project-wide feature freeze.
 
 Routine engineering decisions, evidence-backed pivots and private preview builds
 proceed autonomously once approved. Return to Maxwell for a material acceptance
-scope change, an unresolved product choice or subjective preview acceptance.
+scope change or a consequential unresolved product choice. Maxwell subsequently
+waived further playtests after preview.1; use automated and offscreen checks for
+the remaining work and do not request more manual-preview acceptance.
 Do not ask repeatedly for implementation details already covered by the plan.
 
 Plan approval authorizes publication only after the detailed plan's combined

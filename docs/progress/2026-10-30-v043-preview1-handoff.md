@@ -1,7 +1,7 @@
 # v0.4.3 first private preview
 
-Delivered `E:/Downloads/BlocklandReImagined-v0.4.3-preview.1-windows`, launched by
-Maxwell through its `Launch.cmd`. No interactive session was launched by the
+Delivered `E:/Downloads/BlocklandReImagined-v0.4.3-preview.1-windows`; Maxwell can
+launch it through `Launch.cmd`. No interactive session was launched by the
 agent. The binary reports `v0.4.3-preview.1 (2cd609484)`. This increment contains
 the confirmed input-admission correction, bounded local movement diagnostics,
 bot spawn-frame correction and requested audio derivatives. Navigation, sessions,

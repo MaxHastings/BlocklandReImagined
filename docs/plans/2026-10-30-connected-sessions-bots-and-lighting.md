@@ -6,6 +6,14 @@ minigame, NPC, rendering, audio and open-issue work as one release scope, delive
 through several private previews. Implementation is active on
 `codex/v043-integration`; the broader alpha contract remains open.
 
+Acceptance update: after trying preview.1, Maxwell reported it "seems fine so
+far", requested continued autonomous execution and explicitly said no further
+playtests are needed. Future manual-preview/combined-playtest requirements below
+are superseded by that instruction. Complete the remaining integrated automated,
+headless, source-comparison and offscreen checks, and report their limits without
+claiming human acceptance of unplayed features. The intermittent local movement
+symptom remains under investigation; this short preview is not a long-run proof.
+
 Second review completed October 30 with additional source, installed-content,
 saved-brick, audio-level and recorded-input inspection. Maxwell confirmed:
 
@@ -807,7 +815,8 @@ Publication checklist:
 - [ ] Destroyed-brick lights/emitters follow their debris without duplicate or orphan sources; authoritative spawners suspend and restore correctly.
 - [ ] Requested swish/ambience gains and music gain preserve sliders, fades, headroom and accepted sound identity.
 - [ ] Issues 400, 412, 413, 414 and 415 have the agreed outcomes on the shipped source, with GLSL compatibility disposition explicit and new issues triaged.
-- [ ] Maxwell accepts the combined playable candidate. Recheck changed behavior if corrections follow that playtest.
+- [x] Maxwell tried preview.1 and reported it seems fine so far; he waived further playtests and requested continued autonomous execution. This is limited preview feedback, not human acceptance of future features.
+- [ ] The combined final candidate passes the remaining integrated automated and offscreen acceptance checks; validation limits are explicit.
 - [ ] Required CI, extended release gate and guarded history/protocol checks pass; pre-push hook remains enabled.
 - [ ] Windows x86-64, Apple-silicon macOS and Linux x86-64 packages are built and verified at the same source, including current macOS microphone permission packaging.
 - [ ] Actual extracted Windows package starts with isolated state and `--check`; all archives have correct source/version stamps, manifests and SHA256SUMS.

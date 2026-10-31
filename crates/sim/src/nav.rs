@@ -1681,7 +1681,8 @@ impl PartialOrd for Open {
 pub enum Found {
     /// A path to the goal.
     Path(Vec<Waypoint>),
-    /// No path to the goal; a path to the reachable node closest to it.
+    /// A path to the closest node reached so far. This can be a soft search
+    /// limit, not proof of disconnection; [`Search::resume`] retains a frontier.
     Partial(Vec<Waypoint>),
     /// Not even the start is walkable.
     Nowhere,
@@ -1778,7 +1779,7 @@ impl Search {
         self.limit = limit.min(MAX_EXPANSIONS);
         self
     }
-    /// Continue a budget-limited search whose partial route made no headway.
+    /// Continue a budget-limited search from its retained frontier.
     /// Keep its frontier rather than rediscovering the same dead end. Ordinary
     /// per-tick work limits still apply, with the navigation cache's existing
     /// node bound as a hard ceiling for this exceptional detour investigation.
@@ -2153,7 +2154,7 @@ impl Search {
                 return Some(self.finish(ground, body, true));
             }
             if self.expanded >= self.limit {
-                // This node has not been expanded. A no-headway consumer may
+                // This node has not been expanded. A continuing consumer may
                 // resume from exactly here on its next bounded planning turn.
                 self.pending = Some(node);
                 return Some(self.finish(ground, body, false));

@@ -111,6 +111,8 @@ pub struct BotThought {
     pub next: Option<[f32; 3]>,
     pub path_steps: usize,
     pub searching: bool,
+    /// Nodes retained by the current route search (host diagnostic only).
+    pub search_nodes: usize,
     /// Evidence-based search progress; never an unseen actor position.
     pub search_phase: &'static str,
     pub objective: Option<BrickId>,
@@ -2185,12 +2187,17 @@ impl Session {
                 let brain = brains.get_mut(&bot).unwrap();
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
                     // A lookahead limit is not proof that the way ends here.
-                    // Where even its best partial endpoint makes no headway,
-                    // retain the existing search frontier through the detour
-                    // instead of discarding it and blacklisting the objective.
+                    // A pedestrian pursuing an enemy must also retain the
+                    // frontier when its early best endpoint makes horizontal
+                    // headway: the real route may climb a distant staircase.
+                    // A soft planning limit does not prove that target is out
+                    // of reach. Existing per-tick and hard node bounds remain.
                     let no_headway = matches!(&found, Found::Partial(path)
                         if path.last().is_none_or(|end| feet.distance(end.feet) <= crate::nav::CELL));
-                    if no_headway && brain.search.as_mut().unwrap().resume() {
+                    let pursuit = !body.conservative
+                        && matches!(goal, Goal::Chase(_) | Goal::Search(_))
+                        && matches!(found, Found::Partial(_));
+                    if (no_headway || pursuit) && brain.search.as_mut().unwrap().resume() {
                         return None;
                     }
                     let explored = brain.search.as_ref().map_or(0, Search::explored);
@@ -4745,6 +4752,57 @@ mod hop_tests {
 #[cfg(test)]
 mod navigation_body_tests {
     use super::*;
+
+    #[test]
+    fn a_budget_partial_with_headway_does_not_reject_a_reachable_enemy() {
+        use rapier3d::prelude::ColliderBuilder;
+        let from = Vec3::new(-2.0, 0.05, 0.0);
+        let to = Vec3::new(4.0, 0.05, 0.0);
+        let simulation = crate::simulation::Simulation::new(
+            bri_world::World::new("Enemy detour".into(), "fixture".into(), vec![[1.0; 4]]),
+            crate::testing::definitions(),
+            vec![
+                ColliderBuilder::cuboid(12.0, 0.5, 12.0).translation(Vec3::new(0.0, -0.5, 0.0)),
+                ColliderBuilder::cuboid(0.2, 5.0, 8.0).translation(Vec3::new(0.0, 5.0, 0.0)),
+            ],
+        )
+        .unwrap();
+        let mut session = Session::new(simulation);
+        let bot = session.join("Searcher".into(), from, true).unwrap();
+        let mut brain = Brain::new(None, BotKind::default(), from, bot, 0);
+        brain.goal = Some(Goal::Chase(to));
+        brain.chase_feet = Some(to);
+        brain.reach = (1.0, 2.0);
+        // Force the same soft-limit boundary cheaply. The best early node
+        // makes horizontal headway toward the wall but is not the real detour.
+        brain.search = Some(Search::new(from, to, 24.0).limited(64));
+        session.bots.brains.insert(bot, brain);
+        let body = Body::of(session.peers[&bot].player.tuning(), 1.0);
+        let state = session.peers[&bot].player.state().clone();
+        let mut found = false;
+        for tick in 1..=600 {
+            for (_, nav) in &mut session.bots.navs {
+                nav.begin_tick();
+            }
+            session.bot_path(bot, from, &body, Default::default(), None, &state, tick);
+            let brain = &session.bots.brains[&bot];
+            assert!(
+                brain.out_of_reach.is_none(),
+                "a time-sliced planning limit is not evidence that the enemy cannot be reached"
+            );
+            if brain.search.is_none() {
+                found = brain
+                    .plan
+                    .last()
+                    .is_some_and(|way| way.feet.distance(to) < 2.0);
+                break;
+            }
+        }
+        assert!(
+            found,
+            "the retained frontier must find the walk around the wall"
+        );
+    }
 
     #[test]
     fn replanned_underfoot_waypoints_cannot_erase_a_stationary_walk() {
