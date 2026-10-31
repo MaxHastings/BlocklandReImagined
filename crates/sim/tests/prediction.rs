@@ -146,6 +146,59 @@ fn prediction_bumps_into_other_players_like_the_host() {
 }
 
 #[test]
+fn prediction_stops_colliding_with_a_player_as_soon_as_the_host_kills_them() {
+    use bri_sim::session::Command;
+    let mut session = server();
+    let a = session
+        .join("a".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let b = session
+        .join("b".into(), Vec3::new(0.0, 0.05, -3.0), false)
+        .unwrap();
+    let state = |s: &Session, owner| {
+        s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap()
+            .0
+    };
+    let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
+    let mut prediction = Predictor::new(mirror, state(&session, a), Default::default()).unwrap();
+    let walk = MoveInput {
+        forward: 1.0,
+        ..Default::default()
+    };
+    let mut worst = 0.0_f32;
+    for tick in 1..=240_u64 {
+        if tick == 100 {
+            assert!(
+                state(&session, a).feet[2] > -3.0,
+                "living player blocked the walker"
+            );
+            session.command(b, 1, Command::Suicide).unwrap();
+            assert!(!session.is_alive(b));
+        }
+        if session.is_alive(b) {
+            prediction.set_others([&state(&session, b)]).unwrap();
+        } else {
+            prediction.set_others([]).unwrap();
+        }
+        let (sequence, _) = prediction.step(walk).unwrap();
+        session.movement(a, sequence, walk).unwrap();
+        session.step().unwrap();
+        worst = worst
+            .max(Vec3::from(state(&session, a).feet).distance(Vec3::from(prediction.state().feet)));
+    }
+    let host = state(&session, a);
+    assert!(
+        host.feet[2] < -4.5,
+        "host must walk past the corpse: {:?}",
+        host.feet
+    );
+    assert!(worst < 0.05, "prediction disagreed with host by {worst}");
+}
+
+#[test]
 fn server_input_queue_ignores_duplicates_and_bounds_rate() {
     let mut session = server();
     let owner = session

@@ -191,6 +191,21 @@ fn a_living_body_supports_another_until_it_becomes_a_corpse() {
         Some((1_u128 << 64) | 1),
         "a corpse cannot remain the support"
     );
+    // A new life restores ordinary collision on the same motor collider.
+    lower.set_corpse(&mut world, false);
+    upper
+        .teleport(&mut world, Vec3::new(0., height + 0.6, 0.), 0.0)
+        .unwrap();
+    for _ in 0..240 {
+        lower.step(&mut world, MoveInput::default()).unwrap();
+        upper.step(&mut world, MoveInput::default()).unwrap();
+    }
+    assert!(
+        upper.state().grounded && upper.state().feet[1] > height - 0.1,
+        "a respawned body must support another again: {:?}",
+        upper.state()
+    );
+    assert_eq!(upper.support_tag(), Some((1_u128 << 64) | 1));
 }
 
 #[test]
