@@ -11,6 +11,21 @@ import generated_addons
 
 
 class Palette(unittest.TestCase):
+    def test_released_baseline_is_preserved_and_a_changed_cache_is_refused(self):
+        # Identity contract only; the actual four OGGs get decoded/native checks.
+        with tempfile.TemporaryDirectory() as folder:
+            cache = Path(folder)
+            original = b'pinned released loop'
+            (cache/'v042-fridge-loop.ogg').write_bytes(original)
+            row = {'released_loop': {'input': 'v042-fridge-loop.ogg',
+                                    'input_sha256': build_map_ambience.sha(original)}}
+            raw, processing = build_map_ambience.released_clip(row, cache)
+            self.assertEqual(raw, original)
+            self.assertFalse(processing['lossy_reencoding'])
+            (cache/'v042-fridge-loop.ogg').write_bytes(b'changed cache')
+            with self.assertRaisesRegex(ValueError, 'differs from pinned'):
+                build_map_ambience.released_clip(row, cache)
+
     def test_default_bundle_carries_shared_media_and_required_server_companion(self):
         # Synthetic file-integrity fixture, not source recording fidelity.
         with tempfile.TemporaryDirectory() as folder:

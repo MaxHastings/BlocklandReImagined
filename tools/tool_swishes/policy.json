@@ -9,6 +9,10 @@
     {
       "image": "v20.image.wrenchimage",
       "state": "Fire"
+    },
+    {
+      "image": "v20.image.swordimage",
+      "state": "Fire"
     }
   ],
   "volume": 1.0,

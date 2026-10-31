@@ -606,6 +606,12 @@ starting points, with evidence-backed final mix adjustments permitted. Speech,
 important impacts and combat cues must stay readable against the ambience; exact
 isolated gain arithmetic does not establish acceptance of the combined experience.
 
+During execution Maxwell confirmed the original ambience WAV exports are no
+longer available and explicitly authorized using the v0.4.2 OGGs. The preserved
+release clips are now pinned immutable generation inputs. Keep their derived
+identity separate from the historical original-recording approval lineage, retain
+the existing loop seams, and regenerate gain edits from that fixed baseline.
+
 ## Other GitHub issues
 
 The repository-wide open-issue query initially returned 400, 412 and 413. Maxwell

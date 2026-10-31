@@ -55,7 +55,7 @@ def sound_definition(row):
     return sound
 
 
-def encode_bed(raw):
+def encode_bed(raw, quality=6):
     import numpy as np
     import soundfile as sf
     pcm,rate=sf.read(io.BytesIO(raw),always_2d=True,dtype='float32')
@@ -65,14 +65,14 @@ def encode_bed(raw):
         executable=imageio_ffmpeg.get_ffmpeg_exe()
     encoded=subprocess.run([executable,'-hide_banner','-loglevel','error','-fflags','+bitexact',
                             '-i','pipe:0','-map_metadata','-1','-vn','-sn','-dn','-c:a','libvorbis',
-                            '-q:a','6','-flags:a','+bitexact','-threads','1','-fflags','+bitexact','-f','ogg','pipe:1'],
+                            '-q:a',str(quality),'-flags:a','+bitexact','-threads','1','-fflags','+bitexact','-f','ogg','pipe:1'],
                            input=raw,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout
     decoded,decoded_rate=sf.read(io.BytesIO(encoded),always_2d=True,dtype='float32')
     if decoded_rate!=rate or decoded.shape!=pcm.shape or not np.isfinite(decoded).all() or np.abs(decoded).max()>=1:
         raise ValueError('Vorbis encoding changed duration/channels/rate or produced invalid PCM')
     if len(encoded)>8*1024*1024:
         raise ValueError('bed still exceeds the existing8MiB track budget')
-    return encoded,{'codec':'Ogg Vorbis q6','encoder_sha256':sha(Path(executable).read_bytes()),
+    return encoded,{'codec':f'Ogg Vorbis q{quality}','encoder_sha256':sha(Path(executable).read_bytes()),
                     'audition_pcm_sha256':sha(raw),'rate':rate,'frames':len(pcm),
                     'channels':pcm.shape[1],'bytes':len(encoded),'decoded_peak':float(np.abs(decoded).max()),
                     'decoded_rms':float(np.sqrt(np.mean(decoded*decoded))),
@@ -105,9 +105,34 @@ def selection(repo=REPO):
                            environment='interior' if r['key']=='indoor-base' else 'exterior') for r in user}
     selected['rain']=dict(catalog['rain'],kind='bed',prepared_key='rain',source_id='freesound-preview:rain')
     selected['fridge-loop']=dict(masters['fridge-master'],key='fridge-loop',kind='local',source_id='original-wav:fridge-master')
+    released = json.loads((here / 'user-bases.json').read_text())['released_loops']
+    if released['schema_version'] != 1 or set(released['clips']) != set(selected):
+        raise ValueError('Released ambience baseline inventory differs from selected palette')
+    for key, row in selected.items():
+        row['released_loop'] = released['clips'][key]
     if any(len(('ma/'+key).encode())>32 for key in selected):
         raise ValueError('ambient operation key exceeds the existing32-byte limit')
     return palette, selected
+
+
+def released_clip(row, cache):
+    baseline = row['released_loop']
+    name = baseline['input']
+    if Path(name).name != name:
+        raise ValueError('Released ambience input must be a cache filename')
+    original = (cache / name).read_bytes()
+    if sha(original) != baseline['input_sha256']:
+        raise ValueError('Released ambience baseline differs from pinned v0.4.2 bytes')
+    delta = row['mix_gain_db'] - baseline['baked_gain_db'] if row.get('user_edit') else 0.0
+    processing = dict(method='preserved released loop', source_sha256=sha(original),
+                      gain_db_relative_release=delta, repeated_seam_edit=False,
+                      lossy_reencoding=False)
+    if row.get('user_edit'):
+        raw, mix = user_mix_gain(original, delta)
+        processing['mix'] = dict(mix, authority=row['mix_gain_authority'])
+        processing['lossy_reencoding'] = True
+        return raw, processing
+    return original, processing
 
 
 def policy(palette):
@@ -132,7 +157,7 @@ def build(cache, output, content, download=False, audition_only=False):
         raise ValueError('refusing to overwrite a folder not owned by this generator')
     with tempfile.TemporaryDirectory(prefix='bri-ambience-') as folder:
         staged = Path(folder)
-        needed_beds={r['prepared_key'] for r in selected.values() if r['kind']=='bed' and not r.get('user_edit')}
+        needed_beds={r['prepared_key'] for r in selected.values() if r['kind']=='bed' and not r.get('user_edit') and not r.get('released_loop')}
         bed_rows = beds.build(cache, staged, content, download, selected_keys=needed_beds)
         detail_rows = []
         bed_rows = {r['key']: r for r in bed_rows}
@@ -148,7 +173,9 @@ def build(cache, output, content, download=False, audition_only=False):
         for key, row in sorted(selected.items()):
             is_bed = row['kind'] in {'bed','local'}
             source = staged / ('loops' if is_bed else 'details') / (row.get('prepared_key',key)+'.wav')
-            if row.get('user_edit'):
+            if row.get('released_loop'):
+                raw, processing = released_clip(row, cache)
+            elif row.get('user_edit'):
                 original=(cache/row['input']).read_bytes()
                 if sha(original)!=row['input_sha256']:
                     raise ValueError('user-edited base differs from its explicitly selected file')
@@ -172,7 +199,11 @@ def build(cache, output, content, download=False, audition_only=False):
                 raw = source.read_bytes()
                 processing = bed_rows[row.get('prepared_key',key)]['processing'] if is_bed else detail_rows[key]
             encoding=None
-            if is_bed:
+            if row.get('released_loop') and row.get('user_edit'):
+                # One high-quality encode from the immutable released baseline.
+                # Lossless stereo PCM exceeds the existing 8 MiB track budget.
+                raw,encoding=encode_bed(raw, quality=10)
+            elif is_bed and not row.get('released_loop'):
                 raw,encoding=encode_bed(raw)
             file=clip_file(row)
             (clips_dir/file).write_bytes(raw)
@@ -244,6 +275,8 @@ def problems(repo, directory):
             pinned = selected[r['key']]
             if r['input_sha256'] != pinned['input_sha256'] or r['source_id'] != pinned['source_id']:
                 out.append(r['key']+': recording differs from pinned source')
+            if r.get('released_loop') != pinned.get('released_loop'):
+                out.append(r['key']+': released baseline identity differs')
             out.extend(source_problems(registry,pinned['input_sha256']))
             if pinned.get('user_edit') and (r.get('mix_gain_db')!=pinned['mix_gain_db'] or r.get('mix_gain_authority')!=pinned['mix_gain_authority']):
                 out.append(r['key']+': packaged mix gain differs from direct user authority')

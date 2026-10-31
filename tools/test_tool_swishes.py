@@ -38,12 +38,14 @@ class ToolSwishes(unittest.TestCase):
                                                      dict(name='Fire', sound='', script='onFire'),
                                                      dict(name='StopFire', sound='')],
                                             scripts={'onfire': {'on_fire': 'unchanged'}})
-                                for image in ['v20.image.hammerimage', 'v20.image.wrenchimage']})
+                                for image in ['v20.image.hammerimage', 'v20.image.wrenchimage',
+                                              'v20.image.swordimage']})
+        original['images']['v20.image.swordimage']['states'][0]['sound'] = 'swordDrawSound'
         original['images']['other_tool'] = dict(states=[dict(name='Fire', sound='source_hit')])
         sw.write_json(weapons / 'weapons.json', original)
         return prepared, weapons, sources, original
 
-    def test_augmentation_preserves_every_original_field_except_two_silent_fire_states(self):
+    def test_augmentation_preserves_original_fields_except_selected_silent_fire_states(self):
         with tempfile.TemporaryDirectory() as directory:
             prepared, weapons, sources, original = self.fixture(Path(directory))
             with patch.object(sw, 'selected_sources', return_value=sources):

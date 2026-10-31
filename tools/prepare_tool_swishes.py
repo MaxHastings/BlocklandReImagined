@@ -2,7 +2,7 @@
 """Prepare the three heard/selected tool swings and augment native weapons data.
 
 The read-only v20 conversion runs first. This explicit native policy adds sound
-to two Fire states; contact policy, timing, animations and runtime stay intact.
+to selected Fire states; contact policy, timing, animations and runtime stay intact.
 Original/downloaded/generated recordings never enter Git.
 """
 import argparse
@@ -80,7 +80,7 @@ def source_bytes(sources, inputs, download):
 
 
 def process(source, raw_wav, ffmpeg):
-    # Identical command and processing to the A/B/C auditions Maxwell heard.
+    # Original accepted A/B/C processing, with the explicitly pinned level recipe.
     result = subprocess.run([ffmpeg, '-v', 'error', '-i', 'pipe:0', '-af', source['filter'],
                              '-ac', '1', '-ar', str(RATE), '-f', 'f32le', '-'],
                             input=raw_wav, capture_output=True, check=True)
@@ -109,7 +109,7 @@ def process(source, raw_wav, ffmpeg):
         wav.writeframes(pcm.tobytes())
     data = output.getvalue()
     if source.get('processed_sha256') and digest(data) != source['processed_sha256']:
-        raise ValueError(f"Processed swish differs from the heard version: {source['id']}")
+        raise ValueError(f"Processed swish differs from the pinned waveform: {source['id']}")
     return data, dict(id=source['id'], file=source['id'] + '.wav', sha256=digest(data),
                       bytes=len(data), frames=len(samples), peak=peak_out, rms=rms_out,
                       gain_db=20 * math.log10(gain), source_sha256=source['sha256'])
@@ -216,7 +216,14 @@ def main():
     parser.add_argument('--prepared', type=Path)
     parser.add_argument('--inputs', type=Path, default=REPO / 'content/_regeneration/tool-swish-inputs')
     parser.add_argument('--download', action='store_true')
-    parser.add_argument('--ffmpeg', default=shutil.which('ffmpeg'))
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        try:
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except ImportError:
+            pass  # Preparation reports the supported installation command.
+    parser.add_argument('--ffmpeg', default=ffmpeg)
     args = parser.parse_args()
     if args.verify:
         verify(args.verify)

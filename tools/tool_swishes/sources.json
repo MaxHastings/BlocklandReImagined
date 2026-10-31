@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Only approved hammer/wrench swing Foley; broad sound audit canceled.",
+  "scope": "Approved hammer/wrench/sword swing Foley, +6 dB relative to v0.4.2; source contact and sword draw sounds retained.",
   "sources": [
     {
       "id": "tool-swish-a",
@@ -17,11 +17,14 @@
       "acceptance": "2026-10-29 Maxwell: yeah the tool swish is good; asks to use all three as variation",
       "audition": "tool-swish-A.wav",
       "kind": "one-shot",
-      "peak_dbfs": -12,
-      "rms_dbfs": -24,
+      "peak_dbfs": -6,
+      "rms_dbfs": -18,
       "filter": "highpass=f=120",
-      "processed_sha256": "fe4fb0ac5fac5746bde80ccf4da2ad9b8acdcda3274e62b34a8f66c771b1743e",
-      "audition_sha256": "839ef8bf1aefeecc76dd4e2cbb4177611603522ba0c433b61144c9bd16e7a79c"
+      "audition_sha256": "839ef8bf1aefeecc76dd4e2cbb4177611603522ba0c433b61144c9bd16e7a79c",
+      "v042_processed_sha256": "fe4fb0ac5fac5746bde80ccf4da2ad9b8acdcda3274e62b34a8f66c771b1743e",
+      "processed_sha256": "83646566f093102741d07529d29469e6385e1c37663ea066398ef4edb193b96d",
+      "gain_db_relative_v042": 6.0,
+      "level_authority": "2026-10-30 Maxwell: raise hammer/wrench swish by about +6 dB; also sword swings. Original accepted variants, filtering and timing retained."
     },
     {
       "id": "tool-swish-b",
@@ -38,11 +41,14 @@
       "acceptance": "2026-10-29 Maxwell: yeah the tool swish is good; asks to use all three as variation",
       "audition": "tool-swish-B.wav",
       "kind": "one-shot",
-      "peak_dbfs": -12,
-      "rms_dbfs": -24,
+      "peak_dbfs": -6,
+      "rms_dbfs": -18,
       "filter": "highpass=f=120",
-      "processed_sha256": "20614a28d3a7540cd59524bc28c41aad97f6c1db70d7eb097a720b6671b07344",
-      "audition_sha256": "ffbff7645cec9b6ceb80f89cbbeadf0ecd99450855e0f5060c070810d66a75f2"
+      "audition_sha256": "ffbff7645cec9b6ceb80f89cbbeadf0ecd99450855e0f5060c070810d66a75f2",
+      "v042_processed_sha256": "20614a28d3a7540cd59524bc28c41aad97f6c1db70d7eb097a720b6671b07344",
+      "processed_sha256": "fed25e616f9e122d53eee20ac9bc88ddbe7b59cb1876159e73195f267ee240f3",
+      "gain_db_relative_v042": 6.0,
+      "level_authority": "2026-10-30 Maxwell: raise hammer/wrench swish by about +6 dB; also sword swings. Original accepted variants, filtering and timing retained."
     },
     {
       "id": "tool-swish-c",
@@ -59,11 +65,14 @@
       "acceptance": "2026-10-29 Maxwell: yeah the tool swish is good; asks to use all three as variation",
       "audition": "tool-swish-C.wav",
       "kind": "one-shot",
-      "peak_dbfs": -12,
-      "rms_dbfs": -24,
+      "peak_dbfs": -6,
+      "rms_dbfs": -18,
       "filter": "highpass=f=120",
-      "processed_sha256": "26fe8f653e55f57a3bd400b517a5dd054160d1e5606e96ebceaa698ac151d8be",
-      "audition_sha256": "f6b4b96eabd35fd866207fd8fb6119ecab964b090fb0013de98e397a4222c52a"
+      "audition_sha256": "f6b4b96eabd35fd866207fd8fb6119ecab964b090fb0013de98e397a4222c52a",
+      "v042_processed_sha256": "26fe8f653e55f57a3bd400b517a5dd054160d1e5606e96ebceaa698ac151d8be",
+      "processed_sha256": "cf96dd7daf81ba0ce3d327ce9d26acaec0b895992a61d8c80ae33d88c6f99552",
+      "gain_db_relative_v042": 6.0,
+      "level_authority": "2026-10-30 Maxwell: raise hammer/wrench swish by about +6 dB; also sword swings. Original accepted variants, filtering and timing retained."
     }
   ]
 }
