@@ -256,6 +256,33 @@ fn idle_seeking_prefers_the_nearest_eligible_player() {
         "bot should head toward nearer player: {start:?} -> {end:?}; {:?}",
         g.s.bot_why()
     );
+    for tick in 1..=240 {
+        g.s.movement(
+            player,
+            tick,
+            MoveInput {
+                right: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        g.steps(1);
+    }
+    let following = g.at();
+    assert!(
+        following.x > end.x + 2.0,
+        "bot should follow a moving nearest player: {end:?} -> {following:?}; {:?}",
+        g.s.bot_why()
+    );
+    g.s.command(player, 2, Command::Suicide).unwrap();
+    assert!(!g.s.is_alive(player));
+    g.steps(600);
+    let redirected = g.at();
+    assert!(
+        redirected.z > following.z + 3.0,
+        "bot must seek the other live player after the nearest dies: {following:?} -> {redirected:?}; {:?}",
+        g.s.bot_why()
+    );
 }
 
 #[test]

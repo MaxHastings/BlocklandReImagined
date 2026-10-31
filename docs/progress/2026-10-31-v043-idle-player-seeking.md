@@ -26,8 +26,15 @@ formatting, `cargo clippy --locked --profile playtest -p bri-events -p bri-sim
 passed. The fixture reported its normal missing-hand warnings; an earlier run
 also produced a near-target stall warning before adding the arrival stop.
 
-This is a first scoped implementation, not full navigation acceptance: moving
-targets, death/team changes, competing objectives, saved spawn rows and network
+Follow-up: the nearest-player fixture now moves that player with ordinary inputs,
+checks the bot follows, kills that player and checks the bot redirects toward
+the remaining live game member. All 11 `cargo test --locked --profile playtest
+-p bri-chaos --test bot_builder` cases and scoped `bri-chaos --test bot_builder`
+Clippy passed. This covers that death and moving-target scenario, not every
+reconnection or team transition.
+
+This is a first scoped implementation, not full navigation acceptance: team
+changes, competing objectives, saved spawn rows and network
 observers still need direct checks. The earlier selected-specific-player design
 remains a separate unimplemented idea, not a claim made for this option. Large
 bot-count cost also needs measurement; the opt-in selection scans live peers.
