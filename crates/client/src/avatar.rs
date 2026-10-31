@@ -737,8 +737,8 @@ impl AvatarAssets {
             // The horse lays its texture over its chest colour. Any other
             // body draws as a held item does (`items::native_shape_scene`):
             // a texture with a translucent texel over its colour, one with
-            // none the texture times the world's light, untinted. As an
-            // overlay an opaque texture would ignore the light entirely.
+            // none the texture times the world's light, untinted. The overlay
+            // path uses texture alpha as pigment coverage over the body colour.
             let overlay = model == HORSE_SHAPE
                 || (crate::items::translucent_texel(&data.images[image])
                     && source.blend == "opaque");

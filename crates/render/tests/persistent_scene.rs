@@ -1551,6 +1551,61 @@ fn ordinary_overlay_receives_darkness_and_local_light_but_unlit_stays_bright() -
 }
 
 #[test]
+fn translucent_vertex_lit_material_does_not_emit_and_preserves_blending() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut backdrop = triangle([0.0, 0.0, 1.0, 1.0], 0.2, AlphaMode::Opaque);
+    backdrop.materials[0].kind = MaterialKind::Unlit;
+    let backdrop = renderer.upload(&gpu.device, &gpu.queue, &backdrop)?;
+    let mut data = triangle([1.0, 0.0, 0.0, 0.5], 0.5, AlphaMode::Blend);
+    data.materials[0] = Material::vertex_lit("translucent lit", 0);
+    data.materials[0].alpha = AlphaMode::Blend;
+    let lit = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    data.materials[0].kind = MaterialKind::Unlit;
+    let unlit = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    let center = (32 * 64 + 32) * 4;
+    for modern in [false, true] {
+        let mut camera = Camera {
+            ambient: [0.0; 4],
+            sun_color: [0.0; 4],
+            ..Default::default()
+        };
+        if modern {
+            camera.ambient[3] = 1.0;
+            camera.set_sky_ambient(true);
+        }
+        renderer.update_lights(&gpu.queue, &[])?;
+        let dark = gpu.frame(&mut renderer, &[&backdrop, &lit], &camera, (64, 64))?;
+        let glowing = gpu.frame(&mut renderer, &[&backdrop, &unlit], &camera, (64, 64))?;
+        assert!(
+            dark[center] <= 2 && dark[center + 2] > 100 && dark[center + 2] < 240,
+            "dark translucent surface must blend over background: {:?}",
+            &dark[center..center + 4]
+        );
+        assert!(
+            glowing[center] > 100 && glowing[center + 2] > 100,
+            "unlit control must retain its color and blend: {:?}",
+            &glowing[center..center + 4]
+        );
+        renderer.update_lights(
+            &gpu.queue,
+            &[PointLight {
+                position_radius: [0., 0., 1.5, 4.],
+                color: [1., 1., 1., 0.],
+                ..Default::default()
+            }],
+        )?;
+        let bright = gpu.frame(&mut renderer, &[&backdrop, &lit], &camera, (64, 64))?;
+        assert!(
+            bright[center] > dark[center] + 30 && bright[center + 2] > 100,
+            "local light must illuminate without losing transparency: {:?}",
+            &bright[center..center + 4]
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
     // Depth is reversed (`DEPTH_CLEAR`): nearer is larger.
     let gpu = Gpu::turn()?;

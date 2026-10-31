@@ -19,3 +19,14 @@ These are offscreen material checks, not a full visual or source-reference
 comparison. Other translucent material families, projected surfaces, glow
 effects, shadow combinations and the BadDream fixture still need their own
 investigation and evidence before the lighting release requirement is complete.
+
+## Follow-up: blended surface control
+
+`cargo test --locked --profile playtest -p bri-render --test persistent_scene translucent_vertex_lit_material_does_not_emit_and_preserves_blending -- --nocapture` passed. A half-transparent vertex-lit foreground over an unlit background remains dark without light, retains its background blend, and brightens under a point light in both renderer paths; an explicitly unlit foreground remains visible. This validates that material path only, not every imported blended asset. `cargo clippy --locked --profile playtest -p bri-render --lib --test persistent_scene -- -D warnings` also passed.
+
+The separate projected-surface pass is shared by map/game decals and general
+projector effects including additive and modulated blends. It composites after
+the scene without receiving scene lighting. Applying a blanket lighting rule to
+that pass would also change intentional effects; its receiver lighting and
+blend semantics need a separate design and final-pixel fixtures. It is not
+covered by the brick/avatar overlay correction above.
