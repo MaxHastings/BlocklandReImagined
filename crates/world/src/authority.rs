@@ -308,12 +308,12 @@ impl Authority {
             Edit::Color(c) => next.color = c,
             Edit::ColorEffect(c) => next.color_effect = c,
             Edit::Print(p) => next.print = p,
-            Edit::Name(n) => next.name = n,
+            Edit::Name(n) => next.name = n.map(String::into_boxed_str),
             Edit::Events(e) => next.events = e,
             Edit::ShapeEffect(effect) => next.shape_effect = effect,
             Edit::Properties(properties) => {
                 next.rule_region = properties.rule_region.map(Box::new);
-                next.name = properties.name;
+                next.name = properties.name.map(String::into_boxed_str);
                 next.light = properties.light.map(|id| {
                     Box::new(Light {
                         asset: ContentRef::Resolved(id),

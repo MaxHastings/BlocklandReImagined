@@ -88,7 +88,7 @@ fn session(flags: usize) -> Result<(Session, u64, Vec<u64>)> {
             (at.z / 0.5).round() * 0.5 + 0.25,
         ];
         let mut b = Brick::new(ContentRef::Resolved(fixture::PLATE.into()), at, owner);
-        b.name = Some(format!("authoredLatch{n}"));
+        b.name = Some(format!("authoredLatch{n}").into());
         b.events.push(row(
             "setVariable",
             vec![Value::Int(1), Value::Text(key.clone()), Value::Int(1)],

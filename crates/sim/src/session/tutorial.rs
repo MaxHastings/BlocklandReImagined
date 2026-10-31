@@ -1389,7 +1389,13 @@ impl Session {
             .is_some_and(|a| a.inventory.iter().flatten().any(|i| i == item))
     }
     fn brick_name(&self, brick: BrickId) -> Option<String> {
-        self.simulation.state().bricks.get(&brick)?.name.clone()
+        self.simulation
+            .state()
+            .bricks
+            .get(&brick)?
+            .name
+            .as_deref()
+            .map(str::to_owned)
     }
     fn named_brick(&self, name: &str) -> Option<BrickId> {
         self.simulation

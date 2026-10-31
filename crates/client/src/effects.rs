@@ -10,6 +10,7 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Clone)]
 struct Attachment {
     asset: String,
+    parent: BrickId,
     transform: SourceTransform,
     options: SourceOptions,
 }
@@ -308,10 +309,17 @@ impl WorldEffects {
         debris: &crate::brick_debris::BrickDebris,
         visible: impl FnMut(BrickId, Vec3, Vec3) -> Result<bool>,
     ) -> Result<()> {
+        let parents: std::collections::BTreeSet<_> = self
+            .attachments
+            .iter()
+            .filter(|(key, a)| key.0 != a.parent)
+            .map(|(_, a)| a.parent)
+            .collect();
         let frames = debris.attachment_frames(|id| {
             [(id, false), (id, true)]
                 .iter()
                 .any(|key| self.attachments.contains_key(key) || self.detached.contains_key(key))
+                || parents.contains(&id)
         });
         self.advance_frames(dt, eye, wind, &frames, |id| debris.is_dead(id), visible)
     }
@@ -326,10 +334,13 @@ impl WorldEffects {
         mut visible: impl FnMut(BrickId, Vec3, Vec3) -> Result<bool>,
     ) -> Result<()> {
         self.detached.retain(|key, d| {
-            self.source
-                .as_ref()
-                .is_some_and(|s| !s.bricks.contains_key(&key.0))
-                && frames.get(&key.0).is_some_and(|f| f.cue == d.cue)
+            // Death and world-delta delivery are independent. Keep metadata
+            // across their interval, but never across actual restoration.
+            self.source.as_ref().is_some_and(|s| {
+                s.bricks
+                    .get(&key.0)
+                    .is_none_or(|b| b.damage_hidden || dead(key.0))
+            }) && frames.get(&key.0).is_some_and(|f| f.cue == d.cue)
         });
         let moving = |attachment: &Attachment, frame: &crate::brick_debris::AttachmentFrame| {
             let mut transform = attachment.transform;
@@ -344,13 +355,32 @@ impl WorldEffects {
             .filter_map(|(&key, attachment)| {
                 let brick = self.source.as_ref()?.bricks.get(&key.0)?;
                 let transform = if brick.damage_hidden || dead(key.0) {
-                    moving(attachment, frames.get(&key.0)?)
+                    if let Some(frame) = frames
+                        .get(&key.0)
+                        .filter(|f| self.detached.get(&key).is_some_and(|d| d.cue == f.cue))
+                    {
+                        moving(attachment, frame)
+                    } else if attachment.parent != key.0
+                        && self
+                            .source
+                            .as_ref()?
+                            .bricks
+                            .get(&attachment.parent)
+                            .is_some_and(|p| !p.damage_hidden && !dead(attachment.parent))
+                    {
+                        attachment.transform
+                    } else {
+                        moving(attachment, frames.get(&attachment.parent)?)
+                    }
                 } else {
                     attachment.transform
                 };
                 Some((key, attachment, transform))
             })
             .chain(self.detached.iter().filter_map(|(&key, d)| {
+                if self.attachments.contains_key(&key) {
+                    return None;
+                }
                 Some((
                     key,
                     &d.attachment,
@@ -516,6 +546,7 @@ fn attach(
                 (id, false),
                 Attachment {
                     asset: asset.clone(),
+                    parent: brick.damage_attachment.as_deref().copied().unwrap_or(id),
                     transform,
                     options,
                 },
@@ -536,6 +567,7 @@ fn attach(
                 (id, true),
                 Attachment {
                     asset: asset.clone(),
+                    parent: brick.damage_attachment.as_deref().copied().unwrap_or(id),
                     transform: SourceTransform {
                         position: center,
                         ..Default::default()
@@ -556,6 +588,113 @@ fn attach(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn partitioned_effect_uses_declared_carrier_and_keeps_metadata_across_removal_delivery()
+    -> Result<()> {
+        use crate::brick_debris::{
+            BrickDebris,
+            tests::{building, kill},
+        };
+        let (mut building, mut replica) = building(&[(1, [0.0, 0.3, 0.0]), (9, [0.5, 0.3, 0.0])]);
+        let meshes = BTreeMap::from([(
+            "brick".into(),
+            building.definition("brick").unwrap().mesh.clone(),
+        )]);
+        let source = replica.bricks.get_mut(&1).unwrap();
+        source.light = Some(Box::new(bri_world::Light {
+            asset: ContentRef::Resolved("light".into()),
+            enabled: true,
+        }));
+        source.emitter = Some(Box::new(bri_world::Emitter {
+            asset: Some(ContentRef::Resolved("emitter".into())),
+            direction: 2,
+        }));
+        let original = source.clone();
+        source.damage_hidden = true;
+        source.visible = false;
+        source.colliding = false;
+        source.raycast = false;
+        source.damage_attachment = Some(Box::new(9));
+        building.sync_world(&replica)?;
+        let pack = bri_fx_runtime::testing::pack(|_| {});
+        let mut effects = WorldEffects::new(pack.clone(), Default::default())?;
+        let camera = Camera {
+            view_projection: glam::Mat4::IDENTITY,
+            position: Vec3::Z * 10.0,
+            right: Vec3::X,
+            up: Vec3::Y,
+        };
+        effects.sync(Arc::new(replica.clone()), &meshes)?;
+        effects.advance(0.1, Vec3::ZERO, Vec3::ZERO, |_, _, _| Ok(true))?;
+        assert_eq!(
+            effects.world.source_count(),
+            2,
+            "a late observer sees effects carried by a surviving member"
+        );
+        let initial = effects.active[&(1, false)].handle;
+        let mut debris = BrickDebris::new();
+        let child = kill(1, 9, [0.5, 0.3, 0.0], [0.5, -1.0, 0.0], 12.0, 1.0);
+        effects.observe_deaths(std::slice::from_ref(&child));
+        debris.cues(&[child], &building)?;
+        replica.bricks.remove(&9);
+        effects.sync(Arc::new(replica.clone()), &meshes)?;
+        building.sync_world(&replica)?;
+        debris.sync_world(&replica);
+        debris.advance(0.1, &building)?;
+        effects.advance_with_debris(0.0, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| Ok(true))?;
+        let expected = debris.attachment_frames(|_| true)[&9]
+            .delta
+            .transform_point3(Vec3::from(original.position));
+        let shown = effects.world.snapshot(&camera);
+        assert_eq!(shown.lights.len(), 1);
+        assert!(shown.lights[0].position.abs_diff_eq(expected, 1e-4));
+        assert_eq!(effects.active[&(1, false)].handle, initial);
+        let mut late = WorldEffects::new(pack, Default::default())?;
+        late.sync(Arc::new(replica.clone()), &meshes)?;
+        late.advance(0.1, Vec3::ZERO, Vec3::ZERO, |_, _, _| Ok(true))?;
+        assert_eq!(
+            late.world.source_count(),
+            0,
+            "a departed member has no invented late-join motion"
+        );
+
+        // A new death of the original precedes its removal delta and must
+        // replace the earlier child relationship, rather than lose metadata.
+        let mut root = kill(2, 1, original.position, [0.0, -1.0, 0.0], 12.0, 1.0);
+        root.tick = 2;
+        effects.observe_deaths(std::slice::from_ref(&root));
+        debris.cues(&[root], &building)?;
+        debris.advance(0.1, &building)?;
+        effects.advance_with_debris(0.0, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| Ok(true))?;
+        let expected = debris.attachment_frames(|_| true)[&1]
+            .delta
+            .transform_point3(Vec3::from(original.position));
+        assert!(
+            effects.world.snapshot(&camera).lights[0]
+                .position
+                .abs_diff_eq(expected, 1e-4)
+        );
+        replica.bricks.remove(&1);
+        effects.sync(Arc::new(replica.clone()), &meshes)?;
+        effects.advance_with_debris(0.0, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| Ok(true))?;
+        assert_eq!(effects.world.source_count(), 2);
+        assert!(
+            effects.world.snapshot(&camera).lights[0]
+                .position
+                .abs_diff_eq(expected, 1e-4)
+        );
+        debris.set_limit(0);
+        effects.advance_with_debris(0.0, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| Ok(true))?;
+        assert_eq!(effects.world.source_count(), 0);
+        assert!(effects.detached.is_empty());
+        replica.bricks.insert(1, original);
+        debris.sync_world(&replica);
+        effects.sync(Arc::new(replica), &meshes)?;
+        effects.advance_with_debris(0.1, Vec3::ZERO, Vec3::ZERO, &debris, |_, _, _| Ok(true))?;
+        assert_eq!(effects.world.source_count(), 2);
+        assert_eq!(effects.world.snapshot(&camera).lights.len(), 1);
+        Ok(())
+    }
     #[test]
     fn destroyed_effects_follow_debris_and_restore_without_moving_old_particles() -> Result<()> {
         use crate::brick_debris::{
@@ -619,6 +758,19 @@ mod tests {
                 };
                 let mut debris = BrickDebris::new();
                 effects.observe_deaths(std::slice::from_ref(&cue));
+                debris.cues(std::slice::from_ref(&cue), &building)?;
+                if permanent {
+                    // Death can be observed before the removal delta. Retain
+                    // its metadata across an intervening rendered frame.
+                    effects.advance_with_debris(
+                        0.0,
+                        Vec3::ZERO,
+                        Vec3::ZERO,
+                        &debris,
+                        |_, _, _| Ok(true),
+                    )?;
+                    assert_eq!(effects.detached.len(), 2);
+                }
                 if permanent {
                     replica.bricks.remove(&1);
                 } else {
@@ -629,7 +781,6 @@ mod tests {
                     b.raycast = false;
                 }
                 effects.sync(Arc::new(replica.clone()), &meshes)?;
-                debris.cues(&[cue], &building)?;
                 building.sync_world(&replica)?;
                 debris.sync_world(&replica);
                 debris.advance(0.1, &building)?;

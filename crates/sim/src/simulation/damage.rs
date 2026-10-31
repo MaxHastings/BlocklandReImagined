@@ -18,6 +18,47 @@ struct Family {
 }
 
 impl Simulation {
+    /// Select a visual carrier before committing a partition. Half-open cells
+    /// and a doubled integer lattice give one exact owner even on a cut plane.
+    /// A later partition only transfers the binding if it replaces that owner.
+    pub(crate) fn damage_attachment_slot(
+        &self,
+        replaced: BrickId,
+        mut cells: impl Iterator<Item = Bounds>,
+    ) -> Result<Option<(BrickId, usize)>> {
+        let root = self.damage_parent(replaced).unwrap_or(replaced);
+        let source = self
+            .state()
+            .bricks
+            .get(&root)
+            .context("Missing damage source")?;
+        // Track the relationship even before an effect is configured: adding
+        // one to a broken original must not lose its real visual carrier.
+        if source.damage_attachment.as_deref().copied().unwrap_or(root) != replaced {
+            return Ok(None);
+        }
+        let bounds = Bounds::new(source, &self.definitions.get(source)?.mesh)?;
+        let anchor: [i64; 3] =
+            std::array::from_fn(|a| i64::from(bounds.min[a]) * 2 + i64::from(bounds.size[a]));
+        let slot = cells
+            .position(|cell| {
+                (0..3).all(|a| {
+                    i64::from(cell.min[a]) * 2 <= anchor[a]
+                        && anchor[a] < i64::from(cell.max()[a]) * 2
+                })
+            })
+            .context("Partition does not contain the authored attachment anchor")?;
+        Ok(Some((root, slot)))
+    }
+    pub(crate) fn bind_damage_attachment(&mut self, root: BrickId, parent: BrickId) -> Result<()> {
+        ensure!(
+            self.damage.families.contains_key(&root) && parent > 0 && parent != root,
+            "Invalid damage attachment family"
+        );
+        self.damage_transaction(|sim| {
+            sim.mutate(root, |b| b.damage_attachment = Some(Box::new(parent)))
+        })
+    }
     /// Timed restoration cannot make an original solid inside a live body.
     /// Inspect its saved collision policy without retiring any family/section.
     pub(crate) fn damage_restore_occupied(&self, id: BrickId) -> bool {
@@ -131,6 +172,7 @@ impl Simulation {
                     b.colliding = colliding;
                     b.damage_hidden = false;
                     b.damage_section = None;
+                    b.damage_attachment = None;
                 })?;
                 self.note_link(root);
                 self.sync_flags(root);
@@ -208,6 +250,7 @@ impl Simulation {
                 let mut next = next.clone();
                 next.damage_hidden = false;
                 next.damage_section = None;
+                next.damage_attachment = None;
                 self.finish_damage_family(id, true)?;
                 self.authority.mutate(id, |b| *b = next)?;
                 self.sync_flags(id);

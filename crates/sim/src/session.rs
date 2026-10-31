@@ -2345,6 +2345,7 @@ impl Session {
                 b.colliding = colliding;
                 b.damage_hidden = false;
                 b.damage_section = None;
+                b.damage_attachment = None;
             }
         }
         world

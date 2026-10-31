@@ -680,6 +680,13 @@ impl Session {
                         .context("Missing planned size")
                 })
                 .collect::<Result<_>>()?;
+            let attachment = self.simulation.damage_attachment_slot(
+                id,
+                plan.standing.iter().chain(&plan.taken).map(|c| Bounds {
+                    min: c.min,
+                    size: c.size,
+                }),
+            )?;
             let fresh_bytes: u64 = bricks.iter().map(|b| b.stored_bound()).sum();
             if fresh_bytes > MUTATION_BYTES_PER_TICK.saturating_sub(original.stored_bound()) {
                 self.destruction.work.capacity_holds += 1;
@@ -723,6 +730,11 @@ impl Session {
                 self.remove_damage_pieces(&[id])?;
             }
             self.remove_damage_pieces(taken)?;
+            if let Some((source, slot)) = attachment {
+                self.simulation
+                    .bind_damage_attachment(source, fresh[slot])?;
+                self.dirty.insert(source);
+            }
             let standing = &fresh[..plan.standing.len()];
             self.simulation.register_damage_parts(root, standing);
             self.dirty.extend(standing.iter().copied());

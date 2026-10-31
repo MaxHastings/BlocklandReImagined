@@ -103,7 +103,7 @@ fn source(v: Variant, x: f32, y: f32, z: f32, name: &str, rows: Vec<Row>, sensor
         v.at(x, y, z),
         0,
     );
-    b.name = Some(v.name(name));
+    b.name = Some(v.name(name).into());
     b.events = rows;
     if sensor {
         b.rule_region = Some(Box::new([3.0, 4.0, 3.0]));
@@ -246,7 +246,7 @@ impl Game {
             .state()
             .bricks
             .iter()
-            .find(|(_, b)| b.name.as_ref() == Some(&self.variant.name(role)))
+            .find(|(_, b)| b.name.as_deref() == Some(self.variant.name(role).as_str()))
             .unwrap()
             .0
     }

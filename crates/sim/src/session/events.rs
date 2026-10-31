@@ -447,7 +447,7 @@ impl Session {
         let program = ev::BrickProgram {
             id: id(brick_id),
             owner_scope: brick.owner,
-            name: brick.name.clone(),
+            name: brick.name.as_deref().map(str::to_owned),
             rows,
             print_count,
             implicit_cancel_relays: false,
@@ -1046,6 +1046,7 @@ impl Session {
                         b.colliding = true;
                         b.damage_hidden = false;
                         b.damage_section = None;
+                        b.damage_attachment = None;
                     }
                 },
             )

@@ -131,7 +131,7 @@ mod tests {
                 ));
             }
             if i % 13 == 0 {
-                b.name = Some(format!("brick{i}"));
+                b.name = Some(format!("brick{i}").into());
                 b.light = Some(Box::new(Light {
                     asset: ContentRef::Resolved("light".into()),
                     enabled: true,
@@ -149,6 +149,10 @@ mod tests {
                     asset: None,
                     direction: 2,
                 }));
+            }
+            if i % 23 == 0 {
+                b.damage_hidden = true;
+                b.damage_attachment = Some(Box::new(2000 + i));
             }
             // Ids out of order, as a nearest-first chunk sends them.
             out.push((1000 - i * 3, b));

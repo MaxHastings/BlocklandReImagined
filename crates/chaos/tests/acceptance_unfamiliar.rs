@@ -248,7 +248,7 @@ fn arena(v: Variant, d: &Definitions) -> Vec<Brick> {
     bricks.push(brick(&v.plinth(), [PLINTH[0], on_deck(plinth), PLINTH[1]]));
     let pad = |kind: &str, at: [f32; 3], name: String, team: Option<u32>| {
         let mut b = brick(&v.pad(), at);
-        b.name = Some(name);
+        b.name = Some(name.into());
         b.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(kind.into()),
             recolor: false,
@@ -265,7 +265,7 @@ fn arena(v: Variant, d: &Definitions) -> Vec<Brick> {
     // The zones: a plate at each end whose region the rules watch.
     for (end, scoring) in [(1.0f32, BLUE), (-1.0, RED)] {
         let mut zone = brick(&v.mark(), [0.0, DECK_TOP + 0.1, end * ZONE_Z]);
-        zone.name = Some(format!("zone{}", scoring));
+        zone.name = Some(format!("zone{}", scoring).into());
         zone.colliding = false;
         zone.raycast = false;
         zone.rule_region = Some(Box::new(ZONE_HALF.map(|h| h * 2.0)));

@@ -483,26 +483,77 @@ fn reordered_poses_do_not_rewind_and_interpolation_crosses_yaw_seam() {
 }
 #[test]
 fn compressed_checkpoint_roundtrips_and_truncation_fails() {
+    let mut checkpoint = checkpoint();
+    let mut source = Brick::new(ContentRef::Resolved("plate".into()), [0.0, 0.3, 0.0], 0);
+    source.damage_hidden = true;
+    source.damage_attachment = Some(Box::new(2));
+    checkpoint.world.bricks.insert(1, source);
+    checkpoint.world_bricks = 1;
     let data = codec::encode(&Message::Welcome {
         administrator: false,
         owner: 1,
         resume: ResumeToken([1; 32]),
-        checkpoint: checkpoint(),
+        checkpoint,
     })
     .unwrap();
     let decoded: Message = codec::decode(&data).unwrap();
-    assert!(matches!(
-        decoded,
-        Message::Welcome {
-            administrator: false,
-            owner: 1,
-            ..
-        }
-    ));
+    let Message::Welcome {
+        administrator: false,
+        owner: 1,
+        checkpoint,
+        ..
+    } = decoded
+    else {
+        panic!("expected the checkpoint");
+    };
+    let mut replica = Replica::new(checkpoint).unwrap();
+    assert_eq!(
+        replica.world.bricks[&1].damage_attachment.as_deref(),
+        Some(&2)
+    );
+    let mut restored = replica.world.bricks[&1].clone();
+    restored.damage_hidden = false;
+    restored.damage_attachment = None;
+    let mut delta = contact_geometry_delta(Vec::new());
+    delta.bricks.clear();
+    delta.bricks.insert(1, Some(restored));
+    let Message::Update(delta) =
+        codec::decode(&codec::encode(&Message::Update(delta)).unwrap()).unwrap()
+    else {
+        panic!("expected the restoration delta");
+    };
+    replica.update(delta).unwrap();
+    assert!(
+        replica.world.bricks[&1].damage_attachment.is_none(),
+        "whole-to-plain packing must revoke the parent"
+    );
     for end in [0, 1, 4, data.len() / 2, data.len() - 1] {
         assert!(codec::decode::<Message>(&data[..end]).is_err());
     }
     assert!(codec::decode::<Message>(&vec![0; codec::MAX_FRAME + 1]).is_err());
+}
+
+#[test]
+fn invalid_attachment_metadata_cannot_partially_change_a_replica() {
+    let mut replica = Replica::new(checkpoint()).unwrap();
+    let before = replica.world.bricks.clone();
+    for (hidden, parent) in [(false, 3), (true, 0)] {
+        let mut bad = Brick::new(ContentRef::Resolved("plate".into()), [0.0, 0.3, 0.0], 0);
+        bad.damage_hidden = hidden;
+        bad.damage_attachment = Some(Box::new(parent));
+        let mut delta = contact_geometry_delta(Vec::new());
+        delta.bricks.insert(2, Some(bad));
+        // Sparse decoding rejects malformed metadata before a replica sees it.
+        // Challenge replica atomicity independently with the same invalid delta,
+        // retaining the earlier valid mutation rather than relying on the codec.
+        assert!(
+            codec::decode::<Message>(&codec::encode(&Message::Update(delta.clone())).unwrap())
+                .is_err()
+        );
+        assert!(replica.update(delta).is_err());
+        assert_eq!(replica.world.bricks, before);
+        assert_eq!(replica.cursor, 0);
+    }
 }
 
 #[test]
@@ -674,6 +725,10 @@ fn a_world_streams_in_bounded_chunks_and_reassembles_exactly() {
             [id as f32, 0.0, 0.0],
             0,
         );
+        if id == 1 {
+            brick.damage_hidden = true;
+            brick.damage_attachment = Some(Box::new(9999));
+        }
         brick.source_records.push(bri_world::SourceRecord {
             line: 1,
             text: "private original record".into(),

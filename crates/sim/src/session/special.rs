@@ -135,7 +135,8 @@ impl Session {
             if count + 1 < 2 {
                 peer.special.teledoor_name = Some((name.clone(), count + 1, kind));
             }
-            self.simulation.mutate(brick, |b| b.name = Some(name))?;
+            self.simulation
+                .mutate(brick, |b| b.name = Some(name.into()))?;
         }
         Ok(())
     }

@@ -257,7 +257,7 @@ impl Game {
                 v.at(x, 0.1, z),
                 author,
             );
-            b.name = Some(v.name(name));
+            b.name = Some(v.name(name).into());
             b.vehicle = Some(Box::new(VehicleSpawn {
                 vehicle: ContentRef::Resolved(id.into()),
                 recolor: false,
@@ -294,7 +294,7 @@ impl Game {
             v.at(0., if elevated { 6.1 } else { 0.1 }, 19.),
             author,
         );
-        goal.name = Some(v.name("goal"));
+        goal.name = Some(v.name("goal").into());
         goal.colliding = false;
         goal.raycast = false;
         goal.rule_region = Some(Box::new([3., 4., 3.]));
@@ -621,7 +621,7 @@ fn authored_replacement_after_real_progress_requires_a_new_object_incarnation() 
         let source = g.id("intended");
         let old_brick = g.s.simulation().state().bricks[&source].clone();
         let props = |vehicle| WrenchProperties {
-            name: old_brick.name.clone(),
+            name: old_brick.name.as_deref().map(str::to_owned),
             vehicle,
             raycast: old_brick.raycast,
             colliding: old_brick.colliding,

@@ -656,7 +656,7 @@ impl Session {
             color: b.color,
             owner: b.owner,
             game: self.brick_game(b.owner).map(|g| g.0),
-            name: b.name.clone().unwrap_or_default(),
+            name: b.name.as_deref().unwrap_or_default().to_owned(),
             item,
             ui_name,
         })

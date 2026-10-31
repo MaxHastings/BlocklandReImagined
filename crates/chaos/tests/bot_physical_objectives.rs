@@ -293,7 +293,7 @@ impl Game {
             ],
             human,
         );
-        goal.name = Some(format!("{namespace}_destination"));
+        goal.name = Some(format!("{namespace}_destination").into());
         goal.colliding = false;
         goal.raycast = false;
         goal.rule_region = Some(Box::new(if wide_rearm {
@@ -396,7 +396,7 @@ impl Game {
                 [offset + 4.25, 0.1, 60.25],
                 human,
             );
-            scoreboard.name = Some(board);
+            scoreboard.name = Some(board.into());
             world.bricks.insert(1000, scoreboard);
         }
         world.bricks.insert(3, goal);

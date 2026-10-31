@@ -499,7 +499,7 @@ impl ToolUi {
                         })
                     }),
                     rows: rows.clone(),
-                    named_targets: brick_names.into_iter().collect(),
+                    named_targets: brick_names.into_iter().map(String::from).collect(),
                     allow_named: true,
                 }
             }
@@ -766,7 +766,7 @@ fn wrench_data(brick: &Brick) -> Result<WrenchData> {
         rule_region: brick.rule_region(),
         rule_region_default: None,
         region_inputs: bri_world::regions::has_region_input(brick),
-        name: brick.name.clone().unwrap_or_default(),
+        name: brick.name.as_deref().unwrap_or_default().to_owned(),
         light: brick
             .light
             .as_ref()

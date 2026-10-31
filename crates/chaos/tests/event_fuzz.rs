@@ -150,7 +150,7 @@ fn run(mut session: Session, catalog: &Catalog, seed: u64) -> Result<String, Tes
         let z = (i / 6) as f32 * 0.5 + 2.25;
         let mut brick = Brick::new(ContentRef::Resolved(plate.clone()), [x, 0.1, z], HOST);
         if i < 8 {
-            brick.name = Some(format!("b{i}"));
+            brick.name = Some(format!("b{i}").into());
         }
         brick.events = program(catalog, &mut rng, palette);
         world.bricks.insert(i + 1, brick);

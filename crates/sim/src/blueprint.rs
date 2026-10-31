@@ -129,7 +129,7 @@ impl CopyExtras {
             || brick.rule_region.is_some();
         has.then(|| Self {
             brick: index,
-            name: brick.name.clone(),
+            name: brick.name.as_deref().map(str::to_owned),
             light: brick.light.as_ref().map(|l| l.asset.clone()),
             emitter: brick
                 .emitter
@@ -150,7 +150,7 @@ impl CopyExtras {
 
     /// Put these on `brick`, as it was when they were taken.
     pub fn put_on(&self, brick: &mut Brick) {
-        brick.name.clone_from(&self.name);
+        brick.name = self.name.as_deref().map(Box::<str>::from);
         brick.light = self.light.clone().map(|asset| {
             Box::new(Light {
                 asset,

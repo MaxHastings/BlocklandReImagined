@@ -265,7 +265,14 @@ pub struct Brick {
     /// bricks do not pay two u64s; canonical saves clear it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damage_section: Option<Box<[u64; 2]>>,
-    pub name: Option<String>,
+    /// Transient visual carrier for this original's light/emitter/sound after
+    /// partitioning. It may already have left authoritative collision while
+    /// its client debris remains visible. Canonical saves clear this pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damage_attachment: Option<Box<BrickId>>,
+    /// Rare immutable authored text, without spare String capacity in every
+    /// brick's inline record. Its serialized text representation is unchanged.
+    pub name: Option<Box<str>>,
     // Rare settings are boxed: a brick without them pays a pointer, not the
     // whole setting (a million-brick world is mostly plain bricks).
     pub light: Option<Box<Light>>,
@@ -308,6 +315,7 @@ impl Brick {
             visible: true,
             damage_hidden: false,
             damage_section: None,
+            damage_attachment: None,
             name: None,
             light: None,
             emitter: None,
@@ -368,6 +376,7 @@ impl Brick {
         }
         let optional = |c: &Option<ContentRef>| c.as_ref().map_or(0, content);
         let mut bytes = 512
+            + self.damage_attachment.as_ref().map_or(0, |_| 64)
             + content(&self.definition)
             + optional(&self.print)
             + self.name.as_deref().map_or(0, text)
@@ -415,6 +424,12 @@ impl Brick {
         bytes
     }
     pub fn validate(&self, palette_len: usize) -> Result<()> {
+        ensure!(
+            self.damage_attachment
+                .as_ref()
+                .is_none_or(|parent| **parent > 0 && self.damage_hidden),
+            "Invalid damage attachment parent"
+        );
         ensure!(
             self.damage_section
                 .as_ref()

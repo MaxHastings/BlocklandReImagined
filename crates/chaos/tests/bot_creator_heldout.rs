@@ -187,7 +187,7 @@ impl Game {
         let author = s.join(v.name("author"), at, true).unwrap();
         let brick = |kind: &str, x: f32, z: f32, name: &str| {
             let mut b = Brick::new(ContentRef::Resolved(kind.into()), v.at(x, 0.1, z), author);
-            b.name = Some(v.name(name));
+            b.name = Some(v.name(name).into());
             b
         };
         let mut spawn = brick(fixture::PLATE, 0., 0., "actor");

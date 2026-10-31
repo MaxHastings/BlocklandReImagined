@@ -399,7 +399,7 @@ pub(super) fn candidates(
                         .vehicle_spawn_brick(v.id)
                         .and_then(|id| session.simulation.state().bricks.get(&id))
                         .and_then(|b| b.name.as_ref())
-                        .map_or(0, String::len),
+                        .map_or(0, |name| name.len()),
             )
             .map_err(|_| Rejection::Budget)?;
         let Some(object) = stamp(session, v, d) else {

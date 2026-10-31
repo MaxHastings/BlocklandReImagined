@@ -56,6 +56,9 @@ pub struct Packed {
     records: Vec<(u32, Vec<SourceRecord>)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sections: Vec<(u32, [u64; 2])>,
+    /// Rare original-to-partition carrier, by plain entry index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<(u32, BrickId)>,
 }
 
 fn plain(brick: &Brick) -> bool {
@@ -116,6 +119,9 @@ impl Packed {
             out.kinds.push(PLAIN);
             if let Some(section) = &brick.damage_section {
                 out.sections.push((entry as u32, **section));
+            }
+            if let Some(parent) = &brick.damage_attachment {
+                out.attachments.push((entry as u32, **parent));
             }
             out.definitions.push(names.of(&brick.definition));
             let mut bytes = [0; 12];
@@ -189,6 +195,10 @@ impl Packed {
             || self.whole.len() != whole
             || self.records.windows(2).any(|w| w[0].0 >= w[1].0)
             || self.sections.windows(2).any(|w| w[0].0 >= w[1].0)
+            || self.attachments.windows(2).any(|w| w[0].0 >= w[1].0)
+            || self.attachments.iter().any(|(entry, parent)| {
+                self.kinds.get(*entry as usize) != Some(&PLAIN) || *parent == 0
+            })
             || self
                 .sections
                 .iter()
@@ -216,6 +226,7 @@ impl Packed {
         let mut id = 0u64;
         let mut records = self.records.into_iter().peekable();
         let mut sections = self.sections.into_iter().peekable();
+        let mut attachments = self.attachments.into_iter().peekable();
         for (entry, (kind, gap)) in self.kinds.iter().zip(&self.ids).enumerate() {
             id = id.wrapping_add(*gap as u64);
             let brick = match *kind {
@@ -251,6 +262,16 @@ impl Packed {
                     }
                     if sections.peek().is_some_and(|(at, _)| *at as usize == entry) {
                         brick.damage_section = sections.next().map(|(_, key)| Box::new(key));
+                    }
+                    if attachments
+                        .peek()
+                        .is_some_and(|(at, _)| *at as usize == entry)
+                    {
+                        if !brick.damage_hidden {
+                            return Err("Attachment on a live plain brick".into());
+                        }
+                        brick.damage_attachment =
+                            attachments.next().map(|(_, parent)| Box::new(parent));
                     }
                     p += 1;
                     Some(brick)
@@ -290,7 +311,7 @@ pub(crate) mod tests {
                 ));
             }
             if i % 13 == 0 {
-                b.name = Some(format!("brick{i}"));
+                b.name = Some(format!("brick{i}").into());
                 b.light = Some(Box::new(Light {
                     asset: ContentRef::Resolved("light".into()),
                     enabled: true,
@@ -312,6 +333,9 @@ pub(crate) mod tests {
             b.damage_hidden = i % 3 == 0;
             if b.damage_hidden {
                 b.damage_section = Some(Box::new([4, 7]));
+                if i % 6 == 0 {
+                    b.damage_attachment = Some(Box::new(999));
+                }
             }
             // Ids out of order, as a nearest-first chunk sends them.
             out.push((1000 - i * 3, b));
@@ -360,6 +384,14 @@ pub(crate) mod tests {
         }));
         assert!(tamper(&|p| {
             p.records[0].0 = 1_000_000;
+        }));
+        assert!(tamper(&|p| p.attachments.reverse()));
+        assert!(tamper(&|p| p.attachments[0].0 = 1_000_000));
+        assert!(tamper(&|p| p.attachments[0].1 = 0));
+        assert!(tamper(&|p| {
+            let entry = p.attachments[0].0 as usize;
+            let plain_index = p.kinds[..entry].iter().filter(|k| **k == PLAIN).count();
+            p.looks[plain_index * 3 + 1] &= !DAMAGE_HIDDEN;
         }));
         let p = Packed::pack(sample().iter().map(|(id, b)| (*id, Some(b))));
         assert!(p.unpack(10).is_err(), "Over the entry limit");

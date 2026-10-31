@@ -109,7 +109,7 @@ impl WrenchFill {
     fn apply(&self, brick: &Brick) -> Brick {
         let mut next = brick.clone();
         if let Some(name) = &self.name {
-            next.name.clone_from(name);
+            next.name = name.as_deref().map(Box::<str>::from);
         }
         if let Some(light) = &self.light {
             next.light = light.as_ref().map(|id| {
@@ -171,7 +171,7 @@ pub(super) fn wrench_properties(brick: &Brick) -> WrenchProperties {
     };
     WrenchProperties {
         rule_region: brick.rule_region(),
-        name: brick.name.clone(),
+        name: brick.name.as_deref().map(str::to_owned),
         light: brick.light.as_ref().and_then(|l| resolved(&l.asset)),
         emitter: brick
             .emitter

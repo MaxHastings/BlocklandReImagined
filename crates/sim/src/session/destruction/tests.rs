@@ -119,6 +119,127 @@ fn integrated_split_repeated_hit_save_and_respawn_preserve_original_volume() {
 }
 
 #[test]
+fn partition_attachment_keeps_authored_identity_rebinds_and_clears_on_restore() {
+    let (mut s, owner) = session();
+    let root = place(&mut s, owner, "8x8x3", [0.0, 0.3, 0.0], false);
+    s.blow_up_bricks(owner, None, Vec3::new(1.5, 0.3, -2.0), &impact(0.6))
+        .unwrap();
+    settle(&mut s);
+    let parent = **s.simulation.state().bricks[&root]
+        .damage_attachment
+        .as_ref()
+        .unwrap();
+    assert_ne!(root, parent);
+    assert!(
+        s.live_damage_brick(parent),
+        "the centre survived this corner hit"
+    );
+    // Configuring an effect after damage must use the already-established
+    // relationship; ancestry is not inferred from current asset names.
+    s.simulation
+        .mutate(root, |b| {
+            b.light = Some(Box::new(bri_world::Light {
+                asset: ContentRef::Resolved("light".into()),
+                enabled: true,
+            }));
+            b.emitter = Some(Box::new(bri_world::Emitter {
+                asset: Some(ContentRef::Resolved("emitter".into())),
+                direction: 2,
+            }));
+            b.sound = Some(ContentRef::Resolved("music".into()));
+        })
+        .unwrap();
+    assert_eq!(
+        s.simulation.state().bricks[&root]
+            .damage_attachment
+            .as_deref(),
+        Some(&parent)
+    );
+    assert!(
+        s.simulation
+            .state()
+            .bricks
+            .iter()
+            .filter(|(id, _)| **id != root)
+            .all(|(_, b)| b.light.is_none() && b.emitter.is_none() && b.sound.is_none())
+    );
+    let saved = s.saved_world();
+    assert_eq!(saved.bricks.len(), 1);
+    assert!(saved.bricks[&root].damage_attachment.is_none());
+    assert!(saved.bricks[&root].light.is_some());
+    let packed = bri_world::packed::Packed::pack(
+        s.simulation
+            .state()
+            .bricks
+            .iter()
+            .map(|(id, b)| (*id, Some(b))),
+    );
+    let unpacked = packed.unpack(bri_world::MAX_BRICKS).unwrap();
+    assert_eq!(
+        unpacked
+            .iter()
+            .find(|(id, _)| *id == root)
+            .unwrap()
+            .1
+            .as_ref()
+            .unwrap()
+            .damage_attachment
+            .as_deref(),
+        Some(&parent)
+    );
+
+    assert!(volume(&s, &s.simulation.state().bricks[&parent].definition) > 6);
+    s.blow_up_bricks(owner, Some(parent), Vec3::new(0.0, 0.3, 0.0), &impact(0.0))
+        .unwrap();
+    settle(&mut s);
+    let next = **s.simulation.state().bricks[&root]
+        .damage_attachment
+        .as_ref()
+        .unwrap();
+    assert_ne!(
+        next, parent,
+        "repartition must transfer the carrier before removing it"
+    );
+    let cues = s.take_cues();
+    let (definition, position, turns) = if let Some(b) = s.simulation.state().bricks.get(&next) {
+        (b.definition.clone(), b.position, b.quarter_turns)
+    } else {
+        cues.iter()
+            .find_map(|c| match &c.kind {
+                CueKind::BrickKill {
+                    brick,
+                    definition,
+                    quarter_turns,
+                    ..
+                } if *brick == next => Some((definition.clone(), c.position, *quarter_turns)),
+                _ => None,
+            })
+            .expect("a removed visual carrier must have an actual debris cue")
+    };
+    let ContentRef::Resolved(definition) = definition else {
+        panic!("native definition");
+    };
+    let pose = Pose::from_parts(
+        Vector::from_array(position),
+        Rotation::from_array(
+            glam::Quat::from_rotation_y(-f32::from(turns) * std::f32::consts::FRAC_PI_2).to_array(),
+        ),
+    );
+    assert!(
+        s.simulation.definitions.entries[&definition]
+            .shape
+            .contains_point(&pose, Vector::new(0.0, 0.3, 0.0)),
+        "the actual carrier's collision geometry must contain the authored source point"
+    );
+    s.events.respawns.insert(root, 0);
+    s.step_events(&BTreeSet::new()).unwrap();
+    assert_eq!(s.simulation.state().bricks.len(), 1);
+    let restored = &s.simulation.state().bricks[&root];
+    assert!(!restored.damage_hidden && restored.damage_attachment.is_none());
+    assert!(restored.light.is_some() && restored.emitter.is_some() && restored.sound.is_some());
+}
+
+#[test]
 fn upper_baseplate_stays_on_one_support_then_falls_and_floating_root_stays() {
     let (mut s, owner) = session();
     let a = place(&mut s, owner, "1x1x3", [0.25, 0.3, 0.25], false);

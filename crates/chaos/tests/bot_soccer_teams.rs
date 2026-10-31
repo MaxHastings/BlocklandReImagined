@@ -466,7 +466,7 @@ fn set_brick_team(p: &mut Pitch, brick: &str, team: Option<u32>) {
     let id = p.brick(brick);
     let b = &p.s.simulation().state().bricks[&id];
     let properties = WrenchProperties {
-        name: b.name.clone(),
+        name: b.name.as_deref().map(str::to_owned),
         vehicle: Some(fixture::BOT.into()),
         vehicle_team: team,
         raycast: b.raycast,

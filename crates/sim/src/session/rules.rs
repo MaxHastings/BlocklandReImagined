@@ -265,7 +265,10 @@ impl Session {
                 if brick.owner != owner {
                     return None;
                 }
-                brick.name.clone().map(Datum::Text)
+                brick
+                    .name
+                    .as_deref()
+                    .map(|name| Datum::Text(name.to_owned()))
             }
             Property::Speed => self
                 .object_velocity(ObjectRef::Vehicle(e.id.index))
@@ -1264,7 +1267,7 @@ impl Session {
             );
             brick.base_plate = true;
             brick.color = (index % self.simulation.state().palette.len().max(1)) as u8;
-            brick.name = Some(format!("lab_{mode}_{batch}_{index}"));
+            brick.name = Some(format!("lab_{mode}_{batch}_{index}").into());
             brick.events = events;
             if name.ends_with("ball spawner") || name == "Ball spawner" {
                 brick.vehicle = spawn.clone().map(|v| {
@@ -2015,8 +2018,13 @@ mod tests {
             ev::Value::Int(3),
         ];
         write.conditions.clear();
-        write.target =
-            ev::Target::Named(s.simulation.state().bricks[&ids[1]].name.clone().unwrap());
+        write.target = ev::Target::Named(
+            s.simulation.state().bricks[&ids[1]]
+                .name
+                .as_deref()
+                .unwrap()
+                .to_owned(),
+        );
         let mut reaction = lab_programs("puzzle")[0].1[1].clone();
         reaction.input = "onRuleVariableChanged".into();
         reaction.conditions = vec![Condition {
@@ -2243,7 +2251,7 @@ mod tests {
                     property: Property::SpawnedBy,
                     key: String::new(),
                     compare: ev::rules::Compare::Equal,
-                    value: Datum::Text(spawn_name),
+                    value: Datum::Text(spawn_name.into()),
                 },
                 Condition {
                     subject: Subject::Instigator,
