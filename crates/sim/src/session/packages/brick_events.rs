@@ -160,7 +160,8 @@ impl Session {
             .into_iter()
             .filter(|b| {
                 state.bricks.get(b).is_some_and(|b| {
-                    self.game_of(self.brick_group_owner_for(b.owner, Some(game))) == Some(game)
+                    self.resource_game(self.brick_group_owner_for(b.owner, Some(game)))
+                        == Some(game)
                 })
             })
             .collect();
@@ -579,7 +580,7 @@ impl Session {
         if let Some(client) = client {
             self.player_targets(source, &slots, client, &mut trigger);
         } else if slots.contains(&ev::Slot::MiniGame)
-            && let Some(game) = self.game_of(owner)
+            && let Some(game) = self.resource_game(owner)
         {
             trigger
                 .targets

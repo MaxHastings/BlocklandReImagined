@@ -939,7 +939,7 @@ impl Session {
                 .state()
                 .bricks
                 .get(&brick)
-                .and_then(|b| self.game_of(b.owner));
+                .and_then(|b| self.resource_game(b.owner));
             self.fire_input_with(
                 brick,
                 &fact,
@@ -2620,6 +2620,48 @@ mod tests {
         assert_eq!(score(&s, p), 1);
     }
     #[test]
+    fn offline_creators_authored_round_message_still_reaches_remaining_members() {
+        let (mut s, creator, member) = setup();
+        let ids = s.create_rule_lab(creator, "hill").unwrap();
+        join_game(&mut s, creator, member);
+        let game = s.game_of(creator).unwrap();
+        s.simulation
+            .mutate(ids[0], |b| {
+                b.events = vec![ev::Row {
+                    conditions: vec![],
+                    preserved: None,
+                    enabled: true,
+                    input: "onRuleRoundStart".into(),
+                    delay_ms: 0,
+                    target: ev::Target::Slot(Slot::MiniGame),
+                    output: "chatMsgAll".into(),
+                    params: vec![ev::Value::Text("The encounter continues".into())],
+                }]
+            })
+            .unwrap();
+        s.dirty.insert(ids[0]);
+        s.step().unwrap();
+        s.disconnect(creator).unwrap();
+        s.take_private_notices();
+        let effects = s
+            .minigames
+            .execute(mg::Command::Reset {
+                game,
+                authority: mg::EventAuthority::System,
+            })
+            .unwrap();
+        s.apply_minigame_effects(effects).unwrap();
+        s.step().unwrap();
+        assert!(
+            s.take_private_notices()
+                .iter()
+                .any(|(who, notice)| *who == member
+                    && matches!(notice, Notice::Chat(text) if text == "The encounter continues")),
+            "an autonomous authored message must not require a connected creator body"
+        );
+    }
+
+    #[test]
     fn creator_minigame_save_and_offline_recovery_do_not_require_participation() {
         let (mut s, _, _) = setup();
         let principal = bri_admin::Principal([0x5b; 32]);
@@ -3261,6 +3303,55 @@ mod tests {
             assert!(speed < 0.5, "the reset ball is at rest: {speed}");
         }
     }
+    #[test]
+    fn creator_departure_preserves_running_vehicles_delayed_events_and_offline_goal_resets() {
+        let mut score_event = score_row();
+        score_event.delay_ms = 500;
+        let mut reset_event = goal_row(ev::Target::Slot(Slot::Object), "resetObject", vec![]);
+        reset_event.delay_ms = 500;
+        let (mut s, creator, ids, _, goal) = lone_goal(vec![score_event, reset_event]);
+        s.set_lan_host(false);
+        let member = s
+            .join("Remaining player".into(), Vec3::new(-20., 0.1, 0.), false)
+            .unwrap();
+        join_game(&mut s, creator, member);
+        let ball = ball_of(&s, ids[2]);
+        place_ball(&mut s, ball, goal, member);
+        assert_eq!(score(&s, member), 0, "the authored delay has not elapsed");
+        s.minigame_request(creator, MiniGameRequest::Leave).unwrap();
+        assert_eq!(
+            ball_of(&s, ids[2]),
+            ball,
+            "departure must not replace the running vehicle"
+        );
+        for _ in 0..90 {
+            s.step().unwrap();
+        }
+        assert_eq!(
+            score(&s, member),
+            1,
+            "departure must preserve queued brick events"
+        );
+        let replacement = ball_of(&s, ids[2]);
+        assert_ne!(replacement, ball, "the authored delayed reset must execute");
+        s.disconnect(creator).unwrap();
+        assert_eq!(ball_of(&s, ids[2]), replacement);
+        place_ball(&mut s, replacement, goal, member);
+        for _ in 0..90 {
+            s.step().unwrap();
+        }
+        assert_eq!(
+            score(&s, member),
+            2,
+            "offline creator's region must still observe play"
+        );
+        assert_ne!(
+            ball_of(&s, ids[2]),
+            replacement,
+            "offline creator's goal can reset its ball"
+        );
+    }
+
     /// Max (v0.2.3): after the ball went in, the goal never fired again.
     /// Each Object resetObject (now or after a delay) brings a new ball
     /// back to its spawn brick at rest, and each entry of it scores again.

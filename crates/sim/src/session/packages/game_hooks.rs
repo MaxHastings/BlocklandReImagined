@@ -616,14 +616,13 @@ impl Session {
     /// or the one they play in when it uses every player's bricks.
     pub(in crate::session) fn brick_game(&self, owner: u64) -> Option<mg::GameId> {
         let account = mg::AccountId(owner);
-        self.minigames
-            .games()
-            .find(|g| {
+        self.resource_game(owner).filter(|game| {
+            self.minigames.game(*game).is_ok_and(|g| {
                 g.owner == account
                     || (g.settings.use_all_players_bricks
                         && g.members.iter().any(|m| m.account == account))
             })
-            .map(|g| g.id)
+        })
     }
 
     /// A brick as scripts see it.

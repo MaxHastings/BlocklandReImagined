@@ -81,3 +81,107 @@ restarted-server resource reclaim, server/default/Slayer mode behavior and actua
 multi-client continuing bot damage are still open. This domain increment alone
 DOES NOT prove that a real bot battle continues. Keep the full feature unchecked.
 Use only headless/network/offscreen verification: Maxwell waived further playtests.
+
+
+## Resource affiliation correction — scoped checks complete
+
+Stock creator-owned brick groups now resolve to the creator's retained game
+before the creator's current participation. This applies to new placements too:
+all their bricks/spawners belong to that encounter until explicit End. A body
+joining another game changes combat permissions, not ownership of the original
+encounter. Existing explicit per-object membership remains available; this is
+not a new general per-brick identity format. Offline groups belonging to a
+retained encounter cannot be adopted into another encounter through Full trust.
+
+Creator Leave/rejoin/disconnect no longer cancels their event schedules or
+replaces their running vehicles. Resource cleanup carries an AccountId, not a
+PlayerId requiring a connected body. Initial creation initializes resources once;
+Reset/End include absent creators. Reset excludes resources belonging to another
+member's independently owned encounter. Bot membership, vehicle return/respawn
+policy, damage/use resolution, script brick views, native region observation,
+package game broadcasts and player-triggered MiniGame event targets consume the
+resource context. Actual player combat and event instigator permissions continue
+to use actual membership.
+
+Evidence obtained so far for this increment:
+
+- Domain full suite: 40 pass (28 rules, 12 teams), including reset/end cleanup for
+  an offline creator and rejoining without resource reset. The resource-affiliation
+  regression failed before the correction.
+- The headless Session battle regression failed with bot game None before the
+  correction, then passes: the same bot life remains in its original game and
+  ordinary AI controls/melee damage the remaining player after the creator leaves
+  and joins another game. Creator disconnect retains its affiliation. This is one
+  synthetic encounter, not a networked crowd or restarted-world claim.
+- The native reset-brick regression fails after creator Leave before correcting
+  the event target lookup, then passes both connected-outside and disconnected
+  creator states. All 11 ordinary v20 event cases pass; the two pre-existing
+  generated-content cases remain separately available, not counted as passes.
+  The new fixture first reused a command sequence; correcting its sequence gave
+  the expected behavioral failure. No assertion was relaxed.
+- All-target sim/net/client type checking passed before adding the final queued
+  event and autonomous-message cases; those cases and broader checks are running.
+
+Private diagnostics: `minigame-resource-{domain,types}.txt`,
+`minigame-battle-{red,green}.txt`, `minigame-events-resource-{red,green}.txt`
+and `minigame-autonomous-resource-red.txt` under the planning diagnostics folder.
+Resource/UI/network combined acceptance remains open, including autonomous events
+without a connected creator, item deadlines, new placement/save/restarted world,
+server/default/Slayer behavior and final multi-client continuing damage. Keep the
+feature unchecked until that chain and the usable departure/rejoin UI are complete.
+
+
+The final autonomous round-message regression exposes another connected-body
+assumption: an authored MiniGame output with no instigator is rejected after its
+creator disconnects. Add source-brick-validated `EventAuthority::AutonomousBrick`
+carrying only the authoritative builder account. It is limited to that account's
+owned game; it neither grants general System authority nor invents a player for
+name/score substitutions. Missing source bricks are rejected rather than treated
+as world owner 0. A domain regression rejects a participant's and the server's
+accounts for somebody else's retained game. The real native rule-message case
+must pass before this increment is committed. No wire/save representation changes
+are introduced by this internal command/effect correction.
+
+
+Next UI chain, once resource checks pass: derive the owned game from the existing
+stable local owner selector in `MiniGameUiState` rather than add a second registry.
+`models/minigames.rs` currently suppresses creator Leave; the list's Leave handler
+instead offers End, and the Escape menu skips the list for an active creator.
+These paths need one consistent overview with distinct Leave, My Minigame/Manage,
+Rejoin and explicit End. Default settings/draft targets and client action adaptation
+must resolve the owned game independently of active membership; preserve explicitly
+selected administrator-editable targets. Invite-only filtering must allow a creator
+to rejoin their own game. Explain that creator-owned brick/spawner groups keep
+running until End, including placements made while outside. Verify actual UI actions,
+host denial and network membership/resource observations; no interactive playtest.
+
+
+The autonomous message now passes in all 45 Session rule cases, together with
+queued score/reset events and a retained vehicle through departure/disconnect.
+The candidate's initial generic owner lookup also incorrectly selected the first
+shared SERVER-owned game for world owner 0. A new domain case fails that behavior.
+Creator priority now applies only to non-server games; server resources retain
+exclusive-game and authored claiming rules, independent of default participation.
+All 42 domain cases pass (30 rules, 12 teams). Final all-target warning-free Clippy
+passes for minigames/sim/net/client. Changed-area native generated-content, saved
+build and network consumers are being run against this final resource correction;
+retain the final receipts below before considering this increment verified.
+
+
+Final resource-increment receipt: **113 distinct scoped cases pass**, no retries:
+42 minigame domain cases; 45 Session rules; two bot spawn/lifecycle cases; all 13
+v20 event cases including both generated-content cases; both synthetic and native
+converted-content bot-spawner combat cases; two actual QUIC minigame cases; five
+native saved-build/direct duplicator consumers; and both protocol history cases.
+Overlap with the earlier foundation receipt is not an additional 113 features.
+Commands use `cargo test --locked --profile playtest`: domain selects
+`-p bri-minigames`; all remaining commands select `-p bri-sim -p bri-net
+-p bri-client` and respectively `--lib session::rules::tests`, `--lib spawn_tests`,
+`--test v20_events -- --include-ignored`, `--test vehicles
+bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame -- --include-ignored`,
+`--test loopback minigame`, `--test script_api --test advanced_duplicator save`
+and `--test protocol_changes`. Final logs are `minigame-resource-*-final.txt`.
+Final all-target warning-free Clippy and diff whitespace checks pass. These are
+changed-area checks, not final CI/platform/full-release acceptance. No human
+playtest is claimed. Next: implement the UI chain above, then complete actual
+network continuing-resource and native persistence/default/Slayer acceptance.

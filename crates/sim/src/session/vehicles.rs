@@ -834,7 +834,7 @@ impl Session {
             .and_then(|w| w.definition(definition))
             .context("checked above")?;
         let transform = self.spawn_transform(&brick, def);
-        let game = self.owner_game(brick.owner);
+        let game = self.resource_game(brick.owner);
         let respawn_ms = game
             .and_then(|g| self.minigames.game(g).ok())
             .map_or(0, |g| g.settings.vehicle_respawn_ms);
@@ -985,7 +985,7 @@ impl Session {
     /// `None` never returns it.
     fn return_ticks(&self, brick_owner: OwnerId, definition: &veh::Definition) -> Option<u64> {
         let game = self
-            .owner_game(brick_owner)
+            .resource_game(brick_owner)
             .and_then(|g| self.minigames.game(g).ok());
         let ms = match game.and_then(|g| g.settings.vehicle_return_ms) {
             Some(ms) => ms,
@@ -1208,10 +1208,6 @@ impl Session {
         }
         self.spawn_vehicle_for(brick_id)
     }
-    fn owner_game(&self, owner: OwnerId) -> Option<mg::GameId> {
-        let player = self.peers.get(&owner)?.combat.player;
-        self.minigames.player(player).ok()?.game
-    }
     /// `miniGameCanUse` for riding: owners, trusted sandbox players and
     /// same-minigame players may ride; different minigames may not. Outside
     /// minigames a vehicle whose owner is not on the server is anyone's
@@ -1250,7 +1246,7 @@ impl Session {
             Some(Decision::OutsideMinigames) => {
                 format!("{name} does not trust you enough to ride.")
             }
-            Some(Decision::Deny(mg::Denial::DifferentGame)) if self.owner_game(owner).is_some() => {
+            Some(Decision::Deny(mg::Denial::DifferentGame)) if self.game_of(owner).is_some() => {
                 "This vehicle is not part of the mini-game.".into()
             }
             Some(Decision::Deny(mg::Denial::DifferentGame)) => {

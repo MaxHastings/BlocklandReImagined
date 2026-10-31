@@ -468,7 +468,7 @@ fn reset_event_authority_and_cleanup_order() {
     for p in [a, b] {
         let cleanup = out
             .iter()
-            .position(|e| matches!(e,Effect::Cleanup {player,..} if *player==p))
+            .position(|e| matches!(e,Effect::Cleanup {owner,..} if *owner==p.account))
             .unwrap();
         let spawn = out
             .iter()
@@ -1107,4 +1107,195 @@ fn an_owned_encounter_can_be_empty_saved_and_rejoined_without_being_ended() {
     })
     .unwrap();
     assert_eq!(w.player(owner).unwrap().game, Some(encounter));
+}
+
+#[test]
+fn creator_resources_remain_in_the_owned_encounter_after_participation_changes() {
+    let mut w = world(PolicyMode::Internet);
+    let creator = connect(&mut w, 1);
+    let fighter = connect(&mut w, 2);
+    let other_owner = connect(&mut w, 3);
+    let encounter = create(&mut w, creator, 0);
+    w.execute(Command::Join {
+        actor: fighter,
+        game: encounter,
+    })
+    .unwrap();
+    let left = w.execute(Command::Leave { actor: creator }).unwrap();
+    assert!(
+        !left.iter().any(|e| matches!(
+            e,
+            Effect::Cleanup {
+                clear_event_schedules: true,
+                ..
+            } | Effect::Cleanup {
+                reset_owned_vehicles: true,
+                ..
+            } | Effect::Cleanup {
+                clear_spawned_objects: true,
+                ..
+            }
+        )),
+        "participation cleanup must not restart autonomous encounter resources"
+    );
+    for kind in [ObjectKind::Brick, ObjectKind::Vehicle, ObjectKind::Bot] {
+        assert_eq!(
+            w.can_damage(DamageSource::Player(fighter), obj(kind, creator)),
+            Decision::Allow,
+            "{kind:?} remains part of the encounter"
+        );
+    }
+    let other = create(&mut w, other_owner, 1);
+    w.execute(Command::Join {
+        actor: creator,
+        game: other,
+    })
+    .unwrap();
+    assert_eq!(
+        w.can_damage(
+            DamageSource::Player(fighter),
+            obj(ObjectKind::Vehicle, creator)
+        ),
+        Decision::Allow
+    );
+    assert!(
+        matches!(
+            w.can_damage(
+                DamageSource::Player(creator),
+                w.target_for_player(fighter).unwrap()
+            ),
+            Decision::Deny(_)
+        ),
+        "the creator's body has only its actual game's combat rights"
+    );
+    let mut settings = w.game(encounter).unwrap().settings.clone();
+    settings.use_all_players_bricks = true;
+    w.execute(Command::Configure {
+        actor: creator,
+        settings,
+    })
+    .unwrap();
+    assert!(
+        w.brick_owners(encounter).contains(&creator.account),
+        "reset includes the absent creator's resources"
+    );
+    assert!(
+        !w.brick_owners(other).contains(&creator.account),
+        "another game cannot reset this encounter's resources"
+    );
+    w.disconnect(creator).unwrap();
+    assert_eq!(
+        w.can_damage(
+            DamageSource::Player(fighter),
+            obj(ObjectKind::Vehicle, creator)
+        ),
+        Decision::Allow
+    );
+}
+
+#[test]
+fn encounter_reset_and_end_clean_offline_creator_resources_without_rejoining() {
+    let mut w = world(PolicyMode::Internet);
+    let creator = connect(&mut w, 1);
+    let fighter = connect(&mut w, 2);
+    let encounter = create(&mut w, creator, 0);
+    w.execute(Command::Join {
+        actor: fighter,
+        game: encounter,
+    })
+    .unwrap();
+    w.disconnect(creator).unwrap();
+    let reset = w
+        .execute(Command::Reset {
+            game: encounter,
+            authority: EventAuthority::System,
+        })
+        .unwrap();
+    assert_eq!(reset.iter().filter(|effect| matches!(effect,
+        Effect::Cleanup { owner, reset_owned_vehicles: true, clear_spawned_objects: true, .. }
+        if *owner == creator.account
+    )).count(), 1, "offline creator resources reset once, without a synthetic player");
+    assert!(reset.iter().any(|effect| matches!(effect,
+        Effect::ResetBricks { owners, reveal_items: true, .. } if owners.contains(&creator.account)
+    )));
+    assert!(matches!(w.player(creator), Err(Error::StalePlayer)));
+    let returned = connect(&mut w, 1);
+    let entered = w
+        .execute(Command::Join {
+            actor: returned,
+            game: encounter,
+        })
+        .unwrap();
+    assert!(
+        !entered.iter().any(|effect| matches!(effect,
+            Effect::Cleanup { owner, .. } if *owner == creator.account
+        )),
+        "resuming participation must not restart encounter resources"
+    );
+    w.execute(Command::Leave { actor: returned }).unwrap();
+    let ended = w.execute(Command::End { actor: returned }).unwrap();
+    assert_eq!(ended.iter().filter(|effect| matches!(effect,
+        Effect::Cleanup { owner, reset_owned_vehicles: true, clear_spawned_objects: true, .. }
+        if *owner == creator.account
+    )).count(), 1);
+    assert!(w.game(encounter).is_err());
+    assert_eq!(w.player(fighter).unwrap().game, None);
+}
+
+#[test]
+fn autonomous_brick_authority_requires_the_encounters_actual_creator() {
+    let mut w = world(PolicyMode::Internet);
+    let creator = connect(&mut w, 1);
+    let member = connect(&mut w, 2);
+    let game = create(&mut w, creator, 0);
+    w.execute(Command::Join {
+        actor: member,
+        game,
+    })
+    .unwrap();
+    w.disconnect(creator).unwrap();
+    let command = |owner| Command::Message {
+        game,
+        authority: EventAuthority::AutonomousBrick { owner },
+        kind: MessageKind::Chat,
+        text: "Still running %1".into(),
+    };
+    assert_eq!(w.execute(command(member.account)), Err(Error::NotOwner));
+    assert_eq!(w.execute(command(SERVER.account)), Err(Error::NotOwner));
+    let effects = w.execute(command(creator.account)).unwrap();
+    assert!(
+        effects.iter().any(|effect| matches!(effect,
+            Effect::Message { recipients, text, .. }
+            if recipients == &vec![member] && text == "Still running %1"
+        )),
+        "autonomous events keep recipients and do not invent an instigator"
+    );
+}
+
+#[test]
+fn shared_server_games_use_authored_world_claims_instead_of_first_creator_match() {
+    let mut w = world(PolicyMode::Internet);
+    let first = w.host_create_shared(0, Settings::default()).unwrap();
+    assert_eq!(
+        w.resource_game(SERVER.account),
+        None,
+        "a non-exclusive server game does not implicitly claim the world"
+    );
+    let claiming = w
+        .host_create_shared(
+            1,
+            Settings {
+                use_all_players_bricks: true,
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+    w.set_claims_bricks(claiming, true).unwrap();
+    assert_eq!(w.resource_game(SERVER.account), Some(claiming));
+    w.set_default_game(Some(first)).unwrap();
+    assert_eq!(
+        w.resource_game(SERVER.account),
+        Some(claiming),
+        "default participation must not override authored resource claims"
+    );
 }

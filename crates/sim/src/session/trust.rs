@@ -135,6 +135,16 @@ impl Session {
         group: OwnerId,
         game: Option<bri_minigames::GameId>,
     ) -> OwnerId {
+        // A retained encounter keeps its creator's group even while that
+        // creator is offline. Full trust is editing permission, not transfer
+        // of an independently running encounter into another game.
+        if self
+            .minigames
+            .games()
+            .any(|g| !g.is_server() && g.owner.0 == group)
+        {
+            return group;
+        }
         if let Some(player) = self.brick_group_player(group) {
             return player;
         }

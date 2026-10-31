@@ -429,8 +429,9 @@ impl Region {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CleanupRules {
-    /// Leaving the game (or its end) clears the member's event schedules
-    /// and objects and respawns their vehicles, as v20's `removeMember`.
+    /// Leaving the game (or its end) clears participant resource groups,
+    /// as v20's `removeMember`. A creator's independently owned encounter
+    /// instead keeps its resources until that encounter resets or ends.
     pub leave: bool,
 }
 impl Default for CleanupRules {
@@ -692,8 +693,9 @@ pub enum Effect {
         teams: Vec<TeamId>,
         players: Vec<PlayerId>,
     },
+    /// World resources belong to an account, even when no player is present.
     Cleanup {
-        player: PlayerId,
+        owner: AccountId,
         clear_event_schedules: bool,
         reset_owned_vehicles: bool,
         clear_spawned_objects: bool,
@@ -759,6 +761,11 @@ pub enum Effect {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventAuthority {
     Owner(PlayerId),
+    /// Autonomous output from a live authored brick. The host resolves this
+    /// account from the source brick; it cannot come from a client packet.
+    AutonomousBrick {
+        owner: AccountId,
+    },
     OwnerBrick {
         instigator: PlayerId,
         brick_owner: AccountId,

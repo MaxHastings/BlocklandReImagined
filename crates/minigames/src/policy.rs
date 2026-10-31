@@ -117,6 +117,28 @@ impl MinigamesWorld {
             .or_else(|| claiming().next())
             .map(|g| g.id)
     }
+    /// Stock resource-group affiliation is independent of the creator's body.
+    /// All bricks/spawners in a creator's group use their owned game until End;
+    /// otherwise the existing participant/claiming policy applies. Actors still
+    /// use PlayerState::game. Explicit object membership remains available.
+    pub fn resource_game(&self, owner: AccountId) -> Option<GameId> {
+        self.games
+            .values()
+            .find(|g| !g.is_server() && g.owner == owner)
+            .map(|g| g.id)
+            .or_else(|| {
+                self.players
+                    .values()
+                    .find(|p| p.id.account == owner)
+                    .and_then(|p| p.game)
+            })
+            .or_else(|| {
+                (owner == SERVER.account)
+                    .then(|| self.server_game())
+                    .flatten()
+            })
+            .or_else(|| self.claiming_game())
+    }
     fn resolve_target(&self, target: Target) -> Result<Resolved, Error> {
         match target {
             Target::Player { player, life } => {
@@ -155,15 +177,7 @@ impl MinigamesWorld {
                         {
                             None
                         } else {
-                            let game = owner.and_then(|a| {
-                                match self.players.values().find(|p| p.id.account == a) {
-                                    Some(p) => p.game.or_else(|| self.claiming_game()),
-                                    // The world's bricks belong to a game
-                                    // mode's mini-game.
-                                    None if a == SERVER.account => self.server_game(),
-                                    None => self.claiming_game(),
-                                }
-                            });
+                            let game = owner.and_then(|a| self.resource_game(a));
                             match (membership, game) {
                                 (Membership::OwnerAt(at), Some(g))
                                     if self.games[&g].region.is_some_and(|r| !r.contains(at)) =>

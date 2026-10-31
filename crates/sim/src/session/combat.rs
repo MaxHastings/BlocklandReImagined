@@ -1136,6 +1136,10 @@ impl Session {
     pub(super) fn game_of(&self, owner: OwnerId) -> Option<GameId> {
         self.damage_policy().game_of(owner)
     }
+    /// Affiliation of a creator-owned resource group, not the creator's body.
+    pub(super) fn resource_game(&self, owner: OwnerId) -> Option<GameId> {
+        self.minigames.resource_game(mg::AccountId(owner))
+    }
     /// The damage rules over the state they read.
     pub(super) fn damage_policy(&self) -> DamagePolicy<'_> {
         DamagePolicy {
@@ -2670,21 +2674,19 @@ impl Session {
                 // Joining, leaving or resetting a minigame off LAN:
                 // `ClearEventSchedules` and `resetVehicles` for the client.
                 mg::Effect::Cleanup {
-                    player,
+                    owner,
                     clear_event_schedules,
                     reset_owned_vehicles,
                     clear_spawned_objects,
                 } => {
-                    if let Some(owner) = self.owner_of(player) {
-                        if clear_event_schedules {
-                            self.cancel_owner_events(owner);
-                        }
-                        if clear_spawned_objects {
-                            self.clear_event_projectiles(owner);
-                        }
-                        if reset_owned_vehicles {
-                            self.reset_owned_vehicles(owner);
-                        }
+                    if clear_event_schedules {
+                        self.cancel_owner_events(owner.0);
+                    }
+                    if clear_spawned_objects {
+                        self.clear_event_projectiles(owner.0);
+                    }
+                    if reset_owned_vehicles {
+                        self.reset_owned_vehicles(owner.0);
                     }
                 }
                 mg::Effect::EjectVehicles { brick_owner } => {

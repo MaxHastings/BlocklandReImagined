@@ -177,6 +177,59 @@ fn a_lan_minigame_owner_resets_their_game_from_anyones_brick() {
     }
 }
 
+/// Encounter brick authority survives its creator's participation and connection.
+#[test]
+fn a_remaining_member_can_trigger_the_creators_reset_brick_after_the_creator_leaves() {
+    let mut s = session(false);
+    let creator = s
+        .join("Creator".into(), Vec3::new(5., 0.05, 0.), false)
+        .unwrap();
+    let member = s
+        .join("Member".into(), Vec3::new(-5., 0.05, 0.), false)
+        .unwrap();
+    s.command(
+        creator,
+        1,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings::default(),
+        }),
+    )
+    .unwrap();
+    let game = s.minigame_views()[0].id;
+    s.command(member, 1, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+    let brick = evented_brick(
+        &mut s,
+        creator,
+        2,
+        [5., 0.3, -3.],
+        vec![row(
+            "onActivate",
+            bri_events::Slot::MiniGame,
+            "Reset",
+            vec![],
+        )],
+    );
+    s.command(creator, 3, Command::MiniGame(MiniGameRequest::Leave))
+        .unwrap();
+    for disconnected in [false, true] {
+        if disconnected {
+            s.disconnect(creator).unwrap();
+        }
+        steps(&mut s, &[member], 700);
+        s.take_private_notices();
+        s.fire_brick_input(brick, "onActivate", Some(member));
+        steps(&mut s, &[member], 2);
+        assert!(
+            s.take_private_notices()
+                .iter()
+                .any(|(_, n)| format!("{n:?}").contains("reset the mini-game")),
+            "creator disconnected={disconnected}: encounter reset brick lost its game target"
+        );
+    }
+}
+
 on_both! {
 /// allGameScripts.cs:17660 `fxDTSBrick::spawnExplosion` (and spawnItem
 /// 17514, spawnProjectile 17600) do nothing from a brick that is neither

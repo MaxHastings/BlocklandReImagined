@@ -178,6 +178,13 @@ impl MinigamesWorld {
         let game = self.game(id)?;
         match authority {
             EventAuthority::System => Ok(()),
+            EventAuthority::AutonomousBrick { owner } => {
+                if owner == game.owner {
+                    Ok(())
+                } else {
+                    Err(Error::NotOwner)
+                }
+            }
             EventAuthority::Owner(p) => {
                 self.player(p)?;
                 if p.account == game.owner {
@@ -201,10 +208,19 @@ impl MinigamesWorld {
         }
     }
     fn cleanup(&self, player: PlayerId, reset: bool, out: &mut Vec<Effect>) {
-        let active = reset || self.mode != PolicyMode::LegacyLan;
-        if active {
+        // Join/leave concerns the combat body. An owned encounter's world
+        // resources continue, including when this player joins another game.
+        if let Ok(owned) = self.owned_game(player)
+            && (!reset || self.player(player).is_ok_and(|p| p.game != Some(owned)))
+        {
+            return;
+        }
+        self.cleanup_resources(player.account, reset, out);
+    }
+    fn cleanup_resources(&self, owner: AccountId, reset: bool, out: &mut Vec<Effect>) {
+        if reset || self.mode != PolicyMode::LegacyLan {
             out.push(Effect::Cleanup {
-                player,
+                owner,
                 clear_event_schedules: self.clear_events,
                 reset_owned_vehicles: true,
                 clear_spawned_objects: true,
@@ -347,6 +363,9 @@ impl MinigamesWorld {
                 brick_owner: p.account,
             });
         }
+        if game.cleanup.leave && !game.members.iter().any(|p| p.account == game.owner) {
+            self.cleanup_resources(game.owner, false, out);
+        }
         for p in self.players.values_mut() {
             if p.invite == Some(id) {
                 p.invite = None;
@@ -459,6 +478,7 @@ impl MinigamesWorld {
             return Err(Error::Capacity);
         }
         let members: Vec<_> = g.members.iter().copied().collect();
+        let creator = g.owner;
         let owners = self.brick_owners(game);
         let g = self.games.get_mut(&game).expect("validated game");
         g.last_reset = Some(self.tick);
@@ -469,6 +489,9 @@ impl MinigamesWorld {
             respawn_vehicles: true,
             reveal_items: true,
         });
+        if !members.iter().any(|p| p.account == creator) {
+            self.cleanup_resources(creator, true, out);
+        }
         let keep_scores = self.games[&game].keep_scores;
         if !keep_scores {
             let points = std::mem::take(
@@ -545,6 +568,9 @@ impl MinigamesWorld {
                 self.games
                     .insert(id, MiniGame::new(id, actor, color, settings));
                 out.push(Effect::Created { game: id });
+                // Starting an encounter initializes its resources once. Later
+                // participant re-entry is not another encounter reset.
+                self.cleanup_resources(actor.account, false, &mut out);
                 self.join_member(actor, id, &mut out)?;
             }
             Command::Configure {
@@ -700,7 +726,7 @@ impl MinigamesWorld {
                     EventAuthority::Owner(p) | EventAuthority::OwnerBrick { instigator: p, .. } => {
                         Some(p)
                     }
-                    EventAuthority::System => None,
+                    EventAuthority::System | EventAuthority::AutonomousBrick { .. } => None,
                 };
                 let text = if let Some(p) = instigator {
                     let text = text.replace("%1", &self.players[&p].name);
@@ -929,11 +955,16 @@ impl MinigamesWorld {
         let Some(g) = self.games.get(&game) else {
             return Vec::new();
         };
+        let mut owners = BTreeSet::from([g.owner]);
         if g.settings.use_all_players_bricks {
-            g.members.iter().map(|p| p.account).collect()
-        } else {
-            vec![g.owner]
+            owners.extend(
+                g.members
+                    .iter()
+                    .map(|p| p.account)
+                    .filter(|owner| self.resource_game(*owner) == Some(game)),
+            );
         }
+        owners.into_iter().collect()
     }
     /// A team's score: its own points and its current members' scores
     /// together (Slayer's `Slayer_TeamSO::getScore`).

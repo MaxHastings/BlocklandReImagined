@@ -524,8 +524,7 @@ impl Session {
             return Some(game);
         }
         let owner = self.simulation.state().bricks.get(&brick)?.owner;
-        let player = self.peers.get(&owner)?.combat.player;
-        self.minigames.player(player).ok()?.game
+        self.resource_game(owner)
     }
     /// What a spawn brick's bot is called. A brick its builder named gives
     /// "Kind (name)", so the Players list tells one brick's bot from
@@ -753,6 +752,112 @@ impl Session {
 #[cfg(test)]
 mod spawn_tests {
     use super::*;
+
+    #[test]
+    fn a_brick_bot_keeps_fighting_after_its_creator_leaves_and_joins_another_game() -> Result<()> {
+        use bri_minigames as mg;
+        use rapier3d::prelude::*;
+        let mut world =
+            bri_world::World::new("Persistent battle".into(), "fixture".into(), vec![[1.; 4]]);
+        let mut brick = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved(crate::testing::VEHICLE_SPAWN.into()),
+            [0., 0.1, 0.],
+            0,
+        );
+        brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
+            vehicle: bri_world::ContentRef::Resolved("fixture:bot/melee".into()),
+            recolor: false,
+            team: None,
+        }));
+        world.bricks.insert(1, brick);
+        world.next_brick_id = 2;
+        let floor = ColliderBuilder::cuboid(30., 0.5, 30.).translation(Vector::new(0., -0.5, 0.));
+        let mut s = Session::new(crate::simulation::Simulation::new(
+            world,
+            crate::testing::definitions(),
+            vec![floor],
+        )?);
+        s.set_lan_host(false);
+        s.spawn_points = vec![Vec3::new(-12., 0.05, -8.)];
+        let creator = s.join("Creator".into(), Vec3::new(-8., 0.05, 0.), false)?;
+        let fighter = s.join("Fighter".into(), Vec3::new(6., 0.05, 0.), false)?;
+        let other = s.join("Other owner".into(), Vec3::new(-20., 0.05, 0.), false)?;
+        s.simulation.mutate(1, |b| b.owner = creator)?;
+        s.set_bot_kinds(crate::bot_kind::BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"fixture:bot/melee","name":"Melee bot","sight":80,"wander_radius":0,"reaction_seconds":0,"weapons":false,"side":"hostile","melee":{"damage":25,"reach":2.5,"seconds":0.3},"behaviours":{"fly":0},"perception":{"strength":0},"surprise":{"strength":0}}]}"#)?.bots)?;
+        s.minigame_request(
+            creator,
+            crate::session::MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )?;
+        let encounter = s.game_of(creator).unwrap();
+        s.minigame_request(
+            fighter,
+            crate::session::MiniGameRequest::Join { game: encounter.0 },
+        )?;
+        s.peers.get_mut(&fighter).unwrap().player.place(
+            &mut s.simulation.physics,
+            Vec3::new(6., 0.05, 0.),
+            0.,
+            Vec3::ZERO,
+        );
+        s.reconcile_bot_brick(1, Some("fixture:bot/melee"))?;
+        s.sync_bot_minigames()?;
+        let bot = s.bots.by_brick[&1];
+        let life = s
+            .minigames
+            .player(s.peers[&bot].combat.player)
+            .unwrap()
+            .life;
+        s.minigame_request(creator, crate::session::MiniGameRequest::Leave)?;
+        s.sync_bot_minigames()?;
+        assert_eq!(
+            s.game_of(bot),
+            Some(encounter),
+            "the creator's departure must not eject the bot from combat"
+        );
+        assert_eq!(
+            s.minigames
+                .player(s.peers[&bot].combat.player)
+                .unwrap()
+                .life,
+            life,
+            "leaving must not respawn the running bot"
+        );
+        s.minigame_request(
+            other,
+            crate::session::MiniGameRequest::Create {
+                color: 1,
+                settings: Default::default(),
+            },
+        )?;
+        let other_game = s.game_of(other).unwrap();
+        s.minigame_request(
+            creator,
+            crate::session::MiniGameRequest::Join { game: other_game.0 },
+        )?;
+        s.sync_bot_minigames()?;
+        assert_eq!(s.game_of(bot), Some(encounter));
+        assert!(!s.damage_policy().player(creator, fighter, false));
+        assert!(!s.damage_policy().player(bot, creator, false));
+        let initial = s.peers[&fighter].combat.health;
+        for _ in 0..1440 {
+            s.step()?;
+            if s.peers[&fighter].combat.health < initial {
+                break;
+            }
+        }
+        assert!(
+            s.peers[&fighter].combat.health < initial,
+            "ordinary bot controls and melee must damage the remaining participant"
+        );
+        s.disconnect(creator)?;
+        s.sync_bot_minigames()?;
+        assert_eq!(s.game_of(bot), Some(encounter));
+        assert!(s.minigames.game(mg::GameId(encounter.0)).is_ok());
+        Ok(())
+    }
 
     #[test]
     fn brick_bots_inherit_the_spawn_frame_on_creation_and_reset() -> Result<()> {

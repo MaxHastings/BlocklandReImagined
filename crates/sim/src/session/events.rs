@@ -791,7 +791,7 @@ impl Session {
         let game = ev::semantics::minigame_target(
             self.lan_host,
             brick_owner
-                .and_then(|o| self.game_of(self.brick_group_owner_for(o, client_game)))
+                .and_then(|o| self.resource_game(self.brick_group_owner_for(o, client_game)))
                 .map(|g| entity(Class::MiniGame, g.0)),
             client_game.map(|g| entity(Class::MiniGame, g.0)),
         );
@@ -1976,12 +1976,15 @@ impl EventHost<'_> {
         let game = mg::GameId(d.target.id.index);
         let s = &mut *self.session;
         // Brick events act with the brick owner's authority over their game.
-        let owner = s
+        let Some(owner) = s
             .simulation
             .state()
             .bricks
             .get(&d.source.index)
-            .map_or(0, |b| b.owner);
+            .map(|b| b.owner)
+        else {
+            return Ok(Apply::Rejected("source brick no longer exists".into()));
+        };
         let instigator = d
             .client
             .and_then(|c| s.peers.get(&c.id.index))
@@ -2002,9 +2005,9 @@ impl EventHost<'_> {
                 brick_owner: mg::AccountId(owner),
             },
             (None, Some(peer)) => mg::EventAuthority::Owner(peer.combat.player),
-            (None, None) => {
-                return Ok(Apply::Rejected("brick owner is not connected".into()));
-            }
+            (None, None) => mg::EventAuthority::AutonomousBrick {
+                owner: mg::AccountId(owner),
+            },
         };
         let command = match op {
             MiniGameOp::Message {
