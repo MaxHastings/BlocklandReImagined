@@ -31,3 +31,18 @@ claim that timer-only copying will solve native crowd coordination. The native
 bot safe-walk path currently evaluates ordinary hops through a static landing
 probe. Next verify how that probe treats living bodies and connect a grounded,
 bounded cooperation decision to ordinary controls; the cube is still unsolved.
+
+
+The safety path is now traced: `bot_safe_walk` accepts an ordinary moving hop
+only if `hop_lands` finds world geometry below its projected level-ground landing
+point. `admin_players::world_ray` explicitly excludes player and vehicle
+colliders, and the probe starts only 0.5 units above the current feet. Therefore
+it cannot validate landing on an elevated living body's top; merely requesting a
+normal hop cannot establish the requested stacking behavior. The in-place jump
+path is separate and bypasses that particular hop probe, but does not provide an
+approach, landing plan or cooperation. Preserve the existing world-only test for
+ordinary movement: the supported next change needs an explicit living-support
+candidate and a trajectory/clearance check using the actual body dimensions,
+lifetime and motor, not a blanket inclusion of players in world rays. The v21
+collision handler's synchronized jumps are evidence for timing, not evidence of
+native clearance or stability. No cube success is claimed.
