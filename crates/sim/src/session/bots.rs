@@ -1411,6 +1411,27 @@ fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool, feet_only:
     }
 }
 
+/// Minimum vertical rise that puts an observed point within a melee reach.
+fn support_jump_rise(eye: Vec3, target: Vec3, reach: f32, apex: f32) -> Option<f32> {
+    let d = target - eye;
+    if !d.is_finite()
+        || !reach.is_finite()
+        || !apex.is_finite()
+        || reach <= 0.0
+        || apex <= 0.0
+        || d.y <= 0.0
+        || d.length() <= reach
+    {
+        return None;
+    }
+    let room = reach * reach - d.x * d.x - d.z * d.z;
+    if room < 0.0 {
+        return None;
+    }
+    let rise = d.y - room.sqrt();
+    (rise > 0.0 && rise <= apex).then_some(rise)
+}
+
 /// Horizontal speed, units a second, under which the stall judge's jump is
 /// a jump in place (over what its shins catch): faster, it carries the bot
 /// on and is judged as a hop.
@@ -3632,13 +3653,69 @@ impl Session {
                 )
                 .is_none()
             });
+        // An actual allied support can give a melee fighter a higher takeoff
+        // than the static walk grid knows. If an ordinary vertical jump can
+        // bring a visible opponent into reach, use that contact rather than
+        // immediately stepping down to the grid. The motor still owns the
+        // jump and all collision and attack checks.
+        let support_jump = kind.cooperative_stack
+            && on_body
+            && driving.is_none()
+            && !self.seated(bot)
+            && flat(Vec3::from(state.velocity)).length() <= STILL_HOP
+            && matches!(behaviour, Behaviour::Fight | Behaviour::Chase)
+            && wanted.is_none_or(|w| w.feet.y < feet.y - body.step - 0.5)
+            && self.peers[&bot].player.support_tag().is_some_and(|tag| {
+                tag >> 64 == 1
+                    && self.peers.get(&(tag as OwnerId)).is_some_and(|p| {
+                        p.combat.alive
+                            && p.player.state().grounded
+                            && Vec3::from(p.player.state().velocity).length() <= STILL_HOP
+                    })
+                    && self.bot_allies(bot, tag as OwnerId)
+                    && self
+                        .bots
+                        .brains
+                        .get(&(tag as OwnerId))
+                        .is_none_or(|b| b.kind.cooperative_stack)
+            })
+            && sight.target.is_some_and(|seen| {
+                if seen.feet.distance(seen.real) > 0.01 {
+                    return false;
+                }
+                let reach = bite
+                    .as_ref()
+                    .map(|m| m.reach)
+                    .or_else(|| weapon.filter(|w| w.melee).map(|w| w.reach));
+                reach
+                    .and_then(|reach| support_jump_rise(eye, seen.aim, reach, body.motion.apex()))
+                    .is_some_and(|rise| {
+                        let sim = &self.simulation;
+                        let terrain = |o, d, r| sim.terrain_ray(o, d, r);
+                        let passable = sim.bot_passable();
+                        let solid = |h, _: &_| !passable.contains(&h);
+                        let ground = Ground {
+                            physics: &sim.physics,
+                            terrain: &terrain,
+                            passages: sim.passages(),
+                            waters: &[],
+                            bodies: &[],
+                            motions: &[],
+                            solid: &solid,
+                        };
+                        ground.sweep(&body, feet, feet + Vec3::Y * rise)
+                    })
+            });
+        if support_jump {
+            wanted = None;
+        }
         // The walk grid has no place for its feet there and no route: it
         // walks straight off toward wherever it is going, and plans again
         // once down. One going nowhere, or whose goal is close by below it
         // (under its feet or at the body's foot), goes nowhere walking at
         // it: it steps off to the nearest free floor instead, toward the
         // goal where that side is open.
-        if wanted.is_none() && on_body && self.bots.brains[&bot].search.is_none() {
+        if wanted.is_none() && on_body && !support_jump && self.bots.brains[&bot].search.is_none() {
             let to = match self.bots.brains[&bot].goal.map(|g| g.point(home)) {
                 Some(point) if flat(point - feet).length() > 1.5 => Some(point),
                 Some(point) if point.y >= feet.y - body.step - 0.5 => None,
@@ -3663,6 +3740,7 @@ impl Session {
             && driving.is_none()
             && !self.seated(bot)
             && swim.is_none()
+            && !support_jump
         {
             let to = self.bot_step_off(bot, feet, &body, next.feet, feet.y - body.step - 0.5);
             if on_body || to.is_some() {
@@ -4445,7 +4523,7 @@ impl Session {
             &mut proposals,
             act::Press {
                 hop: act.jump || extra.jump || into_body || stall_hop && !in_place,
-                jump: stall_hop && in_place,
+                jump: stall_hop && in_place || support_jump,
                 crouch: act.crouch || extra.crouch,
                 jet: extra.jet,
             },
@@ -4678,6 +4756,22 @@ mod work_tests {
             true,
             true
         ));
+    }
+
+    #[test]
+    fn a_supported_melee_jump_requires_an_elevated_reachable_target() {
+        let eye = Vec3::ZERO;
+        let reach = 2.0;
+        let apex = 3.0;
+        assert_eq!(
+            support_jump_rise(eye, Vec3::new(0.0, 4.0, 0.0), reach, apex),
+            Some(2.0)
+        );
+        assert!(support_jump_rise(eye, Vec3::new(0.0, 6.0, 0.0), reach, apex).is_none());
+        assert!(support_jump_rise(eye, Vec3::new(2.1, 3.0, 0.0), reach, apex).is_none());
+        assert!(support_jump_rise(eye, Vec3::Y, reach, apex).is_none());
+        assert!(support_jump_rise(eye, Vec3::NEG_Y * 4.0, reach, apex).is_none());
+        assert!(support_jump_rise(eye, Vec3::Y * 4.0, f32::NAN, apex).is_none());
     }
 }
 

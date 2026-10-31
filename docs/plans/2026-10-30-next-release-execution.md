@@ -129,6 +129,14 @@ long-run movement report and destroyed-brick attachments/spawners. Newly arrivin
 reports get explicit triage; they do not silently expand or reduce the baseline.
 This is a release workload agreement, not a project-wide feature freeze.
 
+October 31 GitHub recheck found two additional open issues under Maxwell's
+instruction to address open issues: [#416](https://github.com/MaxHastings/BlocklandReImagined/issues/416)
+(borderless display and missing aspect ratios/resolutions) and
+[#417](https://github.com/MaxHastings/BlocklandReImagined/issues/417)
+(automatic draw distance). Audit the underlying needs, source behavior and
+existing implementation; apply judgment to the proposed solutions and record
+what is justified rather than adopting every suggestion automatically.
+
 October 31 explicit additions: loading chat paging/F2 with a real roster;
 the reported closed-chat-channel exit during friend-server map loading; and
 modder VoIP composition seams as scoped in the detailed plan. Maxwell clarified

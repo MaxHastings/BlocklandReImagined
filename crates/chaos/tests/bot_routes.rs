@@ -957,7 +957,7 @@ fn a_driver_searches_round_a_wall_from_an_allys_sighting() {
 /// there is worth nothing, so it goes about its business instead of
 /// standing under the platform for good (as the old chase did).
 #[test]
-fn a_melee_bot_gives_up_an_enemy_it_cannot_reach_on_a_roof() {
+fn a_melee_bot_keeps_pursuing_a_visible_enemy_on_a_roof() {
     let mut s = session();
     only_kind(&mut s, |k| {
         k.melee = Some(bite(5.0));
@@ -978,7 +978,7 @@ fn a_melee_bot_gives_up_an_enemy_it_cannot_reach_on_a_roof() {
     steps(&mut s, &[human], 30, &mut sequence);
     let bot = bots(&s)[0];
     let mut chased = 0;
-    let mut gave_up = None;
+    let mut pursued_late = 0;
     let mut nearest = f32::INFINITY;
     for tick in 0..120 * 20 {
         steps(&mut s, &[human], 1, &mut sequence);
@@ -986,9 +986,9 @@ fn a_melee_bot_gives_up_an_enemy_it_cannot_reach_on_a_roof() {
         let t = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
         if matches!(t.behaviour, "chase" | "fight" | "search") {
             chased += 1;
-            gave_up = None;
-        } else if gave_up.is_none() {
-            gave_up = Some(tick);
+            if tick >= 120 * 10 {
+                pursued_late += 1;
+            }
         }
     }
     assert!(chased > 0, "it went for the enemy at first");
@@ -997,8 +997,8 @@ fn a_melee_bot_gives_up_an_enemy_it_cannot_reach_on_a_roof() {
         "execute the reachable partial route before judging the roof unreachable: {nearest}"
     );
     assert!(
-        gave_up.is_some_and(|tick| tick < 120 * 10),
-        "it chased an enemy it cannot reach for {chased} ticks: {:?}",
+        pursued_late > 120 * 5,
+        "it did not continue pursuing the visible elevated enemy: {pursued_late} late ticks, {:?}",
         s.bot_thoughts()
     );
 }
