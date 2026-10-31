@@ -333,46 +333,77 @@ pub fn skid_loop(
 /// replica revision from what changed in it (`Bricks::diff` skips the
 /// shared tree), so a world change costs its changed bricks, not a pass
 /// over every brick with a copy of every sound name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MusicSource {
+    sound: String,
+    position: [f32; 3],
+    parent: u64,
+    destroyed: bool,
+}
 #[derive(Default)]
 pub struct MusicBricks {
     bricks: Option<bri_world::Bricks>,
-    wanted: BTreeMap<u64, (String, [f32; 3])>,
-    /// Passes over a whole world: the first replica only.
+    wanted: BTreeMap<u64, MusicSource>,
+    /// Sparse reverse index; multiple sources can safely share a carrier.
+    carriers: BTreeMap<u64, usize>,
     pub full_scans: u64,
-    /// Bricks examined, in passes and in changes.
     pub visited: u64,
 }
 impl MusicBricks {
-    fn music(brick: &bri_world::Brick) -> Option<(String, [f32; 3])> {
+    fn music(id: u64, brick: &bri_world::Brick) -> Option<MusicSource> {
         match &brick.sound {
-            Some(bri_world::ContentRef::Resolved(sound)) => Some((sound.clone(), brick.position)),
+            Some(bri_world::ContentRef::Resolved(sound)) => Some(MusicSource {
+                sound: sound.clone(),
+                position: brick.position,
+                parent: brick.damage_attachment.as_deref().copied().unwrap_or(id),
+                destroyed: brick.damage_hidden,
+            }),
             _ => None,
         }
     }
-    /// Bring the music bricks up to `bricks`; true when any changed.
+    fn change(&mut self, id: u64, next: Option<MusicSource>) -> bool {
+        if self.wanted.get(&id) == next.as_ref() {
+            return false;
+        }
+        if let Some(old) = self.wanted.remove(&id)
+            && old.parent != id
+        {
+            let count = self
+                .carriers
+                .get_mut(&old.parent)
+                .expect("indexed music carrier");
+            *count -= 1;
+            if *count == 0 {
+                self.carriers.remove(&old.parent);
+            }
+        }
+        if let Some(next) = next {
+            if next.parent != id {
+                *self.carriers.entry(next.parent).or_default() += 1;
+            }
+            self.wanted.insert(id, next);
+        }
+        true
+    }
+    /// Keep the authored index incremental; motion never rescans the world.
     pub fn update(&mut self, bricks: &bri_world::Bricks) -> bool {
         if self.bricks.as_ref().is_some_and(|old| old.ptr_eq(bricks)) {
             return false;
         }
         let mut changed = false;
-        match &self.bricks {
+        match self.bricks.replace(bricks.clone()) {
             Some(old) => {
                 for change in old.diff(bricks) {
                     self.visited += 1;
                     match change {
                         imbl::ordmap::DiffItem::Remove(id, _) => {
-                            changed |= self.wanted.remove(id).is_some();
+                            changed |= self.carriers.contains_key(id);
+                            changed |= self.change(*id, None);
                         }
                         imbl::ordmap::DiffItem::Add(id, b)
                         | imbl::ordmap::DiffItem::Update { new: (id, b), .. } => {
-                            let want = Self::music(b);
-                            if self.wanted.get(id) != want.as_ref() {
-                                changed = true;
-                                match want {
-                                    Some(want) => self.wanted.insert(*id, want),
-                                    None => self.wanted.remove(id),
-                                };
-                            }
+                            changed |= self.carriers.contains_key(id);
+                            changed |= self.change(*id, Self::music(*id, b));
                         }
                     }
                 }
@@ -380,20 +411,23 @@ impl MusicBricks {
             None => {
                 self.full_scans += 1;
                 self.visited += bricks.len() as u64;
-                self.wanted = bricks
-                    .iter()
-                    .filter_map(|(id, b)| Some((*id, Self::music(b)?)))
-                    .collect();
+                for (id, brick) in bricks {
+                    self.change(*id, Self::music(*id, brick));
+                }
                 changed = true;
             }
         }
-        self.bricks = Some(bricks.clone());
         changed
     }
-    /// Music brick id, loop and position.
-    pub fn wanted(&self) -> &BTreeMap<u64, (String, [f32; 3])> {
+    pub fn wanted(&self) -> &BTreeMap<u64, MusicSource> {
         &self.wanted
     }
+}
+struct BrickMusicVoice {
+    source: MusicSource,
+    position: [f32; 3],
+    handle: SoundHandle,
+    death: Option<u64>,
 }
 
 pub struct ClientAudio {
@@ -410,8 +444,9 @@ pub struct ClientAudio {
     pub server_dropped: u64,
     pub requested: BTreeMap<String, u64>,
     prefs: Prefs,
-    /// Music-brick loops keyed by brick: (loop id, position, voice).
-    music: BTreeMap<u64, (String, [f32; 3], SoundHandle)>,
+    /// Bounded playback owns removed-source metadata until visible debris retires.
+    music: BTreeMap<u64, BrickMusicVoice>,
+    music_dirty: bool,
     /// The music bricks the world has.
     pub music_bricks: MusicBricks,
     /// Looping image state sounds (spray hiss, push broom) keyed by
@@ -593,6 +628,7 @@ impl ClientAudio {
             requested: BTreeMap::new(),
             prefs: Prefs::default(),
             music: BTreeMap::new(),
+            music_dirty: false,
             music_bricks: MusicBricks::default(),
             rule_music: None,
             rule_ambient: BTreeMap::new(),
@@ -900,45 +936,142 @@ impl ClientAudio {
         }
     }
     /// Keep one positional loop per music brick in step with the world.
-    pub fn sync_music(&mut self, bricks: &bri_world::Bricks) {
-        // Loops that would not start (64 at once, or a failed play) are
-        // tried again on later revisions, as before.
-        if !self.music_bricks.update(bricks) && self.music.len() == self.music_bricks.wanted.len() {
-            return;
-        }
-        let wanted = &self.music_bricks.wanted;
-        let stale: Vec<u64> = self
-            .music
-            .iter()
-            .filter(|(id, (sound, position, _))| {
-                wanted
-                    .get(id)
-                    .is_none_or(|(want, at)| want != sound || at != position)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        for id in stale {
-            if let Some((_, _, handle)) = self.music.remove(&id) {
-                let result = self.runtime.stop_with_fade(handle, 0.2);
-                self.record(result);
+    pub(crate) fn observe_music_deaths(&mut self, cues: &[bri_sim::presentation::Cue]) {
+        for cue in cues {
+            if let bri_sim::presentation::CueKind::BrickKill { brick, .. } = cue.kind {
+                self.music_dirty = true;
+                if let Some(voice) = self.music.get_mut(&brick) {
+                    voice.death = Some(cue.id);
+                }
             }
         }
-        let missing: Vec<(u64, String, [f32; 3])> = self
+    }
+    pub(crate) fn sync_music_with_debris(
+        &mut self,
+        bricks: &bri_world::Bricks,
+        debris: &crate::brick_debris::BrickDebris,
+    ) {
+        let changed = self.music_bricks.update(bricks);
+        if self.music.is_empty() && self.music_bricks.wanted.is_empty() {
+            self.music_dirty = false;
+            return;
+        }
+        let frames = debris.attachment_frames(|id| {
+            self.music.contains_key(&id)
+                || self.music_bricks.wanted.contains_key(&id)
+                || self.music_bricks.carriers.contains_key(&id)
+        });
+        self.sync_music_frames(bricks, &frames, |id| debris.is_dead(id), changed);
+    }
+    fn sync_music_frames(
+        &mut self,
+        bricks: &bri_world::Bricks,
+        frames: &BTreeMap<u64, crate::brick_debris::AttachmentFrame>,
+        dead: impl Fn(u64) -> bool,
+        changed: bool,
+    ) {
+        let dirty = std::mem::take(&mut self.music_dirty);
+        let mut refresh = changed || dirty;
+        let mut stale = Vec::new();
+        let mut updates = Vec::new();
+        for (&id, voice) in &mut self.music {
+            if let Some(source) = self.music_bricks.wanted.get(&id) {
+                if source.sound != voice.source.sound {
+                    stale.push(id);
+                    continue;
+                }
+                if &voice.source != source {
+                    voice.source.clone_from(source);
+                }
+                if bricks
+                    .get(&id)
+                    .is_some_and(|b| !b.damage_hidden && !dead(id))
+                {
+                    voice.death = None;
+                }
+            } else if bricks.contains_key(&id) {
+                // A live authored source explicitly had its sound removed.
+                stale.push(id);
+                continue;
+            }
+            let delta = crate::brick_debris::attachment_delta(
+                id,
+                voice.source.parent,
+                bricks,
+                frames,
+                voice.death,
+                &dead,
+            );
+            if let Some(delta) = delta {
+                let position = delta
+                    .transform_point3(voice.source.position.into())
+                    .to_array();
+                if position != voice.position {
+                    updates.push((id, voice.handle, position));
+                }
+            } else {
+                stale.push(id);
+            }
+        }
+        for (id, handle, position) in updates {
+            let result = self.runtime.set_source_position(handle, position);
+            if result.is_ok() {
+                self.music.get_mut(&id).unwrap().position = position;
+            }
+            self.record(result);
+        }
+        for id in stale {
+            let result = self.runtime.stop_with_fade(self.music[&id].handle, 0.2);
+            if result.is_ok() {
+                self.music.remove(&id);
+                refresh = true;
+            }
+            self.record(result);
+        }
+        // Stable static playback or moving existing sources cost at most 64
+        // voices. Refill only after an authored/cue/eligibility change.
+        if !refresh {
+            return;
+        }
+        let wanted: Vec<_> = self
             .music_bricks
             .wanted
             .iter()
             .filter(|(id, _)| !self.music.contains_key(id))
-            .map(|(id, (sound, position))| (*id, sound.clone(), *position))
+            .filter_map(|(&id, source)| {
+                let delta = crate::brick_debris::attachment_delta(
+                    id,
+                    source.parent,
+                    bricks,
+                    frames,
+                    None,
+                    &dead,
+                )?;
+                Some((
+                    id,
+                    source.clone(),
+                    delta.transform_point3(source.position.into()).to_array(),
+                ))
+            })
+            .take(64 - self.music.len())
             .collect();
-        for (id, sound, position) in missing {
-            if self.music.len() >= 64 {
-                break;
-            }
-            match self.runtime.play(&sound, Placement::World(position)) {
+        for (id, source, position) in wanted {
+            match self.runtime.play(&source.sound, Placement::World(position)) {
                 Ok(handle) => {
-                    self.music.insert(id, (sound, position, handle));
+                    self.music.insert(
+                        id,
+                        BrickMusicVoice {
+                            source,
+                            position,
+                            handle,
+                            death: None,
+                        },
+                    );
                 }
-                Err(error) => self.record(Err(error)),
+                Err(error) => {
+                    self.music_dirty |= matches!(&error, AudioError::QueueFull);
+                    self.record(Err(error));
+                }
             }
         }
     }
@@ -1534,6 +1667,7 @@ impl ClientAudio {
     pub fn clear(&mut self) {
         self.hear_through(Vec::new());
         self.music.clear();
+        self.music_dirty = false;
         self.music_bricks = MusicBricks::default();
         self.rule_music = None;
         self.rule_ambient.clear();
@@ -2054,6 +2188,358 @@ mod tests {
 
     /// A world change costs the bricks it changed: only the first replica
     /// is read whole, however many revisions follow.
+    #[test]
+    fn brick_music_follows_carriers_without_restarting_or_leaving_orphans() -> Result<()> {
+        use crate::brick_debris::AttachmentFrame;
+        use bri_sim::presentation::{BrickDeath, Cue, CueKind};
+        use glam::{Mat4, Quat, Vec3};
+        let pack = Pack::synthetic()?;
+        let path = pack.root.join("manifest.json");
+        let mut manifest: bri_audio::schema::PackManifest =
+            serde_json::from_slice(&std::fs::read(&path)?)?;
+        manifest
+            .sounds
+            .iter_mut()
+            .find(|s| s.id == crate::testing::audio::MUSIC_SOUND)
+            .unwrap()
+            .playback
+            .spatial = Some(bri_audio::schema::Spatial {
+            reference_distance: 2.,
+            max_distance: 12.,
+            falloff: Default::default(),
+        });
+        std::fs::write(path, serde_json::to_vec(&manifest)?)?;
+        let mut audio =
+            ClientAudio::load(&pack.root, &mut Settings::default(), OutputKind::Offline)?;
+        let mut source = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved("brick".into()),
+            [1., 1., 0.],
+            1,
+        );
+        source.sound = Some(bri_world::ContentRef::Resolved(
+            crate::testing::audio::MUSIC_SOUND.into(),
+        ));
+        source.visible = false;
+        let mut bricks: bri_world::Bricks = [(1u64, source.clone())].into_iter().collect();
+        let mut frames = BTreeMap::new();
+        let sync = |audio: &mut ClientAudio,
+                    bricks: &bri_world::Bricks,
+                    frames: &BTreeMap<u64, AttachmentFrame>,
+                    dead: &[u64]| {
+            let changed = audio.music_bricks.update(bricks);
+            audio.sync_music_frames(bricks, frames, |id| dead.contains(&id), changed);
+        };
+        let cue = |id, brick| Cue {
+            id,
+            tick: id,
+            position: source.position,
+            kind: CueKind::BrickKill {
+                brick,
+                death: BrickDeath::Blast,
+                definition: source.definition.clone(),
+                quarter_turns: 0,
+                color: 0,
+                color_effect: 0,
+                shape_effect: 0,
+                print: None,
+                origin: [0.; 3],
+                force: 1.,
+                radius: 1.,
+            },
+        };
+        sync(&mut audio, &bricks, &frames, &[]);
+        let handle = audio.music[&1].handle;
+        audio.tick(0.1, Listener::default());
+        let rms = |samples: &[f32]| {
+            assert!(!samples.is_empty() && samples.iter().all(|s| s.is_finite()));
+            (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+        };
+        let near = rms(&audio.take_capture());
+        assert!(near > 0.001);
+        audio.observe_music_deaths(&[cue(1, 1)]);
+        let delta = Mat4::from_rotation_translation(Quat::from_rotation_y(0.7), Vec3::X * 100.);
+        frames.insert(1, AttachmentFrame { cue: 1, delta });
+        // Cue first, hidden/removal deltas later: keep one existing voice.
+        sync(&mut audio, &bricks, &frames, &[1]);
+        assert_eq!(audio.music[&1].handle, handle);
+        assert_eq!(
+            audio.music[&1].position,
+            delta.transform_point3(source.position.into()).to_array()
+        );
+        audio.tick(0.2, Listener::default());
+        audio.take_capture();
+        audio.tick(0.1, Listener::default());
+        let far = rms(&audio.take_capture());
+        assert!(
+            far < near * 0.05,
+            "a moved source must stop sounding from its old position: {near} vs {far}"
+        );
+        bricks.get_mut(&1).unwrap().damage_hidden = true;
+        sync(&mut audio, &bricks, &frames, &[1]);
+        bricks.remove(&1);
+        sync(&mut audio, &bricks, &frames, &[1]);
+        for i in 0..50 {
+            let delta = Mat4::from_translation(Vec3::X * (i as f32 + 3.));
+            frames.insert(1, AttachmentFrame { cue: 1, delta });
+            sync(&mut audio, &bricks, &frames, &[1]);
+            assert_eq!(audio.music[&1].handle, handle);
+            assert_eq!(
+                audio.music[&1].position,
+                delta.transform_point3(source.position.into()).to_array()
+            );
+        }
+        assert_eq!(audio.stats().started, 1, "motion must not restart the loop");
+        assert_eq!(audio.music_bricks.full_scans, 1);
+        frames.clear();
+        sync(&mut audio, &bricks, &frames, &[1]);
+        assert!(audio.music.is_empty());
+        audio.tick(0.3, Listener::default());
+        // A late observer has no historical debris; restored source wins over old frames.
+        let mut hidden = source.clone();
+        hidden.damage_hidden = true;
+        bricks.insert(1, hidden);
+        sync(&mut audio, &bricks, &frames, &[1]);
+        assert!(audio.music.is_empty());
+        bricks.insert(1, source.clone());
+        frames.insert(1, AttachmentFrame { cue: 1, delta });
+        sync(&mut audio, &bricks, &frames, &[]);
+        let restored = audio.music[&1].handle;
+        assert_ne!(restored, handle);
+        assert_eq!(audio.music[&1].position, source.position);
+        // Partition carrier survives, then is destroyed under a different ID.
+        bricks.insert(
+            2,
+            bri_world::Brick::new(source.definition.clone(), [0.; 3], 1),
+        );
+        let original = bricks.get_mut(&1).unwrap();
+        original.damage_hidden = true;
+        original.damage_attachment = Some(Box::new(2));
+        frames.clear();
+        sync(&mut audio, &bricks, &frames, &[1]);
+        assert_eq!(audio.music[&1].handle, restored);
+        audio.observe_music_deaths(&[cue(3, 2)]);
+        bricks.remove(&2);
+        frames.insert(2, AttachmentFrame { cue: 3, delta });
+        sync(&mut audio, &bricks, &frames, &[1, 2]);
+        assert_eq!(audio.music[&1].handle, restored);
+        assert_eq!(
+            audio.music[&1].position,
+            delta.transform_point3(source.position.into()).to_array()
+        );
+        audio.observe_music_deaths(&[cue(4, 1)]);
+        let latest = Mat4::from_translation(Vec3::Z * 6.);
+        frames.insert(
+            1,
+            AttachmentFrame {
+                cue: 4,
+                delta: latest,
+            },
+        );
+        sync(&mut audio, &bricks, &frames, &[1, 2]);
+        assert_eq!(
+            audio.music[&1].position,
+            latest.transform_point3(source.position.into()).to_array()
+        );
+        bricks.remove(&1);
+        sync(&mut audio, &bricks, &frames, &[1, 2]);
+        assert_eq!(audio.music[&1].handle, restored);
+        bricks.insert(1, source);
+        sync(&mut audio, &bricks, &frames, &[]);
+        bricks.get_mut(&1).unwrap().sound = None;
+        sync(&mut audio, &bricks, &frames, &[]);
+        assert!(
+            audio.music.is_empty(),
+            "explicit sound removal must stop the old loop"
+        );
+        audio.clear();
+        audio.tick(0.3, Listener::default());
+        assert_eq!(audio.stats().real_voices, 0);
+        // An inactive hidden source becomes eligible when its carrier restores,
+        // even though the carrier has no sound and the source itself is unchanged.
+        let mut waiting = bricks[&1].clone();
+        waiting.sound = Some(bri_world::ContentRef::Resolved(
+            crate::testing::audio::MUSIC_SOUND.into(),
+        ));
+        waiting.damage_hidden = true;
+        waiting.damage_attachment = Some(Box::new(2));
+        bricks.insert(1, waiting);
+        let mut carrier = bri_world::Brick::new(bricks[&1].definition.clone(), [0.; 3], 1);
+        carrier.damage_hidden = true;
+        bricks.insert(2, carrier);
+        frames.clear();
+        sync(&mut audio, &bricks, &frames, &[1, 2]);
+        assert!(audio.music.is_empty());
+        bricks.get_mut(&2).unwrap().damage_hidden = false;
+        sync(&mut audio, &bricks, &frames, &[1]);
+        assert_eq!(audio.music.len(), 1);
+        assert_eq!(audio.music_bricks.carriers.get(&2), Some(&1));
+        audio.clear();
+        Ok(())
+    }
+
+    #[test]
+    fn brick_music_retries_full_audio_queue_without_losing_its_voice() -> Result<()> {
+        use crate::brick_debris::AttachmentFrame;
+        let pack = Pack::synthetic()?;
+        let mut audio =
+            ClientAudio::load(&pack.root, &mut Settings::default(), OutputKind::Offline)?;
+        let mut source = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved("brick".into()),
+            [1., 1., 0.],
+            1,
+        );
+        source.sound = Some(bri_world::ContentRef::Resolved(
+            crate::testing::audio::MUSIC_SOUND.into(),
+        ));
+        let mut bricks: bri_world::Bricks = [(1u64, source.clone())].into_iter().collect();
+        let mut frames = BTreeMap::new();
+        let sync = |audio: &mut ClientAudio,
+                    bricks: &bri_world::Bricks,
+                    frames: &BTreeMap<u64, AttachmentFrame>| {
+            let changed = audio.music_bricks.update(bricks);
+            audio.sync_music_frames(bricks, frames, |_| false, changed);
+        };
+        let fill = |audio: &mut ClientAudio, handle| {
+            for _ in 0..8192 {
+                if let Err(error) = audio.runtime.set_source_position(handle, [0.; 3]) {
+                    assert!(matches!(error, AudioError::QueueFull));
+                    return;
+                }
+            }
+            panic!("the offline command queue must be bounded");
+        };
+        sync(&mut audio, &bricks, &frames);
+        let handle = audio.music[&1].handle;
+        audio.tick(0.01, Listener::default());
+        fill(&mut audio, handle);
+        bricks.get_mut(&1).unwrap().damage_hidden = true;
+        frames.insert(
+            1,
+            AttachmentFrame {
+                cue: 1,
+                delta: glam::Mat4::from_translation(glam::Vec3::X * 3.),
+            },
+        );
+        sync(&mut audio, &bricks, &frames);
+        assert_eq!(
+            audio.music[&1].position, source.position,
+            "a refused position must remain retryable"
+        );
+        audio.tick(0.01, Listener::default());
+        sync(&mut audio, &bricks, &frames);
+        assert_eq!(audio.music[&1].position, [4., 1., 0.]);
+        audio.tick(0.01, Listener::default());
+        fill(&mut audio, handle);
+        bricks.clear();
+        frames.clear();
+        sync(&mut audio, &bricks, &frames);
+        assert_eq!(
+            audio.music[&1].handle, handle,
+            "retain ownership until the stop is admitted"
+        );
+        audio.tick(0.01, Listener::default());
+        sync(&mut audio, &bricks, &frames);
+        assert!(audio.music.is_empty());
+        audio.tick(0.3, Listener::default());
+        assert_eq!(audio.stats().real_voices, 0);
+        fill(&mut audio, handle);
+        bricks.insert(1, source);
+        sync(&mut audio, &bricks, &frames);
+        assert!(audio.music.is_empty());
+        audio.tick(0.01, Listener::default());
+        sync(&mut audio, &bricks, &frames);
+        assert_eq!(
+            audio.music.len(),
+            1,
+            "retry a temporarily refused start without another world edit"
+        );
+        audio.clear();
+        Ok(())
+    }
+
+    #[test]
+    fn brick_music_tracks_real_debris_through_culling_and_restore() -> Result<()> {
+        use crate::brick_debris::{
+            BrickDebris,
+            tests::{building, kill, tool_kill},
+        };
+        let pack = Pack::synthetic()?;
+        for permanent in [false, true] {
+            for tool in [false, true] {
+                let at = [0., 0.3, 0.];
+                let (mut building, mut replica) = building(&[(1, at)]);
+                replica.bricks.get_mut(&1).unwrap().sound = Some(bri_world::ContentRef::Resolved(
+                    crate::testing::audio::MUSIC_SOUND.into(),
+                ));
+                building.sync_world(&replica)?;
+                let original = replica.bricks[&1].clone();
+                let mut audio =
+                    ClientAudio::load(&pack.root, &mut Settings::default(), OutputKind::Offline)?;
+                let mut debris = BrickDebris::new();
+                audio.sync_music_with_debris(&replica.bricks, &debris);
+                let handle = audio.music[&1].handle;
+                let cue = if tool {
+                    tool_kill(1, 1, at)
+                } else {
+                    kill(1, 1, at, [0., -1., 0.], 12., 1.)
+                };
+                audio.observe_music_deaths(std::slice::from_ref(&cue));
+                debris.cues(std::slice::from_ref(&cue), &building)?;
+                // Exercise a cue-first frame before hiding/removing its source.
+                audio.sync_music_with_debris(&replica.bricks, &debris);
+                assert_eq!(audio.music[&1].handle, handle);
+                if permanent {
+                    replica.bricks.remove(&1);
+                } else {
+                    let b = replica.bricks.get_mut(&1).unwrap();
+                    b.damage_hidden = true;
+                    b.visible = false;
+                    b.colliding = false;
+                    b.raycast = false;
+                }
+                building.sync_world(&replica)?;
+                debris.sync_world(&replica);
+                for _ in 0..3 {
+                    debris.advance(0.1, &building)?;
+                    audio.sync_music_with_debris(&replica.bricks, &debris);
+                    let frame = debris.attachment_frames(|id| id == 1)[&1];
+                    let expected = frame.delta.transform_point3(at.into());
+                    assert!(expected.distance(at.into()) > 0.01);
+                    assert_eq!(audio.music[&1].handle, handle);
+                    assert!(glam::Vec3::from(audio.music[&1].position).distance(expected) < 1e-5);
+                    audio.tick(0.01, Listener::default());
+                }
+                assert_eq!(audio.stats().started, 1);
+                debris.set_limit(0);
+                if tool {
+                    // Physics Quality caps blast bodies. A tool-kill animation
+                    // is still visibly present, so its source ends at its fade.
+                    audio.sync_music_with_debris(&replica.bricks, &debris);
+                    assert_eq!(audio.music[&1].handle, handle);
+                    for _ in 0..300 {
+                        debris.advance(1.0 / 60.0, &building)?;
+                    }
+                }
+                audio.sync_music_with_debris(&replica.bricks, &debris);
+                assert!(
+                    audio.music.is_empty(),
+                    "an expired/culled parent cannot leave its source behind"
+                );
+                replica.bricks.insert(1, original);
+                building.sync_world(&replica)?;
+                debris.sync_world(&replica);
+                audio.sync_music_with_debris(&replica.bricks, &debris);
+                assert_eq!(audio.music.len(), 1);
+                assert_eq!(audio.music[&1].position, at);
+                assert_ne!(audio.music[&1].handle, handle);
+                audio.clear();
+                audio.tick(0.3, Listener::default());
+                assert_eq!(audio.stats().real_voices, 0);
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn music_bricks_follow_world_changes_without_rereading_the_world() {
         let brick = |x: f32, sound: Option<&str>| {

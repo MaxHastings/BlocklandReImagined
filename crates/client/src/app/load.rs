@@ -402,7 +402,6 @@ impl App {
                 posed_eye: None,
                 tumble: None,
             },
-            music_world: None,
             perf: Perf {
                 net_sampler: Default::default(),
                 lag_watch: Default::default(),

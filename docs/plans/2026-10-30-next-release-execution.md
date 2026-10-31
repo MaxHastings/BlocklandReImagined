@@ -72,8 +72,10 @@ Current destruction handoff: [partition bindings](../progress/2026-10-31-v043-pa
 and [actor source lifecycle](../progress/2026-10-31-v043-actor-source-lifecycle.md)
 add authoritative carrier identity, delivery/restore checks and destroyed-source
 actor suspension without resetting native deadlines. Static item suspension is
-already checked. Brick looping audio and final effect pixels remain open; these
-increments do not complete the broader release scope.
+already checked. [Brick music](../progress/2026-10-31-v043-brick-music-following.md)
+now follows those same carrier rules with preserved playback handles and tested
+queue-pressure retries. Final effect pixels remain open; these increments do not
+complete the broader release scope.
 
 ## Rules for each increment
 

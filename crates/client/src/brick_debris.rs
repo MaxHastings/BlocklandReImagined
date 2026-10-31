@@ -200,6 +200,33 @@ pub(crate) struct AttachmentFrame {
     pub cue: u64,
     pub delta: Mat4,
 }
+/// Resolve one authored cosmetic source through the same restoration/carrier
+/// rules for visual effects and audio. Missing historical debris stays silent.
+pub(crate) fn attachment_delta(
+    source: BrickId,
+    parent: BrickId,
+    bricks: &bri_world::Bricks,
+    frames: &BTreeMap<BrickId, AttachmentFrame>,
+    original_cue: Option<u64>,
+    dead: impl Fn(BrickId) -> bool,
+) -> Option<Mat4> {
+    let brick = bricks.get(&source);
+    if brick.is_some_and(|b| !b.damage_hidden && !dead(source)) {
+        return Some(Mat4::IDENTITY);
+    }
+    if let Some(frame) = frames.get(&source).filter(|f| Some(f.cue) == original_cue) {
+        return Some(frame.delta);
+    }
+    brick?;
+    if parent != source
+        && bricks
+            .get(&parent)
+            .is_some_and(|p| !p.damage_hidden && !dead(parent))
+    {
+        return Some(Mat4::IDENTITY);
+    }
+    frames.get(&parent).map(|f| f.delta)
+}
 impl Falling {
     fn position(&self) -> Vec3 {
         self.start + self.velocity * self.age - Vec3::Y * (0.5 * KILL_GRAVITY * self.age * self.age)

@@ -342,39 +342,26 @@ impl WorldEffects {
                     .is_none_or(|b| b.damage_hidden || dead(key.0))
             }) && frames.get(&key.0).is_some_and(|f| f.cue == d.cue)
         });
-        let moving = |attachment: &Attachment, frame: &crate::brick_debris::AttachmentFrame| {
+        let moving = |attachment: &Attachment, delta: glam::Mat4| {
             let mut transform = attachment.transform;
-            transform.position = frame.delta.transform_point3(transform.position);
-            transform.rotation = glam::Quat::from_mat4(&frame.delta) * transform.rotation;
-            transform.velocity = frame.delta.transform_vector3(transform.velocity);
+            transform.position = delta.transform_point3(transform.position);
+            transform.rotation = glam::Quat::from_mat4(&delta) * transform.rotation;
+            transform.velocity = delta.transform_vector3(transform.velocity);
             transform
         };
         let mut current: Vec<_> = self
             .attachments
             .iter()
             .filter_map(|(&key, attachment)| {
-                let brick = self.source.as_ref()?.bricks.get(&key.0)?;
-                let transform = if brick.damage_hidden || dead(key.0) {
-                    if let Some(frame) = frames
-                        .get(&key.0)
-                        .filter(|f| self.detached.get(&key).is_some_and(|d| d.cue == f.cue))
-                    {
-                        moving(attachment, frame)
-                    } else if attachment.parent != key.0
-                        && self
-                            .source
-                            .as_ref()?
-                            .bricks
-                            .get(&attachment.parent)
-                            .is_some_and(|p| !p.damage_hidden && !dead(attachment.parent))
-                    {
-                        attachment.transform
-                    } else {
-                        moving(attachment, frames.get(&attachment.parent)?)
-                    }
-                } else {
-                    attachment.transform
-                };
+                let delta = crate::brick_debris::attachment_delta(
+                    key.0,
+                    attachment.parent,
+                    &self.source.as_ref()?.bricks,
+                    frames,
+                    self.detached.get(&key).map(|d| d.cue),
+                    &dead,
+                )?;
+                let transform = moving(attachment, delta);
                 Some((key, attachment, transform))
             })
             .chain(self.detached.iter().filter_map(|(&key, d)| {
@@ -384,7 +371,7 @@ impl WorldEffects {
                 Some((
                     key,
                     &d.attachment,
-                    moving(&d.attachment, frames.get(&key.0)?),
+                    moving(&d.attachment, frames.get(&key.0)?.delta),
                 ))
             }))
             .collect();

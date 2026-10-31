@@ -609,7 +609,6 @@ pub struct App {
     vehicles: crate::vehicles::ClientVehicles,
     /// Seats and riders: what the local player sits on and how riders are posed.
     mounts: Mounts,
-    music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// Performance: frame stats and log, network sampling, lag watch and quality.
     perf: Perf,
     /// Finding games: LAN hosts and queries, the update check and the firewall fix.

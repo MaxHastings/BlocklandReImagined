@@ -861,14 +861,6 @@ impl App {
                     })
                     .collect();
                 self.audio.sync_held(&held);
-                if self
-                    .music_world
-                    .as_ref()
-                    .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
-                {
-                    self.audio.sync_music(&view.world.bricks);
-                    self.music_world = Some(view.world.clone());
-                }
             }
         }
         Ok(())
@@ -2005,6 +1997,7 @@ impl App {
             let debris_span = crate::frame_trace::span("brick debris");
             let changes_span = crate::frame_trace::span("debris changes");
             let kills = std::mem::take(&mut self.fx.brick_kills);
+            self.audio.observe_music_deaths(&kills);
             let thrown = self.fx.brick_debris.cues(&kills, building);
             // A kill announced after its brick started fading out stops the
             // fade (see the chunk rebuild's `observe`), and a dead brick
@@ -2122,6 +2115,8 @@ impl App {
             );
             drop(effects_span);
             self.cosmetic_faults.absorb("world effects", advanced);
+            self.audio
+                .sync_music_with_debris(&view.world.bricks, &self.fx.brick_debris);
             let _weather_span = crate::frame_trace::span("weather");
             let weather = self.weather.advance(
                 game_elapsed.as_secs_f32(),

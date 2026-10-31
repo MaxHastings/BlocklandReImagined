@@ -281,7 +281,6 @@ impl App {
         self.scene.liquid_cache = None;
         self.ghosts.clear();
         self.vehicles.clear();
-        self.music_world = None;
         self.controls.clear_observer();
         self.build.macro_recording = None;
         self.build.macro_playback.clear();
