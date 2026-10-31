@@ -1106,10 +1106,14 @@ fn a_bot_that_fails_to_think_leaves_the_others_thinking() {
 /// walls and a roof, as a brick respawning on it would: its unsticking
 /// gets it nowhere, so in the end it respawns itself, as a player would
 /// (Ctrl+K), back at its brick.
-#[test]
-fn a_bot_sealed_in_by_bricks_gets_out_eventually() {
+fn sealed_bot_scenario(allow_self_respawn: bool) {
     let mut s = session();
-    only_kind(&mut s, |k| k.wander_radius = 6.0);
+    only_kind(&mut s, |k| {
+        k.wander_radius = 6.0;
+        if allow_self_respawn {
+            k.behaviours.insert("respawn".into(), 1.0);
+        }
+    });
     let human = s
         .join("Builder".into(), Vec3::new(0.0, 0.05, 22.0), true)
         .unwrap();
@@ -1180,15 +1184,66 @@ fn a_bot_sealed_in_by_bricks_gets_out_eventually() {
     )
     .unwrap();
     let mut out = None;
+    let mut max_trap: f32 = 0.0;
+    let mut max_trap_ticks = 0;
+    let mut previous_trap_ticks = 0;
+    let mut resets = Vec::new();
     for tick in 0..120 * 90 {
         steps(&mut s, &[human], 1, &mut sequence);
+        if tick % 120 == 0
+            && let Some((elapsed, score)) = s
+                .bot_thoughts()
+                .iter()
+                .find(|t| t.bot == bot)
+                .and_then(|t| t.trap)
+        {
+            if elapsed < previous_trap_ticks && resets.len() < 12 {
+                resets.push((tick, previous_trap_ticks, elapsed, feet(&s, bot)));
+            }
+            previous_trap_ticks = elapsed;
+            max_trap = max_trap.max(score);
+            max_trap_ticks = max_trap_ticks.max(elapsed);
+        }
+        if !allow_self_respawn {
+            assert!(
+                s.vitals()[&bot].died_tick.is_none(),
+                "default bot died while trapped at tick {tick}"
+            );
+        }
         if flat_distance(feet(&s, bot), Vec3::new(cx, 0.0, cz)) > 2.5 {
             out = Some(tick);
             break;
         }
     }
-    let out = out.expect("the sealed-in bot got out");
-    eprintln!("out after {out} ticks, at {}", feet(&s, bot));
+    if allow_self_respawn {
+        let out = out.unwrap_or_else(|| {
+                panic!(
+                    "the opted-in sealed bot got out, maximum trap score {max_trap}, ticks {max_trap_ticks}, resets {resets:?}: {:?}, {:?}",
+                    s.bot_thoughts(),
+                    s.vitals()
+                )
+            });
+        assert!(
+            s.vitals()[&bot].died_tick.is_some(),
+            "the opted-in bot must have respawned"
+        );
+        eprintln!("out after {out} ticks, at {}", feet(&s, bot));
+    } else {
+        assert!(
+            out.is_none(),
+            "the sealed fixture must remain closed for the default case"
+        );
+    }
+}
+
+#[test]
+fn a_default_bot_does_not_kill_itself_when_sealed_in() {
+    sealed_bot_scenario(false);
+}
+
+#[test]
+fn a_bot_sealed_in_by_bricks_gets_out_eventually() {
+    sealed_bot_scenario(true);
 }
 
 fn flat_distance(a: Vec3, b: Vec3) -> f32 {

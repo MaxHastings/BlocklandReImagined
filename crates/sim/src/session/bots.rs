@@ -93,6 +93,8 @@ pub struct BotThought {
     /// Actor reported by the most recent grounded motor contact, if any.
     /// This is diagnostic evidence and may need revalidation against live state.
     pub support_actor: Option<OwnerId>,
+    /// Elapsed attempted-stuck interval and current trap score, diagnostic only.
+    pub trap: Option<(u64, f32)>,
     /// It was refused sight rays lately (the tick's share was spent), so
     /// an enemy may have gone unseen for that, not for being hidden.
     pub sight_starved: bool,

@@ -40,7 +40,10 @@ bot does through the same code.
    A weight of 0 turns a behaviour off (`"chase": 0` makes a guard that
    stays at its post and fights what comes within reach); more than 1 puts
    it ahead of others. Ordinary behaviours default to 1; `interact` defaults
-   to 0 and the standard Blockhead package opts in. Objective utility also
+   to 0 and the standard Blockhead package opts in. Voluntary suicide to
+   escape a trap also defaults off; a kind can opt in with a `respawn`
+   behaviour weight. This does not disable normal respawning after death.
+   Objective utility also
    requires its explicit kind opt-in; it does not grant a creature a new brain. Creature policy remains
    in its package. Nothing scoring: it wanders.
 
@@ -177,7 +180,7 @@ bot does through the same code.
    Then getting unstuck (hop, judged before the stage resolves and pressed
    like any other hop, then plan again, give up the goal) on foot. A bot
    that keeps trying to get somewhere and stays within 2 units of where it
-   began is trapped (bricks respawned round it): past 10 s its Respawn
+   began is trapped (bricks respawned round it): if the kind opts in, past 10 s its Respawn
    option rises, and once sure it gives the command a player gives
    (Ctrl+K). Respawn scores 0 with an enemy in sight, when hurt, or while
    carrying, so it is never a way out of a fight; drivers instead brake, replan and

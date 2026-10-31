@@ -105,7 +105,8 @@ pub struct BotKind {
     /// Weights on its behaviours' scores by name (`carry`, `interact`,
     /// `fight`, `chase`, `search`, `return`, `wander`), and on its route's
     /// legs (`fly`: how readily it jets; 0 never). Ordinary
-    /// behaviours default to 1; environmental interactions and objectives default to 0:
+    /// behaviours default to 1; environmental interactions, objectives, and
+    /// voluntarily respawning when trapped default to 0:
     /// 0 turns one off (a guard that never gives chase), more puts it ahead
     /// of others (`docs/architecture/bots.md`).
     pub behaviours: std::collections::BTreeMap<String, f32>,
@@ -457,18 +458,19 @@ impl BotKind {
         }
     }
     /// Its weight on behaviour or leg `name` (`behaviours`): 1 unless it
-    /// says otherwise, but 0 for the opt-in ones (interact, objective).
+    /// says otherwise, but 0 for the opt-in ones (interact, objective,
+    /// respawn). `respawn` controls a living bot choosing suicide as an
+    /// escape, not the spawn brick's automatic respawn after a death.
     /// Interact is off for a kind that takes no seat and has no tool use
     /// to offer (`vehicles` all off).
     pub fn weight(&self, name: &str) -> f32 {
-        self.behaviours
-            .get(name)
-            .copied()
-            .unwrap_or(if matches!(name, "interact" | "objective") {
+        self.behaviours.get(name).copied().unwrap_or(
+            if matches!(name, "interact" | "objective" | "respawn") {
                 0.0
             } else {
                 1.0
-            })
+            },
+        )
     }
     /// Whether it attacks with its body at all: a hit (`melee`), a touch
     /// (`contact`) or its ability.
@@ -798,6 +800,10 @@ mod tests {
         assert!(!pack.bots[1].cooperative_stack);
         assert!(pack.bots[0].alerts_allies);
         assert!(!pack.bots[1].alerts_allies);
+        assert_eq!(pack.bots[0].weight("respawn"), 0.0);
+        let mut escape = pack.bots[0].clone();
+        escape.behaviours.insert("respawn".into(), 1.0);
+        assert_eq!(escape.weight("respawn"), 1.0);
     }
     /// Comments explain tunables; a `//` inside a string is text.
     #[test]

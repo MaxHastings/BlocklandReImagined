@@ -132,6 +132,9 @@ impl Session {
                     let tag = p.player.support_tag()?;
                     (tag >> 64 == 1).then_some(tag as OwnerId)
                 }),
+                trap: b
+                    .pinned
+                    .map(|(_, since, last)| (last.saturating_sub(since), trapped(b.pinned))),
                 driving: b.driving,
                 sight_starved: self
                     .bots
@@ -281,6 +284,7 @@ mod tests {
         let mut t = BotThought {
             bot: 7,
             support_actor: None,
+            trap: None,
             sight_starved: false,
             unnoticed_hit: None,
             route_short: None,
