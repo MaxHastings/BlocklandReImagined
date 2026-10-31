@@ -198,16 +198,19 @@ pub struct Music {
     pub track: Option<String>,
     pub looping: bool,
     pub fade: f32,
+    pub volume: f32,
 }
 impl ScriptOp for Music {
     const CAPABILITY: &str = "effects";
     const NAME: &str = "play_music";
     fn bounded(&self) -> bool {
-        let Music { track, fade, .. } = self;
+        let Music { track, fade, volume, .. } = self;
         track.as_ref().is_none_or(|t| {
             !t.is_empty() && t.len() <= 128 && !t.chars().any(char::is_control)
         }) && fade.is_finite()
             && (0.0..=MAX_MUSIC_FADE).contains(fade)
+            && volume.is_finite()
+            && (0.0..=1.0).contains(volume)
     }
 }
 /// The longest fade in or out `play_music` and `stop_music` take, in seconds.
@@ -359,6 +362,13 @@ impl ScriptOp for PlayThread {
 #[cfg(test)]
 mod world_volume_tests {
     use super::*;
+
+    #[test]
+    fn music_volume_is_finite_and_bounded_independently_of_its_fade() {
+        let music = |volume| Music { player:None, track:Some("test:theme".into()), looping:false, fade:2.0, volume };
+        for value in [0.0, 0.25, 1.0] { assert!(music(value).bounded()); }
+        for value in [-0.01, 1.01, f32::NAN, f32::INFINITY] { assert!(!music(value).bounded()); }
+    }
 
     #[test]
     fn a_world_volume_is_a_scale_for_a_time_with_fades_that_fit() {

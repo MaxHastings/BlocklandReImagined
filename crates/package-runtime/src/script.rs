@@ -3376,18 +3376,19 @@ fn register_presentation(engine: &mut Engine) {
     // play_music(player, track[, options]) / play_music_all(track[, options]),
     // stop_music(player[, fade]) / stop_music_all([fade]). Options:
     // `looping` (default true; `loop` is a Rhai keyword) and `fade`,
-    // seconds to fade in.
+    // seconds to fade in, and `volume` (0..=1, default 1).
     fn music(player: Option<u64>, track: &str, options: Map) -> Fallible<INT> {
-        let (mut looping, mut fade) = (true, 0.0);
+        let (mut looping, mut fade, mut volume) = (true, 0.0, 1.0);
         for (key, value) in options {
             match key.as_str() {
                 "looping" => {
                     looping = value.as_bool().map_err(|_| "looping is true or false")?;
                 }
                 "fade" => fade = float(&value)?,
+                "volume" => volume = float(&value)?,
                 other => {
                     return fail(format!(
-                        "play_music has no option `{other}` (looping, fade)"
+                        "play_music has no option `{other}` (looping, fade, volume)"
                     ));
                 }
             }
@@ -3397,6 +3398,7 @@ fn register_presentation(engine: &mut Engine) {
             track: Some(track.into()),
             looping,
             fade,
+            volume,
         }))
     }
     fn stop_music(player: Option<u64>, fade: f32) -> Fallible<INT> {
@@ -3405,6 +3407,7 @@ fn register_presentation(engine: &mut Engine) {
             track: None,
             looping: false,
             fade,
+            volume: 1.0,
         }))
     }
     engine.register_fn("play_music", |p: Dynamic, track: &str| {

@@ -961,15 +961,16 @@ impl ClientAudio {
             Ok(found) => found,
             Err(error) => return self.record(Err(error)),
         };
+        let volume = volume
+            * if play.volume.is_finite() {
+                play.volume.clamped(0.0, 1.0)
+            } else {
+                0.0
+            };
         let fade = play.fade.max(0.0);
-        // A one-shot starts above the gain below which it would not start.
-        let start = if fade == 0.0 {
-            1.0
-        } else if play.looping {
-            0.0
-        } else {
-            0.1
-        };
+        // Music is an explicit track, including quiet one-shots: fade from
+        // silence without an initial burst to satisfy effects-voice culling.
+        let start = if fade == 0.0 { 1.0 } else { 0.0 };
         let asset = Arc::new(asset.as_music(play.looping));
         match self
             .runtime
@@ -2704,6 +2705,55 @@ mod tests {
         assert_eq!(mine[0].kind, "sound");
         assert_eq!(mine[0].count, 2);
     }
+    #[test]
+    fn rule_music_volume_and_fade_apply_to_looping_and_one_shot_tracks() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        for looping in [false, true] {
+            let mut levels = Vec::new();
+            for volume in [0.0, 0.01, 0.25, 1.0] {
+                let mut audio =
+                    ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+                audio.play_music(&bri_sim::session::MusicPlay {
+                    track: Some(crate::testing::audio::MUSIC_SOUND.into()),
+                    looping,
+                    fade: 0.05,
+                    volume,
+                });
+                // Before any fade update, the track must really start silent.
+                let first = audio.runtime.render_offline(480);
+                assert!(first.iter().all(|s| *s == 0.0));
+                for _ in 0..10 {
+                    audio.tick(0.01, Listener::default());
+                }
+                let pcm = audio.take_capture();
+                assert!(pcm.len() >= 960 && pcm.iter().all(|v| v.is_finite() && v.abs() <= 1.0));
+                let tail = &pcm[pcm.len() - 960..];
+                levels.push(
+                    (tail.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / tail.len() as f64)
+                        .sqrt(),
+                );
+                assert_eq!(
+                    audio.stats().rejected,
+                    0,
+                    "quiet music must not be culled: {:?}",
+                    audio.warnings
+                );
+                audio
+                    .runtime
+                    .set_volume(bri_audio::VolumeControl::Music, 0.0)?;
+                audio.tick(0.05, Listener::default());
+                let muted = audio.take_capture();
+                assert!(muted[muted.len() / 2..].iter().all(|s| *s == 0.0));
+            }
+            assert_eq!(levels[0], 0.0);
+            assert!(
+                levels.windows(2).all(|w| w[0] < w[1]),
+                "volumes: {levels:?}"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn streamed_local_ambience_keeps_authored_range_and_handle_when_listener_returns() -> Result<()>
     {

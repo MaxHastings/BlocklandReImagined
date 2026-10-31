@@ -298,12 +298,14 @@ impl Perform for ops::Music {
             track,
             looping,
             fade,
+            volume,
         } = self;
         session.take_cue(package)?;
         let play = crate::session::MusicPlay {
             track,
             looping,
             fade,
+            volume,
         };
         match player {
             Some(player) => {

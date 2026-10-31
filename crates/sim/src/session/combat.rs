@@ -449,6 +449,8 @@ pub struct MusicPlay {
     pub looping: bool,
     /// Seconds the new track fades in, or the stopped one out.
     pub fade: f32,
+    /// Rule-selected gain, 0..=1, multiplied by the profile and Music slider.
+    pub volume: f32,
 }
 
 /// A death as a kill feed shows it ([`Notice::Kill`]), with the chat line

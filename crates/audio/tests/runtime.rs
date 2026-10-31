@@ -47,6 +47,32 @@ fn one_shot_plays_then_finishes_and_frees_its_voice() {
     assert_eq!(rms(&tail), 0.0);
 }
 
+/// Quiet one-shot music and fade-in silence must not hit effects-only MIN_GAIN.
+#[test]
+fn quiet_music_one_shots_start_silent_and_can_fade_without_a_burst() {
+    use std::sync::Arc;
+    let mut rt = offline(linear);
+    let asset = Arc::new(rt.bank().resolve("UiSound").unwrap().as_music(false));
+    let h = rt.play_asset(asset, Placement::Listener, 0.0).unwrap();
+    assert_eq!(rms(&seconds(&mut rt, 0.02)), 0.0);
+    assert!(rt.drain_events().contains(&AudioEvent::Started {
+        handle: h,
+        real: true
+    }));
+    rt.set_voice_params(h, 0.01, 1.0).unwrap();
+    let quiet = seconds(&mut rt, 0.05);
+    assert!(rms(&quiet) > 0.0001);
+    assert_finite(&quiet);
+    rt.set_volume(VolumeControl::Music, 0.0).unwrap();
+    let muted = seconds(&mut rt, 0.05);
+    assert_eq!(rms(&muted[muted.len() / 2..]), 0.0);
+    seconds(&mut rt, 0.3);
+    assert!(
+        rt.drain_events()
+            .contains(&AudioEvent::Finished { handle: h })
+    );
+}
+
 #[test]
 fn resampled_duration_matches_source_duration() {
     let mut rt = offline(|_| {});

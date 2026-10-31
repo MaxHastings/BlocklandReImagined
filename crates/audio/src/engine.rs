@@ -790,7 +790,9 @@ impl Engine {
         if suspended && !looping {
             return self.reject(handle, CullReason::MusicDisabled);
         }
-        if !looping && score <= policy.min_start_gain {
+        // Explicit music tracks may start silent for a fade or at a quiet
+        // authored gain. They still obey Music enablement and voice budgets.
+        if !looping && !is_music && score <= policy.min_start_gain {
             return self.reject(handle, CullReason::BelowMinimumGain);
         }
 

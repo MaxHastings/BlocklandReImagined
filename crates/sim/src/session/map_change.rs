@@ -184,6 +184,7 @@ impl Session {
             track: None,
             looping: false,
             fade: 0.0,
+            volume: 1.0,
         });
         // And without its ambience.
         for key in std::mem::take(&mut self.ambient).into_keys() {

@@ -171,7 +171,7 @@ fn cmd_give(p, b) { give_item(b, "probe:weapon/gun", false); }
 fn cmd_bot_tool(p, b, slot) { if slot < 0 { bot_tool(b, ()); } else { bot_tool(b, slot); } }
 fn cmd_unbot(p, b) { remove_bot(b); }
 fn cmd_box(p) { message_box(p, "Probe", "A box"); }
-fn cmd_music(p, track) { play_music_all(track, #{ looping: false, fade: 2.0 }); }
+fn cmd_music(p, track) { play_music_all(track, #{ looping: false, fade: 2.0, volume: 0.25 }); }
 fn cmd_music_stop(p) { stop_music_all(1.5); }
 fn cmd_my_music(p) { play_music(p, "probe:sound/theme"); }
 fn cmd_bed(p, key) { play_ambient_all(key, "probe:sound/theme", #{ volume: 0.5, fade: 1.0, at: [1.0, 2.0, 3.0], range: 40.0 }); }
@@ -2488,6 +2488,7 @@ fn rules_play_and_stop_music_for_everyone_and_one_player() {
         track: Some("musicData_Ambient".into()),
         looping: false,
         fade: 2.0,
+        volume: 0.25,
     };
     assert_eq!(music(&mut g, a), vec![theme.clone()]);
     let b = g.join(Vec3::new(2.0, 0.05, 0.0));
@@ -2499,6 +2500,7 @@ fn rules_play_and_stop_music_for_everyone_and_one_player() {
         track: None,
         looping: false,
         fade: 1.5,
+        volume: 1.0,
     };
     assert_eq!(music(&mut g, b), vec![stopped]);
     let c = g.join(Vec3::new(4.0, 0.05, 0.0));
@@ -2513,7 +2515,7 @@ fn rules_play_and_stop_music_for_everyone_and_one_player() {
         .collect();
     assert_eq!(heard.len(), 1);
     assert!(
-        matches!(heard[0], (o, Notice::Music(MusicPlay { track: Some(t), looping: true, fade })) if *o == c && t == "probe:sound/theme" && *fade == 0.0)
+        matches!(heard[0], (o, Notice::Music(MusicPlay { track: Some(t), looping: true, fade, volume })) if *o == c && t == "probe:sound/theme" && *fade == 0.0 && *volume == 1.0)
     );
 }
 

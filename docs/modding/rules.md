@@ -883,7 +883,10 @@ included, until `stop_music_all()` or a new map. A player hears one rule
 track at a time: a new one replaces the last. Options go in a map,
 `play_music_all(track, #{ looping: false, fade: 2.0 })`: `looping` (true
 unless set; `loop` is a Rhai keyword) plays it again from the start when
-it ends, and `fade` fades it in over that many seconds, up to 30.
+it ends, `fade` fades it in over that many seconds, up to 30, and `volume`
+(default 1, finite 0 to 1) scales this track together with its authored profile
+and the player's Music/master volume. For example `#{ volume: 0.25 }` makes
+a quieter track without changing ambient or effects volume.
 `stop_music(p, fade)` and `stop_music_all(fade)` fade it out (`fade`
 optional, 0 by default); a new track fades the last one out over its own
 `fade`. The track is a sound your Add-On's `assets/weapons.json` declares
