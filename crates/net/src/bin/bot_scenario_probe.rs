@@ -74,7 +74,7 @@ fn static_route_audit(session: &Session, target: Vec3) -> Result<Value> {
         }
     }
     Ok(
-        json!({"owner": state.owner, "from": state.feet, "target": target.to_array(),
+        json!({"owner": state.owner, "tick": session.simulation().state().tick, "from": state.feet, "target": target.to_array(),
         "static_only": true, "jets": false, "body": format!("{body:?}"),
         "finished": finished, "stages": stages}),
     )
@@ -96,6 +96,7 @@ fn sample(session: &Session) -> Value {
             "behaviour": thought.behaviour,
             "goal": thought.goal,
             "next": thought.next,
+            "next_actions": thought.next_actions,
             "route_short": thought.route_short,
             "route_end": thought.route_end,
             "path_steps": thought.path_steps,
@@ -200,13 +201,24 @@ fn main() -> Result<()> {
         })),
     )?;
     let mut snapshots = vec![sample(session)];
-    let route_audit = audit
+    let grounded_bot = |session: &Session| {
+        session
+            .motion_states()
+            .iter()
+            .any(|(state, _)| session.is_bot(state.owner) && state.grounded)
+    };
+    // Observe an actual grounded pose. An arbitrary setup tick can catch all
+    // bots in midair; wait within the normal run rather than inventing support.
+    let mut route_audit = (audit && grounded_bot(session))
         .then(|| static_route_audit(session, target))
         .transpose()?;
     for tick in 1..=ticks {
         sequence += 1;
         session.movement(owner, sequence, MoveInput::default())?;
         session.step()?;
+        if audit && route_audit.is_none() && grounded_bot(session) {
+            route_audit = Some(static_route_audit(session, target)?);
+        }
         if trace || tick % 120 == 0 || tick == ticks {
             snapshots.push(sample(session));
         }

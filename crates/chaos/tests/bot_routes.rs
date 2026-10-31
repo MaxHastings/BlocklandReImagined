@@ -909,10 +909,20 @@ fn a_driver_searches_round_a_wall_from_an_allys_sighting() {
         .expect("the driver");
     let look = spot + Vec3::Y * 1.5;
     let mut drove = false;
+    let mut history = Vec::new();
     for tick in 0..120 * 40 {
         steps(&mut s, &[human], 1, &mut sequence);
         let seated = s.mounted(driver);
         drove |= seated.is_some();
+        if tick % 120 == 0 {
+            let t = s
+                .bot_thoughts()
+                .into_iter()
+                .find(|t| t.bot == driver)
+                .unwrap();
+            history.push(format!("tick {tick}: seat {seated:?}, feet {:?}, goal {:?}, next {:?}, route {}, search {} ({} nodes), leg {}, drive {:?}, input {:?}",
+                feet(&s, driver), t.goal, t.next, t.path_steps, t.searching, t.search_nodes, t.leg, t.driving, t.input));
+        }
         if let Some((car, _)) = seated {
             let at = Vec3::from(
                 s.vehicle_poses()
@@ -930,7 +940,7 @@ fn a_driver_searches_round_a_wall_from_an_allys_sighting() {
         } else {
             assert!(
                 !drove,
-                "the driver got out at tick {tick} before seeing the spot: {:?}",
+                "the driver got out at tick {tick} before seeing the spot; history {history:#?}: {:?}",
                 s.bot_thoughts().into_iter().find(|t| t.bot == driver)
             );
         }
@@ -962,18 +972,17 @@ fn a_melee_bot_gives_up_an_enemy_it_cannot_reach_on_a_roof() {
     steps(&mut s, &[human], 10, &mut sequence);
     let mut platform = brick(fixture::BASEPLATE, [16.0, top - 0.1, 30.0], human);
     platform.raycast = false;
-    let bricks = vec![
-        spawn_brick(fixture::BOT, [15.5, 0.1, 29.5], human),
-        platform,
-    ];
+    let bricks = vec![spawn_brick(fixture::BOT, [4.0, 0.1, 29.5], human), platform];
     load(&mut s, human, bricks);
     minigame(&mut s, human);
     steps(&mut s, &[human], 30, &mut sequence);
     let bot = bots(&s)[0];
     let mut chased = 0;
     let mut gave_up = None;
+    let mut nearest = f32::INFINITY;
     for tick in 0..120 * 20 {
         steps(&mut s, &[human], 1, &mut sequence);
+        nearest = nearest.min((feet(&s, bot) - centre).with_y(0.0).length());
         let t = s.bot_thoughts().into_iter().find(|t| t.bot == bot).unwrap();
         if matches!(t.behaviour, "chase" | "fight" | "search") {
             chased += 1;
@@ -983,6 +992,10 @@ fn a_melee_bot_gives_up_an_enemy_it_cannot_reach_on_a_roof() {
         }
     }
     assert!(chased > 0, "it went for the enemy at first");
+    assert!(
+        nearest < 2.5,
+        "execute the reachable partial route before judging the roof unreachable: {nearest}"
+    );
     assert!(
         gave_up.is_some_and(|tick| tick < 120 * 10),
         "it chased an enemy it cannot reach for {chased} ticks: {:?}",

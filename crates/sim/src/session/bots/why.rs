@@ -192,6 +192,9 @@ impl Session {
                 next: (!b.surprise.standing())
                     .then(|| b.plan.first().map(|p| p.feet.to_array()))
                     .flatten(),
+                next_actions: (!b.surprise.standing())
+                    .then(|| b.plan.first().map(|p| [p.jump, p.crouch]))
+                    .flatten(),
                 path_steps: b.plan.len(),
                 searching: b.search.is_some(),
                 search_nodes: b.search.as_ref().map_or(0, Search::explored),
@@ -289,6 +292,7 @@ mod tests {
             task: None,
             goal: None,
             next: None,
+            next_actions: None,
             path_steps: 0,
             searching: false,
             search_nodes: 0,

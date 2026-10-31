@@ -109,6 +109,8 @@ pub struct BotThought {
     pub task: Option<BotTask>,
     pub goal: Option<[f32; 3]>,
     pub next: Option<[f32; 3]>,
+    /// Required jump and crouch at the next point, in that order.
+    pub next_actions: Option<[bool; 2]>,
     pub path_steps: usize,
     pub searching: bool,
     /// Nodes retained by the current route search (host diagnostic only).
@@ -510,7 +512,8 @@ struct Brain {
     /// (`HOME_GIVEN_UP`), so `Return` stands instead of searching again.
     home_given_up: Option<Vec3>,
     /// A chase point whose best route ends beyond its reach (`reach`):
-    /// that enemy is not worth chasing while they stay there.
+    /// Once its reachable partial route is executed, that enemy is not worth
+    /// chasing again while they stay there.
     out_of_reach: Option<Vec3>,
     /// How far across and up it hurts from where it stands.
     reach: (f32, f32),
@@ -894,6 +897,16 @@ impl Brain {
         self.strafe = (side, until);
         side
     }
+    /// A partial route is useful progress even when its endpoint cannot yet
+    /// hurt the target. Do not cancel it merely because planning found that
+    /// endpoint. Once it is exhausted, keep the existing unreachable policy.
+    fn may_pursue(&self, at: Vec3) -> bool {
+        (matches!(self.goal, Some(Goal::Chase(_) | Goal::Search(_)))
+            && (self.search.is_some() || !self.plan.is_empty()))
+            || self
+                .out_of_reach
+                .is_none_or(|p| p.distance(at) > CHASE_SLACK)
+    }
     fn navigate_as(&mut self, body: &Body) {
         if self.path_body.as_ref() != Some(body) {
             self.path_body = Some(body.clone());
@@ -952,7 +965,15 @@ impl Brain {
     /// search every time another warning arrives. Once routing finishes,
     /// ordinary arrival/replanning checks resolve the remaining displacement.
     fn set_pursuit_goal(&mut self, goal: Option<Goal>) {
-        if (self.search.is_some() || !self.plan.is_empty())
+        // Chassis corridors are advisory: their oriented hull/turn controller
+        // must retain its existing retarget/replanning behavior. Reusing a
+        // pedestrian frontier cannot also freeze those steering waypoints.
+        let walking = self
+            .path_body
+            .as_ref()
+            .is_none_or(|body| !body.conservative);
+        if walking
+            && (self.search.is_some() || !self.plan.is_empty())
             && let Some(Goal::Chase(old) | Goal::Search(old)) = self.goal
             && let Some(Goal::Chase(new) | Goal::Search(new)) = goal
             && old.distance(new) <= CHASE_SLACK
@@ -1029,7 +1050,12 @@ impl Brain {
                 // the local probe timeout before the bot reaches that floor.
                 // The dated evidence expiry and physical stall recovery still
                 // bound the pursuit.
-                if self.search.is_some() || !self.plan.is_empty() {
+                let walking = self
+                    .path_body
+                    .as_ref()
+                    .is_none_or(|body| !body.conservative);
+                if self.search.is_some() && self.plan.is_empty() || walking && !self.plan.is_empty()
+                {
                     self.evidence_search.routing();
                 }
                 let next = self
@@ -2320,6 +2346,8 @@ impl Session {
                 // route follows. (Not on the way to work a body or a brick:
                 // pressing against those is the work.)
                 let wedged = brain.progress.stalls() > 0
+                    && !next.jump
+                    && !next.crouch
                     && brain.plan.len() > 1
                     && flat(d).length() < 1.0
                     && !matches!(brain.goal, Some(Goal::Objective(_) | Goal::Interact(_)));
@@ -2986,11 +3014,7 @@ impl Session {
             enemy: enemy
                 // Where it was out of reach, not across from there: one
                 // that came down off a jump or a roof is in reach again.
-                .filter(|seen| {
-                    brain
-                        .out_of_reach
-                        .is_none_or(|p| p.distance(seen.real) > 2.5)
-                })
+                .filter(|seen| brain.may_pursue(seen.real))
                 .map(|seen| {
                     if swim.is_some() || weapon.is_none_or(|w| w.melee) {
                         (seen.feet.distance(feet), 0.0)
@@ -3010,10 +3034,9 @@ impl Session {
             // gets on with something else rather than stand there until
             // the memory fades.
             hunted: threat.is_some() && sight.target.is_none(),
-            remembers: brain.memory.is_some_and(|m| {
-                brain.out_of_reach.is_none_or(|p| p.distance(m.at) > 2.5)
-                    && !brain.evidence_search.exhausted_for(m)
-            }),
+            remembers: brain
+                .memory
+                .is_some_and(|m| brain.may_pursue(m.at) && !brain.evidence_search.exhausted_for(m)),
             // Strayed past where it strolls; while it works a body or a
             // seat (an interaction, idle play's included) its leash is
             // the chase's, as for a fight.
@@ -4945,6 +4968,49 @@ mod navigation_body_tests {
                 stalls == 0,
                 moving,
                 "only real displacement satisfies the walk"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stalled_approach_cannot_skip_an_unfinished_jump_or_crouched_landing() {
+        for (jump, crouch) in [(false, false), (true, false), (false, true), (true, true)] {
+            let sim = crate::simulation::Simulation::new(
+                bri_world::World::new("Required stance".into(), "fixture".into(), vec![[1.0; 4]]),
+                crate::testing::definitions(),
+                vec![],
+            )
+            .unwrap();
+            let mut s = Session::new(sim);
+            let bot = s.join("Walker".into(), Vec3::ZERO, true).unwrap();
+            let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
+            let goal = Vec3::X * 30.0;
+            let required = Waypoint {
+                feet: Vec3::new(0.65, 1.2, 0.0),
+                jump,
+                crouch,
+                through: None,
+                mode: Mode::Walk,
+            };
+            brain.set_goal(Some(Goal::Chase(goal)));
+            brain.plan = vec![required, Waypoint::walk(goal)];
+            brain.progress.stalled(Vec3::ZERO, 8.0, 120.0, 0);
+            assert!(brain.progress.stalled(Vec3::ZERO, 8.0, 120.0, 91));
+            s.bots.brains.insert(bot, brain);
+            let body = Body::of(s.peers[&bot].player.tuning(), 1.0);
+            let state = s.peers[&bot].player.state().clone();
+            let next = s
+                .bot_path(bot, Vec3::ZERO, &body, Default::default(), None, &state, 92)
+                .unwrap();
+            assert_eq!(
+                next.feet,
+                if jump || crouch { required.feet } else { goal },
+                "jump={jump}, crouch={crouch}: only plain walking points may be skipped at a jam"
+            );
+            assert_eq!(
+                s.bots.brains[&bot].progress.stalls(),
+                1,
+                "a waypoint is not physical progress"
             );
         }
     }

@@ -1378,18 +1378,8 @@ impl Nav {
                     .filter_map(|f| Some((*f, link(body, swims, from, afloat, *f)?)))
                     .collect();
             }
-            if steps.is_empty() && afloat.is_none() && !body.conservative {
-                // Beside a small support, the body overhangs the edge before
-                // it falls. The intermediate columns have no place for the
-                // whole body at floor height, even though ordinary walking
-                // carries it off. Join only the nearby lower landing, with
-                // clearance above the edge and all the way down; never a
-                // level gap, an over-step rail or a chassis shortcut.
-                if let Some((next, floor)) = self.walkoff(ground, body, node, dx, dz)? {
-                    out.push((next, false, floor, None));
-                }
-            }
-            for (f, jump) in steps {
+            let opened = out.len();
+            for (mut f, jump) in steps {
                 if self.avoided(node, x, z, f.y, body) {
                     continue;
                 }
@@ -1398,9 +1388,11 @@ impl Nav {
                 // out over the edge at the height it stands at (crouched,
                 // out of a crawlspace): a rail or a lip between the two
                 // spots, which neither cell's own sample sees, holds it back.
+                let crouched_drop =
+                    f.y < from - body.step && (f.low || !ground.clear(body, node.feet(), false));
                 if f.y < from - body.step
                     && !self.edge(node, next, || {
-                        let crouched = !ground.clear(body, node.feet(), false);
+                        let crouched = crouched_drop;
                         let (half_width, _, _) = body.clearance(crouched);
                         let height = if crouched {
                             body.crouch_height
@@ -1412,6 +1404,9 @@ impl Nav {
                 {
                     continue;
                 }
+                // The edge was validated in this stance; retain it until
+                // the landing even when that floor itself permits standing.
+                f.low |= crouched_drop;
                 // A jump is taken only where the body rises clear where it
                 // stands to the height it lands at, then over onto it
                 // (crouched, into a crawlspace): a roof over the takeoff, or
@@ -1437,6 +1432,17 @@ impl Nav {
                     straight[i] = Some((next, jump, f));
                 }
                 out.push((next, jump, f, None));
+            }
+            // Provisional floor links can all fail their actual sweeps (a
+            // jump onto the header above a low window). Only then try the
+            // supported walkoff, retaining a low departure stance. Testing
+            // raw candidates before validation incorrectly hid this exit.
+            if out.len() == opened
+                && afloat.is_none()
+                && !body.conservative
+                && let Some((next, floor)) = self.walkoff(ground, body, node, dx, dz)?
+            {
+                out.push((next, false, floor, None));
             }
         }
         // Diagonals only where both sides are open at walking height, so a
@@ -1473,7 +1479,8 @@ impl Nav {
         dx: i32,
         dz: i32,
     ) -> Option<Option<(Node, Floor)>> {
-        if !ground.clear(body, from.feet(), false) {
+        let crouched = !ground.clear(body, from.feet(), false);
+        if !ground.clear(body, from.feet(), crouched) {
             return Some(None);
         }
         // At most one footprint beyond an adjacent cell, capped at eight
@@ -1488,35 +1495,84 @@ impl Nav {
             for f in entered(&floors, from.feet().y, None, body)
                 .filter(|f| !f.low && !f.wet && f.y >= from.feet().y - body.drop)
             {
-                let to = Node::on(x, z, &f);
-                if self.line_avoided(from.feet(), to.feet(), body) {
-                    continue;
-                }
-                if self.edge(from, to, || {
-                    let (half, lift, tall) = body.clearance(false);
-                    let high = to.feet().with_y(from.feet().y);
-                    let samples = (from.feet().distance(high) / (CELL * 0.5)).ceil() as usize;
-                    // This bridges missing *standing* samples beside a prop,
-                    // not open air between platforms: a safe floor must lie
-                    // beneath every part of the crossing.
-                    let supported = (1..=samples).all(|i| {
-                        let top = from.feet().lerp(high, i as f32 / samples as f32)
-                            + Vec3::Y * STEP_SLACK;
-                        ground
-                            .ray(top, Vec3::NEG_Y, body.drop + STEP_SLACK)
-                            .is_some_and(|(_, normal)| normal.y >= body.floor_cos)
+                let centre = Node::on(x, z, &f).feet();
+                // Keep the departure's lateral lane while leaving a narrow
+                // opening. Steering back to the grid centre before the body
+                // clears the jamb can invalidate an otherwise legal drop.
+                let aligned = if dx != 0 {
+                    centre.with_z(from.feet().z)
+                } else {
+                    centre.with_x(from.feet().x)
+                };
+                let aligned_floor = (aligned.distance_squared(centre) > f32::EPSILON)
+                    .then(|| ground.place(body, aligned + Vec3::Y * SETTLE_GAP, false))
+                    .flatten()
+                    .filter(|at| {
+                        (at.x - x as f32 * CELL).abs() <= CELL * 0.5
+                            && (at.z - z as f32 * CELL).abs() <= CELL * 0.5
+                            && ground.floats(body, *at).is_none()
+                    })
+                    .map(|at| Floor {
+                        y: at.y - SETTLE_GAP,
+                        spot: (
+                            ((at.x - x as f32 * CELL) / SPOT_UNIT).round() as i8,
+                            ((at.z - z as f32 * CELL) / SPOT_UNIT).round() as i8,
+                        ),
+                        overhang: !ground.stands(body, at),
+                        ..f
+                    })
+                    .filter(|f| {
+                        f.y < from.feet().y - body.step && f.y >= from.feet().y - body.drop
                     });
-                    supported
-                        && ground.settle(body, to.feet(), false).is_some()
-                        && ground.sweep_box(
-                            half,
-                            tall,
-                            from.feet() + Vec3::Y * lift,
-                            high + Vec3::Y * lift,
-                        )
-                        && ground.sweep_box(half, body.height, high, to.feet())
-                }) {
-                    return Some(Some((to, f)));
+                for f in [Some(f), aligned_floor].into_iter().flatten() {
+                    let to = Node::on(x, z, &f);
+                    if self.line_avoided(from.feet(), to.feet(), body) {
+                        continue;
+                    }
+                    if self.edge(from, to, || {
+                        let (half, lift, tall) = body.clearance(crouched);
+                        let high = to.feet().with_y(from.feet().y);
+                        let samples = (from.feet().distance(high) / (CELL * 0.5)).ceil() as usize;
+                        // This bridges missing *standing* samples beside a prop,
+                        // not open air between platforms: a safe floor must lie
+                        // beneath every part of the crossing.
+                        let supported = (1..=samples).all(|i| {
+                            let top = from.feet().lerp(high, i as f32 / samples as f32)
+                                + Vec3::Y * STEP_SLACK;
+                            ground
+                                .ray(top, Vec3::NEG_Y, body.drop + STEP_SLACK)
+                                .is_some_and(|(_, normal)| normal.y >= body.floor_cos)
+                        });
+                        supported
+                            && ground.settle(body, to.feet(), false).is_some()
+                            && ground.sweep_box(
+                                half,
+                                tall,
+                                from.feet() + Vec3::Y * lift,
+                                high + Vec3::Y * lift,
+                            )
+                            && ground.sweep_box(
+                                half,
+                                if crouched {
+                                    body.crouch_height
+                                } else {
+                                    body.height
+                                },
+                                high,
+                                to.feet(),
+                            )
+                    }) {
+                        // Keep the low departure stance through the crossing,
+                        // even when the landing itself has room to stand. This
+                        // is edge metadata; the cached landing floor stays exact.
+                        return Some(Some((
+                            to,
+                            Floor {
+                                low: crouched || f.low,
+                                ..f
+                            },
+                        )));
+                    }
                 }
             }
         }
@@ -1625,7 +1681,7 @@ struct Floor {
     /// The full body fits but is within half a cell of fixed collision:
     /// passable, with a preference for the middle of doors and corridors.
     snug: bool,
-    /// Only a crouched body fits.
+    /// Crouched stance is required at this sample or while entering it.
     low: bool,
     /// Under water that floats the body: swum, not walked.
     wet: bool,
@@ -1684,7 +1740,11 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
                     y: feet.y - 0.01,
                     overhang: false,
                     spot: (offset(feet.x - px), offset(feet.z - pz)),
-                    snug: {
+                    snug: if body.conservative {
+                        // The chassis already used its actual width. Preserve
+                        // its clearance/cost policy while fixing pedestrians.
+                        !ground.fits(body, feet, low)
+                    } else {
                         let (half, lift, tall) = body.clearance(low);
                         !ground.empty(feet, half + CELL * 0.5, lift, tall)
                     },
@@ -4152,6 +4212,75 @@ mod tests {
             }
             assert!(landed, "{from:?} -> {to:?}: {:?}", player.state());
         }
+    }
+
+    /// A low window exit must stay crouched until its full footprint clears
+    /// the lintel, then drop to a normal standing floor with ordinary controls.
+    #[test]
+    fn a_crouched_window_exit_keeps_its_stance_until_clear_of_the_lintel() {
+        use bri_motor::player::{MoveInput, Player, PlayerTuning};
+        let boxes = [
+            floor(),
+            (Vec3::new(-4.0, 0.0, -4.0), Vec3::new(-3.0, 6.0, 4.0)),
+            (Vec3::new(-4.0, 0.0, -4.0), Vec3::new(1.0, 6.0, -3.0)),
+            (Vec3::new(-4.0, 0.0, 3.0), Vec3::new(1.0, 6.0, 4.0)),
+            (Vec3::new(0.0, 0.0, -4.0), Vec3::new(1.0, 1.4, 4.0)),
+            (Vec3::new(0.0, 2.6, -4.0), Vec3::new(1.0, 3.8, 4.0)),
+            (Vec3::new(0.0, 1.4, -4.0), Vec3::new(1.0, 2.6, 0.0)),
+            (Vec3::new(0.0, 1.4, 1.5), Vec3::new(1.0, 2.6, 4.0)),
+        ];
+        let from = Vec3::new(0.5, 1.41, 0.8166);
+        let to = Vec3::new(4.0, 0.01, 0.8493);
+        let mut physics = world(&boxes);
+        let route = path(search(&physics, from, to).0);
+        assert!(
+            route.iter().any(|w| w.crouch && w.feet.x > 1.0),
+            "{route:?}"
+        );
+        assert!(route.iter().all(|w| !w.jump && w.mode == Mode::Walk));
+        let tuning = PlayerTuning::default();
+        let mut player = Player::spawn_overlapping(&mut physics, 1, from, tuning).unwrap();
+        let mut next = 0;
+        let mut arrived = false;
+        for _ in 0..600 {
+            let feet = Vec3::from(player.state().feet);
+            while next < route.len()
+                && (route[next].feet - feet).with_y(0.0).length() < 0.3
+                && (route[next].feet.y - feet.y).abs() < 0.3
+            {
+                next += 1;
+            }
+            if next == route.len() {
+                let landing = route.last().unwrap().feet;
+                arrived = player.state().grounded
+                    && (feet - landing).with_y(0.0).length() < 0.3
+                    && (feet.y - landing.y).abs() < 0.1
+                    && feet.x - player.tuning().width * 0.5 > 1.0;
+                break;
+            }
+            let way = (route[next].feet - feet).with_y(0.0).normalize_or_zero();
+            player
+                .step(
+                    &mut physics,
+                    MoveInput {
+                        forward: -way.z,
+                        right: way.x,
+                        crouch: route[next].crouch,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            physics.step();
+        }
+        assert!(arrived, "route {route:?}, final {:?}", player.state());
+        for _ in 0..10 {
+            player.step(&mut physics, MoveInput::default()).unwrap();
+            physics.step();
+        }
+        assert!(
+            !player.state().crouched,
+            "stands normally after clearing the window"
+        );
     }
 
     /// A leap a body missed is avoided alone: the route leaps the gap

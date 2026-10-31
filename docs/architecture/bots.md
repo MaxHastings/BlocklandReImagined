@@ -368,10 +368,12 @@ that makes no headway backs up (only when the way behind is clear of
 allies, things and drops), plans again and finally gives up the seat.
 A plan is never trusted past what the world shows. When the best route to
 an enemy ends where the bot cannot hurt them (farther across than its
-band, or higher than a jump brings within it), chasing them, or searching
-where they stand, is worth nothing until they move. A bot standing on
-something the grid leaves out (a vehicle's roof) plans from the floor
-beneath.
+band, or higher than a jump brings within it), the bot first executes the
+reachable partial route. Only after that route is exhausted is chasing or
+searching that same point worth nothing until the evidence or geometry changes.
+A pending route is progress to try, not evidence that no approach exists.
+A bot standing on something the grid leaves out (a vehicle's roof) plans
+from the floor beneath.
 
 Portals stay inside the same mechanism: an opening is a walk edge of the
 grid, so a route that crosses one is a walk leg like any other. Shark-like
