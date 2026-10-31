@@ -234,10 +234,25 @@ pub struct MagazineView {
     pub reserve: Option<u32>,
     pub reloading: bool,
 }
+/// An accepted human connection, independently of whether it has a body.
+/// A loading minigame is an authorized entry destination, not membership.
+#[derive(Debug, Clone)]
+pub struct ConnectionView {
+    pub id: u64,
+    pub name: String,
+    pub loading: bool,
+    pub minigame: Option<u64>,
+    pub team: Option<u32>,
+    pub alive: Option<bool>,
+    pub position: Option<[f32; 3]>,
+}
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
 /// returns, so a brick it removes still stops its rays.
 pub trait World {
+    fn connection(&self, _owner: u64) -> Option<ConnectionView> {
+        None
+    }
     /// The first thing a ray meets within `range` of `from` along the unit
     /// `direction`, passing through the body of the player `ignore`.
     fn raycast(
@@ -3117,6 +3132,45 @@ fn damage_op(
 
 /// Questions for the live world: rays and the damage rules.
 fn register_queries(engine: &mut Engine) {
+    engine.register_fn("connection", |owner: Dynamic| {
+        let owner = id(&owner)?;
+        with_world(|world, i| match world.connection(owner) {
+            Some(c) => view_in(i, Some(Of::Player(owner)), || {
+                map([
+                    ("id", Dynamic::from_int(c.id as i64)),
+                    ("name", c.name.into()),
+                    ("loading", c.loading.into()),
+                    (
+                        "minigame",
+                        c.minigame
+                            .map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
+                    ),
+                    (
+                        "team",
+                        c.team
+                            .map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
+                    ),
+                    ("alive", c.alive.map_or(Dynamic::UNIT, Dynamic::from_bool)),
+                    (
+                        "x",
+                        c.position
+                            .map_or(Dynamic::UNIT, |p| Dynamic::from_float(p[0] as f64)),
+                    ),
+                    (
+                        "y",
+                        c.position
+                            .map_or(Dynamic::UNIT, |p| Dynamic::from_float(p[1] as f64)),
+                    ),
+                    (
+                        "z",
+                        c.position
+                            .map_or(Dynamic::UNIT, |p| Dynamic::from_float(p[2] as f64)),
+                    ),
+                ])
+            }),
+            None => Ok(Dynamic::UNIT),
+        })
+    });
     fn raycast(
         from: Array,
         direction: Array,

@@ -24,6 +24,9 @@ impl<'a> ScriptWorld<'a> {
     }
 }
 impl World for ScriptWorld<'_> {
+    fn connection(&self, owner: u64) -> Option<bri_package_runtime::script::ConnectionView> {
+        self.session.connection(owner)
+    }
     fn raycast(
         &self,
         from: [f32; 3],

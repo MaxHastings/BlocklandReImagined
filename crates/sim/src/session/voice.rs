@@ -171,14 +171,11 @@ pub struct VoiceRoute {
 
 impl Session {
     pub fn voice_context(&self, owner: OwnerId) -> VoiceContext {
+        let connection = self.connection(owner);
         VoiceContext {
-            game: self.game_of(owner).map(|g| g.0),
-            team: self
-                .peers
-                .get(&owner)
-                .and_then(|p| self.minigames.team_of(p.combat.player))
-                .map(|t| t.0),
-            alive: self.peers.get(&owner).is_some_and(|p| p.combat.alive),
+            game: connection.as_ref().and_then(|c| c.minigame),
+            team: connection.as_ref().and_then(|c| c.team),
+            alive: connection.and_then(|c| c.alive).unwrap_or(false),
         }
     }
 }

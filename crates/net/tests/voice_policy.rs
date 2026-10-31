@@ -776,3 +776,21 @@ fn a_failed_voice_policy_cannot_fall_through_to_a_public_route() {
         }
     }
 }
+
+#[test]
+fn loading_connection_has_no_implicit_private_radio_channel() {
+    let mut s = session(true);
+    let a = s.join("A".into(), Vec3::new(0., 0.05, 0.), false).unwrap();
+    let loading = s
+        .arrive("Loading".into(), &Default::default(), false, None)
+        .unwrap();
+    assert!(s.voice_routes(&[a, loading])[&loading].contains_key(&a));
+    radio(&mut s, a, 1, "radio_transmit", PackageArg::Bool(true));
+    assert!(
+        !s.voice_routes(&[a, loading])
+            .get(&loading)
+            .is_some_and(|r| r.contains_key(&a)),
+        "unknown loading radio channel must deny, rather than falling back to public voice"
+    );
+    assert!(s.take_package_problems().is_empty());
+}

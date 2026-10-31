@@ -1290,15 +1290,8 @@ impl Session {
         match game {
             None => self.system_chat(text),
             Some(game) => {
-                let members: Vec<_> = self
-                    .minigames
-                    .game(game)
-                    .map(|g| g.members.iter().copied().collect())
-                    .unwrap_or_default();
-                for member in members {
-                    if let Some(owner) = self.owner_of(member)
-                        && Some(owner) != except
-                    {
+                for owner in self.conversation_recipients(game) {
+                    if Some(owner) != except {
                         self.notify(owner, Notice::Chat(text.clone()));
                     }
                 }
@@ -1327,11 +1320,7 @@ impl Session {
         {
             return;
         }
-        let to: Vec<OwnerId> = self
-            .minigames
-            .game(game)
-            .map(|g| g.members.iter().filter_map(|m| self.owner_of(*m)).collect())
-            .unwrap_or_default();
+        let to = self.conversation_recipients(game);
         for owner in to {
             self.notify(owner, Notice::Kill(kill.clone()));
         }
@@ -2874,6 +2863,18 @@ impl Session {
             .context("Unknown connection")?
             .combat
             .player;
+        if self
+            .minigames
+            .player(player)
+            .is_ok_and(|p| p.game.is_none())
+            && let Some(game) = self.retained_connection_game(owner)
+        {
+            let effects = self
+                .minigames
+                .host_place(player, Some(game))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return self.apply_minigame_effects(effects);
+        }
         let Some(game) = self.minigames.server_game() else {
             // Players in no game join the default one (Slayer's Default
             // Minigame) as they first spawn.

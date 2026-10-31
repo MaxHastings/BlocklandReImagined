@@ -2226,7 +2226,7 @@ async fn run(
                     broadcast(peers.values(),Kind::Update,&Message::Update(delta));cursor=next;
                 }
                 send_package_views(&session,&peers,&mut package_views);
-                for (owner,notice) in recorder.take_private_notices(&mut session){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}else if let Some(lobby)=lobbies.get(&owner)&&matches!(notice,bri_sim::session::Notice::Chat(_)|bri_sim::session::Notice::Sound(_)){lobby.peer.send_message(Kind::Notice,&Message::Notice(notice));}}
+                for (owner,notice) in recorder.take_private_notices(&mut session){if let Some(peer)=peers.get(&owner){peer.send_message(Kind::Notice,&Message::Notice(notice));}else if let Some(lobby)=lobbies.get(&owner)&&matches!(notice,bri_sim::session::Notice::Chat(_)|bri_sim::session::Notice::Sound(_)|bri_sim::session::Notice::Kill(_)){lobby.peer.send_message(Kind::Notice,&Message::Notice(notice));}}
             }
             }
             event_overload.0+=session.take_event_overload();

@@ -56,6 +56,7 @@ mod death_results;
 pub use death_results::{DamageResult, DeathResult};
 mod round_results;
 pub use round_results::RoundResult;
+mod connections;
 mod control;
 pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera, SeatSince};
 pub mod camera_path;
@@ -1124,6 +1125,8 @@ pub struct Session {
     cleared_bricks_at: BTreeMap<OwnerId, u64>,
     /// When each player last used `/cancelEvents` (five seconds apart).
     cancelled_events_at: BTreeMap<OwnerId, u64>,
+    /// Latest authoritative membership, retained for human reconnects. A fresh
+    /// map's journal starts empty, so runtime game IDs cannot cross worlds.
     last_membership: BTreeMap<OwnerId, Option<bri_minigames::GameId>>,
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
@@ -2176,7 +2179,11 @@ impl Session {
         peer.player.despawn(&mut self.simulation.physics);
         self.release_spies(owner);
         self.combat_disconnect(peer.combat.player);
-        self.last_membership.remove(&owner);
+        // Human reconnects retain their authoritative entry grant. Bots have
+        // no reconnecting connection, and map adoption starts a fresh journal.
+        if self.bots.is_bot(owner) {
+            self.last_membership.remove(&owner);
+        }
         self.trust_disconnect(owner);
         self.set_steering_prefs(owner, DEFAULT_STEERING.0, DEFAULT_STEERING.1);
         Ok(())

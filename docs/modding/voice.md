@@ -14,13 +14,37 @@ fn voice_routes(speaker, listeners) {
 }
 ```
 
-`speaker` and `listeners` are connected human owner IDs. Read `player(id)`, minigames, package state and ordinary settings to choose policy. The hook cannot mutate state, emit effects, log, or perform operations, including indirectly through another package. Failed hooks contribute no routes and report a package problem. Use ordinary commands/hooks to update channel or inventory state. No voice packet invokes script.
+`speaker` and `listeners` are connected human owner IDs. Read `connection(id)`, minigames, package state and ordinary settings to choose policy. `player(id)` remains a body-only view. The hook cannot mutate state, emit effects, log, or perform operations, including indirectly through another package. Failed hooks contribute no routes and report a package problem. Use ordinary commands/hooks to update channel or inventory state. No voice packet invokes script.
 
 A hook returns at most one entry per listener (bounded by the server connection limit); `hear` defaults true. Playback is spatial with server-owned range (1–2000 world units), or centered at steady volume. Labels are plain text, up to 48 bytes with no control characters. Priority is 0–255. Up to four policy providers compose: highest priority wins each speaker/listener pair, including explicit `hear:false` denials. Identical equal-priority results deduplicate; conflicting equal-priority results deny that pair and report a conflict. Personal and administrator mutes cannot be overridden.
 
 Policy refreshes every 200 ms, with earlier refresh for membership, death, join/leave and moderation changes. Host settings and package channel/state changes apply within that refresh interval. This is bounded control latency, not an audio packet delay. Live distance is checked when audio is relayed. Reliable private route tables carry per-route generations; late audio/activity from revoked routes cannot revive them. Unchanged routes keep their audio buffers. Speech originates at the actor body; listening uses the controlled viewpoint.
 
 The enabled `voice_chat` package declares outside/global and same-minigame/proximity defaults, server settings for outside scope/range, and minigame settings for mode/range. Global lets living and dead members talk together. Proximity and Team retain their dead-to-living restrictions. No engine rule hardcodes these groups or the package ID. `voice` capability authorization is shown by the existing Add-On trust UI.
+
+## Accepted connection view
+
+`connection(owner)` is a read-only human connection view, or `()` for an unknown,
+offline or bot owner. It returns `id`, `name`, `loading`, `minigame`, `team`,
+`alive` and `x`/`y`/`z`. A loading connection has no body: `team`, `alive` and all
+position coordinates are `()`. Check `loading` before using those fields.
+`minigame` is its authorized pending destination, not membership or permission
+to perform gameplay commands. Actual players retain their current membership.
+
+Pending destination prefers a valid retained membership proven by authenticated
+owner reuse, then the host's automatic server/default game, otherwise lobby
+(`()`). It follows changes to those grants. It grants no team slot, invented
+position or previous private chat history; map replacement does not carry old
+game IDs into a new world. Explicit membership removal revokes retention.
+Eligible pending connections receive subsequent scoped game notices and kill
+feeds. The host-selected default uses the existing automatic-entry authority;
+an unrelated invite-only game supplies no grant.
+
+The stock policy uses nonpositional routes when either participant is loading.
+It does not infer a loading team or dead-player channel. The optional radio
+example denies private transmissions to loading listeners with no established
+channel. These policy/query foundations do **not** establish continuous loading
+audio transport: arrival VoiceLink and background audio handoff remain pending.
 
 ## Native processing parameters
 

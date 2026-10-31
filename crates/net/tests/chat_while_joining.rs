@@ -474,3 +474,128 @@ async fn another_player_cannot_spawn_as_a_loading_player() -> Result<()> {
     assert_eq!(report.joins, 0);
     Ok(())
 }
+
+/// Destination notices must use the accepted connection, before any body exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_destination_receives_game_notices_before_entering_the_world() -> Result<()> {
+    use bri_package::packages::{PackageEntry, Side};
+    use bri_package_runtime::Catalog;
+    use bri_sim::session::{MiniGameRequest, PackageCommand};
+    let root = tempfile::tempdir()?;
+    let dir = root.path().join("destination");
+    std::fs::create_dir(&dir)?;
+    std::fs::write(
+        dir.join("package.json"),
+        serde_json::json!({
+            "schema_version":1,"id":"destination","version":"1.0.0","api":1,
+            "name":"Destination fixture","license":"CC0-1.0","capabilities":["minigame"],
+            "provides":[
+                {"kind":"behaviour","id":"destination:behaviour/main","file":"behaviour.json"},
+                {"kind":"script","id":"destination:script/main","file":"rules.rhai"}]
+        })
+        .to_string(),
+    )?;
+    std::fs::write(
+        dir.join("behaviour.json"),
+        r#"{"schema_version":1,"script":"rules.rhai","commands":[{"name":"destination_default"}]}"#,
+    )?;
+    std::fs::write(
+        dir.join("rules.rhai"),
+        "fn cmd_destination_default(p) { set_default_minigame(player(p).minigame, true); }",
+    )?;
+    let catalog = Catalog::load(
+        root.path(),
+        &PackageSet {
+            schema_version: 1,
+            packages: vec![PackageEntry {
+                id: "destination".into(),
+                version: "1.0.0".into(),
+                dir: "destination".into(),
+                side: Side::Server,
+                role: None,
+            }],
+        },
+        true,
+    )
+    .map_err(|d| anyhow::anyhow!("{d:?}"))?;
+    let mut session = fixture::session();
+    session.install_packages(Arc::new(catalog), None)?;
+    let server = server::start(session, fixture::options())?;
+    let mut ann = Client::connect(
+        server.address,
+        &server.certificate,
+        "Ann".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    ann.command(Command::MiniGame(MiniGameRequest::Create {
+        color: 0,
+        settings: Default::default(),
+    }))
+    .await?;
+    ann.command(Command::Package(PackageCommand {
+        package: "destination".into(),
+        command: "destination_default".into(),
+        args: vec![],
+    }))
+    .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !ann.replica.minigames.iter().any(|g| g.default) {
+            ann.receive().await?;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let game = ann.replica.minigames.iter().find(|g| g.default).unwrap().id;
+    let ids = tempfile::tempdir()?;
+    let pin = HostPin::from(&server.certificate[..]);
+    let mut loading = Arrival::open(
+        server.address,
+        &pin,
+        "Loading".into(),
+        None,
+        &identity(ids.path(), "loading")?,
+    )
+    .await?;
+    let cara = Client::connect(
+        server.address,
+        &server.certificate,
+        "Cara".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match loading.next().await {
+                Some(ArrivalEvent::Notice(Notice::Chat(line)))
+                    if line.contains("Cara joined the mini-game.") =>
+                {
+                    break;
+                }
+                Some(ArrivalEvent::Closed(reason)) => anyhow::bail!("closed: {reason}"),
+                None => anyhow::bail!("loading connection ended"),
+                _ => {}
+            }
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    // The same authoritative destination becomes actual membership only at entry.
+    assert!(!cara.replica.names.contains_key(&loading.owner));
+    assert!(
+        cara.replica
+            .minigames
+            .iter()
+            .find(|g| g.id == game)
+            .unwrap()
+            .members
+            .contains(&cara.owner)
+    );
+    loading.close();
+    cara.close();
+    ann.close();
+    server.stop().await?;
+    Ok(())
+}
