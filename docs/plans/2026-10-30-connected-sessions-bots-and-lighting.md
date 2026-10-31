@@ -323,8 +323,11 @@ interiors, terrain and original content. The old official
 [Change Log](https://blockland.us/Change-Log.html) stops at v20; it cannot establish
 complete post-v20 coverage. The official
 [Development board](https://forum.blockland.us/index.php?board=41.0) spans later
-announcements through r2033. This audit read selected original posts across that
-range; completing the release-by-release register is Phase 1 work.
+announcements through r2033. The implementation follow-up now records every
+release announcement in that range in the
+[post-v20 core register](../audits/post-v20-core.md), separating render/bot work,
+native boundary checks and legacy implementation details. That reading coverage
+does not establish that every native counterpart is verified.
 
 | Primary evidence | Candidate contract to inspect in BRI |
 | --- | --- |
