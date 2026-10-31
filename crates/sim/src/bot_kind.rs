@@ -96,6 +96,8 @@ pub struct BotKind {
     /// sight that have nothing better to go on go and look where the enemy
     /// was (Bot_Hole's `hAlertOtherBots`).
     pub alerts_allies: bool,
+    /// Whether this kind may cooperate with allied bots to reach higher ground.
+    pub cooperative_stack: bool,
     /// How close, in world units, a shot at someone else must pass to count
     /// as fire at this bot (`on_bot_under_fire`). 0: none does.
     pub under_fire_range: f32,
@@ -429,6 +431,7 @@ impl Default for BotKind {
             emote: None,
             out_of_water_seconds: None,
             alerts_allies: false,
+            cooperative_stack: false,
             under_fire_range: 0.0,
             behaviours: Default::default(),
             objective_radius: 24.0,

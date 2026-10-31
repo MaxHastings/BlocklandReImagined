@@ -73,3 +73,11 @@ change also reran the five still-controller cases and Clippy. Diagnostics:
 `stack-contact-tag-final.txt`, `stack-contact-tag-last.txt`, and
 `stack-contact-tag-clippy.txt`. No bot currently consumes the seam, and moving
 support, prediction agreement, cooperation and the cube remain unverified.
+
+The Bot_Hole importer now preserves the source `hSuperStacker` setting as the
+generic bot-kind `cooperative_stack` capability, defaulting to false for kinds
+without it. This records authored intent only: no movement behavior consumes it
+yet, and imported content must be regenerated before testing the capability in
+the saved cube scenario. `cargo fmt -p bri-addon-import -p bri-sim -- --check`
+and `cargo test --locked --profile playtest -p bri-addon-import hole_bots::tests
+--lib` passed (three importer tests, including presence and absence of the flag).

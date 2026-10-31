@@ -83,6 +83,9 @@ pub(crate) fn kind(
     if on("halertotherbots") {
         kind["alerts_allies"] = json!(true);
     }
+    if on("hsuperstacker") {
+        kind["cooperative_stack"] = json!(true);
+    }
     if let Some(side) = text("htype") {
         kind["side"] = json!(
             side.to_ascii_lowercase()
@@ -115,6 +118,7 @@ mod tests {
             ("hmelee", "1"),
             ("hattackdamage", "12"),
             ("halertotherbots", "1"),
+            ("hsuperstacker", "1"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -134,6 +138,7 @@ mod tests {
         assert_eq!(k["melee"]["action"], "activate2");
         assert_eq!(k["body"], "x:archetype/walkerbot");
         assert_eq!(k["alerts_allies"], true);
+        assert_eq!(k["cooperative_stack"], true);
     }
 
     #[test]
@@ -152,6 +157,7 @@ mod tests {
             "disabled search must not retain one unit of sight"
         );
         assert_eq!(k["return_home"], false);
+        assert!(k.get("cooperative_stack").is_none());
         assert_eq!(
             k["wander_radius"], 16.0,
             "idle distance is still converted from brick units"
