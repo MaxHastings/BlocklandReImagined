@@ -616,6 +616,11 @@ impl VoiceClient {
                     voice.sequence,
                     &voice.payload,
                     route.spatial.then_some(route.range),
+                    bri_audio::voice::Effects {
+                        gain: route.effects.gain,
+                        high_pass_hz: route.effects.high_pass_hz,
+                        low_pass_hz: route.effects.low_pass_hz,
+                    },
                 );
             }
             self.speaking = chat.speaking();
@@ -791,6 +796,7 @@ mod tests {
                 spatial: false,
                 range: 48.0,
                 label: "Radio 1".into(),
+                effects: Default::default(),
             },
         };
         voice.routes = bri_net::voice::RouteTable {

@@ -3754,4 +3754,4 @@ mod input_drain_tests {
     }
 }
 
-pub use voice::{VoicePlayback, VoiceRoute};
+pub use voice::{VoiceEffects, VoicePlayback, VoiceRoute};

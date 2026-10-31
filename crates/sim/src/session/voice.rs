@@ -76,6 +76,41 @@ impl Session {
     }
 }
 
+/// Bounded native processing selected by authorized server packages. The
+/// client maps this DTO to audio parameters; the simulation owns no codec/DSP.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VoiceEffects {
+    /// Linear gain before local voice-volume/mute and the native mix limiter.
+    pub gain: f32,
+    /// Zero bypasses this filter; otherwise 40..=4000 Hz.
+    pub high_pass_hz: f32,
+    /// Zero bypasses this filter; otherwise 100..=7500 Hz.
+    pub low_pass_hz: f32,
+}
+impl Default for VoiceEffects {
+    fn default() -> Self {
+        Self {
+            gain: 1.0,
+            high_pass_hz: 0.0,
+            low_pass_hz: 0.0,
+        }
+    }
+}
+impl VoiceEffects {
+    pub fn valid(self) -> bool {
+        [self.gain, self.high_pass_hz, self.low_pass_hz]
+            .into_iter()
+            .all(f32::is_finite)
+            && (0.0..=2.0).contains(&self.gain)
+            && (self.high_pass_hz == 0.0 || (40.0..=4000.0).contains(&self.high_pass_hz))
+            && (self.low_pass_hz == 0.0 || (100.0..=7500.0).contains(&self.low_pass_hz))
+            && (self.high_pass_hz == 0.0
+                || self.low_pass_hz == 0.0
+                || self.high_pass_hz < self.low_pass_hz)
+    }
+}
+
 /// Per-listener playback selected by authorized server packages.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,10 +118,13 @@ pub struct VoicePlayback {
     pub spatial: bool,
     pub range: f32,
     pub label: String,
+    #[serde(default)]
+    pub effects: VoiceEffects,
 }
 impl VoicePlayback {
     pub fn valid(&self) -> bool {
-        self.range.is_finite()
+        self.effects.valid()
+            && self.range.is_finite()
             && (1.0..=2000.0).contains(&self.range)
             && self.label.len() <= 48
             && !self.label.chars().any(char::is_control)
@@ -103,6 +141,8 @@ pub struct VoiceRoute {
     pub range: f32,
     pub label: String,
     pub priority: u8,
+    #[serde(default)]
+    pub effects: VoiceEffects,
 }
 
 impl Session {

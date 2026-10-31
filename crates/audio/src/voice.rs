@@ -20,6 +20,9 @@ use bri_console::Clamp;
 
 use crate::spatial::{Listener, Vec3, length, pan_gains, sub, torque_attenuation};
 
+mod effects;
+pub use effects::Effects;
+
 /// Voice is carried at this rate, whatever the devices run at.
 pub const SAMPLE_RATE: u32 = 16_000;
 /// 20 ms of voice.
@@ -422,6 +425,7 @@ fn newer(old: u16, new: u16) -> bool {
 
 struct Speaker {
     playback: Option<f32>,
+    effects: effects::Processor,
     position: Vec3,
     buffer: VecDeque<f32>,
     playing: bool,
@@ -446,6 +450,7 @@ impl Speaker {
     fn new(position: Vec3) -> Self {
         Self {
             playback: Some(DEFAULT_RANGE),
+            effects: effects::Processor::default(),
             position,
             buffer: VecDeque::with_capacity(FRAME_SAMPLES),
             playing: false,
@@ -561,10 +566,15 @@ impl Mixer {
         sequence: u16,
         payload: &[u8],
         range: Option<f32>,
+        effects: Effects,
     ) {
+        if !effects.valid() {
+            return;
+        }
         self.hear(speaker, position, sequence, payload);
         if let Some(s) = self.speakers.get_mut(&speaker) {
             s.playback = range;
+            s.effects.set(effects);
         }
     }
     /// The gain a voice `distance` away is heard at.
@@ -639,7 +649,8 @@ impl Mixer {
             let start = speaker.gains;
             let mut loudest = 0.0f32;
             for frame in 0..frames {
-                let sample = speaker.next(step);
+                let dry = speaker.next(step);
+                let sample = speaker.effects.process(dry, sample_rate);
                 let t = (frame + 1) as f32 / frames as f32;
                 let l = start.0 + (target.0 - start.0) * t;
                 let r = start.1 + (target.1 - start.1) * t;
@@ -849,10 +860,24 @@ mod tests {
     }
 
     #[test]
-    fn all_thirty_one_remote_speakers_mix_and_mute_purges_buffered_audio() {
+    fn all_thirty_one_filtered_remote_speakers_mix_and_mute_purges_audio_and_filters() {
         let mut mixer = Mixer::new(Arc::new(Shared::new(Settings::default())));
+        let audio = tone(4, 0.5);
         for owner in 1..32 {
-            speak(&mut mixer, owner, [0.0, 0.0, -2.0], 4, 0);
+            for (n, chunk) in audio.chunks(FRAME_SAMPLES).enumerate() {
+                mixer.hear_routed(
+                    owner,
+                    [0.0, 0.0, -2.0],
+                    n as u16,
+                    &Codec::encode(&pcm(chunk)),
+                    None,
+                    Effects {
+                        gain: 2.0,
+                        high_pass_hz: 300.0,
+                        low_pass_hz: 3000.0,
+                    },
+                );
+            }
         }
         let mut out = vec![0.0; 960 * 2];
         mixer.render(&mut out, 2, 48_000);

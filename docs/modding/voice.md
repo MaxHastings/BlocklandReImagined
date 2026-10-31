@@ -20,7 +20,38 @@ A hook returns at most one entry per listener (bounded by the server connection 
 
 Policy refreshes every 200 ms, with earlier refresh for membership, death, join/leave and moderation changes. Host settings and package channel/state changes apply within that refresh interval. This is bounded control latency, not an audio packet delay. Live distance is checked when audio is relayed. Reliable private route tables carry per-route generations; late audio/activity from revoked routes cannot revive them. Unchanged routes keep their audio buffers. Speech originates at the actor body; listening uses the controlled viewpoint.
 
-The enabled `voice_chat` package declares outside/global and same-minigame/proximity defaults, server settings for outside scope/range, and minigame settings for mode/range. Dead minigame members do not speak to living members by default. No engine rule hardcodes these groups or the package ID. `voice` capability authorization is shown by the existing Add-On trust UI.
+The enabled `voice_chat` package declares outside/global and same-minigame/proximity defaults, server settings for outside scope/range, and minigame settings for mode/range. Global lets living and dead members talk together. Proximity and Team retain their dead-to-living restrictions. No engine rule hardcodes these groups or the package ID. `voice` capability authorization is shown by the existing Add-On trust UI.
+
+## Native processing parameters
+
+An eligible route may include `effects`. Omitted fields mean clean speech:
+
+```rhai
+#{ listener: id, hear: true, spatial: false, range: 48.0,
+   label: "Authored channel", priority: 10,
+   effects: #{ gain: 0.8, high_pass_hz: 300.0, low_pass_hz: 3000.0 } }
+```
+
+| Parameter | Meaning and bounds |
+|---|---|
+| `gain` | Linear gain, 0–2; default 1. Applied before the listener's voice volume and the native mix limiter. |
+| `high_pass_hz` | First-order high-pass cutoff, 40–4000 Hz; 0 bypasses it (default). |
+| `low_pass_hz` | First-order low-pass cutoff, 100–7500 Hz; 0 bypasses it (default). |
+
+When both filters are enabled, the high-pass cutoff must be below the low-pass
+cutoff. All values must be finite. Unknown fields and invalid values report a
+package problem and contribute no route. Combining the filters narrows the
+frequency band; these numbers illustrate composition, rather than a required
+radio sound. Packages own tuning, channel policy and presentation.
+
+The native mono processor smooths gain/filter changes on the sample clock,
+adapts cutoffs to the output device's Nyquist limit and allocates no per-sample
+objects. Clean defaults bypass processing exactly. The existing 32-source mixer,
+queues and limiter remain bounded. A route change receives a new generation and
+discards the previous decoder, queued speech and filter state together. A mute
+or revocation clears them immediately; changing effects never grants eligibility
+or bypasses a listener's mute/volume. No package code receives microphone PCM,
+runs on an audio callback, or loads arbitrary native plug-ins.
 
 ## Optional radio example
 
@@ -28,7 +59,7 @@ The enabled `voice_chat` package declares outside/global and same-minigame/proxi
 
 ## Speaking HUD
 
-A compact microphone/name list appears above chat, three names plus an overflow count, with a 400 ms release fade and a radio label. Only eligible, unmuted speakers appear. World name indicators and the F2 list remain available. Player names are plain text, not ML markup.
+A compact microphone/name list flows horizontally above chat and wraps at its measured width, with an overflow count, a 400 ms release fade and a channel label. Only eligible, unmuted speakers appear. World name indicators and the F2 list remain available. Player names are plain text, not ML markup.
 
 A HUD layout can claim `region: "voice"`. An empty claim hides the stock list; `speakers` draws native live rows with a custom rectangle, color and row count (1–6), using the layout's existing basis/placement:
 
@@ -39,6 +70,6 @@ A HUD layout can claim `region: "voice"`. An empty claim hides the stock list; `
 
 Received live voice has a 1.5x playback gain at the existing default volume setting; the slider and linked mix limiter still apply. Microphone gain is unchanged.
 
-No external voice service or radio sound recordings are introduced. v0.4.0 clients require an update for the changed protocol. Device, microphone and subjective presentation acceptance remain human playtests.
+No external voice service or radio sound recordings are introduced. Voice routing metadata is protocol-versioned; clients and hosts must run matching versions. Device, microphone and subjective presentation acceptance remain human playtests.
 
 The mixer limit of 32 simultaneous sources is independent of the player roster; a 33rd connected player does not disable voice routing. The current concurrent-talker transport check covers 32 players; this does not establish performance at the maximum theoretical server capacity.

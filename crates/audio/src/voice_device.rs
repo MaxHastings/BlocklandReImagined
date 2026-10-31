@@ -161,8 +161,9 @@ impl VoiceChat {
         sequence: u16,
         payload: &[u8],
         range: Option<f32>,
+        effects: crate::voice::Effects,
     ) {
-        lock(&self.mixer).hear_routed(speaker, position, sequence, payload, range);
+        lock(&self.mixer).hear_routed(speaker, position, sequence, payload, range, effects);
     }
     pub fn forget(&self, speaker: u64) {
         lock(&self.mixer).forget(speaker);

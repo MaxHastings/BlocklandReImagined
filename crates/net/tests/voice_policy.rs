@@ -291,6 +291,99 @@ fn voice_policy_requires_authorization_and_queries_cannot_write() {
     }
 }
 
+#[test]
+fn authorized_voice_effects_are_native_parameters_and_invalid_routes_report_problems() {
+    use bri_sim::session::VoiceEffects;
+    use serde_json::json;
+    for (field, expected) in [
+        ("", Some(VoiceEffects::default())),
+        (
+            "effects: #{ gain: 0.7, high_pass_hz: 300.0, low_pass_hz: 3000.0 },",
+            Some(VoiceEffects {
+                gain: 0.7,
+                high_pass_hz: 300.0,
+                low_pass_hz: 3000.0,
+            }),
+        ),
+        ("effects: #{ gain: 2.1 },", None),
+        ("effects: #{ high_pass_hz: 10.0 },", None),
+        (
+            "effects: #{ high_pass_hz: 3000.0, low_pass_hz: 1000.0 },",
+            None,
+        ),
+        ("effects: #{ arbitrary_plugin: 1 },", None),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("custom-voice");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), json!({
+            "schema_version":1,"id":"custom-voice","version":"1.0.0","api":1,
+            "name":"Voice parameter fixture","license":"CC0-1.0","capabilities":["voice"],
+            "provides":[
+                {"kind":"behaviour","id":"custom-voice:behaviour/rules","file":"behaviour.json"},
+                {"kind":"script","id":"custom-voice:script/rules","file":"rules.rhai"}]
+        }).to_string()).unwrap();
+        std::fs::write(
+            dir.join("behaviour.json"),
+            r#"{"schema_version":1,"script":"rules.rhai","on_voice":true}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rules.rhai"),
+            r#"
+            fn voice_routes(speaker, listeners) {
+                let routes = [];
+                for id in listeners {
+                    if id != speaker {
+                        routes.push(#{ listener:id, spatial:false, range:48.0,
+                            label:"Authored channel", priority:10, EFFECTS });
+                    }
+                }
+                routes
+            }
+        "#
+            .replace("EFFECTS", field),
+        )
+        .unwrap();
+        let catalog = Catalog::load(
+            tmp.path(),
+            &PackageSet {
+                schema_version: 1,
+                packages: vec![PackageEntry {
+                    id: "custom-voice".into(),
+                    version: "1.0.0".into(),
+                    dir: "custom-voice".into(),
+                    side: Side::Server,
+                    role: None,
+                }],
+            },
+            true,
+        )
+        .unwrap();
+        let mut s = common::session();
+        s.install_packages(Arc::new(catalog), None).unwrap();
+        let a = s
+            .join("Speaker".into(), Vec3::new(0.0, 0.05, 0.0), false)
+            .unwrap();
+        let b = s
+            .join("Listener".into(), Vec3::new(4.0, 0.05, 0.0), false)
+            .unwrap();
+        let routes = s.voice_routes(&[a, b]);
+        if let Some(expected) = expected {
+            assert_eq!(routes[&b][&a].effects, expected, "{field}");
+            assert!(s.package_diagnostics().is_empty());
+        } else {
+            assert!(routes.is_empty(), "{field}");
+            assert!(
+                s.package_diagnostics()
+                    .iter()
+                    .any(|p| p.code == "voice.routes" || p.code == "voice.playback"),
+                "{field}"
+            );
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn voice_real_network_revokes_and_regrants_private_routes_on_membership_change()
 -> anyhow::Result<()> {

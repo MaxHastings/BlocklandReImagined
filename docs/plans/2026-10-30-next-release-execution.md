@@ -55,6 +55,19 @@ now have native headless baselines, plus a farther house-egress control. See
 and the adjacent movement, facing and audio receipts. These implementation checks
 do not establish that the rare local movement symptom can never recur.
 
+October 31 changed-area evidence also covers loading chat/F2/options controls,
+the recorded closed-typing-writer exit, horizontal speaker names, Global voice
+across living/dead members, installed-source Linux packaging composition and
+per-track music gain. The saved house exit (including a farther control),
+standalone stairs, tower and mattress balcony now record actual target deaths
+through normal headless gameplay; see the
+[partial-pursuit/window receipt](../progress/2026-10-31-v043-partial-pursuit.md).
+Cube stacking and the other unchecked baseline items remain open. The
+[voice-processing increment](../progress/2026-10-31-v043-voice-processing.md)
+implements bounded package-selected filters/gain; it does not complete loading
+voice, world-speaker placement or transmit lifecycle integration. None of these
+scoped checks replace final platform CI, release gates or package verification.
+
 ## Rules for each increment
 
 1. Pin the source and content inputs; identify the existing seam owner. Keep one

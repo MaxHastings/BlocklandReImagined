@@ -113,11 +113,20 @@ impl Session {
                         spatial: route.spatial,
                         range: route.range,
                         label: route.label,
+                        effects: route.effects,
                     };
-                    if route.listener == speaker
-                        || !owners.contains(&route.listener)
-                        || !playback.valid()
-                    {
+                    if !playback.valid() {
+                        note(
+                            self.packages.as_mut().unwrap(),
+                            Diagnostic::error(
+                                "voice.playback",
+                                "invalid voice playback parameters",
+                            )
+                            .at(package),
+                        );
+                        continue;
+                    }
+                    if route.listener == speaker || !owners.contains(&route.listener) {
                         continue;
                     }
                     let playback = route.hear.then_some(playback);
