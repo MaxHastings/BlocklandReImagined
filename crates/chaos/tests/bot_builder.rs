@@ -205,6 +205,24 @@ fn builder_event_names_a_bot_and_clears_the_override() {
         "onActivate",
         Slot::SelfBrick,
         "setBotName",
+        vec![Value::Text("Builder".into())],
+    )]);
+    let distinct = name(&g);
+    assert_ne!(
+        distinct,
+        g.s.names()[&g.human],
+        "bot cannot take a connected player's name"
+    );
+    g.steps(120);
+    assert_eq!(
+        name(&g),
+        distinct,
+        "reconciliation must not repeatedly rename a duplicate"
+    );
+    g.edit_and_fire(vec![row(
+        "onActivate",
+        Slot::SelfBrick,
+        "setBotName",
         vec![Value::Text(String::new())],
     )]);
     assert_eq!(name(&g), original);

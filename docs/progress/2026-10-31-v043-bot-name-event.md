@@ -27,3 +27,8 @@ and `cargo clippy --locked --profile playtest -p bri-chaos --test bot_builder --
 -D warnings` passed. This covers the saved event row and replacement life, not
 multiplayer name replication or source Bot-target adaptation. Other bot event
 groups and exact-player tracking remain open.
+
+The builder case also requests the connected builder's own name and verifies
+that the bot receives a distinct name that remains stable across reconciliation.
+The focused case and `bri-chaos --test bot_builder` Clippy passed after this
+addition.
