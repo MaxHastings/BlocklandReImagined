@@ -88,6 +88,7 @@ fn sample(session: &Session) -> Value {
         "vitals": session.vitals(),
         "bots": session.bot_thoughts().into_iter().map(|thought| json!({
             "owner": thought.bot,
+            "support_actor": thought.support_actor,
             "visible": thought.visible,
             "remembered": thought.remembered.map(|e| json!({
                 "subject": e.subject, "position": e.position,

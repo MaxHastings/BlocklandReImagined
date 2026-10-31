@@ -14,7 +14,7 @@ bot does through the same code.
    kind's `memory_seconds`. Evidence stores the enemy identity, observed
    position, observation tick and expiry. Hidden movement never refreshes it;
    death, removal or a changed alliance invalidates hostility. A kind with
-   `alerts_allies` (Bot_Hole's `hAlertOtherBots`) shares sightings and hits with
+   `alerts_allies` (on by default; Bot_Hole's `hAlertOtherBots`) shares sightings and hits with
    nearby allies (`hear_alerts`, after every bot has stepped). A receiver keeps
    the observation's original age and accepts newer evidence, without extending
    its lifetime. Friendly-fire permission does not make teammates enemies.

@@ -94,9 +94,10 @@ pub struct BotKind {
     pub out_of_water_seconds: Option<f32>,
     /// When it first sees an enemy, or is hurt, bots of its side within its
     /// sight that have nothing better to go on go and look where the enemy
-    /// was (Bot_Hole's `hAlertOtherBots`).
+    /// was (Bot_Hole's `hAlertOtherBots`). Enabled by default.
     pub alerts_allies: bool,
     /// Whether this kind may cooperate with allied bots to reach higher ground.
+    /// Enabled by default; kinds may turn it off explicitly.
     pub cooperative_stack: bool,
     /// How close, in world units, a shot at someone else must pass to count
     /// as fire at this bot (`on_bot_under_fire`). 0: none does.
@@ -430,8 +431,8 @@ impl Default for BotKind {
             look: None,
             emote: None,
             out_of_water_seconds: None,
-            alerts_allies: false,
-            cooperative_stack: false,
+            alerts_allies: true,
+            cooperative_stack: true,
             under_fire_range: 0.0,
             behaviours: Default::default(),
             objective_radius: 24.0,
@@ -787,6 +788,17 @@ fn strip_comments(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn teamwork_is_default_and_a_kind_can_disable_it() {
+        let pack = BotPack::from_json(
+            br#"{"schema_version":1,"bots":[{"id":"x","name":"X"},{"id":"y","name":"Y","cooperative_stack":false,"alerts_allies":false}]}"#,
+        )
+        .unwrap();
+        assert!(pack.bots[0].cooperative_stack);
+        assert!(!pack.bots[1].cooperative_stack);
+        assert!(pack.bots[0].alerts_allies);
+        assert!(!pack.bots[1].alerts_allies);
+    }
     /// Comments explain tunables; a `//` inside a string is text.
     #[test]
     fn comments_are_skipped_but_not_inside_strings() {

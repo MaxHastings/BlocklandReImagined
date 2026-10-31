@@ -80,11 +80,11 @@ pub(crate) fn kind(
     if fields.contains_key("hshoot") && !on("hshoot") {
         kind["weapons"] = json!(false);
     }
-    if on("halertotherbots") {
-        kind["alerts_allies"] = json!(true);
+    if let Some(value) = num("halertotherbots") {
+        kind["alerts_allies"] = json!(value != 0.0);
     }
-    if on("hsuperstacker") {
-        kind["cooperative_stack"] = json!(true);
+    if let Some(value) = num("hsuperstacker") {
+        kind["cooperative_stack"] = json!(value != 0.0);
     }
     if let Some(side) = text("htype") {
         kind["side"] = json!(
@@ -177,5 +177,9 @@ mod tests {
         assert_eq!(zombie["weapons"], false);
         let gunner = kind_of(&[("hshoot", "1")]);
         assert!(gunner.get("weapons").is_none());
+        let no_stack = kind_of(&[("hsuperstacker", "0")]);
+        assert_eq!(no_stack["cooperative_stack"], false);
+        let quiet = kind_of(&[("halertotherbots", "0")]);
+        assert_eq!(quiet["alerts_allies"], false);
     }
 }

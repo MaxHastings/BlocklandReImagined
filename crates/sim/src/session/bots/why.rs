@@ -128,6 +128,10 @@ impl Session {
             .iter()
             .map(|(bot, b)| BotThought {
                 bot: *bot,
+                support_actor: self.peers.get(bot).and_then(|p| {
+                    let tag = p.player.support_tag()?;
+                    (tag >> 64 == 1).then_some(tag as OwnerId)
+                }),
                 driving: b.driving,
                 sight_starved: self
                     .bots
@@ -276,6 +280,7 @@ mod tests {
     fn the_readout_names_the_choice_its_rivals_terms_and_what_it_noticed() {
         let mut t = BotThought {
             bot: 7,
+            support_actor: None,
             sight_starved: false,
             unnoticed_hit: None,
             route_short: None,

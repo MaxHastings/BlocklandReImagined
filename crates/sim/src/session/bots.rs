@@ -90,6 +90,9 @@ pub use team::BotTeamView;
 #[derive(Clone, Debug)]
 pub struct BotThought {
     pub bot: OwnerId,
+    /// Actor reported by the most recent grounded motor contact, if any.
+    /// This is diagnostic evidence and may need revalidation against live state.
+    pub support_actor: Option<OwnerId>,
     /// It was refused sight rays lately (the tick's share was spent), so
     /// an enemy may have gone unseen for that, not for being hidden.
     pub sight_starved: bool,
