@@ -44,9 +44,12 @@ The stock policy uses nonpositional routes when either participant is loading.
 It does not infer a loading team or dead-player channel. The optional radio
 example denies private transmissions to loading listeners with no established
 channel. Accepted arrivals now expose the same bounded VoiceLink transport as gameplay,
-including reliable route updates and audio/activity datagrams. This does **not**
-establish continuous client loading audio: background capture/send/playout and
-stable audio ownership across transport replacement remain pending.
+including reliable route updates and audio/activity datagrams. The native voice
+worker runs independently of game frames. Authenticated loading and early gameplay
+connections are published before world assembly through a revocable join lease;
+planned Add-On preparation retains accepted ownership. Cancellation or supersession
+cannot install a late link, and an old loading link cannot replace gameplay.
+Combined PCM continuity and captured-source scope verification remain pending.
 
 ## Independent control snapshots
 
@@ -64,7 +67,12 @@ grants. Ordinary kick/drop reasons stay owned by the connection lifecycle.
 The native worker consumes control independently of frames and does not open
 capture before an enabled snapshot. Existing device ownership may stay warm,
 without transmitting, during a verified same-session transport handoff.
-Loading UI/link integration and combined PCM continuity remain under development.
+The loading UI uses that independent snapshot for voice state and its plain-text
+conversation caption. Accepted loading permits bound keyboard/side-mouse PTT,
+with held PTT preserved through downloading/loading/game screen transitions.
+Without a rendered gameplay listener, eligible spatial routes play centrally;
+host range checks still apply. Combined PCM continuity and captured-source scope
+remain under development.
 
 ## Native processing parameters
 

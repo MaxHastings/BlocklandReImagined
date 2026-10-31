@@ -2,6 +2,85 @@
 use super::*;
 
 impl App {
+    /// Voice has its own live connection state while the world is still loading.
+    pub(super) fn present_voice(&mut self) {
+        let context = self.voice.context();
+        let loading = self
+            .net
+            .attempt
+            .as_ref()
+            .is_some_and(|a| !a.entered || a.reloading)
+            || self.net.arrival.is_some();
+        let Some((owner, control)) = context else {
+            self.ui.core.voice_on_server = false;
+            self.ui.core.voice_muted.clear();
+            self.ui.core.server_voice_muted.clear();
+            self.ui.core.voice_speaking.clear();
+            self.ui.core.voice_speakers.clear();
+            self.ui.apply(UiUpdate::LoadingVoiceConversation(None));
+            return;
+        };
+        self.ui.core.voice_on_server = control.metadata.enabled;
+        self.ui.core.voice_muted = self.voice.muted();
+        self.ui.core.server_voice_muted = control.metadata.muted;
+        self.ui.core.voice_speaking = self.voice.speaking_owners(owner);
+        if loading {
+            if let Some(held) = &self.net.arrival
+                && self.net.attempt.as_ref().is_none_or(|a| a.view.is_none())
+                && self.ui.core.players != held.rows
+            {
+                self.ui.apply_session(
+                    held.id,
+                    UiUpdate::Players {
+                        rows: held.rows.clone(),
+                        server_name: plain_chat(&held.arrival.listing.name),
+                        max_players: held.arrival.listing.max_players,
+                        voice_chat: self.ui.core.voice_on_server,
+                        voice_muted: self.ui.core.voice_muted.iter().copied().collect(),
+                        server_voice_muted: self
+                            .ui
+                            .core
+                            .server_voice_muted
+                            .iter()
+                            .copied()
+                            .collect(),
+                        voice_speaking: self.ui.core.voice_speaking.iter().copied().collect(),
+                    },
+                );
+            }
+            if control.revision > 0 {
+                self.ui.apply(UiUpdate::LoadingChat(true));
+            }
+        }
+        let conversation = (loading && control.metadata.enabled)
+            .then(|| {
+                control
+                    .metadata
+                    .conversation
+                    .as_ref()
+                    .map(|c| plain_chat(&c.title))
+            })
+            .flatten();
+        self.ui
+            .apply(UiUpdate::LoadingVoiceConversation(conversation));
+        self.ui.core.voice_speakers = self
+            .voice
+            .speaking_labels(owner)
+            .into_iter()
+            .filter_map(|(id, (label, alpha))| {
+                let name = self
+                    .ui
+                    .core
+                    .players
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.name.clone())
+                    .or_else(|| (id == owner).then(|| "You".into()))?;
+                Some(bri_ui::api::VoiceSpeaker { name, label, alpha })
+            })
+            .collect();
+    }
+
     /// The loading connection's chat and server lines, while the player
     /// downloads Add-Ons and loads the map; it ends once they enter the
     /// game, whose updates carry chat from then on.
@@ -16,6 +95,7 @@ impl App {
                 id: a.id,
                 address: address.trim().to_string(),
                 last_chat: arrival.chat_cursor,
+                rows: Vec::new(),
                 arrival,
             });
         }
@@ -40,40 +120,51 @@ impl App {
         for event in events {
             match event {
                 bri_net::client::ArrivalEvent::Players(players) => {
-                    let Some(held) = &self.net.arrival else {
-                        continue;
-                    };
-                    self.ui.apply_session(
-                        id,
-                        UiUpdate::Players {
-                            rows: players
-                                .into_iter()
-                                .map(|p| PlayerRow {
-                                    id: p.owner,
-                                    name: plain_chat(&p.name),
-                                    bot: p.bot,
-                                    score: p.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-                                    admin: p.administrator,
-                                    super_admin: p.super_admin,
-                                    bl_id: p.principal.as_ref().map(crate::trust_list::display_id),
-                                    loading: p.loading,
-                                    ignoring: false,
-                                    // Trust editing is unavailable until gameplay entry.
-                                    trust: if p.owner == held.arrival.owner {
-                                        "You".into()
-                                    } else {
-                                        String::new()
-                                    },
-                                })
-                                .collect(),
-                            server_name: plain_chat(&held.arrival.listing.name),
-                            max_players: held.arrival.listing.max_players,
-                            voice_chat: false,
-                            voice_muted: vec![],
-                            server_voice_muted: vec![],
-                            voice_speaking: vec![],
-                        },
-                    );
+                    if let Some(held) = &mut self.net.arrival {
+                        held.rows = players
+                            .into_iter()
+                            .map(|p| PlayerRow {
+                                id: p.owner,
+                                name: plain_chat(&p.name),
+                                bot: p.bot,
+                                score: p.score.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                                admin: p.administrator,
+                                super_admin: p.super_admin,
+                                bl_id: p.principal.as_ref().map(crate::trust_list::display_id),
+                                loading: p.loading,
+                                ignoring: false,
+                                trust: if p.owner == held.arrival.owner {
+                                    "You".into()
+                                } else {
+                                    String::new()
+                                },
+                            })
+                            .collect();
+                        self.ui.apply_session(
+                            id,
+                            UiUpdate::Players {
+                                rows: held.rows.clone(),
+                                server_name: plain_chat(&held.arrival.listing.name),
+                                max_players: held.arrival.listing.max_players,
+                                voice_chat: self.ui.core.voice_on_server,
+                                voice_muted: self.ui.core.voice_muted.iter().copied().collect(),
+                                server_voice_muted: self
+                                    .ui
+                                    .core
+                                    .server_voice_muted
+                                    .iter()
+                                    .copied()
+                                    .collect(),
+                                voice_speaking: self
+                                    .ui
+                                    .core
+                                    .voice_speaking
+                                    .iter()
+                                    .copied()
+                                    .collect(),
+                            },
+                        );
+                    }
                 }
                 bri_net::client::ArrivalEvent::Talking(names) => {
                     self.ui.apply_session(
@@ -224,7 +315,7 @@ impl App {
             // (the downloads are cached, so this join fetches nothing).
             let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
             if let Some(set) = add_ons {
-                self.disconnect();
+                self.clear_gameplay();
                 self.queue_package_reload(
                     set,
                     None,

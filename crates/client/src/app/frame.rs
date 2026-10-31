@@ -222,24 +222,21 @@ impl App {
         self.hear_world(&listener);
         // Proximity voice: the player's voice out, the others' in, placed
         // by the same listener as the game's own sounds.
-        let voice_link = self
+        self.voice
+            .set_preview_active(self.ui.core.voice_preview_active);
+        let voice_listener = (self
             .net
             .attempt
             .as_ref()
-            .filter(|a| a.entered && a.view.as_ref().is_some_and(|view| view.voice_chat))
-            .and_then(|a| a.worker.probes.get())
-            .map(|probes| &probes.voice);
-        self.voice
-            .set_preview_active(self.ui.core.voice_preview_active);
-        self.voice.update(
-            self.net.attempt.as_ref().map(|a| a.id),
-            voice_link,
-            listener,
-        );
+            .is_some_and(|a| a.entered && !a.reloading)
+            && self.view.rendered_camera.is_some())
+        .then_some(listener);
+        self.voice.set_listener(voice_listener);
         if let Some(indicator) = self.voice.indicator_change() {
             self.ui.apply(UiUpdate::VoiceIndicator(indicator));
         }
         self.ui.apply(UiUpdate::VoicePreview(self.voice.preview()));
+        self.present_voice();
         self.audio.tick(elapsed.as_secs_f32(), listener);
         drop(span);
         self.view.drawn_controls = Some(self.controls.clone());

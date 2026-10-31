@@ -321,6 +321,7 @@ async fn a_joiner_is_connected_and_chats_while_downloading_then_spawns() -> Resu
             chat_done.await?;
             Ok(())
         },
+        None,
     );
     let chat = async {
         bob.say("downloading your Add-Ons".into())?;
@@ -461,6 +462,7 @@ async fn another_player_cannot_spawn_as_a_loading_player() -> Result<()> {
         |_, _| Ok(Vec::new()),
         Some(bob.ticket.clone()),
         async { Ok(()) },
+        None,
     )
     .await
     .err()

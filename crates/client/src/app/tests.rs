@@ -60,6 +60,7 @@ fn accepted_loading_chat_routes_ui_typing_and_survives_transport_close() -> anyh
         id,
         address: server.address.to_string(),
         last_chat: arrival.chat_cursor,
+        rows: Vec::new(),
         arrival,
     });
     app.ui.core.binds.bind(

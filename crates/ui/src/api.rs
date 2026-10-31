@@ -1986,6 +1986,8 @@ pub enum UiUpdate {
     /// the loading screen shows chat and the chat key opens the chat box
     /// there, as on v20's LoadingGui.
     LoadingChat(bool),
+    /// Authorized voice destination while loading; plain display text.
+    LoadingVoiceConversation(Option<String>),
     CenterPrint {
         text: String,
         seconds: f32,

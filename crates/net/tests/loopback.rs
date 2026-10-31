@@ -2609,6 +2609,7 @@ async fn join_reports_the_world_download_in_bricks() -> Result<()> {
         None,
         &key,
         progress.clone(),
+        None,
     )
     .await?;
     let seen = progress.snapshot();
@@ -3027,6 +3028,7 @@ async fn clan_tags_from_the_join_and_avatar_done_reach_chat() -> Result<()> {
         Some(server.host_token.clone()),
         &host_identity,
         bri_progress::Progress::default(),
+        None,
     )
     .await?;
     let guest_identity = ClientIdentity::load_or_create(dir.path().join("guest.identity"))?;
@@ -3040,6 +3042,7 @@ async fn clan_tags_from_the_join_and_avatar_done_reach_chat() -> Result<()> {
         None,
         &guest_identity,
         bri_progress::Progress::default(),
+        None,
     )
     .await?;
     let said = |client: &Client, name: &str, text: &str| {

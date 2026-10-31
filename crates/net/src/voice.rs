@@ -84,10 +84,17 @@ impl Control {
                 .is_none_or(|c| c.title.len() <= 1024 && !c.title.chars().any(char::is_control))
     }
 }
-struct ControlReader(tokio::task::JoinHandle<()>);
+struct ControlReader(Mutex<Vec<tokio::task::JoinHandle<()>>>);
 impl Drop for ControlReader {
     fn drop(&mut self) {
-        self.0.abort();
+        for task in self
+            .0
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+        {
+            task.abort();
+        }
     }
 }
 
@@ -394,9 +401,16 @@ impl VoiceLink {
             heard: Arc::new(Mutex::new(heard)),
             activity: Arc::new(Mutex::new(activity)),
             control,
-            _reader: Arc::new(ControlReader(reader)),
+            _reader: Arc::new(ControlReader(Mutex::new(vec![reader]))),
             stopped,
         }
+    }
+    pub(crate) fn own_reader(&self, task: tokio::task::JoinHandle<()>) {
+        self._reader
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(task);
     }
     pub fn is_closed(&self) -> bool {
         self.stopped.load(std::sync::atomic::Ordering::Acquire)

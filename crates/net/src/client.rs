@@ -14,6 +14,18 @@ use std::{
     time::Duration,
 };
 use tokio::sync::mpsc;
+/// Called once after the pinned host authenticates admission, before world
+/// chunk assembly. Must not block; errors cancel and close the pending join.
+pub type VoiceReady = Arc<dyn Fn(crate::voice::VoiceLink) -> Result<()> + Send + Sync>;
+struct PendingConnection(Option<quinn::Connection>);
+impl Drop for PendingConnection {
+    fn drop(&mut self) {
+        if let Some(connection) = self.0.take() {
+            connection.close(0_u32.into(), b"Join canceled");
+        }
+    }
+}
+
 enum Incoming {
     Reliable(Box<Message>),
     Pose(Pose),
@@ -206,6 +218,7 @@ impl Client {
             Progress::default(),
             false,
             None,
+            None,
         )
         .await
     }
@@ -233,6 +246,7 @@ impl Client {
             Progress::default(),
             false,
             None,
+            None,
         )
         .await
     }
@@ -254,6 +268,7 @@ impl Client {
             host,
             identity,
             Progress::default(),
+            None,
         )
         .await
     }
@@ -342,6 +357,7 @@ impl Client {
             load,
             None,
             async { Ok(()) },
+            None,
         )
         .await
     }
@@ -368,6 +384,7 @@ impl Client {
         ) -> Result<Vec<bri_package::environment::PackageRef>>,
         arrival: Option<ResumeToken>,
         ready: impl std::future::Future<Output = Result<()>>,
+        voice_ready: Option<VoiceReady>,
     ) -> Result<(
         Self,
         Vec<crate::packages::Fetched>,
@@ -421,6 +438,7 @@ impl Client {
             progress.clone(),
             false,
             arrival.clone(),
+            voice_ready.clone(),
         )
         .await;
         if resume.is_some()
@@ -444,6 +462,7 @@ impl Client {
                 progress.clone(),
                 false,
                 arrival.clone(),
+                voice_ready.clone(),
             )
             .await;
         }
@@ -493,6 +512,7 @@ impl Client {
             progress,
             true,
             arrival,
+            voice_ready.clone(),
         )
         .await?;
         // A callback may have declined a downloaded shared package, or a
@@ -527,16 +547,21 @@ impl Client {
         host: Option<ResumeToken>,
         identity: &ClientIdentity,
         progress: Progress,
+        voice_ready: Option<VoiceReady>,
     ) -> Result<Self> {
-        Self::connect_pinned(
+        Self::connect_inner(
             address,
             HostPin::from(certificate),
             name,
             packages,
             resume,
             host,
-            identity,
+            Some(identity),
+            None,
             progress,
+            false,
+            None,
+            voice_ready,
         )
         .await
     }
@@ -565,6 +590,7 @@ impl Client {
             progress,
             false,
             None,
+            None,
         )
         .await
     }
@@ -581,6 +607,7 @@ impl Client {
         progress: Progress,
         accept_differences: bool,
         arrival: Option<ResumeToken>,
+        voice_ready: Option<VoiceReady>,
     ) -> Result<Self> {
         progress.begin(Stage::Connecting, Unit::Steps, None);
         let opened = open(address, &pin, Duration::from_secs(10)).await?;
@@ -595,6 +622,7 @@ impl Client {
             progress,
             accept_differences,
             arrival,
+            voice_ready,
         )
         .await
     }
@@ -636,6 +664,7 @@ impl Client {
             progress,
             false,
             None,
+            None,
         )
         .await
     }
@@ -651,6 +680,7 @@ impl Client {
         progress: Progress,
         accept_differences: bool,
         arrival: Option<ResumeToken>,
+        voice_ready: Option<VoiceReady>,
     ) -> Result<Self> {
         let address = opened.connection.remote_address();
         let Opened {
@@ -720,6 +750,47 @@ impl Client {
         let (voice_activity_inbox, voice_activity) = crate::voice::activity_inbox();
         let voice =
             crate::voice::VoiceLink::new(connection.clone(), owner, voice_heard, voice_activity);
+        ensure!(
+            checkpoint.names.contains_key(&owner),
+            "Welcome has no local player"
+        );
+        let mut pending = PendingConnection(Some(connection.clone()));
+        let (events, incoming) = mpsc::channel(128);
+        let datagram_connection = connection.clone();
+        let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let heard_tick = heard.clone();
+        let datagram_events = events.clone();
+        let datagrams = tokio::spawn(async move {
+            while let Ok(bytes) = datagram_connection.read_datagram().await {
+                // Voice is told apart by its first byte and goes straight to
+                // the audio; a full inbox drops the frame.
+                if crate::voice::is_voice(&bytes) {
+                    crate::voice::receive_downstream(&bytes, &voice_inbox, &voice_activity_inbox);
+                    continue;
+                }
+                let Ok(items) = codec::decode_datagram::<Vec<Datagram>>(&bytes) else {
+                    continue;
+                };
+                for item in items {
+                    if let Datagram::Pose(Pose { tick, .. })
+                    | Datagram::Remote(RemotePose { tick, .. }) = &item
+                    {
+                        heard_tick.fetch_max(*tick, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    let _ = datagram_events.try_send(match item {
+                        Datagram::Pose(pose) => Incoming::Pose(pose),
+                        Datagram::Remote(pose) => Incoming::Pose(pose.into_pose()),
+                        Datagram::Vehicle(pose) => Incoming::Vehicle(pose),
+                        Datagram::VehicleView(view) => Incoming::VehicleView(view),
+                        Datagram::Orb(orb) => Incoming::Orb(orb),
+                    });
+                }
+            }
+        });
+        voice.own_reader(datagrams);
+        if let Some(ready) = voice_ready {
+            ready(voice.clone())?;
+        }
         // The Welcome is small; the world streams after it in chunks.
         progress.set_subject(&checkpoint.world.map_id);
         progress.begin(
@@ -779,7 +850,6 @@ impl Client {
             "Welcome has no local player"
         );
         let joining = (!rest.done()).then_some(rest);
-        let (events, incoming) = mpsc::channel(128);
         let reliable_events = events.clone();
         let reader_connection = connection.clone();
         // Frames decode on blocking threads, several at once, and are handed
@@ -836,42 +906,13 @@ impl Client {
                 }
             }
         });
-        let datagram_connection = connection.clone();
-        let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let heard_tick = heard.clone();
-        let datagrams = tokio::spawn(async move {
-            while let Ok(bytes) = datagram_connection.read_datagram().await {
-                // Voice is told apart by its first byte and goes straight to
-                // the audio; a full inbox drops the frame.
-                if crate::voice::is_voice(&bytes) {
-                    crate::voice::receive_downstream(&bytes, &voice_inbox, &voice_activity_inbox);
-                    continue;
-                }
-                let Ok(items) = codec::decode_datagram::<Vec<Datagram>>(&bytes) else {
-                    continue;
-                };
-                for item in items {
-                    if let Datagram::Pose(Pose { tick, .. })
-                    | Datagram::Remote(RemotePose { tick, .. }) = &item
-                    {
-                        heard_tick.fetch_max(*tick, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    let _ = events.try_send(match item {
-                        Datagram::Pose(pose) => Incoming::Pose(pose),
-                        Datagram::Remote(pose) => Incoming::Pose(pose.into_pose()),
-                        Datagram::Vehicle(pose) => Incoming::Vehicle(pose),
-                        Datagram::VehicleView(view) => Incoming::VehicleView(view),
-                        Datagram::Orb(orb) => Incoming::Orb(orb),
-                    });
-                }
-            }
-        });
+        pending.0 = None;
         Ok(Self {
             endpoint,
             connection,
             send,
             incoming,
-            readers: vec![reader, forwarder, datagrams],
+            readers: vec![reader, forwarder],
             owner,
             administrator,
             admin_snapshot: None,

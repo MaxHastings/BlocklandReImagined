@@ -75,6 +75,9 @@ fn chat_text(core: &Core) -> String {
 fn chat_rect(core: &Core, chat: &str) -> Rect {
     let (x, mut y) = CHAT_TOP_LEFT;
     y += voice_list_height(core);
+    if core.loading_chat && core.loading_voice_conversation.is_some() {
+        y += 18;
+    }
     let w = (core.logical.0 - x).max(1);
     let h = View::ml_height(&core.pack, &chat_profile(core), chat, w);
     Rect::new(x, y, w, h)
@@ -895,7 +898,7 @@ fn add_chat(v: &mut View, core: &Core) -> Rect {
 }
 /// NewChatHud over LoadingGui: a player the host has accepted reads chat
 /// while they download Add-Ons and load the map.
-pub fn loading_chat(pack: &Pack, dl: &mut DrawList, core: &Core) {
+fn loading_chat_view(core: &Core) -> View {
     let (w, h) = core.logical;
     let mut v = View::new(&ctrl(
         "GuiControl",
@@ -903,9 +906,22 @@ pub fn loading_chat(pack: &Pack, dl: &mut DrawList, core: &Core) {
         Rect::new(0, 0, w, h),
     ));
     add_typing_names(&mut v, core);
+    add_voice_names(&mut v, core);
+    if let Some(title) = &core.loading_voice_conversation {
+        named_text(
+            &mut v,
+            "MM_LeftProfile",
+            Rect::new(2, 20 + voice_list_height(core), (w - 4).max(1), 18),
+            &format!("Voice: {title}"),
+        );
+    }
     add_chat(&mut v, core);
     v.layout(w, h);
-    v.draw(pack, dl);
+    v
+}
+pub fn loading_chat(pack: &Pack, dl: &mut DrawList, core: &Core) {
+    loading_chat_view(core).draw(pack, dl);
+    voice_indicator(dl, core.logical, core.voice);
 }
 impl Play {
     fn fit_center_print(&mut self, core: &Core) {
@@ -1420,6 +1436,53 @@ mod voice_speaker_tests {
         ui::{Ui, UiConfig},
     };
     use std::rc::Rc;
+    #[test]
+    fn loading_conversation_and_horizontal_speakers_leave_chat_clear() {
+        let mut ui = Ui::new(
+            Rc::new(Pack::from_parts(UiPack::default(), Default::default())),
+            UiConfig {
+                size: (640, 480),
+                scale: Some(1.),
+                platform: Platform::Windows,
+            },
+            Settings::default(),
+        );
+        ui.apply(crate::api::UiUpdate::LoadingChat(true));
+        ui.apply(crate::api::UiUpdate::LoadingVoiceConversation(Some(
+            "Room <color:ff0000>".into(),
+        )));
+        ui.core.voice_speakers = vec![
+            VoiceSpeaker {
+                name: "One".into(),
+                label: String::new(),
+                alpha: 1.,
+            },
+            VoiceSpeaker {
+                name: "Two".into(),
+                label: String::new(),
+                alpha: 1.,
+            },
+        ];
+        let view = loading_chat_view(&ui.core);
+        let caption = view
+            .nodes
+            .iter()
+            .find(|n| n.ctrl.text.as_deref() == Some("Voice: Room <color:ff0000>"))
+            .unwrap();
+        assert_ne!(
+            caption.ctrl.class, "GuiMLTextCtrl",
+            "conversation titles are plain text"
+        );
+        let entries = voice_entries(&ui.core, &voice_style(&ui.core).unwrap());
+        assert_eq!(entries[0].rect.y, entries[1].rect.y);
+        assert!(entries[0].rect.x < entries[1].rect.x);
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.rect.bottom() <= caption.ctrl.position[1])
+        );
+        assert!(chat_rect(&ui.core, "chat").y >= caption.ctrl.position[1] + caption.ctrl.extent[1]);
+    }
     #[test]
     fn voice_names_are_bounded_plain_text_and_can_be_hidden_by_a_hud_claim() {
         let mut ui = Ui::new(

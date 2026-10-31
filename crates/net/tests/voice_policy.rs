@@ -981,6 +981,7 @@ async fn accepted_loading_voice_is_bidirectional_moderated_and_rekeyed_on_entry(
         |_, _| Ok(vec![]),
         Some(b.ticket.clone()),
         async { Ok(()) },
+        None,
     )
     .await?;
     assert_eq!(entered.owner, b.owner);

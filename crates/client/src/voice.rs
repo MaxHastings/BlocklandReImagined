@@ -394,20 +394,14 @@ impl VoiceState {
             VoiceMode::Disabled => false,
         }
     }
-    /// One bounded pump iteration. `transport` is the accepted session link; when
-    /// Options is open, the same capture stream remains available for the
-    /// microphone meter even without a joined session.
-    pub fn tick(
-        &mut self,
-        session_key: Option<u64>,
-        transport: Option<&VoiceLink>,
-        listener: Listener,
-        now: Instant,
-    ) {
-        // Keep the raw session handle briefly so a settings change that turns
-        // voice off can publish a final false state before we stop processing.
+    fn set_session(&mut self, session_key: Option<u64>) {
         if self.session_key != session_key {
             self.session_key = session_key;
+            self.transport_id = None;
+            self.active = false;
+            self.routes = Default::default();
+            self.server_muted.clear();
+            self.server_blocked = false;
             self.chat = None;
             self.opening = None;
             self.muted.clear();
@@ -419,6 +413,20 @@ impl VoiceState {
             self.activity_sent_at = None;
             self.retry_at = None;
         }
+    }
+    /// One bounded pump iteration. `transport` is the accepted session link; when
+    /// Options is open, the same capture stream remains available for the
+    /// microphone meter even without a joined session.
+    pub fn tick(
+        &mut self,
+        session_key: Option<u64>,
+        transport: Option<&VoiceLink>,
+        listener: Option<Listener>,
+        now: Instant,
+    ) {
+        // Keep the raw session handle briefly so a settings change that turns
+        // voice off can publish a final false state before we stop processing.
+        self.set_session(session_key);
         let transport_id = transport.map(VoiceLink::id);
         if self.transport_id != transport_id {
             self.transport_id = transport_id;
@@ -475,7 +483,9 @@ impl VoiceState {
             self.active = false;
             self.retry_at = None;
             self.told = false;
-            self.talking = false;
+            if self.session_key.is_none() {
+                self.talking = false;
+            }
             self.sent_activity = None;
             self.activity_sent_at = None;
             return;
@@ -619,7 +629,9 @@ impl VoiceState {
             self.speaking.clear();
             return;
         };
-        chat.set_listener(listener);
+        if let Some(listener) = listener {
+            chat.set_listener(listener);
+        }
         self.outgoing.clear();
         chat.take_frames(&mut self.outgoing);
         if let Some(link) = link {
@@ -650,10 +662,13 @@ impl VoiceState {
                     continue;
                 }
                 let playback = match (route.spatial, voice.position) {
-                    (true, Some(position)) => bri_audio::voice::Playback::Spatial {
-                        position,
-                        range: route.range,
-                    },
+                    (true, Some(position)) if listener.is_some() => {
+                        bri_audio::voice::Playback::Spatial {
+                            position,
+                            range: route.range,
+                        }
+                    }
+                    (true, Some(_)) => bri_audio::voice::Playback::Nonpositional,
                     (false, None) => bri_audio::voice::Playback::Nonpositional,
                     _ => continue,
                 };
@@ -683,7 +698,57 @@ struct VoiceShared {
     state: VoiceState,
     session: Option<u64>,
     transport: Option<VoiceLink>,
-    listener: Listener,
+    listener: Option<Listener>,
+    generation: u64,
+    phase: VoicePhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum VoicePhase {
+    None,
+    Accepted,
+    Gameplay,
+}
+/// A join attempt's weak, revocable publisher. Resource workers never own the
+/// audio service and cannot revive a canceled or superseded session.
+#[derive(Clone)]
+pub(crate) struct VoiceBridge {
+    shared: std::sync::Weak<std::sync::Mutex<VoiceShared>>,
+    session: u64,
+    generation: u64,
+}
+impl VoiceBridge {
+    fn install(&self, link: VoiceLink, phase: VoicePhase) -> anyhow::Result<()> {
+        let shared = self
+            .shared
+            .upgrade()
+            .ok_or_else(|| anyhow::anyhow!("Voice session ended"))?;
+        let mut held = shared.lock().unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(
+            held.session == Some(self.session) && held.generation == self.generation,
+            "Voice join was canceled or superseded"
+        );
+        anyhow::ensure!(
+            phase >= held.phase,
+            "An old loading connection cannot replace gameplay voice"
+        );
+        anyhow::ensure!(
+            held.transport
+                .as_ref()
+                .is_none_or(|old| old.owner() == link.owner()),
+            "Authenticated voice owner changed during the loading handoff"
+        );
+        held.transport = Some(link);
+        held.phase = phase;
+        Ok(())
+    }
+    pub(crate) fn accepted(&self, link: VoiceLink) -> anyhow::Result<()> {
+        self.install(link, VoicePhase::Accepted)
+    }
+    pub(crate) fn gameplay(&self) -> bri_net::client::VoiceReady {
+        let bridge = self.clone();
+        std::sync::Arc::new(move |link| bridge.install(link, VoicePhase::Gameplay))
+    }
 }
 
 /// UI controls and snapshots for one independently pumped voice state machine.
@@ -698,7 +763,9 @@ impl VoiceClient {
             state: VoiceState::new(settings),
             session: None,
             transport: None,
-            listener: Listener::default(),
+            listener: None,
+            generation: 0,
+            phase: VoicePhase::None,
         })
     }
     fn spawn(shared: VoiceShared) -> std::io::Result<Self> {
@@ -723,24 +790,50 @@ impl VoiceClient {
                     }
                 }
                 let mut held = worker.lock().unwrap_or_else(|e| e.into_inner());
-                held.state
-                    .tick(None, None, Listener::default(), Instant::now());
+                held.state.tick(None, None, None, Instant::now());
             })?;
         Ok(Self { shared, stop })
     }
     fn shared(&self) -> std::sync::MutexGuard<'_, VoiceShared> {
         self.shared.lock().unwrap_or_else(|e| e.into_inner())
     }
-    pub fn update(
-        &mut self,
-        session: Option<u64>,
-        transport: Option<&VoiceLink>,
-        listener: Listener,
-    ) {
+    pub(crate) fn bind_attempt(&mut self, session: u64) -> VoiceBridge {
         let mut held = self.shared();
-        held.session = session;
-        held.transport = transport.cloned();
-        held.listener = listener;
+        // Add-On preparation retains its accepted lease. A new gameplay
+        // reconnect has the previous behavior of resetting owner-ID local
+        // mutes, rather than carrying them across a possible server restart.
+        if held.session != Some(session) || held.phase == VoicePhase::Gameplay {
+            held.state.set_session(None);
+            held.state.set_session(Some(session));
+            held.transport = None;
+            held.listener = None;
+            held.phase = VoicePhase::None;
+        }
+        held.session = Some(session);
+        held.generation += 1;
+        VoiceBridge {
+            shared: std::sync::Arc::downgrade(&self.shared),
+            session,
+            generation: held.generation,
+        }
+    }
+    pub(crate) fn end_session(&mut self) {
+        let mut held = self.shared();
+        held.generation += 1;
+        held.session = None;
+        held.transport = None;
+        held.listener = None;
+        held.phase = VoicePhase::None;
+        held.state.set_session(None);
+    }
+    pub fn set_listener(&mut self, listener: Option<Listener>) {
+        self.shared().listener = listener;
+    }
+    pub(crate) fn context(&self) -> Option<(OwnerId, bri_net::voice::Control)> {
+        self.shared()
+            .transport
+            .as_ref()
+            .map(|link| (link.owner(), link.control()))
     }
     pub fn apply_settings(&mut self, settings: &Settings) {
         self.shared().state.apply_settings(settings);
@@ -787,6 +880,7 @@ impl VoiceClient {
 }
 impl Drop for VoiceClient {
     fn drop(&mut self) {
+        self.end_session();
         if let Some(chat) = &self.shared().state.chat {
             chat.set_transmit_allowed(false);
         }
@@ -858,13 +952,31 @@ mod tests {
     fn without_a_session_nothing_is_open_and_the_key_is_forgotten() {
         let mut voice = VoiceState::new(&Settings::default());
         voice.set_talking(true);
-        voice.tick(None, None, Listener::default(), Instant::now());
+        voice.tick(None, None, None, Instant::now());
         assert!(voice.chat.is_none());
         assert!(!voice.talking, "a key held across a session does not stick");
         assert!(voice.chat.is_none());
         assert!(voice.speaking.is_empty());
         assert_eq!(voice.indicator(), None);
         assert_eq!(voice.indicator_change(), None, "nothing shown, nothing new");
+    }
+
+    #[test]
+    fn ptt_pressed_for_a_pending_join_survives_admission_wait_but_not_a_new_session() {
+        let mut voice = VoiceState::new(&Settings::default());
+        voice.set_session(Some(1));
+        voice.set_talking(true);
+        voice.tick(Some(1), None, None, Instant::now());
+        assert!(
+            voice.talking,
+            "loading preparation must not swallow a held PTT key"
+        );
+        assert!(voice.chat.is_none());
+        voice.set_session(Some(2));
+        assert!(
+            !voice.talking,
+            "a different session cannot inherit the previous key hold"
+        );
     }
 
     #[test]
@@ -1067,8 +1179,11 @@ mod pump_tests {
             state,
             session: Some(1),
             transport: Some(link),
-            listener: Listener::default(),
+            listener: None,
+            generation: 0,
+            phase: VoicePhase::Accepted,
         })?;
+        let bridge = voice.bind_attempt(1);
         a.voice_link().send_activity(true)?;
         tokio::time::timeout(Duration::from_secs(3), async {
             while !voice.speaking_owners(loading.owner).contains(&a.owner) {
@@ -1128,11 +1243,11 @@ mod pump_tests {
             |_, _| Ok(vec![]),
             Some(loading.ticket.clone()),
             async { Ok(()) },
+            Some(bridge.gameplay()),
         )
         .await?;
         assert_eq!(entered.owner, loading.owner);
         let entered_link = entered.voice_link();
-        voice.update(Some(1), Some(&entered_link), Listener::default());
         tokio::time::timeout(Duration::from_secs(3), async {
             while voice.shared().state.transport_id != Some(entered_link.id()) {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -1152,7 +1267,26 @@ mod pump_tests {
                 "the microphone opener is retained rather than restarted during gameplay entry"
             );
         }
+        assert!(
+            bridge.accepted(loading.voice_link()).is_err(),
+            "a late loading publisher cannot replace the gameplay transport"
+        );
+        assert!(
+            (bridge.gameplay())(a.voice_link()).is_err(),
+            "the accepted owner cannot be replaced by another participant"
+        );
         release.send(())?;
+        voice.end_session();
+        assert!(
+            (bridge.gameplay())(entered_link.clone()).is_err(),
+            "cancellation revokes the publisher"
+        );
+        let _next = voice.bind_attempt(2);
+        assert!(
+            (bridge.gameplay())(entered_link.clone()).is_err(),
+            "old callbacks cannot revive in the next session"
+        );
+        assert!(voice.context().is_none());
         drop(voice);
         entered.close();
         loading.close();

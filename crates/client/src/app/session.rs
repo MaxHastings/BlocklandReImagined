@@ -44,6 +44,7 @@ pub(super) struct HeldArrival {
     pub(super) arrival: bri_net::client::Arrival,
     /// The newest chat line shown.
     pub(super) last_chat: u64,
+    pub(super) rows: Vec<bri_ui::api::PlayerRow>,
 }
 
 /// Timings come from the loading worker, including tasks completed between
@@ -128,6 +129,11 @@ impl App {
         Ok(())
     }
     pub(super) fn disconnect(&mut self) {
+        self.voice.end_session();
+        self.net.arrival = None;
+        self.clear_gameplay();
+    }
+    pub(super) fn clear_gameplay(&mut self) {
         self.net.invite = None;
         self.ui.core.name_tags.clear();
         self.scene.scene_map = None;
@@ -534,6 +540,7 @@ impl App {
         progress.set_subject(&map);
         let reporting = progress.clone();
         let host_runtime = self.host_runtime.handle().clone();
+        let voice_bridge = self.voice.bind_attempt(id);
         let worker = Worker::start(self.runtime.handle(), progress.clone(), async move {
             let identity_file = state_dir.join("client.identity");
             let native_identity = tokio::task::spawn_blocking(move || {
@@ -875,6 +882,7 @@ impl App {
                 Some(host.host_token.clone()),
                 &native_identity,
                 reporting,
+                Some(voice_bridge.gameplay()),
             )
             .await?;
             Ok(Connected {
@@ -1014,7 +1022,7 @@ impl App {
         let needs_add_ons = add_ons.clone();
         let joined_list = Arc::new(std::sync::Mutex::new(None));
         let joined_add_ons = joined_list.clone();
-        self.disconnect();
+        self.clear_gameplay();
         let progress = bri_progress::Progress::new();
         let screen = match &shown {
             Some(map) => {
@@ -1066,6 +1074,7 @@ impl App {
         );
         let early_scene = Arc::new(std::sync::Mutex::new(None::<(String, Prepared)>));
         let early_out = early_scene.clone();
+        let voice_bridge = self.voice.bind_attempt(id);
         let worker = Worker::start(self.runtime.handle(), progress.clone(), async move {
             let route = target.resolve().await?;
             let address = route.address;
@@ -1148,6 +1157,7 @@ impl App {
                         Some(arrival.ticket.clone()),
                         Some(arrival.listing.map.clone()),
                     );
+                    voice_bridge.accepted(arrival.voice_link())?;
                     if let Ok(mut slot) = arrived.lock() {
                         *slot = Some(arrival);
                     }
@@ -1253,6 +1263,7 @@ impl App {
                 },
                 ticket,
                 ready,
+                Some(voice_bridge.gameplay()),
             )
             .await;
             let client = match joined {

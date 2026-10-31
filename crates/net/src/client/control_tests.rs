@@ -126,3 +126,98 @@ async fn voice_control_survives_a_saturated_world_queue_without_ui_polling() -> 
     server.stop().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_ready_requires_admission_and_closes_a_join_rejected_by_its_observer() -> Result<()> {
+    let session = bri_sim::session::Session::new(bri_sim::simulation::Simulation::new(
+        bri_world::World::new("Early voice".into(), "fixture".into(), vec![[1.; 4]; 2]),
+        bri_sim::testing::definitions(),
+        vec![],
+    )?);
+    let server = server::start(
+        session,
+        ServerOptions {
+            bind: "127.0.0.1:0".parse()?,
+            environment: bri_package::environment::Environment::empty(),
+            spawn_points: vec![glam::Vec3::new(0., 10., 0.), glam::Vec3::new(5., 10., 0.)],
+            certificate: None,
+            map_loader: None,
+            packages: None,
+        },
+    )?;
+    let tmp = tempfile::tempdir()?;
+    let identity = ClientIdentity::load_or_create(tmp.path().join("observer.identity"))?;
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let output = observed.clone();
+    let observer: VoiceReady = Arc::new(move |link| {
+        *output.lock().unwrap() = Some(link);
+        anyhow::bail!("observer rejected this join")
+    });
+    let refused = Client::connect_reporting(
+        server.address,
+        &server.certificate,
+        "Probe".into(),
+        vec![],
+        None,
+        Some(ResumeToken([0; 32])),
+        &identity,
+        Progress::default(),
+        Some(observer.clone()),
+    )
+    .await
+    .err()
+    .context("invalid host credential must fail")?;
+    assert!(refused.to_string().contains("host credential"));
+    assert!(
+        observed.lock().unwrap().is_none(),
+        "no observer before authenticated admission"
+    );
+    let canceled = Client::connect_reporting(
+        server.address,
+        &server.certificate,
+        "Probe".into(),
+        vec![],
+        None,
+        None,
+        &identity,
+        Progress::default(),
+        Some(observer),
+    )
+    .await
+    .err()
+    .context("observer must cancel")?;
+    assert!(canceled.to_string().contains("observer rejected"));
+    let link = observed
+        .lock()
+        .unwrap()
+        .take()
+        .context("accepted voice link was not published")?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !link.is_closed() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let inspector_id = ClientIdentity::load_or_create(tmp.path().join("inspector.identity"))?;
+    let mut inspector = Arrival::open(
+        server.address,
+        &HostPin::from(&server.certificate[..]),
+        "Inspector".into(),
+        None,
+        &inspector_id,
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(ArrivalEvent::Players(rows)) = inspector.next().await
+                && rows.iter().all(|p| p.name != "Probe")
+            {
+                break;
+            }
+        }
+    })
+    .await?;
+    inspector.close();
+    server.stop().await?;
+    Ok(())
+}

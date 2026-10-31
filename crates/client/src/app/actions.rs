@@ -706,7 +706,11 @@ impl App {
             UiAction::Chat {
                 channel: ChatChannel::Say,
                 text,
-            } if self.net.arrival.is_some()
+            } if self
+                .net
+                .arrival
+                .as_ref()
+                .is_some_and(|h| !h.arrival.voice_link().is_closed())
                 && !self.net.attempt.as_ref().is_some_and(|a| a.entered) =>
             {
                 // Still loading: the line goes over the connection the host
@@ -938,6 +942,7 @@ impl App {
             UiAction::StartTyping | UiAction::StopTyping => {
                 let talking = matches!(action, UiAction::StartTyping);
                 if let Some(held) = &self.net.arrival
+                    && !held.arrival.voice_link().is_closed()
                     && !self.net.attempt.as_ref().is_some_and(|a| a.entered)
                 {
                     // Presence is best-effort, like movement/activity edges.

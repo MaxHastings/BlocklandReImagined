@@ -1484,3 +1484,105 @@ fn a_player_the_host_accepted_chats_from_the_loading_screen() {
     assert_eq!(actions(&mut u), vec![UiAction::CancelConnect]);
     assert!(!u.core.loading_chat);
 }
+
+#[test]
+fn loading_voice_ptt_keeps_its_hold_across_content_and_releases_without_gameplay_input() {
+    let mut u = ui();
+    u.core
+        .binds
+        .bind(BindInput::Key(Chord::plain(Key::Letter('v'))), "voiceTalk");
+    u.core.binds.bind(
+        BindInput::Key(Chord::plain(Key::Letter('w'))),
+        "moveforward",
+    );
+    let loading = ConnectionState::Loading {
+        map: "Bedroom".into(),
+        preview: IconRef::None,
+        status: "LOADING".into(),
+        progress: 0.5,
+    };
+    u.apply(UiUpdate::Connection(loading.clone()));
+    down(&mut u, Key::Letter('v'));
+    up(&mut u, Key::Letter('v'));
+    assert!(
+        !actions(&mut u)
+            .iter()
+            .any(|a| matches!(a, UiAction::Game(GameAction::Voice { .. }))),
+        "not yet accepted"
+    );
+    u.apply(UiUpdate::LoadingChat(true));
+    down(&mut u, Key::Letter('v'));
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::Voice { down: true })]
+    );
+    u.apply(UiUpdate::Connection(ConnectionState::DownloadingPackages(
+        PackageDownload {
+            server: "Host".into(),
+            packages: vec![],
+            done_bytes: 1,
+            total_bytes: 2,
+        },
+    )));
+    assert!(
+        !actions(&mut u)
+            .iter()
+            .any(|a| matches!(a, UiAction::Game(GameAction::Voice { down: false })))
+    );
+    u.apply(UiUpdate::Connection(loading));
+    assert!(
+        !actions(&mut u)
+            .iter()
+            .any(|a| matches!(a, UiAction::Game(GameAction::Voice { down: false })))
+    );
+    u.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Host".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: false,
+    }));
+    assert!(
+        !actions(&mut u)
+            .iter()
+            .any(|a| matches!(a, UiAction::Game(GameAction::Voice { down: false })))
+    );
+    up(&mut u, Key::Letter('v'));
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::Voice { down: false })]
+    );
+    u.apply(UiUpdate::Connection(ConnectionState::Loading {
+        map: "Bedroom".into(),
+        preview: IconRef::None,
+        status: "LOADING".into(),
+        progress: 0.8,
+    }));
+    down(&mut u, Key::Letter('w'));
+    up(&mut u, Key::Letter('w'));
+    assert!(
+        actions(&mut u).is_empty(),
+        "voice does not enable movement while loading"
+    );
+    u.core
+        .binds
+        .bind(BindInput::Mouse(MouseButton::Back), "voiceTalk");
+    u.handle_input(InputEvent::MouseDown {
+        button: MouseButton::Back,
+        x: 400.,
+        y: 300.,
+    });
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::Voice { down: true })]
+    );
+    u.handle_input(InputEvent::MouseUp {
+        button: MouseButton::Back,
+        x: 400.,
+        y: 300.,
+    });
+    assert_eq!(
+        actions(&mut u),
+        vec![UiAction::Game(GameAction::Voice { down: false })]
+    );
+}

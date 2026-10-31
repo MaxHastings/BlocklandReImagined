@@ -396,6 +396,7 @@ pub struct Core {
     pub talking: Vec<String>,
     /// The loading screen carries chat ([`UiUpdate::LoadingChat`]).
     pub loading_chat: bool,
+    pub loading_voice_conversation: Option<String>,
     pub selector: SelectorModel,
     pub wrench: WrenchState,
     pub players: Vec<PlayerRow>,
@@ -618,6 +619,7 @@ impl Core {
         );
         self.talking.clear();
         self.loading_chat = false;
+        self.loading_voice_conversation = None;
         self.selector.cart = [None; 10];
         self.selector.clicked_brick = None;
         self.selector.clicked_slot = None;
@@ -1682,6 +1684,7 @@ impl Ui {
             chat,
             talking: Vec::new(),
             loading_chat: false,
+            loading_voice_conversation: None,
             selector,
             wrench: WrenchState::default(),
             players: Vec::new(),
@@ -1954,7 +1957,25 @@ impl Ui {
                 if self.content.id() == id {
                     return;
                 }
+                let continuous_voice = matches!(
+                    self.content.id(),
+                    ScreenId::Loading | ScreenId::PackageDownload | ScreenId::Play
+                ) && matches!(
+                    id,
+                    ScreenId::Loading | ScreenId::PackageDownload | ScreenId::Play
+                );
+                let voice: Vec<_> = self
+                    .core
+                    .held
+                    .iter()
+                    .filter(|(_, cmd)| continuous_voice && cmd.eq_ignore_ascii_case("voiceTalk"))
+                    .map(|(key, cmd)| (*key, cmd.clone()))
+                    .collect();
+                for (key, _) in &voice {
+                    self.core.held.remove(key);
+                }
                 self.core.release_all();
+                self.core.held.extend(voice);
                 let mut old =
                     std::mem::replace(&mut self.content, screens::make(id, &mut self.core));
                 old.on_sleep(&mut self.core);
@@ -2222,6 +2243,7 @@ impl Ui {
             }
             UiUpdate::Talking(names) => c.talking = names,
             UiUpdate::LoadingChat(on) => c.loading_chat = on,
+            UiUpdate::LoadingVoiceConversation(title) => c.loading_voice_conversation = title,
             UiUpdate::CenterPrint { text, seconds } => c.center_print(&text, seconds),
             UiUpdate::BottomPrint {
                 text,
@@ -2656,6 +2678,30 @@ impl Ui {
             }
             InputEvent::MouseDown { button, x, y } => {
                 self.mouse = (x, y);
+                if self.core.loading_chat
+                    && matches!(
+                        self.content.id(),
+                        ScreenId::Loading | ScreenId::PackageDownload
+                    )
+                    && matches!(button, MouseButton::Back | MouseButton::Forward)
+                    && !self.text_focus()
+                    && self
+                        .dialogs
+                        .iter()
+                        .all(|d| d.passive() || d.id() == ScreenId::PlayerList)
+                    && let Some(cmd) = self
+                        .core
+                        .binds
+                        .command_for(&BindInput::Mouse(button))
+                        .filter(|c| c.eq_ignore_ascii_case("voiceTalk"))
+                        .map(str::to_string)
+                {
+                    self.core.held.insert(HeldInput::Mouse(button), cmd.clone());
+                    self.core.run_command(&cmd, true);
+                    self.flush();
+                    return;
+                }
+
                 if self.cursor_visible() {
                     let (lx, ly) = self.logical_point(x, y);
                     let t = self.mouse_target();
@@ -2947,12 +2993,16 @@ impl Ui {
                         "pageUpNewChatHud",
                         "pageDownNewChatHud",
                         "showPlayerList",
+                        "voiceTalk",
                     ]
                     .iter()
                     .any(|allowed| c.eq_ignore_ascii_case(allowed))
                 })
                 .map(str::to_string)
         {
+            if cmd.eq_ignore_ascii_case("voiceTalk") {
+                self.core.held.insert(HeldInput::Key(key), cmd.clone());
+            }
             self.core.run_command(&cmd, true);
             self.swallow_char = true;
             self.flush();
