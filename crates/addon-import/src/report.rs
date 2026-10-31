@@ -168,7 +168,8 @@ pub struct Dependency {
     /// file of another Add-On is used.
     pub how: String,
     pub source: Option<Location>,
-    /// `reference` (found in the v20 reference install), `base` (an Add-On
+    /// `reference` (found in the v20 reference install), `installed` (a
+    /// matching native package is installed), `base` (an Add-On
     /// v20 shipped, whose content is the game's own `package`), `missing`,
     /// `unused` (missing, with none of its content named), `self`, or
     /// `if_present` (required only inside an `isFile` check for it, which

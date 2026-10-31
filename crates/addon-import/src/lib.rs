@@ -571,6 +571,9 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         };
         reference.add_beside(folder, &required);
     }
+    if let Some(content) = &opts.installed {
+        reference.add_installed_dependencies(content, &required)?;
+    }
     reference.settle_for(&src.name, &required);
     let ns = namespace_for(&src.name)?;
     std::fs::create_dir_all(&opts.out)?;
@@ -3123,7 +3126,10 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                             // The base game's own id for that geometry, so
                             // the brick reuses the loaded shape
                             // (`Definitions::load_with`).
-                            None => format!("v20/{found}"),
+                            None => match cx.reference.native_bricks.get(&found).cloned() {
+                                Some(native) => borrow_native_brick(cx, &found, native),
+                                None => format!("v20/{found}"),
+                            },
                         }
                     } else {
                         let o = cx.owned.get(&key);
@@ -3131,7 +3137,7 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                         cx.ambiguous(
                             format!("brick {key} geometry {mesh}"),
                             at,
-                            "brickFile is in neither this Add-On nor the reference install".into(),
+                            "brickFile was not found in this Add-On, a source reference, or validated geometry from a declared installed dependency".into(),
                             None,
                         );
                         String::new()
@@ -3283,6 +3289,49 @@ fn borrow_brick(cx: &mut Ctx, path: &str, bytes: &[u8]) -> String {
             cx.report
                 .diagnostics
                 .push(format!("brick geometry {path}: {e:#}"));
+            String::new()
+        }
+    }
+}
+
+/// Copy a declared dependency's validated native conversion into this
+/// package, retaining the original source and installed-conversion hashes.
+fn borrow_native_brick(cx: &mut Ctx, path: &str, mut native: reference::NativeBrick) -> String {
+    let id = content_id(&cx.ns, "brick_geometry", path);
+    if cx.borrowed.contains_key(&id) {
+        return id;
+    }
+    let fingerprint =
+        hash(format!("{id}\0{}\0{}", native.source_sha256, native.native_sha256).as_bytes());
+    let rel = format!("bricks/{}.brick.json", &fingerprint[..24]);
+    native.mesh.id = id.clone();
+    let written = serde_json::to_vec(&native.mesh)
+        .map_err(anyhow::Error::from)
+        .and_then(|bytes| cx.write(&format!("assets/{rel}"), &bytes));
+    match written {
+        Ok(()) => {
+            cx.id("brick_geometry", path, path, &format!("assets/{rel}"));
+            cx.borrowed.insert(id.clone(), rel.clone());
+            cx.report.assets.push(AssetEntry {
+                source: path.into(),
+                sha256: native.source_sha256,
+                kind: "brick_geometry".into(),
+                status: "copied".into(),
+                output: Some(format!("assets/{rel}")),
+                id: Some(id.clone()),
+                notes: vec![format!(
+                    "Copied validated installed dependency conversion, native SHA256 {}",
+                    native.native_sha256
+                )],
+                gaps: vec![],
+                missing: vec![],
+            });
+            id
+        }
+        Err(e) => {
+            cx.report
+                .diagnostics
+                .push(format!("installed brick geometry {path}: {e:#}"));
             String::new()
         }
     }
@@ -4222,7 +4271,13 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                     addon: found.clone().unwrap_or(addon.clone()),
                     how: c.callee.clone(),
                     source: Some(Location::new(&s.path, c.line)),
-                    status: if found.is_some() {
+                    status: if cx
+                        .reference
+                        .native_addons
+                        .contains(&addon.to_ascii_lowercase())
+                    {
+                        "installed"
+                    } else if found.is_some() {
                         "reference"
                     } else if base.is_some() {
                         "base"

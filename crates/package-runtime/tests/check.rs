@@ -41,6 +41,84 @@ fn manifest(id: &str, extra: serde_json::Value) -> serde_json::Value {
 }
 
 #[test]
+fn imported_bricks_without_a_runtime_catalog_are_not_reported_ready() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("brick_fixture");
+    write(&dir, "package.json", manifest("brick_fixture", json!({})));
+    write(
+        &dir.join("assets"),
+        "bricks.json",
+        json!({
+            "schema_version": 1,
+            "bricks": [{"id":"brick_fixture:brick/one"}, {"id":"brick_fixture:brick/two"}]
+        }),
+    );
+    let report = check(&dir);
+    assert!(
+        !report.ok,
+        "missing runtime catalog cannot be ready: {report}"
+    );
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "check.bricks.incomplete")
+        .expect("clear brick count diagnostic");
+    assert!(diagnostic.message.contains("0 of 2"), "{diagnostic:?}");
+    assert!(
+        diagnostic.message.contains("brick_fixture:brick/one"),
+        "{diagnostic:?}"
+    );
+}
+
+#[test]
+fn partially_imported_bricks_identify_the_missing_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("brick_fixture");
+    write(&dir, "package.json", manifest("brick_fixture", json!({})));
+    write(
+        &dir.join("assets"),
+        "bricks.json",
+        json!({"schema_version": 1,
+        "bricks": [{"id":"brick_fixture:brick/one"}, {"id":"brick_fixture:brick/two"}]}),
+    );
+    let catalog = dir.join("assets/brick-catalog");
+    write(
+        &catalog,
+        "stock-catalog.json",
+        json!({"schema_version":1,"bricks":[{
+            "id":"brick_fixture:brick/one", "display_name":"One", "category":"Test", "subcategory":"Test",
+            "mesh_id":"v20/shape/base", "collision_source":null, "icon_source":"", "print_aspect_ratio":null,
+            "orientation_fix":0, "can_cover":false, "indestructible":false, "special_kind":null, "other_properties":{}
+        }]}),
+    );
+    write(
+        &catalog,
+        "catalog-audit.json",
+        json!({"resolved_meshes":[{"id":"brick_fixture:brick/one"}]}),
+    );
+    write(
+        &catalog,
+        "native-collisions.json",
+        json!({"schema_version":1,"bodies":[]}),
+    );
+    let report = check(&dir);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "check.bricks.incomplete")
+        .unwrap();
+    assert!(diagnostic.message.contains("1 of 2"), "{diagnostic:?}");
+    assert!(
+        diagnostic.message.contains("brick_fixture:brick/two"),
+        "{diagnostic:?}"
+    );
+    assert!(
+        !diagnostic.message.contains("brick_fixture:brick/one"),
+        "{diagnostic:?}"
+    );
+}
+
+#[test]
 fn a_hud_add_on_checks_with_the_rules_it_needs() {
     let report = check(&stresslab("stresslab-hud"));
     assert!(report.ok, "{report}");

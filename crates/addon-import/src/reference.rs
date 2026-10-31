@@ -18,6 +18,14 @@ pub struct Owned {
     pub datablock: Datablock,
 }
 
+/// A declared installed dependency's converted geometry and recorded provenance.
+#[derive(Debug, Clone)]
+pub struct NativeBrick {
+    pub mesh: bri_content::brick::Brick,
+    pub source_sha256: String,
+    pub native_sha256: String,
+}
+
 #[derive(Debug, Default)]
 pub struct Reference {
     pub root: Option<String>,
@@ -57,6 +65,8 @@ pub struct Reference {
     /// virtual path: an Add-On whose brick uses another Add-On's shape
     /// gets a copy, so it loads without that Add-On.
     pub blbs: BTreeMap<String, Vec<u8>>,
+    pub native_bricks: BTreeMap<String, NativeBrick>,
+    pub native_addons: BTreeSet<String>,
 }
 
 /// The Add-Ons a script loads before its own datablocks
@@ -417,6 +427,132 @@ impl Reference {
                 );
             }
         }
+    }
+
+    /// Read only geometry explicitly attributed to a required installed
+    /// Add-On. Never search unrelated packages or match by basename.
+    pub fn add_installed_dependencies(
+        &mut self,
+        content: &Path,
+        required: &[String],
+    ) -> Result<()> {
+        let set = bri_package::packages::PackageSet::load_root(content)?;
+        for addon in required {
+            let lower = addon.to_ascii_lowercase();
+            if self.addons.contains_key(&lower) {
+                continue;
+            }
+            let package = crate::namespace_for(addon)?;
+            let rel = set
+                .packages
+                .iter()
+                .find(|p| p.id == package)
+                .map(|p| p.dir.clone())
+                .unwrap_or_else(|| format!("addons/{package}"));
+            let Ok(dir) = bri_package::path::inside(content, &rel) else {
+                continue;
+            };
+            let read = |name: &str| -> Option<Vec<u8>> {
+                let file = bri_package::path::inside(&dir, name).ok()?;
+                let meta = std::fs::metadata(&file).ok()?;
+                (meta.len() <= source::MAX_MEMBER_BYTES)
+                    .then(|| std::fs::read(file).ok())
+                    .flatten()
+            };
+            let Some(manifest) = read("package.json") else {
+                continue;
+            };
+            let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&manifest) else {
+                continue;
+            };
+            if manifest["id"].as_str() != Some(package.as_str()) {
+                continue;
+            }
+            self.addons.insert(lower.clone(), addon.clone());
+            self.native_addons.insert(lower.clone());
+            let Some(report) = read("import-report.json") else {
+                continue;
+            };
+            let Ok(report) = serde_json::from_slice::<serde_json::Value>(&report) else {
+                continue;
+            };
+            if !report["source"]["name"]
+                .as_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(addon))
+            {
+                continue;
+            }
+            let Some(catalog) = read("assets/content.json") else {
+                continue;
+            };
+            let Ok(catalog) = serde_json::from_slice::<serde_json::Value>(&catalog) else {
+                continue;
+            };
+            for asset in report["assets"].as_array().into_iter().flatten() {
+                if asset["kind"].as_str() != Some("brick_geometry")
+                    || asset["status"].as_str() != Some("converted")
+                {
+                    continue;
+                }
+                let (Some(path), Some(native_id), Some(output), Some(source_sha256)) = (
+                    asset["source"].as_str(),
+                    asset["id"].as_str(),
+                    asset["output"].as_str(),
+                    asset["sha256"].as_str(),
+                ) else {
+                    continue;
+                };
+                let key = path.replace('\\', "/").to_ascii_lowercase();
+                if !key.starts_with(&format!("add-ons/{lower}/"))
+                    || !key.ends_with(".blb")
+                    || bri_package::path::problem(&key).is_some()
+                    || !native_id.starts_with(&format!("{package}:brick_geometry/"))
+                    || !output.starts_with("assets/bricks/")
+                    || source_sha256.len() != 64
+                    || !source_sha256.bytes().all(|c| c.is_ascii_hexdigit())
+                {
+                    continue;
+                }
+                let listed = catalog["content"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["kind"].as_str() == Some("brick_geometry")
+                            && item["id"].as_str() == Some(native_id)
+                            && item["file"].as_str() == Some(output)
+                    })
+                });
+                if !listed {
+                    continue;
+                }
+                let Ok(file) = bri_package::path::inside(&dir, output) else {
+                    continue;
+                };
+                let Ok(meta) = std::fs::metadata(&file) else {
+                    continue;
+                };
+                if meta.len() > source::MAX_MEMBER_BYTES {
+                    continue;
+                }
+                let bytes = std::fs::read(file)?;
+                let Ok(mesh) = serde_json::from_slice::<bri_content::brick::Brick>(&bytes) else {
+                    continue;
+                };
+                if mesh.id != native_id || mesh.validate().is_err() {
+                    continue;
+                }
+                let value = NativeBrick {
+                    mesh,
+                    source_sha256: source_sha256.to_ascii_lowercase(),
+                    native_sha256: source::hash(&bytes),
+                };
+                anyhow::ensure!(
+                    !self.native_bricks.contains_key(&key),
+                    "ambiguous installed geometry {key}"
+                );
+                self.files.insert(key.clone());
+                self.native_bricks.insert(key, value);
+            }
+        }
+        Ok(())
     }
 
     /// The base game's sound that plays `file` (`base/data/sound/clickMove.wav`

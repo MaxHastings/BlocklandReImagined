@@ -237,6 +237,9 @@ pub fn check(folder: &Path) -> Report {
     if let Err(mut problems) = Catalog::load(&parent, &set, false) {
         diagnostics.append(&mut problems);
     }
+    for (manifest, dir) in &found {
+        diagnostics.extend(imported_brick_problems(&parent.join(dir), &manifest.id));
+    }
     // Weapons are merged by the engine's content loading rather than the
     // catalog, from `assets/weapons.json` whether or not `provides` lists it.
     // Every sound the set declares, lower case, and whether it loops.
@@ -389,6 +392,107 @@ pub fn check(folder: &Path) -> Report {
         add_ons,
         diagnostics,
     }
+}
+
+/// Imported brick declarations do not load on their own: the runtime uses
+/// the generated stock catalog, mesh bindings and collision recipes.
+fn imported_brick_problems(folder: &Path, id: &str) -> Vec<Diagnostic> {
+    let path = folder.join("assets/bricks.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return vec![];
+    };
+    let source: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return vec![
+                Diagnostic::error(
+                    "check.bricks.source",
+                    format!("invalid brick declarations: {e}"),
+                )
+                .at(format!("{id}/assets/bricks.json")),
+            ];
+        }
+    };
+    let Some(entries) = source.get("bricks").and_then(|v| v.as_array()) else {
+        return vec![
+            Diagnostic::error(
+                "check.bricks.source",
+                "brick declarations have no bricks array",
+            )
+            .at(format!("{id}/assets/bricks.json")),
+        ];
+    };
+    if entries.is_empty() {
+        return vec![];
+    }
+    let declared: Vec<String> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            entry
+                .get("id")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .map_or_else(|| format!("<entry {i} without id>"), str::to_owned)
+        })
+        .collect();
+    let dir = folder.join("assets/brick-catalog");
+    let catalog = std::fs::read(dir.join("stock-catalog.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<bri_content::brick::Catalog>(&b).ok())
+        .filter(|c| c.schema_version == 1);
+    let audit = std::fs::read(dir.join("catalog-audit.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let collisions = std::fs::read(dir.join("native-collisions.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<bri_content::collision::CollisionLibrary>(&b).ok())
+        .filter(|c| c.schema_version == 1);
+    let loadable = |name: &str| {
+        let (Some(catalog), Some(audit), Some(collisions)) = (&catalog, &audit, &collisions) else {
+            return false;
+        };
+        let Some(entry) = catalog.bricks.iter().find(|b| b.id == name) else {
+            return false;
+        };
+        let Some(binding) = audit
+            .get("resolved_meshes")
+            .and_then(|v| v.as_array())
+            .and_then(|a| {
+                a.iter()
+                    .find(|v| v.get("id").and_then(|x| x.as_str()) == Some(name))
+            })
+        else {
+            return false;
+        };
+        let Some(file) = binding.get("native_mesh") else {
+            // Runtime borrows this shape from the base game; the checker has
+            // no base catalog, so only the base namespace can be recognized.
+            return entry.mesh_id.starts_with("v20/");
+        };
+        let Some(file) = file
+            .as_str()
+            .filter(|f| !f.is_empty() && !f.contains(['/', '\\', ':']))
+        else {
+            return false;
+        };
+        let mesh = bri_package::path::inside(&dir, file)
+            .ok()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice::<bri_content::brick::Brick>(&b).ok());
+        mesh.is_some_and(|m| m.id == entry.mesh_id && m.validate().is_ok())
+            && collisions
+                .bodies
+                .iter()
+                .any(|c| c.id == name && c.validate().is_ok())
+    };
+    let missing: Vec<_> = declared.iter().filter(|name| !loadable(name)).collect();
+    if missing.is_empty() {
+        return vec![];
+    }
+    vec![Diagnostic::error("check.bricks.incomplete", format!("{} of {} declared bricks have a loadable catalog binding; unavailable: {}", declared.len() - missing.len(), declared.len(), missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")))
+        .at(format!("{id}/assets/brick-catalog"))
+        .hint("install the declared source dependencies and reimport; each brick needs a runtime catalog, mesh binding and collision recipe")]
 }
 
 /// What is wrong with the engine and skid sounds a vehicles pack (`bytes`, at
