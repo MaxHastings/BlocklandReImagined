@@ -1489,6 +1489,68 @@ fn brick_overlay_coverage_preserves_paint_opacity_and_display_space() -> Result<
 }
 
 #[test]
+fn ordinary_overlay_receives_darkness_and_local_light_but_unlit_stays_bright() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    for modern in [false, true] {
+        let mut camera = Camera {
+            ambient: [0.0; 4],
+            sun_color: [0.0; 4],
+            ..Default::default()
+        };
+        if modern {
+            camera.ambient[3] = 1.0;
+            camera.set_sky_ambient(true);
+        }
+        for kind in [MaterialKind::BrickOverlay, MaterialKind::BrickSurfaces] {
+            for coverage in [128, 255] {
+                let mut data = triangle([0.8, 0.2, 0.1, 1.0], 0.3, AlphaMode::Opaque);
+                data.images.push(SceneImage {
+                    label: "ordinary overlay".into(),
+                    width: 1,
+                    height: 1,
+                    rgba: vec![32, 128, 224, coverage],
+                    srgb: false,
+                });
+                data.materials[0] = Material::brick_overlay("lit overlay", 1);
+                data.materials[0].kind = kind;
+                let lit = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+                data.materials[0].kind = MaterialKind::UnlitOverlay;
+                let unlit = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+                let center = (32 * 64 + 32) * 4;
+                renderer.update_lights(&gpu.queue, &[])?;
+                let dark = gpu.frame(&mut renderer, &[&lit], &camera, (64, 64))?;
+                assert!(
+                    dark[center..center + 3].iter().all(|v| *v <= 2),
+                    "ordinary overlay must darken: {:?}",
+                    &dark[center..center + 4]
+                );
+                let glow = gpu.frame(&mut renderer, &[&unlit], &camera, (64, 64))?;
+                assert!(
+                    glow[center + 2] > 80,
+                    "intentional unlit overlay remains visible"
+                );
+                renderer.update_lights(
+                    &gpu.queue,
+                    &[PointLight {
+                        position_radius: [0., 0., 1.5, 4.],
+                        color: [1., 1., 1., 0.],
+                        ..Default::default()
+                    }],
+                )?;
+                let bright = gpu.frame(&mut renderer, &[&lit], &camera, (64, 64))?;
+                assert!(
+                    bright[center + 2] > dark[center + 2] + 20,
+                    "light must illuminate the overlay"
+                );
+                renderer.update_lights(&gpu.queue, &[])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
     // Depth is reversed (`DEPTH_CLEAR`): nearer is larger.
     let gpu = Gpu::turn()?;

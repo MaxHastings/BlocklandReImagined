@@ -1717,9 +1717,9 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
     if (flags&32u)!=0u {pigment=display_color(albedo.rgb)*base_color;}
     let decal=overlay;
     if decal {
-        // v20 fxBrickBatcher uses GL_DECAL (0x52d120): lit paint first, then
-        // the raw UNORM overlay mixed by its coverage alpha. Alpha is paint's.
-        pigment=base_color;
+        // The mask changes surface pigment, not emitted light. Compose in
+        // display space, then apply the same illumination as the paint.
+        pigment=mix(base_color,albedo.rgb,albedo.a);
         alpha=v.color.a;
     }
     if material[0].x==7.0 {
@@ -1831,8 +1831,6 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         if relit() {illumination=max(illumination*sky_follow()+(camera.ambient.rgb-baked_ambient())*(1.0-sky_share()),vec3<f32>(0.0));}
     }
     var display=pigment*illumination;
-    // Fixed-function lighting clamps the vertex colour before texturing.
-    if decal {display=mix(min(display,vec3<f32>(1.)),albedo.rgb,albedo.a);}
     display+=specular;
     return vec4<f32>(fogged(display,v.world_position),alpha);
 }
