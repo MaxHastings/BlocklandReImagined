@@ -1,0 +1,1 @@
+Minigame ownership is an authenticated account relationship independent of current player-session membership. Owner departure/disconnect retains the game; listing, management, policy and persisted live snapshot v2 follow that relationship.

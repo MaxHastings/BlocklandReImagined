@@ -86,7 +86,10 @@ impl Session {
         let administrator = peer.actor.administrator;
         let player = peer.combat.player;
         if let Some(game) = self.game_of(owner)
-            && self.minigames.game(game).is_ok_and(|g| g.owner != player)
+            && self
+                .minigames
+                .game(game)
+                .is_ok_and(|g| g.owner != player.account)
         {
             self.notify(
                 owner,

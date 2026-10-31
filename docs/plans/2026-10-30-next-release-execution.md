@@ -81,6 +81,13 @@ now follows those same carrier rules with preserved playback handles and tested
 queue-pressure retries. Final effect pixels remain open; these increments do not
 complete the broader release scope.
 
+Current creator-departure handoff: [persistent ownership](../progress/2026-10-31-v043-persistent-minigame-ownership.md)
+now separates management accounts from membership/session lifetimes, preserves
+owned-game save/recovery while outside, and passes 94 scoped cases plus changed-crate
+Clippy. Actual QUIC leave/manage/resume/end is checked. Bot/vehicle/item/resource
+bindings, UI and continuing real battle acceptance remain open; this does not
+complete step 4 or the creator-departure feature.
+
 ## Rules for each increment
 
 1. Pin the source and content inputs; identify the existing seam owner. Keep one

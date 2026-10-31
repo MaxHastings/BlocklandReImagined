@@ -350,7 +350,8 @@ pub struct PlayerState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGame {
     pub id: GameId,
-    pub owner: PlayerId,
+    /// Stable host-authenticated account, independent of a player session.
+    pub owner: AccountId,
     pub color: u8,
     pub settings: Settings,
     pub members: BTreeSet<PlayerId>,
@@ -440,7 +441,7 @@ impl Default for CleanupRules {
 impl MiniGame {
     /// A game mode's mini-game, owned by the server ([`SERVER`]).
     pub fn is_server(&self) -> bool {
-        self.owner == SERVER
+        self.owner == SERVER.account
     }
     /// The server's only mini-game, which every player is in (a game
     /// mode's), as opposed to a [`MiniGame::shared`] one.
@@ -450,7 +451,7 @@ impl MiniGame {
     pub(crate) fn new(id: GameId, owner: PlayerId, color: u8, settings: Settings) -> Self {
         Self {
             id,
-            owner,
+            owner: owner.account,
             color,
             settings,
             members: BTreeSet::new(),

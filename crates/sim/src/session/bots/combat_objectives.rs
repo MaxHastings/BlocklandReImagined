@@ -137,7 +137,7 @@ impl Session {
         let bri_minigames::LifeState::Alive { life } = victim_player.life else {
             return Ok(vec![]);
         };
-        let Some(sources) = self.events.objective_deaths.get(&g.owner.account.0) else {
+        let Some(sources) = self.events.objective_deaths.get(&g.owner.0) else {
             return Ok(vec![]);
         };
         if sources.len() > 64 {

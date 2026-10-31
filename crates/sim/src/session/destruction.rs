@@ -442,8 +442,8 @@ impl Session {
                 .and_then(|id| self.minigames.game(id).ok())
                 .and_then(|g| {
                     self.peers
-                        .get(&g.owner.account.0)
-                        .map(|p| (g.owner.account.0, p.actor.clone()))
+                        .get(&g.owner.0)
+                        .map(|p| (g.owner.0, p.actor.clone()))
                 }),
             own,
             lan: self.lan_host,

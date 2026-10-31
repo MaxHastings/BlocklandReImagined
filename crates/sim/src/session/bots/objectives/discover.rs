@@ -87,7 +87,7 @@ impl Session {
         let Some(game) = self.game_of(bot) else {
             return "not in a mini-game".into();
         };
-        let Ok(owner) = self.minigames.game(game).map(|g| g.owner.account.0) else {
+        let Ok(owner) = self.minigames.game(game).map(|g| g.owner.0) else {
             return "no game".into();
         };
         let indexed: Vec<_> = self
@@ -374,7 +374,7 @@ impl Session {
         if g.round_over {
             return Err(F::NoPlan);
         }
-        let (sources, truncated) = self.objective_candidates(bot, g.owner.account.0);
+        let (sources, truncated) = self.objective_candidates(bot, g.owner.0);
         budget.truncated |= truncated;
         let peer = self.peers.get(&bot).ok_or(F::NoPlan)?;
         let team = self

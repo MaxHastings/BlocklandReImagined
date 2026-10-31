@@ -52,7 +52,11 @@ impl Session {
     /// build saves it; none when they run none.
     pub(in crate::session) fn saved_minigame(&self, owner: OwnerId) -> Option<serde_json::Value> {
         let player = self.peers.get(&owner)?.combat.player;
-        let game = self.minigames.player(player).ok()?.game?;
+        let game = self
+            .minigames
+            .owned_game(player)
+            .ok()
+            .or_else(|| self.minigames.player(player).ok().and_then(|p| p.game))?;
         if !self.minigames.can_edit(player, game) {
             return None;
         }
@@ -119,13 +123,21 @@ impl Session {
         let minigame = match game {
             Some(game) => self.minigame_snapshot(game).map(|mut saved| {
                 let owner = self.minigames.game(game).ok().and_then(|g| {
-                    self.peers
-                        .values()
-                        .find(|p| p.combat.player == g.owner)
-                        .and_then(|p| p.principal)
+                    self.simulation
+                        .state()
+                        .owners
+                        .get(&g.owner.0)
+                        .map(|record| record.principal.clone())
+                        .or_else(|| {
+                            self.peers
+                                .values()
+                                .find(|p| p.combat.player.account == g.owner)
+                                .and_then(|p| p.principal)
+                                .map(|p| principal_hex(&p))
+                        })
                 });
                 if let (Some(owner), Some(fields)) = (owner, saved.as_object_mut()) {
-                    fields.insert("owner".into(), principal_hex(&owner).into());
+                    fields.insert("owner".into(), owner.into());
                 }
                 saved
             }),
@@ -199,7 +211,12 @@ impl Session {
             .context("Unknown player")?
             .combat
             .player;
-        let game = match self.minigames.player(player).ok().and_then(|p| p.game) {
+        let game = match self
+            .minigames
+            .owned_game(player)
+            .ok()
+            .or_else(|| self.minigames.player(player).ok().and_then(|p| p.game))
+        {
             Some(game) => {
                 ensure!(
                     self.minigames.can_edit(player, game),
@@ -213,7 +230,7 @@ impl Session {
                     .game(game)
                     .ok()
                     .context("No such mini-game")?;
-                if !g.is_server() && g.owner == player {
+                if !g.is_server() && g.owner == player.account {
                     self.minigame_act(
                         owner,
                         MiniGameRequest::Configure {

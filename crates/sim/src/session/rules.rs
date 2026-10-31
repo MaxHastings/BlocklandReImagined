@@ -402,7 +402,7 @@ impl Session {
                         && self
                             .game_of(thought.bot)
                             .and_then(|g| self.minigames.game(g).ok())
-                            .map(|g| g.owner.account.0)
+                            .map(|g| g.owner.0)
                             == author)
             })
             .take(4)
@@ -466,7 +466,7 @@ impl Session {
             .game(game)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         ensure!(
-            g.owner.account.0 == source.owner,
+            g.owner.0 == source.owner,
             "Only the mini-game owner's rules may change match policy"
         );
         if matches!(target.class, Class::Player | Class::Client) {
@@ -700,7 +700,7 @@ impl Session {
             }
             return;
         }
-        let Some(owner) = self.minigames.game(game).ok().map(|g| g.owner.account.0) else {
+        let Some(owner) = self.minigames.game(game).ok().map(|g| g.owner.0) else {
             return;
         };
         let bricks: Vec<_> = self
@@ -1032,9 +1032,7 @@ impl Session {
         }
         let game = self.game_of(owner).context("Create a mini-game first")?;
         ensure!(
-            self.minigames
-                .game(game)
-                .is_ok_and(|g| g.owner.account.0 == owner),
+            self.minigames.game(game).is_ok_and(|g| g.owner.0 == owner),
             "Leave the other host's mini-game before creating a lab"
         );
         let vehicle_bricks = self.tool_catalog.vehicle_bricks.clone();
@@ -2622,10 +2620,85 @@ mod tests {
         assert_eq!(score(&s, p), 1);
     }
     #[test]
+    fn creator_minigame_save_and_offline_recovery_do_not_require_participation() {
+        let (mut s, _, _) = setup();
+        let principal = bri_admin::Principal([0x5b; 32]);
+        let creator = s
+            .join_verified(
+                "Creator".into(),
+                Vec3::new(20., 2., 0.),
+                false,
+                Some(principal),
+            )
+            .unwrap();
+        s.minigame_request(
+            creator,
+            MiniGameRequest::Create {
+                color: 0,
+                settings: bri_minigames::Settings {
+                    title: "Retained encounter".into(),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+        let game = s.minigame_views()[0].id;
+        s.minigame_request(creator, MiniGameRequest::Leave).unwrap();
+        let mut saved = s
+            .saved_minigame(creator)
+            .expect("the creator saves their owned encounter while outside it");
+        saved["settings"]["title"] = "Restored while outside".into();
+        s.restore_saved_minigame(creator, saved);
+        assert_eq!(s.game_of(creator), None);
+        assert!(
+            s.minigame_views()
+                .iter()
+                .any(|g| g.id == game && g.settings.title == "Restored while outside")
+        );
+        s.disconnect(creator).unwrap();
+        let (_, recovery) = s.recovery_snapshot();
+        let recovery = recovery.unwrap();
+        assert_eq!(
+            recovery["owner"],
+            "5b".repeat(32),
+            "offline recovery keeps the already verified world owner principal"
+        );
+        let returned = s
+            .join_verified(
+                "Returned creator".into(),
+                Vec3::new(20., 2., 0.),
+                false,
+                Some(principal),
+            )
+            .unwrap();
+        assert_eq!(
+            returned, creator,
+            "reuse the world's existing principal ownership mapping"
+        );
+        s.minigame_request(
+            returned,
+            MiniGameRequest::Configure {
+                settings: bri_minigames::Settings {
+                    title: "Creator returned".into(),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+        assert!(
+            s.minigame_views()
+                .iter()
+                .any(|g| g.id == game && g.settings.title == "Creator returned")
+        );
+    }
+
+    #[test]
     fn free_build_region_observes_free_build_players_but_not_other_games() {
         let (mut s, p, q) = setup();
         let ids = s.create_rule_lab(p, "hill").unwrap();
-        s.minigame_request(p, MiniGameRequest::Leave).unwrap();
+        // Free-build coverage requires ending the encounter, not merely
+        // leaving a game that now deliberately continues running.
+        s.minigame_request(p, MiniGameRequest::End).unwrap();
         s.minigame_request(
             q,
             MiniGameRequest::Create {
@@ -2692,7 +2765,9 @@ mod tests {
         s.set_lan_host(false);
         let ids = s.create_rule_lab(p, "soccer").unwrap();
         s.respawn_vehicle_brick(ids[2]).unwrap();
-        s.minigame_request(p, MiniGameRequest::Leave).unwrap();
+        // Free-build coverage requires ending the encounter, not merely
+        // leaving a game that now deliberately continues running.
+        s.minigame_request(p, MiniGameRequest::End).unwrap();
         s.minigame_request(
             q,
             MiniGameRequest::Create {
@@ -2701,7 +2776,7 @@ mod tests {
             },
         )
         .unwrap();
-        // Leaving the match can respawn its ball; observe the live identity.
+        // Ending the match can respawn its ball; observe the live identity.
         let object = s.vehicle_infos()[0].id;
         let center = s.object_centre(ObjectRef::Vehicle(object)).unwrap();
         assert_eq!(s.game_of(p), None);

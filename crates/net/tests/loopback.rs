@@ -2498,6 +2498,128 @@ async fn minigame_listing_replicates_to_other_clients_and_late_joiners() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn minigame_owner_manages_the_same_game_outside_play_and_after_resume() -> Result<()> {
+    use bri_sim::session::MiniGameRequest;
+    let server = server::start(session(), options())?;
+    let mut owner = Client::connect(
+        server.address,
+        &server.certificate,
+        "Owner".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    let mut other = Client::connect(
+        server.address,
+        &server.certificate,
+        "Member".into(),
+        vec![],
+        None,
+    )
+    .await?;
+    owner
+        .command(Command::MiniGame(MiniGameRequest::Create {
+            color: 2,
+            settings: Default::default(),
+        }))
+        .await?;
+    wait(&mut other, |c| c.replica.minigames.len() == 1).await?;
+    let game = other.replica.minigames[0].id;
+    other
+        .command(Command::MiniGame(MiniGameRequest::Join { game }))
+        .await?;
+    let owner_id = owner.owner;
+    let member_id = other.owner;
+    owner
+        .command(Command::MiniGame(MiniGameRequest::Leave))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica.minigames.iter().any(|g| {
+            g.id == game && !g.members.contains(&owner_id) && g.members.contains(&member_id)
+        })
+    })
+    .await?;
+    assert!(
+        other
+            .command(Command::MiniGame(MiniGameRequest::Reset))
+            .await
+            .is_err(),
+        "a member cannot claim creator management"
+    );
+    let settings = bri_minigames::Settings {
+        title: "Owner is outside".into(),
+        ..Default::default()
+    };
+    owner
+        .command(Command::MiniGame(MiniGameRequest::Configure { settings }))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica
+            .minigames
+            .iter()
+            .any(|g| g.id == game && g.settings.title == "Owner is outside")
+    })
+    .await?;
+    let resume = owner.resume.clone();
+    owner.close();
+    wait(&mut other, |c| !c.replica.names.contains_key(&owner_id)).await?;
+    assert!(
+        other
+            .replica
+            .minigames
+            .iter()
+            .any(|g| g.id == game && g.owner == owner_id)
+    );
+    let mut returned = Client::connect(
+        server.address,
+        &server.certificate,
+        "Returned owner".into(),
+        vec![],
+        Some(resume),
+    )
+    .await?;
+    assert_eq!(
+        returned.owner, owner_id,
+        "the host-verified resume capability retains the account"
+    );
+    assert!(
+        returned
+            .replica
+            .minigames
+            .iter()
+            .any(|g| g.id == game && g.owner == owner_id && !g.members.contains(&owner_id))
+    );
+    returned
+        .command(Command::MiniGame(MiniGameRequest::Reset))
+        .await?;
+    let settings = bri_minigames::Settings {
+        title: "Same retained encounter".into(),
+        ..Default::default()
+    };
+    returned
+        .command(Command::MiniGame(MiniGameRequest::Configure { settings }))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica
+            .minigames
+            .iter()
+            .any(|g| g.id == game && g.settings.title == "Same retained encounter")
+    })
+    .await?;
+    returned
+        .command(Command::MiniGame(MiniGameRequest::End))
+        .await?;
+    wait(&mut other, |c| {
+        c.replica.minigames.iter().all(|g| g.id != game)
+    })
+    .await?;
+    other.close();
+    returned.close();
+    server.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn admin_change_map_moves_every_client_to_the_new_world() -> Result<()> {
     use bri_admin::{Action, Request};
     use bri_sim::session::{MapListing, Reply};

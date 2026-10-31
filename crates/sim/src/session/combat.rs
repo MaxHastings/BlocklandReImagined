@@ -1217,15 +1217,11 @@ impl Session {
     pub fn minigame_views(&self) -> Vec<MiniGameView> {
         self.minigames
             .games()
-            .filter_map(|game| {
-                Some(MiniGameView {
+            .map(|game| {
+                MiniGameView {
                     id: game.id.0,
                     // A game mode's mini-game belongs to the server (0).
-                    owner: if game.is_server() {
-                        0
-                    } else {
-                        self.owner_of(game.owner)?
-                    },
+                    owner: game.owner.0,
                     color: game.color,
                     settings: game.settings.clone(),
                     members: game
@@ -1239,7 +1235,7 @@ impl Session {
                     paint_color: game.paint_color,
                     shared: game.shared,
                     name_distance: game.name_distance,
-                })
+                }
             })
             .collect()
     }
@@ -2018,7 +2014,8 @@ impl Session {
             .context("Unknown connection")?
             .combat
             .player;
-        let own = self.minigames.player(player).ok().and_then(|p| p.game);
+        let current = self.minigames.player(player).ok().and_then(|p| p.game);
+        let own = self.minigames.owned_game(player).ok();
         // An editor acting on another game names it.
         let (on, request) = match request {
             MiniGameRequest::Manage { game, request } => {
@@ -2038,13 +2035,13 @@ impl Session {
             }
             other => (None, other),
         };
-        let mine = on.or(own);
+        let mine = on.or(own).or(current);
         let (action, game, target) = match &request {
             MiniGameRequest::Create { .. } => ("create", mine, None),
             MiniGameRequest::Configure { .. } => ("edit", mine, None),
             MiniGameRequest::AddOnSettings { game, .. } => ("edit", Some(GameId(*game)), None),
             MiniGameRequest::Join { game } => ("join", Some(GameId(*game)), None),
-            MiniGameRequest::Leave => ("leave", mine, None),
+            MiniGameRequest::Leave => ("leave", current, None),
             MiniGameRequest::Invite { target } => ("invite", mine, Some(*target)),
             MiniGameRequest::Kick { target } => ("kick", mine, Some(*target)),
             MiniGameRequest::Reset => ("reset", mine, None),
@@ -2070,7 +2067,7 @@ impl Session {
                 || self
                     .minigames
                     .game(*g)
-                    .is_ok_and(|game| game.owner != player)
+                    .is_ok_and(|game| game.owner != player.account)
         });
         let team = match &request {
             MiniGameRequest::SetTeam { team, .. } => *team,
@@ -2155,20 +2152,14 @@ impl Session {
                 .player)
         };
         let owned = |session: &Self| -> Result<GameId> {
-            let game = session
+            session
                 .minigames
-                .player(actor)
-                .ok()
-                .and_then(|p| p.game)
-                .context("You are not in a mini-game")?;
-            ensure!(
-                session.minigames.game(game).is_ok_and(|g| g.owner == actor),
-                "Only the mini-game owner can do that"
-            );
-            Ok(game)
+                .owned_game(actor)
+                .map_err(|_| anyhow::anyhow!("You do not own a mini-game"))
         };
         let mine = |session: &Self| -> Result<GameId> {
-            on.or_else(|| session.minigames.player(actor).ok().and_then(|p| p.game))
+            on.or_else(|| session.minigames.owned_game(actor).ok())
+                .or_else(|| session.minigames.player(actor).ok().and_then(|p| p.game))
                 .context("You are not in a mini-game")
         };
         if granted {
@@ -2582,8 +2573,9 @@ impl Session {
                         && let Ok(g) = self.minigames.game(game)
                     {
                         let owner_name = self
-                            .owner_of(g.owner)
-                            .map(|o| self.peers[&o].name.clone())
+                            .peers
+                            .get(&g.owner.0)
+                            .map(|p| p.name.clone())
                             .unwrap_or_default();
                         let title = g.settings.title.clone();
                         self.notify(

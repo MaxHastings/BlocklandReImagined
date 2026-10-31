@@ -134,8 +134,13 @@ impl MinigamesWorld {
     /// Whether `actor` may change a game's settings and teams (Slayer's
     /// `canEdit`): its owner, or an admin.
     pub fn can_edit(&self, actor: PlayerId, game: GameId) -> bool {
-        self.games.get(&game).is_some_and(|g| g.owner == actor)
-            || self.players.get(&actor).is_some_and(|p| p.admin)
+        self.players.get(&actor).is_some_and(|p| {
+            p.admin
+                || self
+                    .games
+                    .get(&game)
+                    .is_some_and(|g| g.owner == actor.account)
+        })
     }
     /// Change Add-On settings of a game and its teams. The host has checked
     /// each value against its definition and who may change it; `None`

@@ -631,13 +631,7 @@ impl Session {
         budget: &mut GroundingBudget,
     ) -> Result<(), planning::Failure> {
         use planning::Failure as F;
-        let owner = self
-            .minigames
-            .game(game)
-            .map_err(|_| F::NoPlan)?
-            .owner
-            .account
-            .0;
+        let owner = self.minigames.game(game).map_err(|_| F::NoPlan)?.owner.0;
         let Some(sources) = self.events.objective_reactions.get(&owner) else {
             return Ok(());
         };
@@ -754,7 +748,6 @@ impl Session {
             .and_then(|g| self.minigames.game(g).ok())
             .ok_or(F::NoPlan)?
             .owner
-            .account
             .0;
         let mut causes = Vec::new();
         // These are the known native causal inputs at this baseline. Selecting

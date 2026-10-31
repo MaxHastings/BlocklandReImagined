@@ -42,8 +42,14 @@ reject/ignore/kick/reset/respawn-all/end/manual-respawn and three message events
 The UI should initialize a new title from the owner's display name plus
 `'s Mini-Game`, capped to 35 characters; `Settings::default()` uses the original
 disconnected GUI fallback title, `Default Mini-Game`.
-`disconnect()` removes membership and ends an owned game; skip departed player's
-spawn/view effects while applying cleanup and remaining members' effects.
+Ownership is a host-authenticated `AccountId`, independent of the current
+`PlayerId` session and membership. `owned_game(player)` validates the current
+session before resolving management. Leave and `disconnect()` remove participation
+and retain the encounter; only explicit End or applicable host/mode policy ends
+it. Skip a departed player's spawn/view effects while applying remaining effects.
+One owned game per account and the shared game/color caps still apply. Account
+zero is reserved for the server. This intentionally modernizes v20's owner-leave
+behavior; host resource bindings must also retain encounter ownership.
 
 Host moderation uses `moderate_end()`, separate from owner-only UI commands.
 An admin flag does not grant configuration, kick or end ownership. The source's
@@ -133,13 +139,17 @@ membership/color/identity invariants against a trusted native catalog. Persist t
 snapshot alongside the host world at the same tick. Resume saved session IDs only
 when the host restores the same authenticated bindings; otherwise disconnect them
 before fresh clients connect. Snapshot files are trusted server state, not uploads
-from clients. Schema version is 1; unsupported fields/settings fail validation.
+from clients. Trusted live snapshots use schema v2 for account ownership and
+permit absent/nonmember creators and empty encounters. Catalog/preset schema is
+still v1. Unsupported versions/fields/settings and duplicate creators fail
+validation; no alpha migration is provided.
 
 Bounds: 1024 players; 10 simultaneous games/colors; 5 equipment slots; 35 title
 characters; 200 event-text characters; event duration 1–10 s; 65,536 spawn candidates;
 8 MiB snapshot; 64 KiB preset; bounded catalog entries and 160-byte content IDs.
 Scores use saturating i64 arithmetic. Pending invites are one per player and do not
-expire in stock behavior; end/disconnect invalidates their game. Respawn settings
+expire in stock behavior; explicit End invalidates their game, while creator
+disconnect retains it. Respawn settings
 are validated in milliseconds against original server bounds. UI adapters should
 clamp legacy seconds (RT 1–30, VRT 0–300, BRT 2–300); the rules never silently replace
 unknown content or an invalid setting with another item/player type.

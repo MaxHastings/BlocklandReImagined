@@ -85,7 +85,8 @@ impl MinigamesWorld {
         {
             return Err(Error::Capacity);
         }
-        if name.is_empty()
+        if account == SERVER.account
+            || name.is_empty()
             || name.chars().count() > 64
             || name.chars().any(char::is_control)
             || self.players.keys().any(|p| p.account == account)
@@ -163,13 +164,15 @@ impl MinigamesWorld {
             Err(Error::NotReady)
         }
     }
-    fn owned(&self, p: PlayerId) -> Result<GameId, Error> {
-        let g = self.player(p)?.game.ok_or(Error::NotMember)?;
-        if self.game(g)?.owner == p {
-            Ok(g)
-        } else {
-            Err(Error::NotOwner)
-        }
+    /// Ownership is not membership. The host authenticated this account when
+    /// registering the current session; stale sessions never grant authority.
+    pub fn owned_game(&self, p: PlayerId) -> Result<GameId, Error> {
+        self.player(p)?;
+        self.games
+            .values()
+            .find(|g| !g.is_server() && g.owner == p.account)
+            .map(|g| g.id)
+            .ok_or(Error::NotOwner)
     }
     fn authorize_event(&self, id: GameId, authority: EventAuthority) -> Result<(), Error> {
         let game = self.game(id)?;
@@ -177,7 +180,7 @@ impl MinigamesWorld {
             EventAuthority::System => Ok(()),
             EventAuthority::Owner(p) => {
                 self.player(p)?;
-                if p == game.owner {
+                if p.account == game.owner {
                     Ok(())
                 } else {
                     Err(Error::NotOwner)
@@ -189,7 +192,7 @@ impl MinigamesWorld {
             } => {
                 if self.player(instigator)?.game != Some(id) {
                     Err(Error::NotMember)
-                } else if brick_owner != game.owner.account {
+                } else if brick_owner != game.owner {
                     Err(Error::NotOwner)
                 } else {
                     Ok(())
@@ -254,7 +257,7 @@ impl MinigamesWorld {
         self.remove_member(player, out)?;
         let game = self.games.get_mut(&id).ok_or(Error::StaleGame)?;
         game.members.insert(player);
-        let eject = game.owner == player || game.settings.use_all_players_bricks;
+        let eject = game.owner == player.account || game.settings.use_all_players_bricks;
         let color = game.color;
         let p = self.players.get_mut(&player).expect("validated player");
         p.game = Some(id);
@@ -288,10 +291,6 @@ impl MinigamesWorld {
         let Some(id) = self.player(player)?.game else {
             return Ok(());
         };
-        if self.games[&id].owner == player {
-            self.end_game(id, out);
-            return Ok(());
-        }
         let clean = self.games[&id].cleanup.leave;
         self.games
             .get_mut(&id)
@@ -336,7 +335,7 @@ impl MinigamesWorld {
             if game.cleanup.leave {
                 self.cleanup(*p, false, out);
             }
-            if *p == game.owner && alive {
+            if p.account == game.owner && alive {
                 // Changing the life token invalidates delayed damage/death acknowledgements.
                 let life = self.alloc_life();
                 self.players.get_mut(p).expect("validated player").life = LifeState::Alive { life };
@@ -531,7 +530,7 @@ impl MinigamesWorld {
             } => {
                 self.ready(actor)?;
                 settings.validate(&self.catalog)?;
-                if self.owned(actor).is_ok() {
+                if self.owned_game(actor).is_ok() {
                     return Err(Error::AlreadyOwner);
                 }
                 if color >= 10 || !self.free_colors().contains(&color) {
@@ -552,7 +551,7 @@ impl MinigamesWorld {
                 actor,
                 mut settings,
             } => {
-                let id = self.owned(actor)?;
+                let id = self.owned_game(actor)?;
                 self.keep_add_on_rules(id, &mut settings);
                 self.configure(id, settings, &mut out)?;
             }
@@ -562,7 +561,7 @@ impl MinigamesWorld {
                 if self.player(actor)?.game == Some(game) {
                     return Err(Error::AlreadyMember);
                 }
-                if g.settings.invite_only {
+                if g.settings.invite_only && g.owner != actor.account {
                     return Err(Error::InviteOnly);
                 }
                 if self
@@ -583,7 +582,7 @@ impl MinigamesWorld {
                 self.remove_member(actor, &mut out)?;
             }
             Command::Invite { actor, target } => {
-                let game = self.owned(actor)?;
+                let game = self.owned_game(actor)?;
                 self.invite(game, actor.account, target, &mut out)?;
             }
             Command::Accept { actor, game } => {
@@ -608,7 +607,7 @@ impl MinigamesWorld {
                     if p.ignored_owners.len() >= MAX_PLAYERS {
                         return Err(Error::Capacity);
                     }
-                    p.ignored_owners.insert(owner.account);
+                    p.ignored_owners.insert(owner);
                 }
                 p.invite = None;
                 out.push(Effect::Invitation {
@@ -617,7 +616,7 @@ impl MinigamesWorld {
                 });
             }
             Command::Kick { actor, target } => {
-                let id = self.owned(actor)?;
+                let id = self.owned_game(actor)?;
                 if self.player(target)?.game != Some(id) {
                     return Err(Error::NotMember);
                 }
@@ -635,7 +634,7 @@ impl MinigamesWorld {
                 }
             }
             Command::End { actor } => {
-                let game = self.owned(actor)?;
+                let game = self.owned_game(actor)?;
                 self.end_game(game, &mut out);
             }
             Command::Manage {
@@ -933,7 +932,7 @@ impl MinigamesWorld {
         if g.settings.use_all_players_bricks {
             g.members.iter().map(|p| p.account).collect()
         } else {
-            vec![g.owner.account]
+            vec![g.owner]
         }
     }
     /// A team's score: its own points and its current members' scores

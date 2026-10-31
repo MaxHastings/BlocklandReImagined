@@ -140,7 +140,7 @@ impl Session {
         }
         let host = game
             .and_then(|g| self.minigames.game(g).ok())
-            .map(|g| g.owner.account.0)
+            .map(|g| g.owner.0)
             .filter(|host| {
                 self.peers
                     .get(host)

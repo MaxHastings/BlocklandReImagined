@@ -256,7 +256,7 @@ impl MinigamesWorld {
             } else {
                 Decision::Allow
             }
-        } else if t.player.is_some() || t.owner == Some(g.owner.account) {
+        } else if t.player.is_some() || t.owner == Some(g.owner) {
             Decision::Allow
         } else {
             Decision::Deny(Denial::NotInGame)
@@ -340,7 +340,7 @@ impl MinigamesWorld {
         if !enabled {
             return Decision::Deny(Denial::Disabled);
         }
-        if s.use_all_players_bricks || t.owner == Some(g.owner.account) {
+        if s.use_all_players_bricks || t.owner == Some(g.owner) {
             Decision::Allow
         } else {
             Decision::Deny(Denial::NotInGame)
@@ -426,7 +426,7 @@ impl MinigamesWorld {
             .iter()
             .filter(|point| {
                 if !s.use_all_players_bricks {
-                    point.owner == g.owner.account
+                    point.owner == g.owner
                 } else if s.players_use_own_bricks {
                     point.owner == player.account
                 } else {

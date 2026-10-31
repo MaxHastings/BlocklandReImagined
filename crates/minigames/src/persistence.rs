@@ -2,6 +2,10 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+// Catalogs/presets retain their own v1 schema; only trusted live snapshots
+// change ownership from a player session to an authenticated account.
+const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Preset {
@@ -54,7 +58,7 @@ impl MinigamesWorld {
     /// A trusted server snapshot, not a network message. Persist alongside host world state.
     pub fn save(&self) -> Result<Vec<u8>, Error> {
         let snapshot = Snapshot {
-            schema_version: SCHEMA_VERSION,
+            schema_version: SNAPSHOT_SCHEMA_VERSION,
             mode: self.mode,
             clear_events: self.clear_events,
             tick: self.tick,
@@ -78,7 +82,7 @@ impl MinigamesWorld {
             return Err(Error::Capacity);
         }
         let s: Snapshot = serde_json::from_slice(bytes).map_err(|_| Error::InvalidSnapshot)?;
-        if s.schema_version != SCHEMA_VERSION
+        if s.schema_version != SNAPSHOT_SCHEMA_VERSION
             || s.players.len() > MAX_PLAYERS
             || s.games.len() > MAX_GAMES
             || s.next_session == 0
@@ -101,7 +105,8 @@ impl MinigamesWorld {
             let life = match p.life {
                 LifeState::Alive { life } | LifeState::Dead { life, .. } => life,
             };
-            if p.id.session == 0
+            if p.id.account == SERVER.account
+                || p.id.session == 0
                 || p.id.session >= s.next_session
                 || life.0 == 0
                 || life.0 >= s.next_life
@@ -120,6 +125,7 @@ impl MinigamesWorld {
             world.players.insert(p.id, p);
         }
         let mut colors = BTreeSet::new();
+        let mut creators = BTreeSet::new();
         for g in s.games {
             g.settings.validate(&world.catalog)?;
             g.teams.validate()?;
@@ -130,7 +136,7 @@ impl MinigamesWorld {
                 || g.id.0 >= s.next_game
                 || g.color >= 10
                 || !colors.insert(g.color)
-                || (!g.is_server() && (g.members.is_empty() || !g.members.contains(&g.owner)))
+                || (!g.is_server() && !creators.insert(g.owner))
                 || (g.is_server() && world.games.values().any(MiniGame::is_server))
                 || g.region.is_some_and(|r| !r.valid())
                 || g.paint_color.is_some_and(|c| c >= 64)

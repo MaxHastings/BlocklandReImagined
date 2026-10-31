@@ -690,7 +690,7 @@ impl Session {
                 .or_else(|| {
                     self.game_of(bot)
                         .and_then(|g| self.minigames.game(g).ok())
-                        .map(|g| g.owner.account.0)
+                        .map(|g| g.owner.0)
                         .filter(player)
                 })
                 .or_else(|| {
@@ -1990,7 +1990,7 @@ impl EventHost<'_> {
         // brick; its other outputs need the owner's own brick.
         let owns_game = instigator.is_some_and(|p| {
             s.minigames.game(game).is_ok_and(|g| {
-                g.owner == p && s.minigames.player(p).is_ok_and(|m| m.game == Some(game))
+                g.owner == p.account && s.minigames.player(p).is_ok_and(|m| m.game == Some(game))
             })
         });
         let authority = match (instigator, s.peers.get(&owner)) {

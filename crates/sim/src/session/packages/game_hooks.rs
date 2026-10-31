@@ -579,7 +579,7 @@ impl Session {
             .map(|g| MinigameView {
                 id: g.id.0,
                 title: g.settings.title.clone(),
-                owner: (!g.is_server()).then(|| self.owner_of(g.owner)).flatten(),
+                owner: (!g.is_server()).then_some(g.owner.0),
                 members: g.members.iter().filter_map(|p| self.owner_of(*p)).collect(),
                 round: g.round,
                 teams: g
@@ -619,7 +619,7 @@ impl Session {
         self.minigames
             .games()
             .find(|g| {
-                g.owner.account == account
+                g.owner == account
                     || (g.settings.use_all_players_bricks
                         && g.members.iter().any(|m| m.account == account))
             })

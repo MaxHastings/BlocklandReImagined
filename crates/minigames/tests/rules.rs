@@ -118,7 +118,7 @@ fn owner_lifecycle_and_admin_is_not_owner() {
     assert_eq!(w.execute(Command::End { actor: b }), Err(Error::NotOwner));
     let a_life = life(&w, a);
     let b_life = life(&w, b);
-    let out = w.execute(Command::Leave { actor: a }).unwrap();
+    let out = w.execute(Command::End { actor: a }).unwrap();
     assert!(
         out.iter()
             .any(|e| matches!(e,Effect::RestoreOwner { player,.. } if *player==a))
@@ -742,7 +742,7 @@ fn invalid_commands_are_atomic_and_inputs_bounded() {
 }
 
 #[test]
-fn colors_limit_games_and_owner_disconnect_cleans_invites() {
+fn colors_remain_reserved_until_the_disconnected_creators_game_is_explicitly_ended() {
     let mut w = world(PolicyMode::Internet);
     let mut owners = vec![];
     for i in 0..10 {
@@ -764,7 +764,12 @@ fn colors_limit_games_and_owner_disconnect_cleans_invites() {
         target: outside,
     })
     .unwrap();
+    let retained = w.player(outside).unwrap().invite;
     w.disconnect(owners[0]).unwrap();
+    assert_eq!(w.player(outside).unwrap().invite, retained);
+    assert!(w.free_colors().is_empty());
+    let returned = connect(&mut w, owners[0].account.0);
+    w.execute(Command::End { actor: returned }).unwrap();
     assert_eq!(w.player(outside).unwrap().invite, None);
     assert_eq!(w.free_colors(), vec![0]);
     create(&mut w, outside, 0);
@@ -943,4 +948,163 @@ fn a_game_modes_minigame_belongs_to_the_server_and_holds_everyone() {
     // It saves and restores like any other.
     let restored = MinigamesWorld::restore(&w.save().unwrap(), w.catalog().clone()).unwrap();
     assert_eq!(restored.server_game(), Some(game));
+}
+
+#[test]
+fn creator_departure_preserves_the_encounter_and_management_outside_membership() {
+    let mut w = world(PolicyMode::Internet);
+    let owner = connect(&mut w, 1);
+    let member = connect(&mut w, 2);
+    let other_owner = connect(&mut w, 3);
+    let encounter = create(&mut w, owner, 0);
+    w.execute(Command::Join {
+        actor: member,
+        game: encounter,
+    })
+    .unwrap();
+    let effects = w.execute(Command::Leave { actor: owner }).unwrap();
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Ended { .. })),
+        "leaving must not end an owned encounter"
+    );
+    assert!(w.game(encounter).unwrap().members.contains(&member));
+    assert_eq!(w.player(owner).unwrap().game, None);
+    assert_eq!(w.player(member).unwrap().game, Some(encounter));
+    assert!(matches!(
+        w.execute(Command::Create {
+            actor: owner,
+            color: 1,
+            settings: Settings::default()
+        }),
+        Err(Error::AlreadyOwner)
+    ));
+    let before = w.game(encounter).unwrap().round;
+    w.execute(Command::Reset {
+        game: encounter,
+        authority: EventAuthority::Owner(owner),
+    })
+    .unwrap();
+    assert_eq!(w.game(encounter).unwrap().round, before + 1);
+    let other = create(&mut w, other_owner, 1);
+    w.execute(Command::Join {
+        actor: owner,
+        game: other,
+    })
+    .unwrap();
+    let mut settings = w.game(encounter).unwrap().settings.clone();
+    settings.title = "Battle continues".into();
+    w.execute(Command::Configure {
+        actor: owner,
+        settings,
+    })
+    .unwrap();
+    assert_eq!(
+        w.game(encounter).unwrap().settings.title,
+        "Battle continues"
+    );
+    w.execute(Command::End { actor: owner }).unwrap();
+    assert!(w.game(encounter).is_err());
+    assert_eq!(
+        w.player(owner).unwrap().game,
+        Some(other),
+        "management must not move the owner's current body"
+    );
+}
+
+#[test]
+fn creator_disconnect_and_snapshot_preserve_management_for_an_authenticated_account() {
+    let mut w = world(PolicyMode::Internet);
+    assert!(matches!(
+        w.connect(SERVER.account, "Fake server".into(), false),
+        Err(Error::InvalidSettings)
+    ));
+    let owner = connect(&mut w, 1);
+    let member = connect(&mut w, 2);
+    let encounter = create(&mut w, owner, 0);
+    w.execute(Command::Join {
+        actor: member,
+        game: encounter,
+    })
+    .unwrap();
+    w.disconnect(owner).unwrap();
+    assert!(
+        w.game(encounter).is_ok(),
+        "disconnect must not end the encounter"
+    );
+    let saved = w.save().unwrap();
+    let mut restored = MinigamesWorld::restore(&saved, w.catalog().clone()).unwrap();
+    let unrelated = connect(&mut restored, 3);
+    assert!(matches!(
+        restored.execute(Command::Reset {
+            game: encounter,
+            authority: EventAuthority::Owner(unrelated)
+        }),
+        Err(Error::NotOwner)
+    ));
+    let returned = connect(&mut restored, 1);
+    assert_ne!(returned, owner);
+    assert!(
+        !restored.can_edit(owner, encounter),
+        "a stale session does not regain editor authority"
+    );
+    assert!(restored.can_edit(returned, encounter));
+    assert!(matches!(
+        restored.execute(Command::Reset {
+            game: encounter,
+            authority: EventAuthority::Owner(owner)
+        }),
+        Err(Error::StalePlayer)
+    ));
+    let before = restored.game(encounter).unwrap().round;
+    restored
+        .execute(Command::Reset {
+            game: encounter,
+            authority: EventAuthority::Owner(returned),
+        })
+        .unwrap();
+    assert_eq!(restored.game(encounter).unwrap().round, before + 1);
+    assert_eq!(restored.player(returned).unwrap().game, None);
+}
+
+#[test]
+fn an_owned_encounter_can_be_empty_saved_and_rejoined_without_being_ended() {
+    let mut w = world(PolicyMode::Internet);
+    let owner = connect(&mut w, 1);
+    let encounter = create(&mut w, owner, 0);
+    w.execute(Command::Leave { actor: owner }).unwrap();
+    assert!(w.game(encounter).unwrap().members.is_empty());
+    let saved = w.save().unwrap();
+    let mut malformed: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(malformed["schema_version"], 2);
+    malformed["schema_version"] = 1.into();
+    assert!(
+        MinigamesWorld::restore(
+            &serde_json::to_vec(&malformed).unwrap(),
+            w.catalog().clone()
+        )
+        .is_err()
+    );
+    let mut duplicate: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+    let mut second = duplicate["games"][0].clone();
+    second["id"] = 2.into();
+    second["color"] = 1.into();
+    duplicate["next_game"] = 3.into();
+    duplicate["games"].as_array_mut().unwrap().push(second);
+    assert!(
+        MinigamesWorld::restore(
+            &serde_json::to_vec(&duplicate).unwrap(),
+            w.catalog().clone()
+        )
+        .is_err(),
+        "snapshot cannot grant one account multiple owned games"
+    );
+    let mut w = MinigamesWorld::restore(&saved, w.catalog().clone()).unwrap();
+    steps(&mut w, 5);
+    assert!(w.game(encounter).is_ok());
+    w.execute(Command::Join {
+        actor: owner,
+        game: encounter,
+    })
+    .unwrap();
+    assert_eq!(w.player(owner).unwrap().game, Some(encounter));
 }

@@ -2193,7 +2193,7 @@ impl Session {
             return false;
         };
         g.settings.use_all_players_bricks
-            || self.brick_group_owner_for(owner, Some(game)) == g.owner.account.0
+            || self.brick_group_owner_for(owner, Some(game)) == g.owner.0
     }
     /// Plant a brick into build `owner`. A brick that does
     /// not fit is skipped without a report, as v20's `plant()` errors were

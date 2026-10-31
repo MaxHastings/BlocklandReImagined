@@ -698,7 +698,7 @@ impl Session {
         let creator = if game.is_server() || game.shared {
             None
         } else {
-            self.owner_of(game.owner)
+            Some(game.owner.0)
         };
         let trust = match (peer, creator) {
             (_, Some(c)) if c == owner => bri_world::authority::trust::YOU,
