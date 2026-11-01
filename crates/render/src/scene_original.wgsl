@@ -535,6 +535,9 @@ fn cascade_lit(c:CascadeCoord)->f32 {
 }
 fn shadow_lit(c:ShadowCoord)->f32 {
     if c.near.cascade<0 {return 1.0;}
+    // Faded out at the shadow edge: mix(1.0, lit, 0) == 1.0, so cascade
+    // PCSS is discarded. Skip its ~25-50 texture reads entirely.
+    if c.strength<=0.0 {return 1.0;}
     var lit=cascade_lit(c.near);
     // Only receivers in the blend band pay for the second cascade.
     if c.blend>0.0 {lit=mix(lit,cascade_lit(c.far),c.blend);}
@@ -695,11 +698,17 @@ fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
     if dynamic<=0.0 {return 0.0;}
     var map=vis.low.x;
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
-        var lit=map_cascade_lit(c.near);
-        if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
-        // Only receivers fading out of the last cascade pay for the far map.
-        if c.strength<1.0 {map=far_map_lit(position,n,map);}
-        map=mix(map,lit,c.strength);
+        if c.strength>0.0 {
+            var lit=map_cascade_lit(c.near);
+            if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+            // Only receivers fading out of the last cascade pay for the far map.
+            if c.strength<1.0 {map=far_map_lit(position,n,map);}
+            map=mix(map,lit,c.strength);
+        } else {
+            // strength<=0: mix(map, lit, 0) == map, so cascade PCSS is
+            // discarded. far_map_lit's result becomes map directly.
+            map=far_map_lit(position,n,map);
+        }
     } else {
         map=far_map_lit(position,n,map);
     }
