@@ -413,7 +413,8 @@ pub struct Material {
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
     /// Brick overlays/surfaces optionally use `[3][0]` as normal-map strength
-    /// and image slot 6 for its linear tangent-space normal map.
+    /// and image slot 6 for its linear tangent-space normal map. `[3][1..4]`
+    /// optionally hold specular strength, exponent and an enabled flag.
     pub parameters: Option<[[f32; 4]; 4]>,
 }
 impl Material {
@@ -439,6 +440,27 @@ impl Material {
         );
         self.images[6] = image;
         self.parameters.get_or_insert([[0.0; 4]; 4])[3][0] = strength;
+        Ok(())
+    }
+    /// Opt into a bounded direct-light highlight on an ordinary brick.
+    /// A zero strength removes the highlight; the exponent controls its width.
+    pub fn set_brick_specular(&mut self, strength: f32, exponent: f32) -> Result<()> {
+        ensure!(
+            matches!(
+                self.kind,
+                MaterialKind::BrickOverlay | MaterialKind::BrickSurfaces
+            ),
+            "Specular detail requires a brick surface material"
+        );
+        ensure!(
+            strength.is_finite()
+                && (0.0..=1.0).contains(&strength)
+                && exponent.is_finite()
+                && (1.0..=256.0).contains(&exponent),
+            "Brick specular strength or exponent is out of range"
+        );
+        let values = &mut self.parameters.get_or_insert([[0.0; 4]; 4])[3];
+        values[1..4].copy_from_slice(&[strength, exponent, 1.0]);
         Ok(())
     }
     /// A [`MaterialKind::Physical`] material for a model's
@@ -1009,7 +1031,10 @@ impl SceneData {
                 (0.0..=1.0).contains(&p[3][0])
                     && p[1] == [0.0; 4]
                     && p[2] == [0.0; 4]
-                    && p[3][1..] == [0.0; 3]
+                    && (p[3][1..] == [0.0; 3]
+                        || ((0.0..=1.0).contains(&p[3][1])
+                            && (1.0..=256.0).contains(&p[3][2])
+                            && p[3][3] == 1.0))
                     && (material.temp_brick_flash || p[0] == [0.0; 4])
             });
             ensure!(

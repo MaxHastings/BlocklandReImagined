@@ -1719,6 +1719,20 @@ override SURFACE_GROUP:u32=0u;
             specular=(camera.sun_color.rgb*sun_share*select(0.0,highlight(normal,sun_toward,toward_eye),facing>0.0)
                 +local.specular)*SPECULAR_STRENGTH;
         }
+        if (decal || surfaces) && material[4].w>0.5 && fx.x!=3u {
+            let power=material[4].z;
+            let eye=normalize(camera.eye.xyz-v.world_position);
+            var sun_share=0.0;
+            var local=vec3<f32>(0.0);
+            if facing>0.0 {
+                if lighting_mode()==0 {sun_share=sun_visibility(v.world_position,normal);}
+                else if lighting_mode()==3 {sun_share=dynamic_sun(v.world_position,normal);}
+                else {sun_share=object_sun(v.world_position,normal,map_visibility(v.world_position,normal));}
+            }
+            if lighting_mode()==3 {local=dynamic_light_sum(v.world_position,normal,power).specular;}
+            else if lighting_mode()!=0 {local=map_light_sum(v.world_position,normal,map_visibility(v.world_position,normal),true,power).specular;}
+            specular=(camera.sun_color.rgb*sun_share*select(0.0,glint(normal,sun_toward,eye,power),facing>0.0)+local)*material[4].y;
+        }
         if fx.x==3u {
             // Glow aims the normal at the sun, 1/min(1, sun rgb) long.
             var shortest=1.0;

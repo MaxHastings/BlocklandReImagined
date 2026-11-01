@@ -1435,6 +1435,17 @@ fn posed_geometry_shares_bindings_and_rejects_foreign_materials_or_pixels() -> R
 fn invalid_scene_references_and_vertical_cameras() {
     let mut data = triangle([1.0; 4], 0.5, AlphaMode::Opaque);
     data.validate().unwrap();
+    assert!(data.materials[0].set_brick_specular(0.5, 32.0).is_err());
+    let mut brick = Material::brick_overlay("brick", 0);
+    for (strength, exponent) in [
+        (-0.1, 32.0),
+        (1.1, 32.0),
+        (0.5, 0.0),
+        (0.5, 257.0),
+        (f32::NAN, 32.0),
+    ] {
+        assert!(brick.set_brick_specular(strength, exponent).is_err());
+    }
     data.indices.push(999);
     assert!(data.validate().is_err());
     data.indices.pop();
@@ -1484,6 +1495,63 @@ fn brick_overlay_coverage_preserves_paint_opacity_and_display_space() -> Result<
             center[3], 255,
             "overlay coverage must not make an opaque brick transparent"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn brick_specular_parameters_control_highlights_without_emission() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let center = (32 * 64 + 32) * 4;
+    for mode in [0.0, 1.0, 3.0] {
+        let mut camera = Camera {
+            ambient: [0.0, 0.0, 0.0, mode],
+            sun_color: [0.4, 0.4, 0.4, 0.0],
+            sun_direction: [0.0, 0.0, -1.0, 0.0],
+            eye: [0.0, 0.0, 2.0, 1.0],
+            ..Default::default()
+        };
+        if mode > 0.0 {
+            camera.set_sky_ambient(true);
+        }
+        for kind in [MaterialKind::BrickOverlay, MaterialKind::BrickSurfaces] {
+            let mut data = triangle([0.25, 0.25, 0.25, 1.0], 0.3, AlphaMode::Opaque);
+            data.materials[0] = Material::brick_overlay("brick", 0);
+            data.materials[0].kind = kind;
+            data.materials[0].set_brick_specular(0.0, 32.0)?;
+            let matte = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+            data.materials[0].set_brick_specular(0.5, 32.0)?;
+            let glossy = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+            let base = gpu.frame(&mut renderer, &[&matte], &camera, (64, 64))?;
+            let bright = gpu.frame(&mut renderer, &[&glossy], &camera, (64, 64))?;
+            assert!(
+                bright[center] > base[center] + 10,
+                "mode {mode}: gloss must respond to sun: {:?} -> {:?}",
+                &base[center..center + 4],
+                &bright[center..center + 4]
+            );
+            let mut dark = camera;
+            dark.sun_color = [0.0; 4];
+            let unlit = gpu.frame(&mut renderer, &[&glossy], &dark, (64, 64))?;
+            assert!(
+                unlit[center..center + 3].iter().all(|v| *v <= 2),
+                "gloss must not emit light"
+            );
+            assert_eq!(bright[center + 3], base[center + 3]);
+            data.materials[0].set_brick_specular(0.8, 4.0)?;
+            let broad = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+            data.materials[0].set_brick_specular(0.8, 128.0)?;
+            let tight = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+            let mut angled = camera;
+            angled.sun_direction = [-0.8, 0.0, -0.6, 0.0];
+            let wide = gpu.frame(&mut renderer, &[&broad], &angled, (64, 64))?;
+            let narrow = gpu.frame(&mut renderer, &[&tight], &angled, (64, 64))?;
+            assert!(
+                wide[center] > narrow[center] + 10,
+                "mode {mode}: exponent should narrow the highlight"
+            );
+        }
     }
     Ok(())
 }
