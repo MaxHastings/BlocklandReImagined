@@ -1149,7 +1149,7 @@
       "title": "Reset When Empty",
       "category": "Minigame",
       "type": "bool",
-      "default": {{pref_reset_when_empty|bool}},
+      "default": false,
       "editor": "creator",
       "quiet": true
     },

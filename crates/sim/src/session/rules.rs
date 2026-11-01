@@ -2662,6 +2662,49 @@ mod tests {
     }
 
     #[test]
+    fn granted_join_uses_membership_instead_of_ownership() {
+        let (mut s, creator, other) = setup();
+        s.minigame_request(
+            creator,
+            MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )
+        .unwrap();
+        let game = s.game_of(creator).unwrap();
+        let join = || MiniGameRequest::Join { game: game.0 };
+        assert!(
+            s.minigame_act(creator, join(), true, None).is_err(),
+            "joining the game one is actually in should still be rejected"
+        );
+        s.minigame_request(creator, MiniGameRequest::Leave).unwrap();
+        assert_eq!(s.game_of(creator), None);
+        s.minigame_act(creator, join(), true, None).unwrap();
+        assert_eq!(s.game_of(creator), Some(game));
+        s.minigame_request(creator, MiniGameRequest::Leave).unwrap();
+        s.minigame_request(
+            other,
+            MiniGameRequest::Create {
+                color: 1,
+                settings: Default::default(),
+            },
+        )
+        .unwrap();
+        let other_game = s.game_of(other).unwrap();
+        s.minigame_act(
+            creator,
+            MiniGameRequest::Join { game: other_game.0 },
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.game_of(creator), Some(other_game));
+        s.minigame_act(creator, join(), true, None).unwrap();
+        assert_eq!(s.game_of(creator), Some(game));
+    }
+
+    #[test]
     fn creator_minigame_save_and_offline_recovery_do_not_require_participation() {
         let (mut s, _, _) = setup();
         let principal = bri_admin::Principal([0x5b; 32]);

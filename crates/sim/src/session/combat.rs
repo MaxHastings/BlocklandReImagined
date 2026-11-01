@@ -2213,7 +2213,10 @@ impl Session {
                 }
                 MiniGameRequest::Join { game } => {
                     let game = GameId(game);
-                    ensure!(mine(self).ok() != Some(game), "Already in that mini-game");
+                    ensure!(
+                        self.minigames.player(actor).ok().and_then(|p| p.game) != Some(game),
+                        "Already in that mini-game"
+                    );
                     let effects = self
                         .minigames
                         .host_place(actor, Some(game))

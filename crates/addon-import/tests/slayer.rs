@@ -3404,16 +3404,21 @@ fn five_hundred_team_spawns_still_spawn_each_team_on_its_own() {
 /// with both teams' counts in it.
 #[test]
 fn a_loaded_builds_game_fills_its_teams_with_bots() {
-    loaded_build_fills(true);
+    loaded_build_fills(true, true);
 }
 
 /// The same build loaded into the game its loader is running.
 #[test]
 fn a_build_loaded_into_a_running_game_fills_its_teams_with_bots() {
-    loaded_build_fills(false);
+    loaded_build_fills(false, true);
 }
 
-fn loaded_build_fills(end_first: bool) {
+#[test]
+fn saved_team_battle_keeps_bots_alive_when_creator_leaves_and_rejoins() {
+    loaded_build_fills(true, false);
+}
+
+fn loaded_build_fills(end_first: bool, explicit_reset_when_empty: bool) {
     // (Max's second team is paint colour 7; this world has three.)
     const TEAM_2: u8 = 2;
     let mut g = Game::new(if end_first {
@@ -3485,22 +3490,25 @@ fn loaded_build_fills(end_first: bool) {
         key: key(SLAYER, k),
         value: Some(v),
     };
+    let mut settings = vec![
+        on("mode", Value::Text(TEAM_MODE.into())),
+        on("points", Value::Int(5)),
+        on("time_between_rounds", Value::Int(5)),
+        on("auto_sort", Value::Bool(true)),
+        on("balance_teams", Value::Bool(true)),
+        on("balance_new_teams", Value::Bool(true)),
+        on("default_minigame", Value::Bool(true)),
+    ];
+    if explicit_reset_when_empty {
+        settings.push(on("reset_when_empty", Value::Bool(true)));
+    }
     g.cmd(
         max,
         Command::MiniGame(MiniGameRequest::AddOnSettings {
             quiet: false,
             reset: true,
             game,
-            settings: vec![
-                on("mode", Value::Text(TEAM_MODE.into())),
-                on("points", Value::Int(5)),
-                on("time_between_rounds", Value::Int(5)),
-                on("reset_when_empty", Value::Bool(true)),
-                on("auto_sort", Value::Bool(true)),
-                on("balance_teams", Value::Bool(true)),
-                on("balance_new_teams", Value::Bool(true)),
-                on("default_minigame", Value::Bool(true)),
-            ],
+            settings,
             teams: Some(
                 [("Team 1", RED), ("Team 2", TEAM_2)]
                     .into_iter()
@@ -3601,6 +3609,42 @@ fn loaded_build_fills(end_first: bool) {
     assert_eq!(count(&g), expect(&g), "Save & Reset: {notices:?}");
     g.steps(BETWEEN_ROUNDS * 120 + 240);
     assert_eq!(count(&g), expect(&g), "the next round");
+    if !explicit_reset_when_empty {
+        let alive_bots = |g: &Game| {
+            g.s.vitals()
+                .iter()
+                .filter(|(id, vital)| g.s.is_bot(**id) && vital.alive)
+                .count()
+        };
+        assert!(alive_bots(&g) > 0, "the battle starts with live bots");
+        g.cmd(max, Command::MiniGame(MiniGameRequest::Leave))
+            .unwrap();
+        g.steps(10);
+        assert!(
+            alive_bots(&g) > 0,
+            "leaving must not remove the battle's bots"
+        );
+        g.cmd(
+            max,
+            Command::MiniGame(MiniGameRequest::Join { game: view.id }),
+        )
+        .unwrap();
+        g.steps(10);
+        assert!(
+            g.s.minigame_views()[0].members.contains(&max),
+            "the creator can rejoin"
+        );
+    } else {
+        g.cmd(max, Command::MiniGame(MiniGameRequest::Leave))
+            .unwrap();
+        g.steps(10);
+        assert!(
+            g.s.vitals()
+                .iter()
+                .all(|(id, vital)| !g.s.is_bot(*id) || !vital.alive),
+            "an explicitly enabled reset when empty still removes bot bodies"
+        );
+    }
     g.quiet();
 }
 
