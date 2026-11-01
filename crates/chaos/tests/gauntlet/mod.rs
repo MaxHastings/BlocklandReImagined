@@ -60,14 +60,18 @@ impl Arena {
         items: &[(&str, &str)],
         vehicle_kinds: &[&str],
     ) -> Self {
-        Self::build(definitions, bricks, items, vehicle_kinds)
+        Self::build(definitions, bricks, items, vehicle_kinds, false)
     }
 
     /// The synthetic session with extra bricks (`(id, copied from)`) and
     /// extra items (`(item id, image id)`, copies of the gun) for a
     /// scenario's own package.
     pub fn custom(bricks: &[(&str, &str)], items: &[(&str, &str)], vehicle_kinds: &[&str]) -> Self {
-        Self::build(Vec::new(), bricks, items, vehicle_kinds)
+        Self::build(Vec::new(), bricks, items, vehicle_kinds, false)
+    }
+
+    pub fn wide(vehicle_kinds: &[&str]) -> Self {
+        Self::build(Vec::new(), &[], &[], vehicle_kinds, true)
     }
 
     fn build(
@@ -75,8 +79,26 @@ impl Arena {
         bricks: &[(&str, &str)],
         items: &[(&str, &str)],
         vehicle_kinds: &[&str],
+        wide: bool,
     ) -> Self {
         let mut simulation = fixture::synthetic_simulation(&[]).unwrap();
+        if wide {
+            // The ordinary 200-unit floor is too small for a 90-second
+            // vehicle battle whose host starts near a corner. Extend it
+            // without overlapping the existing floor or removing its walls.
+            for (x, z, hx, hz) in [
+                (-550.0, 0.0, 450.0, 1000.0),
+                (550.0, 0.0, 450.0, 1000.0),
+                (0.0, -550.0, 100.0, 450.0),
+                (0.0, 550.0, 100.0, 450.0),
+            ] {
+                simulation.physics.insert_collider(
+                    rapier3d::prelude::ColliderBuilder::cuboid(hx, 0.5, hz)
+                        .translation(rapier3d::prelude::Vector::new(x, -0.5, z)),
+                    None,
+                );
+            }
+        }
         for d in definitions {
             simulation.definitions.entries.insert(d.mesh.id.clone(), d);
         }

@@ -663,7 +663,7 @@ fn vehicles_in_a_team_deathmatch(deaf: bool) -> (Report, Rides) {
     const PACKAGE: &str = "gauntlet-tdm";
     let car = bri_vehicles::testing::CAR;
     let tank = bri_vehicles::testing::TANK;
-    let mut arena = Arena::new(&[car, tank]);
+    let mut arena = Arena::wide(&[car, tank]);
     arena.package(
         PACKAGE,
         &["bots", "player", "minigame"],
@@ -748,7 +748,18 @@ fn on_pick_spawn(p) {
     b.arena.s.set_bots_deaf_to_allies(deaf);
     let mut rides = Rides::default();
     let sides = b.sides.clone();
-    let r = b.play(0.0, 90, |s, _| rides.sample(s, &sides));
+    let mut fell_through_world = false;
+    let r = b.play(0.0, 90, |s, _| {
+        rides.sample(s, &sides);
+        fell_through_world |= s
+            .motion_states()
+            .iter()
+            .any(|(state, _)| sides.contains_key(&state.owner) && state.feet[1] < -5.0);
+    });
+    assert!(
+        !fell_through_world,
+        "a participant fell below the arena floor"
+    );
     rides.print(&r.name);
     (r, rides)
 }
