@@ -241,6 +241,15 @@ function Verify-PlaytestPackage([string]$Path) {
     if ($manifestInfo.Length -gt 16MB) { throw 'Package manifest exceeds 16 MiB.' }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ([int]$manifest.schema_version -ne 1 -or @($manifest.files).Count -eq 0) { throw 'Invalid package manifest.' }
+    $priorMarker = $manifest.PSObject.Properties['previous_imports_for_private_preview']
+    $hasPriorImports = $null -ne $priorMarker -and $priorMarker.Value -ceq $true
+    if ($PreviousImportsForPrivatePreview) {
+        if (-not $hasPriorImports -or [string]$manifest.version -cne $Version) {
+            throw 'Private preview verification requires a matching preview version and prior-imports manifest marker.'
+        }
+    } elseif ($hasPriorImports) {
+        throw 'A private preview with prior imported Add-Ons is not a release-verified package.'
+    }
     $listed = @{}
     $last = $null
     foreach ($entry in $manifest.files) {

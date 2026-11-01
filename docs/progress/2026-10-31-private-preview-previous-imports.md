@@ -23,3 +23,12 @@ non-preview/archived-package guard checks passed. An attempted
 full actual bundle reconstruction and package verification remain to be run
 after Maxwell's play session; this change does not retroactively turn
 preview.2 into a release-verified package.
+
+Follow-up: verification now requires both the prior-imports marker and a
+matching preview version when that preview mode is requested; ordinary release
+verification rejects the marker outright. A small PowerShell integration test
+checks missing markers, mismatched versions and rejection by normal release
+verification. `python -m unittest discover -s tools -p
+test_preview_packaging_guard.py` passed. Its first assertion assumed PowerShell
+would not line-wrap an error; the test was corrected to match the stable error
+text and passed without changing the guard.
