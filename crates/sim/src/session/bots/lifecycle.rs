@@ -166,7 +166,20 @@ impl Session {
             brain.named = name;
             self.bots.brains.insert(bot, brain);
             self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
-            self.fire_bot_spawn(bot);
+            // Join the brick's game before announcing a life. Placement emits
+            // the spawn event through respawn (or holds it until the game
+            // actually releases the bot); firing here as well would announce
+            // the same life twice and give the first event no game context.
+            if let Some(game) = self.spawn_brick_game(brick_id) {
+                let player = self.peers[&bot].combat.player;
+                let effects = self
+                    .minigames
+                    .host_place(player, Some(game))
+                    .map_err(|e| anyhow::anyhow!("Bot minigame: {e}"))?;
+                self.apply_minigame_effects(effects)?;
+            } else {
+                self.fire_bot_spawn(bot);
+            }
         }
         Ok(())
     }

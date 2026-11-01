@@ -205,6 +205,62 @@ impl Field {
 }
 
 #[test]
+fn a_saved_spawn_event_assigns_the_initial_bot_to_a_team() {
+    use bri_events::{Slot, Value};
+    use bri_world::{EventRow, EventTarget};
+    let mut f = Field::new();
+    f.s.set_event_catalog(bri_events::testing::catalog_extended(), Vec::new())
+        .unwrap();
+    let red = f.team(1);
+    let existing = f.bots();
+    let mut world = World::new(
+        "New spawn".into(),
+        "chaos/map".into(),
+        f.s.simulation().state().palette.clone(),
+    );
+    let mut brick = Brick::new(
+        ContentRef::Resolved(fixture::PLATE.into()),
+        [15.25, 0.1, 40.25],
+        f.author,
+    );
+    brick.vehicle = Some(Box::new(VehicleSpawn {
+        vehicle: ContentRef::Resolved(fixture::BOT.into()),
+        recolor: false,
+        team: None,
+    }));
+    brick.events = vec![EventRow {
+        conditions: vec![],
+        preserved: None,
+        enabled: true,
+        input: "onBotSpawn".into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(Slot::Bot),
+        output: "setTeam".into(),
+        params: vec![Value::Int(i64::from(red))],
+    }];
+    world.bricks.insert(1, brick);
+    world.next_brick_id = 2;
+    let saved = SavedBuild::new(world);
+    let saved = bri_world::build::decode(&bri_world::build::encode(&saved).unwrap()).unwrap();
+    f.run(Command::LoadBuild {
+        build: Box::new(saved),
+        ownership: false,
+    });
+    f.steps(150);
+    let added: Vec<_> =
+        f.s.names()
+            .keys()
+            .copied()
+            .filter(|bot| f.s.is_bot(*bot))
+            .filter(|bot| !existing.contains(bot))
+            .collect();
+    assert_eq!(added.len(), 1, "exactly one bot should be added");
+    let diagnostics = f.s.take_event_diagnostics();
+    assert_eq!(f.s.vitals()[&added[0]].team, Some(red), "{diagnostics:?}");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
 fn a_spawn_event_assigns_its_bot_to_a_minigame_team() {
     use bri_events::{Slot, Value};
     use bri_world::{EventRow, EventTarget, authority::Edit};
