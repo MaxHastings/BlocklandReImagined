@@ -42,3 +42,24 @@ and `cargo clippy --locked --profile playtest -p bri-render --lib --test
 persistent_scene -- -D warnings` pass. The test does not verify point lamps,
 shadowed/FX combinations or an authored stock material profile; no stock brick
 has been assigned these parameters yet. Full material coverage remains open.
+
+## Initial stock brick profile
+
+The native brick-material loader now assigns a restrained direct-light
+specular profile (strength 0.08, exponent 48) to its batched brick surfaces and
+print overlays. It changes no diffuse image or collision. This is an initial
+plastic-family profile, not a per-material visual calibration or proof that all
+world textures are covered. Temporary placement ghosts retain their existing
+flash parameters rather than inheriting the profile.
+
+`cargo test --locked --profile playtest -p bri-client --lib materials::tests`
+passed five cases, including the shared brick/print profile assertion; the ten
+`world_scene::tests` and `cargo clippy --locked --profile playtest -p bri-client
+--lib -- -D warnings` passed. The existing lighting probe was built and run
+offscreen with the native Bedroom bundle and 16 synthetic bricks in Classic.
+The overview image was inspected, but its bricks are too small for a meaningful
+gloss assessment. The probe reported the already-known Bedroom fallback warnings
+for an interior lightmap and foliage; these are not proof of a gloss regression.
+Close-up comparisons across lighting modes and representative prints, local
+lights, visual tuning and cost remain required; no interactive acceptance or
+complete material coverage is claimed.

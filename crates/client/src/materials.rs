@@ -4,6 +4,17 @@ use bri_content::brick_materials::{Bundle, Image, SURFACES};
 use bri_render::scene::{Material, MaterialKind, SceneData, SceneImage};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Read, path::Path};
+
+// A restrained molded-plastic highlight shared by brick paint and prints.
+// It affects direct light only; original diffuse images remain untouched.
+const BRICK_SPECULAR_STRENGTH: f32 = 0.08;
+const BRICK_SPECULAR_EXPONENT: f32 = 48.0;
+
+fn brick_plastic(material: &mut Material) {
+    material
+        .set_brick_specular(BRICK_SPECULAR_STRENGTH, BRICK_SPECULAR_EXPONENT)
+        .expect("static brick material profile is valid");
+}
 pub struct BrickMaterials {
     pub bundle: Bundle,
     images: BTreeMap<String, SceneImage>,
@@ -146,6 +157,7 @@ impl BrickMaterials {
             });
         let mut material = Material::vertex_lit(NAME, white);
         material.kind = MaterialKind::BrickSurfaces;
+        brick_plastic(&mut material);
         material.images = [white; 13];
         for (slot, name) in SURFACES.iter().enumerate() {
             material.images[slot] = self.image(scene, &self.bundle.surfaces[*name]);
@@ -181,9 +193,9 @@ impl BrickMaterials {
         let image_index = scene.images.len();
         scene.images.push(self.images[&image.path].clone());
         let index = scene.materials.len();
-        scene
-            .materials
-            .push(Material::brick_overlay(material_name, image_index));
+        let mut material = Material::brick_overlay(material_name, image_index);
+        brick_plastic(&mut material);
+        scene.materials.push(material);
         index
     }
 }
@@ -369,6 +381,11 @@ mod tests {
         // and the print's.
         assert_eq!((scene.images.len(), scene.materials.len()), (7, 2));
         assert_eq!(scene.materials[index].kind, MaterialKind::BrickOverlay);
+        let profile = scene.materials[index].parameters.unwrap()[3];
+        assert_eq!(
+            profile,
+            [0.0, BRICK_SPECULAR_STRENGTH, BRICK_SPECULAR_EXPONENT, 1.0]
+        );
         assert!(
             loaded
                 .print_material(&mut scene, "Letters/Missing")
@@ -377,6 +394,11 @@ mod tests {
         assert_eq!((scene.images.len(), scene.materials.len()), (7, 2));
         assert!(slots.iter().all(|s| *s == slots[0]));
         assert_eq!(scene.materials[slots[5]].kind, MaterialKind::BrickSurfaces);
+        assert_eq!(
+            scene.materials[slots[5]].parameters.unwrap()[3],
+            profile,
+            "painted bricks and prints share the same plastic highlight"
+        );
         assert_eq!(
             scene.images[scene.materials[slots[5]].images[5]].rgba,
             vec![255; 4]
