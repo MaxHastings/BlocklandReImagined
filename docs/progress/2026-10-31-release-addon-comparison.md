@@ -10,8 +10,12 @@ the Afghan leave/rejoin checks.
 
 The difference in Zombie's `assets/bots.json` adds
 `cooperative_stack: true`; Shark's corresponding fresh output explicitly sets it
-false. This is a material reason not to ship an unmodified previous bundle as
-the v0.4.3 result. The full fresh build stopped at the missing pinned Tier 1
+false. Correction: the runtime's `BotKind` default is true, so the previous
+Zombie conversion already enables this behavior; the previous Shark conversion
+instead inherits true where its fresh source-derived setting is false. The
+fresh Slayer rules also contain the requested changed reset policy. These are
+reasons to assess individual packages rather than ship the entire old bundle
+unchanged. The full fresh build stopped at the missing pinned Tier 1
 archive, so this sample does not establish the state of later Add-Ons or prove
 that a hybrid bundle is release-ready. Before release, select current verified
 outputs wherever possible, retain honest per-package recipe and source
