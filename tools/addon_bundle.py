@@ -245,8 +245,6 @@ def reference_view(v20, available, addons, target):
         original = addon['original']
         source = next((p for p in available.get(original['addon'].lower(), [])
                        if source_sha(p) in original['sha256']), None)
-        if source is None:
-            continue  # The ordinary build loop reports the pinned-copy error.
         name = original['addon']
         if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
             fail(f'Invalid reference Add-On name: {name!r}')
@@ -256,6 +254,10 @@ def reference_view(v20, available, addons, target):
                     shutil.rmtree(old)
                 else:
                     old.unlink()
+        if source is None:
+            # Never let an ambient edition stand in for the pinned dependency.
+            # The ordinary build loop reports the missing selected copy.
+            continue
         destination = target / 'Add-Ons' / (name + source.suffix if source.is_file() else name)
         if source.is_dir():
             shutil.copytree(source, destination)

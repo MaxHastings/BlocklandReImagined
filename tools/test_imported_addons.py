@@ -120,3 +120,17 @@ class ImportedGenerationTests(unittest.TestCase):
         expected = hashlib.sha256(b'Z.cs' + hashlib.sha256(b'upper').hexdigest().encode()
                                   + b'a.cs' + hashlib.sha256(b'lower').hexdigest().encode()).hexdigest()
         self.assertEqual(addon_bundle.source_sha(folder), expected)
+
+    def test_reference_omits_unpinned_dependency_when_selected_copy_is_missing(self):
+        vanilla = self.repo / 'v20'
+        (vanilla / 'base').mkdir(parents=True)
+        (vanilla / 'Add-Ons').mkdir()
+        ambient = vanilla / 'Add-Ons/Weapon_Parent.zip'
+        ambient.write_bytes(b'other installed edition')
+        listing = [{'id': 'weapon_parent', 'original':
+                    {'addon': 'Weapon_Parent', 'sha256': ['a' * 64]}}]
+        view = self.repo / 'reference'
+        chosen = addon_bundle.reference_view(vanilla, {'weapon_parent': [ambient]}, listing, view)
+        self.assertEqual(chosen, {})
+        self.assertFalse((view / 'Add-Ons/Weapon_Parent.zip').exists())
+        self.assertEqual(ambient.read_bytes(), b'other installed edition')
