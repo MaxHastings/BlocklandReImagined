@@ -1489,6 +1489,70 @@ fn brick_overlay_coverage_preserves_paint_opacity_and_display_space() -> Result<
 }
 
 #[test]
+fn brick_normal_maps_modify_direct_light_without_changing_alpha() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let center = (32 * 64 + 32) * 4;
+    for modern in [false, true] {
+        let mut camera = Camera {
+            ambient: [0.0; 4],
+            sun_color: [0.5, 0.5, 0.5, 0.0],
+            sun_direction: [-1.0, 0.0, -1.0, 0.0],
+            ..Default::default()
+        };
+        if modern {
+            camera.ambient[3] = 1.0;
+            camera.set_sky_ambient(true);
+        }
+        for kind in [MaterialKind::BrickOverlay, MaterialKind::BrickSurfaces] {
+            let mut data = triangle([0.5, 0.5, 0.5, 1.0], 0.3, AlphaMode::Opaque);
+            for vertex in &mut data.vertices {
+                vertex.uv = [vertex.position[0], vertex.position[1]];
+            }
+            data.images.push(SceneImage {
+                label: "tilted normal".into(),
+                width: 1,
+                height: 1,
+                rgba: vec![255, 128, 255, 255],
+                srgb: false,
+            });
+            data.materials[0] = Material::brick_overlay("brick", 0);
+            data.materials[0].kind = kind;
+            let plain = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+            data.materials[0].set_brick_normal_map(1, 1.0)?;
+            let detailed = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+            let base = gpu.frame(&mut renderer, &[&plain], &camera, (64, 64))?;
+            let bent = gpu.frame(&mut renderer, &[&detailed], &camera, (64, 64))?;
+            assert!(
+                bent[center] > base[center] + 10,
+                "normal map should turn toward sunlight: {:?} -> {:?}",
+                &base[center..center + 4],
+                &bent[center..center + 4]
+            );
+            assert_eq!(
+                bent[center + 3],
+                base[center + 3],
+                "normal detail cannot change opacity"
+            );
+            let mut dark_camera = camera;
+            dark_camera.sun_color = [0.0; 4];
+            let dark = gpu.frame(&mut renderer, &[&detailed], &dark_camera, (64, 64))?;
+            assert!(
+                dark[center..center + 3].iter().all(|v| *v <= 2),
+                "a normal map cannot make an unlit brick glow: {:?}",
+                &dark[center..center + 4]
+            );
+            data.images[1].srgb = true;
+            assert!(
+                data.validate().is_err(),
+                "normal data must not be sampled as sRGB"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn ordinary_overlay_receives_darkness_and_local_light_but_unlit_stays_bright() -> Result<()> {
     let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);

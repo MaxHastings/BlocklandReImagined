@@ -409,9 +409,11 @@ pub struct Material {
     /// (`bri_content::shape::TintMask`): texel * ((1 - mask) + mask * colour).
     /// Lit model materials (`VertexLit`, `Physical`) only.
     pub tint_mask: bool,
-    /// Kind-specific uniforms, required for water and terrain only.
+    /// Kind-specific uniforms; required by the material kinds documented above.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
+    /// Brick overlays/surfaces optionally use `[3][0]` as normal-map strength
+    /// and image slot 6 for its linear tangent-space normal map.
     pub parameters: Option<[[f32; 4]; 4]>,
 }
 impl Material {
@@ -419,6 +421,25 @@ impl Material {
         let mut material = Self::vertex_lit(name, diffuse);
         material.kind = MaterialKind::BrickOverlay;
         material
+    }
+    /// Optional tangent-space normal map for an ordinary brick overlay or
+    /// batched brick surface. The image is linear RGB; zero strength leaves the
+    /// original geometric normal unchanged. This does not affect collision.
+    pub fn set_brick_normal_map(&mut self, image: usize, strength: f32) -> Result<()> {
+        ensure!(
+            matches!(
+                self.kind,
+                MaterialKind::BrickOverlay | MaterialKind::BrickSurfaces
+            ),
+            "Normal detail requires a brick surface material"
+        );
+        ensure!(
+            strength.is_finite() && (0.0..=1.0).contains(&strength),
+            "Brick normal strength must be between 0 and 1"
+        );
+        self.images[6] = image;
+        self.parameters.get_or_insert([[0.0; 4]; 4])[3][0] = strength;
+        Ok(())
     }
     /// A [`MaterialKind::Physical`] material for a model's
     /// `bri_content::shape::Surface`: `base` its colour image and `maps`
@@ -924,6 +945,17 @@ impl SceneData {
                 "Material {} references missing image",
                 material.name
             );
+            if matches!(
+                material.kind,
+                MaterialKind::BrickOverlay | MaterialKind::BrickSurfaces
+            ) && material.parameters.is_some_and(|p| p[3][0] > 0.0)
+            {
+                ensure!(
+                    !self.images[material.images[6]].srgb,
+                    "Brick normal map on {} must use linear data",
+                    material.name
+                );
+            }
         }
         Ok(())
     }
@@ -954,9 +986,9 @@ impl SceneData {
             "Scene index out of range"
         );
         for material in &self.materials {
-            // Water, terrain and metal need their uniforms; a temp brick may
-            // carry its flash (`temp_brick_flash`) and an interior surface may
-            // mark its lightmap decomposed; nothing else has any.
+            // Water, terrain and metal need their uniforms; bricks may carry
+            // flash or normal detail, and an interior surface may mark its
+            // lightmap decomposed.
             let wants = matches!(
                 material.kind,
                 MaterialKind::Water
@@ -970,10 +1002,21 @@ impl SceneData {
                 material.kind == MaterialKind::Surface && decomposed_lightmap(material.parameters);
             let fog =
                 material.kind == MaterialKind::Sky && material.parameters == Some(FOG_BACKDROP);
+            let brick_normal = matches!(
+                material.kind,
+                MaterialKind::BrickOverlay | MaterialKind::BrickSurfaces
+            ) && material.parameters.is_some_and(|p| {
+                (0.0..=1.0).contains(&p[3][0])
+                    && p[1] == [0.0; 4]
+                    && p[2] == [0.0; 4]
+                    && p[3][1..] == [0.0; 3]
+                    && (material.temp_brick_flash || p[0] == [0.0; 4])
+            });
             ensure!(
                 (material.parameters.is_some() == wants
                     || (material.temp_brick_flash && !wants)
                     || decomposed
+                    || brick_normal
                     || fog)
                     && material
                         .parameters

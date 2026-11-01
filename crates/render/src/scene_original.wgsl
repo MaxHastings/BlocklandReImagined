@@ -1676,7 +1676,13 @@ override SURFACE_GROUP:u32=0u;
     var specular=vec3<f32>(0.0);
     let sun_toward=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
     if material[0].x==2.0 || material[0].x==3.0 || surfaces {
-        let normal=v.normal/max(length(v.normal),0.0001);
+        var normal=v.normal/max(length(v.normal),0.0001);
+        var live_normal=v.normal;
+        if (decal || surfaces) && material[4].x>0.0 {
+            let texel=textureSample(layer6,tiled,v.uv).xyz*2.0-vec3<f32>(1.0);
+            normal=sampled_normal(normal,v.world_position,v.uv,vec3<f32>(texel.xy*material[4].x,max(texel.z,0.05)));
+            live_normal=normal;
+        }
         let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
         // Water keeps the lengthened GL normal; chrome doubles its normals.
         var strength=1.0;
@@ -1693,8 +1699,8 @@ override SURFACE_GROUP:u32=0u;
             illumination=max(ambient_at(reach)+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
                 +v.point_light*strength;
         } else if lighting_mode()==3 {
-            let live=dynamic_illumination(v.world_position,v.normal);
-            illumination=live.diffuse+map_surface_point_light(v.world_position,v.normal,live.diffuse)*strength;
+            let live=dynamic_illumination(v.world_position,live_normal);
+            illumination=live.diffuse+map_surface_point_light(v.world_position,live_normal,live.diffuse)*strength;
             specular=live.specular;
         } else {
             // Unified: the map's own model. Sun where the map's geometry and
