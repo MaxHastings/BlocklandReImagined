@@ -229,6 +229,54 @@ fn authored_idle_seeking_moves_toward_an_unseen_eligible_player() {
 }
 
 #[test]
+fn saved_idle_seeking_spawn_event_applies_to_replacement_lives() {
+    let mut g = Game::new(vec![
+        row(
+            "onBotSpawn",
+            Slot::SelfBrick,
+            "setBotSightRadius",
+            vec![Value::Float(0.0)],
+        ),
+        row(
+            "onBotSpawn",
+            Slot::SelfBrick,
+            "setBotWanderRadius",
+            vec![Value::Float(0.0)],
+        ),
+        row(
+            "onBotSpawn",
+            Slot::SelfBrick,
+            "setBotSeekPlayersWhenIdle",
+            vec![Value::Bool(true)],
+        ),
+        row("onActivate", Slot::SelfBrick, "respawnBot", vec![]),
+    ]);
+    let first_birth = g.s.spawn_tick(g.bot).unwrap();
+    assert!(
+        g.at().distance(ENEMY) + 3.0 < HOME.distance(ENEMY),
+        "saved spawn event should make the first life seek"
+    );
+    g.s.fire_brick_input(1, "onActivate", Some(g.human));
+    g.steps(2);
+    assert!(
+        g.s.spawn_tick(g.bot).unwrap() > first_birth,
+        "event must replace the bot's life"
+    );
+    let replacement_distance = g.at().distance(ENEMY);
+    g.steps(360);
+    assert!(
+        g.at().distance(ENEMY) + 2.0 < replacement_distance,
+        "spawn event should make the replacement seek too"
+    );
+    assert_eq!(
+        g.s.vitals()[&g.human].health,
+        100.0,
+        "seeking does not grant visual contact"
+    );
+    assert!(g.s.take_event_diagnostics().is_empty());
+}
+
+#[test]
 fn idle_seeking_works_when_random_wandering_is_disabled() {
     let mut g = Game::new(vec![
         row(
