@@ -45,3 +45,23 @@ bot_routes` (10), `cargo test --locked --profile playtest -p bri-sim --test
 nav_invalidation` (1), the raw/pulled stair route test, and `cargo clippy
 --locked --profile playtest -p bri-sim --lib -- -D warnings`. No new
 interactive playtest or general performance claim is made.
+
+## Bounded crowd measurements
+
+After Maxwell finished playtesting, ran the existing real-content
+`bot_deathmatch_stress` harness against the 14,107-brick Afghan save, two
+teams, fresh Slayer policy and the current navigation, using
+`cargo test --locked --profile playtest -p bri-chaos --test
+bot_deathmatch_stress -- --ignored --nocapture`. The 16-bot, 10-second run
+had 2.792 ms mean step, 5.596 ms p99, zero of 1,200 ticks over 8.3 ms, and no
+bot-step failures. The 32-bot, 30-second run had 5.741 ms mean, 10.298 ms p99,
+241 of 3,600 ticks over 8.3 ms, and no bot-step failures. It also reported
+partial routes/stalls and some network-view motion errors; a passing test is
+not a claim of flawless play.
+
+The existing 32-bot Afghan release gate uses a 5.5 ms mean on the release
+profile, a five-weapon loadout, and its own packaged content. This playtest
+profile run used a three-weapon loadout and cannot be directly certified
+against that gate. The observed mean above the reference and spikes are a
+performance concern; run the actual release-profile gate on the final candidate
+and investigate a demonstrated failure rather than treating this as green.
