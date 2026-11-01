@@ -1261,8 +1261,8 @@ impl Session {
         };
         // Off-route footwork and level routes avoid unplanned deep drops.
         // In the air, measure from the supporting floor, not the feet:
-        // otherwise any floor below a jump would appear safe. A route that
-        // deliberately descends may take its planned non-harmful drop.
+        // otherwise any floor below a jump would appear safe. Routes with
+        // a nearby planned height change keep their non-harmful traversal.
         let depth = if restrict_drop {
             // Standing, its feet are on that floor. In the air it is the
             // highest floor under any part of its body (its middle may be

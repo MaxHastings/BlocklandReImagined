@@ -4596,6 +4596,9 @@ impl Session {
             },
         );
         (input.crouch, input.jet) = (controls.crouch, controls.jet);
+        let route_changes_height = brain.plan.iter().take(6).any(|way| {
+            flat(way.feet - feet).length() <= body.width * 3.0 && (way.feet.y - feet.y).abs() > 0.2
+        });
         // The walk chosen, carried out: on foot, not pushing one, round a
         // vehicle in its way (the walk grid leaves vehicles out).
         let controls = act::Controls {
@@ -4613,7 +4616,7 @@ impl Session {
             &state,
             controls,
             act::Ground {
-                route_drops: wanted.is_some_and(|way| way.feet.y < feet.y - body.step - 0.2),
+                route_changes_height,
                 driving: driving.is_some(),
                 swimming: swim.is_some() || wet,
                 air_leg: wanted.is_some_and(|w| {

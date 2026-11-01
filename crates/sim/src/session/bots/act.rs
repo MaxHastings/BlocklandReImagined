@@ -294,8 +294,8 @@ pub(super) struct Ground {
     /// On a leg of its route through the air (its jets, a leap), which
     /// flies its own way.
     pub air_leg: bool,
-    /// The next walking waypoint deliberately descends beyond a step.
-    pub route_drops: bool,
+    /// Nearby route waypoints deliberately climb or descend.
+    pub route_changes_height: bool,
 }
 
 impl Session {
@@ -304,8 +304,8 @@ impl Session {
     /// through one, so footwork, a goof or a push never stumbles in; never
     /// into a live blast that would catch it, nor deeper into one it stands
     /// in; and never off an edge whose fall would hurt it. A level route
-    /// also avoids unplanned deep drops, while a route that actually descends
-    /// retains its planned drop. Off its route it does not step down
+    /// also avoids unplanned deep drops, while nearby planned height changes
+    /// retain their traversal. Off its route it does not step down
     /// where it could not walk back up, on its feet or in the air
     /// (footwork, a goof, a hop or a jump in place). Its
     /// route's own way through the air, and its jets, it keeps. A hop
@@ -350,7 +350,7 @@ impl Session {
                 feet,
                 body,
                 flat(walk).normalize_or_zero(),
-                off_route || (state.grounded && !ground.route_drops),
+                off_route || (state.grounded && !ground.route_changes_height),
                 state.grounded,
             );
         if held_back {
@@ -556,7 +556,7 @@ mod tests {
             let feet = Vec3::from(state.feet);
             let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
             let ground = Ground {
-                route_drops: false,
+                route_changes_height: false,
                 driving: false,
                 swimming: false,
                 air_leg: false,
@@ -600,12 +600,12 @@ mod tests {
         let feet = Vec3::from(state.feet);
         let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
         let ground = Ground {
-            route_drops: false,
+            route_changes_height: false,
             driving: false,
             swimming: false,
             air_leg: false,
         };
-        let walk = |proposal: Proposal, route_drops: bool| {
+        let walk = |proposal: Proposal, route_changes_height: bool| {
             let controls = resolve(&mut [proposal], Press::default());
             s.bot_safe_walk(
                 bot,
@@ -614,7 +614,7 @@ mod tests {
                 &state,
                 controls,
                 Ground {
-                    route_drops,
+                    route_changes_height,
                     ..ground
                 },
             )
