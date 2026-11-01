@@ -1253,19 +1253,17 @@ impl Session {
         feet: Vec3,
         body: &crate::nav::Body,
         toward: Vec3,
-        off_route: bool,
+        restrict_drop: bool,
         grounded: bool,
     ) -> bool {
         let Some(hurts) = self.bot_safe_drop(bot) else {
             return false;
         };
-        // Off its route (footwork, a strafe, a goof's walk) it keeps to
-        // floor it can walk back up from, on its feet or in the air (a
-        // jump in place): measured from the floor under it, not from its
-        // feet in the air, from where any floor at all would do. A route
-        // plans its own drops, so on it no drop the route may take is
-        // refused, nor one that does not hurt.
-        let depth = if off_route {
+        // Off-route footwork and level routes avoid unplanned deep drops.
+        // In the air, measure from the supporting floor, not the feet:
+        // otherwise any floor below a jump would appear safe. A route that
+        // deliberately descends may take its planned non-harmful drop.
+        let depth = if restrict_drop {
             // Standing, its feet are on that floor. In the air it is the
             // highest floor under any part of its body (its middle may be
             // out over a rim it jumped from).

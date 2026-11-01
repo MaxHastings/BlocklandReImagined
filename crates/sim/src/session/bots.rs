@@ -4604,6 +4604,7 @@ impl Session {
             &state,
             controls,
             act::Ground {
+                route_drops: wanted.is_some_and(|way| way.feet.y < feet.y - body.step - 0.2),
                 driving: driving.is_some(),
                 swimming: swim.is_some() || wet,
                 air_leg: wanted.is_some_and(|w| {

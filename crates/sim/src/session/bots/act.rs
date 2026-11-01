@@ -294,6 +294,8 @@ pub(super) struct Ground {
     /// On a leg of its route through the air (its jets, a leap), which
     /// flies its own way.
     pub air_leg: bool,
+    /// The next walking waypoint deliberately descends beyond a step.
+    pub route_drops: bool,
 }
 
 impl Session {
@@ -301,9 +303,9 @@ impl Session {
     /// steers: never through a portal (`passage`) unless its route leads
     /// through one, so footwork, a goof or a push never stumbles in; never
     /// into a live blast that would catch it, nor deeper into one it stands
-    /// in; and never off an edge whose fall would hurt it. What it wants
-    /// beyond is not worth the fall: it stands at the edge and gets
-    /// nowhere, so it plans again. Off its route it does not step down
+    /// in; and never off an edge whose fall would hurt it. A level route
+    /// also avoids unplanned deep drops, while a route that actually descends
+    /// retains its planned drop. Off its route it does not step down
     /// where it could not walk back up, on its feet or in the air
     /// (footwork, a goof, a hop or a jump in place). Its
     /// route's own way through the air, and its jets, it keeps. A hop
@@ -348,7 +350,7 @@ impl Session {
                 feet,
                 body,
                 flat(walk).normalize_or_zero(),
-                off_route,
+                off_route || (state.grounded && !ground.route_drops),
                 state.grounded,
             );
         if held_back {
@@ -554,6 +556,7 @@ mod tests {
             let feet = Vec3::from(state.feet);
             let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
             let ground = Ground {
+                route_drops: false,
                 driving: false,
                 swimming: false,
                 air_leg: false,
@@ -597,13 +600,24 @@ mod tests {
         let feet = Vec3::from(state.feet);
         let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
         let ground = Ground {
+            route_drops: false,
             driving: false,
             swimming: false,
             air_leg: false,
         };
-        let walk = |proposal: Proposal| {
+        let walk = |proposal: Proposal, route_drops: bool| {
             let controls = resolve(&mut [proposal], Press::default());
-            s.bot_safe_walk(bot, &body, feet, &state, controls, ground)
+            s.bot_safe_walk(
+                bot,
+                &body,
+                feet,
+                &state,
+                controls,
+                Ground {
+                    route_drops,
+                    ..ground
+                },
+            )
         };
         // Its route runs east along the edge; an ally in the way bends the
         // walk toward the drop.
@@ -611,10 +625,15 @@ mod tests {
             plan: Some(Vec3::X),
             ..Proposal::walk(Mover::Route, Vec3::Z)
         };
-        let (walked, held, _) = walk(bent);
+        let (walked, held, _) = walk(bent, false);
         assert!(held && walked == Vec3::ZERO, "held at the edge: {walked}");
+        let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z), false);
+        assert!(
+            held && walked == Vec3::ZERO,
+            "level route held at edge: {walked}"
+        );
         // The route's own walk over the same edge is a drop it planned.
-        let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z));
+        let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z), true);
         assert!(!held && walked == Vec3::Z, "its own drop: {walked}");
     }
 }
