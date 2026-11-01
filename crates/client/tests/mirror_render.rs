@@ -243,7 +243,10 @@ fn set_mirrors(app: &mut App, level: &str) -> Result<()> {
 }
 fn red(pixel: &[u8]) -> bool {
     let [r, g, b] = [pixel[0], pixel[1], pixel[2]].map(i32::from);
-    r > 80 && r > 2 * g && r > 2 * b
+    // Lit red objects can be dim in the synthetic indoor room. Exclude
+    // near-black noise while recognizing their hue; the high/off comparison
+    // and minimum pixel count still require a substantial reflected object.
+    r > 32 && r > 2 * g && r > 2 * b
 }
 
 /// Host `map`, build the mirror wall and what stands behind the camera,
