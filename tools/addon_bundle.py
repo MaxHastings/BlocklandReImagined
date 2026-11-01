@@ -562,7 +562,7 @@ def read_bundle(bundle):
     return data
 
 
-def problems(directory, addon, repo=REPO, recipe=None):
+def problems(directory, addon, repo=REPO, recipe=None, *, previous_imports=False):
     """Why directory is not a whole copy of the default Add-On (empty when it is)."""
     manifest_path = directory / 'package.json'
     if not manifest_path.is_file():
@@ -573,7 +573,10 @@ def problems(directory, addon, repo=REPO, recipe=None):
         out.append(f"{manifest_path} names {manifest.get('id')!r}, not {addon['id']!r}")
     original = addon.get('original')
     if original:
-        out += imported_addons.problems(directory, recipe or imported_addons.recipe_hash(repo))
+        if previous_imports:
+            out += imported_addons.previous_generation_problems(directory)
+        else:
+            out += imported_addons.problems(directory, recipe or imported_addons.recipe_hash(repo))
         sha = pinned_sha(manifest)
         if sha not in original['sha256']:
             out.append(f"{manifest_path} was imported from a copy of {original['addon']} the list does not pin "
@@ -620,7 +623,7 @@ def copy_with_companions(source, target):
         shutil.copytree(folder, destination)
 
 
-def default_sources(repo, bundle, without_originals=False):
+def default_sources(repo, bundle, without_originals=False, *, previous_imports=False, preview_content=None):
     """Every default Add-On that ships, in load order, with the folder it is
     copied from: packages/<path> for our own, the bundle's addons/<id> for an
     original; and the bundle's credits file when any original ships. Fails
@@ -635,14 +638,15 @@ def default_sources(repo, bundle, without_originals=False):
         if 'original' in addon or 'generated' in addon:
             if without_originals:
                 continue
-            directory = bundle / 'addons' / addon['id']
+            base = preview_content if preview_content and addon.get('generated') else bundle
+            directory = base / 'addons' / addon['id']
             if not directory.is_dir():
                 fail(f"The Add-On bundle at {bundle} lacks {addon['id']}. "
                      f'Fetch it (python tools/addon_bundle.py fetch) or build it on the PC '
                      f'(python tools/addon_bundle.py build); see docs/release-builds.md.')
         else:
             directory = repo / 'packages' / addon['path']
-        bad = problems(directory, addon, repo, recipe)
+        bad = problems(directory, addon, repo, recipe, previous_imports=previous_imports)
         if bad:
             fail(f"Default Add-On {addon['id']} is missing or incomplete: {'; '.join(bad)}")
         out.append({'id': addon['id'], 'path': str(directory), 'enabled': addon.get('enabled', True),
@@ -681,11 +685,14 @@ def release_packages(packages, mods):
 
 
 def sources(args):
-    addons, credits = default_sources(args.repo, args.bundle.resolve(), args.without_originals)
-    print(json.dumps({'addons': addons, 'credits': str(credits) if credits else None}, indent=2))
+    addons, credits = default_sources(args.repo, args.bundle.resolve(), args.without_originals,
+                                      previous_imports=args.previous_imports,
+                                      preview_content=args.preview_content)
+    print(json.dumps({'addons': addons, 'credits': str(credits) if credits else None,
+                      'previous_imports': args.previous_imports}, indent=2))
 
 
-def verify_defaults(repo, content, credits, without_originals=False):
+def verify_defaults(repo, content, credits, without_originals=False, *, previous_imports=False):
     """A release's content turns on every default Add-On that starts on (at
     addons/<id>), carries the rest installed but off, each whole with its
     host rules beside it and on after it when it is on, and its credits
@@ -705,7 +712,8 @@ def verify_defaults(repo, content, credits, without_originals=False):
                 fail(f"The release turns on {addon['id']}, which ships turned off.")
         elif len(entry) != 1 or entry[0].get('dir') != f"addons/{addon['id']}":
             fail(f"The release does not turn on the default Add-On {addon['id']} at addons/{addon['id']}.")
-        bad = problems(content / 'addons' / addon['id'], addon, repo, recipe)
+        bad = problems(content / 'addons' / addon['id'], addon, repo, recipe,
+                       previous_imports=previous_imports)
         if bad:
             fail(f"Default Add-On {addon['id']} is incomplete: {'; '.join(bad)}")
         listed = [p.get('id') for p in enabled]
@@ -734,7 +742,8 @@ def verify_defaults(repo, content, credits, without_originals=False):
 
 
 def verify_release(args):
-    verify_defaults(args.repo, args.content.resolve(), args.credits, args.without_originals)
+    verify_defaults(args.repo, args.content.resolve(), args.credits, args.without_originals,
+                    previous_imports=args.previous_imports)
 
 
 def install(args):
@@ -818,8 +827,9 @@ def from_release(args):
         if ('original' not in addon and 'generated' not in addon) or not ships(addon):
             continue
         original = addon.get('original')
-        source = content / 'addons' / addon['id']
-        bad = problems(source, addon, args.repo)
+        source_root = args.preview_content if args.preview_content and addon.get('generated') else content
+        source = source_root / 'addons' / addon['id']
+        bad = problems(source, addon, args.repo, previous_imports=args.previous_imports)
         if bad:
             fail(f"The release at {root} lacks a whole {addon['id']}: {'; '.join(bad)}")
         copy_with_companions(source, work / 'addons' / addon['id'])
@@ -861,12 +871,18 @@ def main():
     parser.add_argument('--content-root', dest='content_root', type=pathlib.Path, default=REPO / 'content',
                         help='the game content: find and build import against it, install fills it')
     parser.add_argument('--credits', type=pathlib.Path, help='verify-release: the release credits file')
+    parser.add_argument('--previous-imports', action='store_true',
+                        help='private preview only: verify prior conversion receipts without claiming current generation')
+    parser.add_argument('--preview-content', type=pathlib.Path,
+                        help='private preview only: take generated Add-Ons from this current content root')
     parser.add_argument('--without-originals', action='store_true',
                         help='sources, verify-release: a build without the bundle (packaging tests)')
     parser.add_argument('--allow-unpinned', action='store_true', help='upload: even if some original is unpinned')
     parser.add_argument('--missing-ok', action='store_true',
                         help='build: leave out an original with no copy here (bootstrap on a machine without them)')
     args = parser.parse_args()
+    if (args.previous_imports or args.preview_content) and args.command not in ('sources', 'verify-release', 'from-release'):
+        fail('Previous imports are only supported for explicit private preview assembly/verification.')
     args.repo = args.repo.resolve()
     if args.command in ('find', 'build', 'upload'):
         args.search = remembered_search(args.content_root, args.search)

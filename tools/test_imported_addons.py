@@ -53,6 +53,21 @@ class ImportedGenerationTests(unittest.TestCase):
             self.assertIn('predates', ' '.join(imported_addons.problems(
                 self.addon, imported_addons.recipe_hash(self.repo))))
 
+    def test_private_preview_can_verify_old_inventory_without_relaxing_release(self):
+        original_recipe = imported_addons.recipe_hash(self.repo)
+        imported_addons.write_receipt(self.addon, original_recipe)
+        self.port.write_text('changed importer policy', encoding='utf-8')
+        self.assertIn('predates', ' '.join(imported_addons.problems(
+            self.addon, imported_addons.recipe_hash(self.repo))))
+        self.assertEqual(imported_addons.previous_generation_problems(self.addon), [])
+        (self.rules / 'rules.rhai').write_text('tampered', encoding='utf-8')
+        self.assertIn('rules.rhai', ' '.join(imported_addons.previous_generation_problems(self.addon)))
+        receipt = self.addon / imported_addons.RECEIPT
+        data = json.loads(receipt.read_text(encoding='utf-8'))
+        data['recipe_sha256'] = 'not a digest'
+        self.write(receipt, data)
+        self.assertIn('recipe', ' '.join(imported_addons.previous_generation_problems(self.addon)))
+
     def test_packaging_rejects_an_old_complete_original_and_its_rules(self):
         original = {'id': 'zombie', 'original': {'sha256': ['a' * 64],
                     'authors': ['Tester'], 'version': '1.0.0'}}
@@ -73,6 +88,11 @@ class ImportedGenerationTests(unittest.TestCase):
         self.port.write_text('new team binding', encoding='utf-8')
         with self.assertRaisesRegex(SystemExit, 'predates'):
             addon_bundle.default_sources(self.repo, self.repo / 'content')
+        preview, _ = addon_bundle.default_sources(self.repo, self.repo / 'content', previous_imports=True)
+        self.assertEqual([p['id'] for p in preview], ['zombie', 'zombie-rules'])
+        (self.rules / 'rules.rhai').write_text('modified after import', encoding='utf-8')
+        with self.assertRaisesRegex(SystemExit, 'rules.rhai'):
+            addon_bundle.default_sources(self.repo, self.repo / 'content', previous_imports=True)
 
     def test_reference_uses_pinned_dependency_without_modifying_the_install(self):
         vanilla = self.repo / 'v20'

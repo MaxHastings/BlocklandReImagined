@@ -8,6 +8,9 @@ param(
     [switch]$ValidateOnly,
     # Private previews need the verified playable folder before archive work.
     [switch]$SkipArchive,
+    # Only for an explicitly named private preview: retain and verify the
+    # previous imported inventory, without asserting current importer output.
+    [switch]$PreviousImportsForPrivatePreview,
     [string]$VerifyPackage,
     # Also ship the Stress Lab mod packages (packages/stresslab), enabled in
     # content/packages.json.
@@ -39,6 +42,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($PreviousImportsForPrivatePreview -and (-not $SkipArchive -or $Version -notmatch '-preview[.\-]')) {
+    throw 'Previous imported Add-Ons are permitted only for a named private preview with -SkipArchive.'
+}
 
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $ExecutablePath = Join-Path $RepoRoot 'target/release/bri-client.exe' }
@@ -120,6 +127,10 @@ function Invoke-AddOnBundle([string[]]$Arguments) {
     $tool = Join-Path $PSScriptRoot 'addon_bundle.py'
     $common = @('--repo', $RepoRoot, '--bundle', $AddOnBundle)
     if ($WithoutOriginals) { $common += '--without-originals' }
+    if ($PreviousImportsForPrivatePreview) {
+        $common += '--previous-imports'
+        if ($Arguments[0] -eq 'sources') { $common += @('--preview-content', (Join-Path $RepoRoot 'content')) }
+    }
     $output = & $Python $tool @Arguments @common 2>&1
     $text = (@($output) | ForEach-Object { [string]$_ }) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw "tools/addon_bundle.py $($Arguments[0]) failed: $text" }
@@ -461,6 +472,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Packaged menu image verification failed.' }
     $entries = Get-ManifestEntries $releasePath
     $manifest = [ordered]@{ schema_version = 1; version = $Version; executable = 'bri-client.exe'; content_config = 'content/packages.json'; files = $entries }
+    if ($PreviousImportsForPrivatePreview) {
+        $manifest['previous_imports_for_private_preview'] = $true
+        Write-Warning 'Private preview reuses verified prior imported Add-Ons; current importer generation has not been established.'
+    }
     $manifestJson = ConvertTo-Json -InputObject $manifest -Depth 10
     [IO.File]::WriteAllText((Join-Path $releasePath 'MANIFEST.json'), $manifestJson + "`n", [Text.UTF8Encoding]::new($false))
     Write-Host "Created $releasePath"

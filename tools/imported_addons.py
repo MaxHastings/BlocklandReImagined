@@ -74,3 +74,19 @@ def problems(directory, recipe):
         return []
     except (OSError, ValueError, KeyError, TypeError) as error:
         return [f'Imported Add-On lacks a valid generation receipt; rebuild the bundle: {error}']
+
+
+def previous_generation_problems(directory):
+    """Check a previous conversion's own receipt without claiming freshness.
+
+    Only for explicitly labeled private previews. Release checks must still use
+    problems(directory, current_recipe).
+    """
+    try:
+        receipt = json.loads((Path(directory) / RECEIPT).read_text(encoding='utf-8'))
+        recipe = receipt.get('recipe_sha256')
+        if not isinstance(recipe, str) or len(recipe) != 64 or any(c not in '0123456789abcdef' for c in recipe):
+            return ['Imported Add-On has no valid previous recipe identity']
+        return problems(directory, recipe)
+    except (OSError, ValueError, TypeError) as error:
+        return [f'Imported Add-On lacks a valid generation receipt: {error}']
