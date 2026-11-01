@@ -254,11 +254,11 @@ fn a_falling_contact_hazard_credits_its_walker_instead_of_its_builder() {
     // Rejoining at an elevated spawn starts both bodies stationary.
     // Subsequent input and gravity supply all their motion.
     s.disconnect(walker).unwrap();
-    s.resume(walker, Vec3::new(0.0, 14.0, 3.25)).unwrap();
     s.set_spawn_points(vec![Vec3::new(0.0, 14.0, 3.25)])
         .unwrap();
-    s.command(walker, 2, Command::MiniGame(MiniGameRequest::Join { game }))
-        .unwrap();
+    s.resume(walker, Vec3::new(0.0, 14.0, 3.25)).unwrap();
+    assert_eq!(s.vitals()[&walker].minigame, Some(game));
+    assert!(player_position(&s, walker).distance(Vec3::new(0.0, 14.0, 3.25)) < 0.2);
     let id = s
         .spawn_vehicle_at(builder, BALL, Vec3::new(0.0, 15.25, 1.0), 0.0, Vec3::ZERO)
         .unwrap();
