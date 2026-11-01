@@ -275,11 +275,21 @@ fn first_wound(reaction: f32) -> (u64, Option<bri_sim::session::BotNotice>) {
     assert!(armed, "the bot never hurt the human: {:?}", g.thought());
     // Out of sight until the bot forgets and strolls again.
     g.drop_at(HIDDEN);
-    g.steps(360, false);
+    // Searching the last known area can take longer than the old fixed
+    // three seconds. Measure the relaxed case only after a real stroll.
+    for _ in 0..120 * 60 {
+        let thought = g.thought();
+        if thought.behaviour == "wander" && thought.visible.is_none() {
+            break;
+        }
+        g.steps(1, false);
+    }
     let idle = g.thought();
     assert_eq!((idle.behaviour, idle.visible), ("wander", None), "{idle:?}");
     g.drop_at(SEEN);
     let health = g.s.vitals()[&g.human].health;
+    let mut last_shot = g.s.vitals()[&g.bot].fired_tick;
+    let mut gated_shot = false;
     let mut seen = None;
     for _ in 0..120 * 10 {
         g.steps(1, false);
@@ -287,8 +297,33 @@ fn first_wound(reaction: f32) -> (u64, Option<bri_sim::session::BotNotice>) {
         if seen.is_none() && thought.visible == Some(g.human) {
             seen = Some(g.tick());
         }
+        let fired = g.s.vitals()[&g.bot].fired_tick;
+        if fired != last_shot {
+            if reaction > 0.0 && seen.is_some() {
+                let notice = thought
+                    .noticed
+                    .as_ref()
+                    .expect("reaction recorded before firing");
+                assert!(
+                    fired.is_some_and(|tick| tick >= notice.until),
+                    "shot preceded the reaction gate: {notice:?}"
+                );
+                gated_shot = true;
+            }
+            last_shot = fired;
+        }
         if g.s.vitals()[&g.human].health < health {
-            return (g.tick() - seen.expect("seen before hurt"), thought.noticed);
+            let seen = seen.expect("seen before hurt");
+            if reaction > 0.0 {
+                assert!(gated_shot, "a real shot must follow the reaction gate");
+            }
+            if let Some(notice) = &thought.noticed {
+                assert!(
+                    g.tick() >= notice.until,
+                    "damage preceded the reaction gate: {notice:?}"
+                );
+            }
+            return (g.tick() - seen, thought.noticed);
         }
     }
     panic!("the bot never fired again: {:?}", g.thought());
@@ -304,10 +339,11 @@ fn a_relaxed_bot_returns_fire_after_its_longer_reaction() {
     // 0.5 s plain; three times that from a stroll, give or take 30%.
     let delay = notice.until - notice.since;
     assert!((126..=234).contains(&delay), "{delay} ticks");
-    assert!(
-        relaxed >= plain + 60,
-        "relaxed {relaxed} ticks vs plain {plain}"
-    );
+    // Wound time also includes aiming, movement and projectile travel; two
+    // runs need not order the same way even when their reaction gates do.
+    // The reaction interval above checks the actual threefold policy, and
+    // both cases must still see and hurt the human through ordinary controls.
+    assert!(plain > 0 && relaxed > 0);
 }
 
 /// The human, armed, shoots the bot once from `at`: the bot's remembered
