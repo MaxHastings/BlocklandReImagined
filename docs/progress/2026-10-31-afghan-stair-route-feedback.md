@@ -65,3 +65,8 @@ profile run used a three-weapon loadout and cannot be directly certified
 against that gate. The observed mean above the reference and spikes are a
 performance concern; run the actual release-profile gate on the final candidate
 and investigate a demonstrated failure rather than treating this as green.
+
+Maxwell reviewed the 5.741 ms playtest-profile result and said 5.74 ms is fine.
+Do not spend further time tuning that small difference by itself. The actual
+release-profile workload remains to be measured, and any materially different
+result should be reported rather than equated with this measurement.
