@@ -1147,6 +1147,7 @@ impl Nav {
             // Over open air (off the edge beside it): the first support
             // below, once found.
             let (mut gap, mut support) = (false, None::<f32>);
+            let mut blocked_ledge = false;
             let mut last = (node.x, node.z);
             let mut across = CELL;
             while across <= farthest + CELL * 0.5 {
@@ -1161,7 +1162,9 @@ impl Nav {
                 // Footprint-only supports do not end the gap scan: keep
                 // looking for a centred landing beyond their edge.
                 let highest = floors.iter().find(|f| !f.overhang).map(|f| f.y);
-                let take = if !gap {
+                let take = if blocked_ledge {
+                    !floors.is_empty()
+                } else if !gap {
                     // Only off an edge: floor at its own level beside it is
                     // walked on, and a ledge or a wall there jumped onto
                     // from here or not at all.
@@ -1185,6 +1188,7 @@ impl Nav {
                 if !take {
                     continue;
                 }
+                let before = out.len();
                 for f in floors.iter().filter(|f| !f.wet && !f.low) {
                     let to = Node::on(x, z, f);
                     let feet = to.feet();
@@ -1202,7 +1206,15 @@ impl Nav {
                 // Onto a ledge, the far side, or past the bottom of the
                 // gap: nothing farther is leapt to.
                 let h = highest.unwrap_or(f32::NEG_INFINITY);
-                if support.is_some() || h >= from.y - body.step {
+                // A narrow raised obstruction may be too close to land on,
+                // while a full jump can clear it and land safely beyond it.
+                // Keep scanning only for that case, testing every landing
+                // against the same measured reach and swept body arc.
+                if out.len() == before && (blocked_ledge || h > from.y + body.step) {
+                    blocked_ledge = true;
+                    continue;
+                }
+                if blocked_ledge || support.is_some() || h >= from.y - body.step {
                     break;
                 }
                 support = Some(h);
