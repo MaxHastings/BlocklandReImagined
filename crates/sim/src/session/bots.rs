@@ -1101,6 +1101,15 @@ impl Brain {
                     _ => true,
                 };
                 if moved_on {
+                    if self.settled
+                        && self
+                            .out_of_reach
+                            .is_some_and(|at| at.distance(to) > CHASE_SLACK)
+                    {
+                        self.settled = false;
+                        self.path_stop = None;
+                        self.out_of_reach = None;
+                    }
                     self.set_pursuit_goal(Some(Goal::Chase(to)));
                 }
                 false
@@ -5254,6 +5263,35 @@ mod navigation_body_tests {
             "a materially moved target must be replanned"
         );
         assert_eq!(brain.goal, Some(Goal::Chase(moved)));
+    }
+
+    #[test]
+    fn a_settled_chase_retries_when_its_unreachable_marker_is_for_an_old_target_position() {
+        let feet = Vec3::ZERO;
+        let target = Vec3::new(10.0, 0.0, 0.0);
+        let mut brain = Brain::new(None, BotKind::default(), feet, 1, 0);
+        brain.goal = Some(Goal::Chase(target));
+        brain.out_of_reach = Some(target + Vec3::Z * (CHASE_SLACK + 1.0));
+        brain.settled = true;
+        let seen = Seen {
+            owner: 2,
+            real: target,
+            feet: target,
+            eye: target,
+            aim: target,
+            way: Way {
+                aim: target,
+                carry: None,
+                length: target.length(),
+            },
+        };
+        brain.pursue(Some(seen), false, 1.0, feet, 0.5, 1);
+        assert!(
+            !brain.settled,
+            "stale failure must not suppress the current route"
+        );
+        assert_eq!(brain.out_of_reach, None);
+        assert_eq!(brain.goal, Some(Goal::Chase(target)));
     }
 
     #[test]
