@@ -23,16 +23,20 @@ than silently marking it complete.
   discard pursuit. They search reachable connected space using remembered
   observations, without secretly knowing unseen players' current positions.
   Search, replanning and caching stay bounded as the build or bot count changes.
-- [ ] **Evidence:** The supplied mattress house, Beta16 tower, house exit and
-  staircase saves load without set-aside bricks and produce actual target
-  damage/death with ordinary controls; verify the original house-exit position
-  and farther control. Keep tests for floor selection, flag pickup/return and
-  the edge and center positions in the Beta16 tower. Check meaningful route
-  quality, collision and recovery, not merely a path's existence. Unseen-player,
-  lost-sight, impossible-route and world-edit cases remain separate controls.
+- [ ] **Evidence:** The supplied mattress house, Beta16 tower, original house
+  exit, farther-exit control and staircase previously loaded without set-aside
+  bricks and killed the target using ordinary controls, as recorded in
+  [the retained-save results](../progress/2026-10-31-v043-partial-pursuit.md).
+  The adapted Beta16 tower flag scenario captured with both wall and center
+  flag placement ([results](../progress/2026-10-31-v043-objective-floor-and-frontier.md)).
+  Retain those checks when relevant code changes and investigate actual
+  regressions; the results do not establish visual stair quality or every
+  possible building. Unseen-player, lost-sight, impossible-route and world-edit
+  cases remain separate controls.
 - [ ] **Cube:** The practical requested outcome is that the saved cube's zombies
   can kill the player on top without jets. The current candidate does so in a
-  headless replay using real support contacts and ordinary melee/jump controls;
+  headless replay at tick 8479 using real support contacts and ordinary
+  melee/jump controls ([results](../progress/2026-10-31-v043-supported-melee-jump.md));
   finish regression and safety checks before counting it done. Preserve ordinary
   routes, correct support loss on death and explicit bot policy. This does not
   promise arbitrary-height piles, synchronized boosts or perfect behavior on
