@@ -1419,6 +1419,18 @@ fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool, feet_only:
     }
 }
 
+/// A long-distance partial route can get the body moving while it replans
+/// from the nearer position. Short or backwards detours need the retained
+/// frontier instead: repeatedly restarting them can never find the way round.
+fn useful_partial_progress(feet: Vec3, target: Vec3, end: Option<Vec3>, width: f32) -> bool {
+    let threshold = width * 8.0;
+    end.is_some_and(|end| {
+        let before = flat(target - feet).length();
+        let after = flat(target - end).length();
+        before >= threshold * 2.0 && after >= threshold && before - after >= threshold
+    })
+}
+
 /// Minimum vertical rise that puts an observed point within a melee reach.
 fn support_jump_rise(eye: Vec3, target: Vec3, reach: f32, apex: f32) -> Option<f32> {
     let d = target - eye;
@@ -2334,17 +2346,19 @@ impl Session {
                 let brain = brains.get_mut(&bot).unwrap();
                 if let Some(found) = brain.search.as_mut().unwrap().step(nav, &ground, body) {
                     // A lookahead limit is not proof that the way ends here.
-                    // A pedestrian pursuing an enemy or objective must also
-                    // retain the frontier when its early best endpoint makes
-                    // horizontal headway: the real route may climb a distant
-                    // staircase.
-                    // A soft planning limit does not prove that target is out
-                    // of reach. Existing per-tick and hard node bounds remain.
+                    // Short or unproductive partials keep their frontier: the
+                    // real route may first go around a wall or up distant
+                    // stairs. A substantial partial toward a distant goal is
+                    // worth walking now rather than waiting at the start for
+                    // an entire large-map search. A soft limit is not proof
+                    // that the target is unreachable.
                     let no_headway = matches!(&found, Found::Partial(path)
                         if path.last().is_none_or(|end| feet.distance(end.feet) <= crate::nav::CELL));
                     let pursuit = !body.conservative
                         && matches!(goal, Goal::Chase(_) | Goal::Search(_) | Goal::Objective(_))
-                        && matches!(found, Found::Partial(_));
+                        && matches!(&found, Found::Partial(path)
+                            if !useful_partial_progress(feet, point,
+                                path.last().map(|way| way.feet), body.width));
                     if (no_headway || pursuit) && brain.search.as_mut().unwrap().resume() {
                         return None;
                     }
@@ -5333,6 +5347,31 @@ mod navigation_body_tests {
             found,
             "the objective search must retain its frontier and find the route around the wall"
         );
+    }
+
+    #[test]
+    fn distant_partial_progress_does_not_send_bots_under_an_elevated_goal() {
+        let start = Vec3::ZERO;
+        let goal = Vec3::new(0.0, 40.0, 100.0);
+        assert!(useful_partial_progress(
+            start,
+            goal,
+            Some(Vec3::Z * 50.0),
+            1.25
+        ));
+        assert!(!useful_partial_progress(
+            start,
+            goal,
+            Some(Vec3::Z * 99.0),
+            1.25
+        ));
+        assert!(!useful_partial_progress(
+            start,
+            goal,
+            Some(Vec3::NEG_Z * 10.0),
+            1.25
+        ));
+        assert!(!useful_partial_progress(start, goal, None, 1.25));
     }
 
     #[test]

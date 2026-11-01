@@ -351,6 +351,32 @@ impl<'a> Ground<'a> {
                 (top.y - distance - at.y).abs() <= body.step && normal.y >= body.floor_cos
             })
     }
+    /// A preference, not a walkability restriction: narrow ledges remain
+    /// usable when they are the only route. Look beyond the body's footprint
+    /// for a nearby floor within its ordinary step range.
+    fn exposed(&self, body: &Body, at: Vec3) -> u8 {
+        let margin = body.width * 0.5 + CELL;
+        [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z]
+            .into_iter()
+            .enumerate()
+            .fold(0, |mask, (i, direction)| {
+                mask | if self.stands(body, at + direction * margin) {
+                    0
+                } else {
+                    1 << i
+                }
+            })
+    }
+    fn supported_shortcut(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
+        let samples =
+            (Vec3::new(to.x - from.x, 0.0, to.z - from.z).length() / CELL).ceil() as usize;
+        (1..samples).all(|i| {
+            lateral_exposure(
+                self.exposed(body, from.lerp(to, i as f32 / samples as f32)),
+                to - from,
+            ) < f32::EPSILON
+        })
+    }
     /// Where the full-width body stands at a grid node's `feet`: there, or
     /// pushed sideways out of what it overlaps by no more than the half
     /// cell around its sampled position,
@@ -552,6 +578,15 @@ impl<'a> Ground<'a> {
     }
 }
 
+/// Penalize exposed sides across travel, rather than step risers directly
+/// ahead or behind. Diagonal travel weighs both axes.
+fn lateral_exposure(mask: u8, direction: Vec3) -> f32 {
+    let d = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero();
+    let x = (mask & 0b0011).count_ones() as f32;
+    let z = (mask & 0b1100).count_ones() as f32;
+    x * d.z.abs() + z * d.x.abs()
+}
+
 /// A grid node: a cell, the height of its floor, in tenths, and where in
 /// the cell the body stands on it, in hundredths off the cell's centre.
 /// A cell is a bucket, not a point: where only part of it holds the body
@@ -734,6 +769,7 @@ pub fn pull(
                 && k - i <= PULL_REACH
                 && plain(&path[k])
                 && ground.walkable(body, anchor, path[k].feet)
+                && ground.supported_shortcut(body, anchor, path[k].feet)
                 && !ground.crowds(body, anchor, path[k].feet)
                 && !nav.line_avoided(anchor, path[k].feet, body)
             {
@@ -1519,6 +1555,7 @@ impl Nav {
                             ((at.z - z as f32 * CELL) / SPOT_UNIT).round() as i8,
                         ),
                         overhang: !ground.stands(body, at),
+                        exposed: ground.exposed(body, at),
                         ..f
                     })
                     .filter(|f| {
@@ -1681,6 +1718,8 @@ struct Floor {
     /// The full body fits but is within half a cell of fixed collision:
     /// passable, with a preference for the middle of doors and corridors.
     snug: bool,
+    /// Bit mask of unsupported directions beyond the body's footprint.
+    exposed: u8,
     /// Crouched stance is required at this sample or while entering it.
     low: bool,
     /// Under water that floats the body: swum, not walked.
@@ -1739,6 +1778,11 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
                 floors.push(Floor {
                     y: feet.y - 0.01,
                     overhang: false,
+                    exposed: if body.conservative {
+                        0
+                    } else {
+                        ground.exposed(body, feet)
+                    },
                     spot: (offset(feet.x - px), offset(feet.z - pz)),
                     snug: if body.conservative {
                         // The chassis already used its actual width. Preserve
@@ -1771,6 +1815,7 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
                 let floor = Floor {
                     y: feet.y - SETTLE_GAP,
                     overhang: !ground.stands(body, feet),
+                    exposed: ground.exposed(body, feet),
                     spot: (0, 0),
                     low,
                     snug: !ground.empty(feet, half + CELL * 0.5, lift, tall),
@@ -1791,10 +1836,10 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Floors {
 }
 
 /// How far across from its column's centre a [`sample`] looks: the full
-/// body's half width, the half-cell obstacle preference, off a centre pushed
-/// by up to half a cell (`Ground::place`), past touching and a margin.
+/// body's half width, the floor-support margin, off a centre pushed by up
+/// to half a cell (`Ground::place`), past touching and a margin.
 fn sample_reach(body: &Body) -> f32 {
-    CELL + body.width * 0.5 + SETTLE_GAP + 0.05
+    CELL * 1.5 + body.width * 0.5 + SETTLE_GAP + 0.05
 }
 
 /// Surfaces one column's sample looks through, top to bottom.
@@ -2380,7 +2425,8 @@ impl Search {
                 let cost = here.cost
                     + seconds * self.veer(to)
                     // Keeps paths off walls, through the middle of doors.
-                    + if floor.snug { body.seconds(SNUG) } else { 0.0 };
+                    + if floor.snug { body.seconds(SNUG) } else { 0.0 }
+                    + if swim { 0.0 } else { body.seconds(SNUG * lateral_exposure(floor.exposed, d)) };
                 self.relax(
                     to,
                     Came {
@@ -2410,7 +2456,10 @@ impl Search {
                         // a lower bound.
                         cost: here.cost
                             + (body.motion.stop() + seconds).max(body.seconds(flat_d))
-                            + if overhang { body.seconds(SNUG) } else { 0.0 },
+                            // A footprint-only landing is possible but much
+                            // less stable than landing with its centre over
+                            // the destination. Keep it available for ledges.
+                            + if overhang { body.seconds(SNUG * 4.0) } else { 0.0 },
                         through: None,
                         crouch: false,
                         mode: Mode::Leap {
@@ -3769,6 +3818,55 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.iter().all(|w| !w.jump), "stairs need no jump: {a:?}");
         assert!((a.last().unwrap().feet.y - 3.0).abs() < 0.11);
+    }
+
+    #[test]
+    fn a_wide_stair_route_prefers_a_supported_middle_over_an_exposed_edge() {
+        let mut boxes = vec![floor()];
+        for i in 0..8 {
+            let x = 3.0 + i as f32;
+            boxes.push((
+                Vec3::new(x, 0.0, -3.0),
+                Vec3::new(x + 1.0, 0.6 * (i + 1) as f32, 3.0),
+            ));
+        }
+        boxes.push((Vec3::new(11.0, 0.0, -3.0), Vec3::new(17.0, 4.8, 3.0)));
+        let physics = world(&boxes);
+        let start = Vec3::new(0.0, 0.0, 2.3);
+        let goal = Vec3::new(15.0, 4.8, 2.3);
+        let route = path(search(&physics, start, goal).0);
+        let middle: Vec<_> = route
+            .iter()
+            .filter(|w| w.feet.x >= 5.0 && w.feet.x <= 9.0)
+            .collect();
+        assert!(
+            !middle.is_empty(),
+            "route should climb the steps: {route:?}"
+        );
+        assert!(
+            middle.iter().all(|w| w.feet.z.abs() <= 1.8),
+            "a wide stair has a safer middle than its exposed edge: {route:?}"
+        );
+        let pulled = pull(
+            &open_ground(&physics),
+            &Nav::default(),
+            &body(),
+            start,
+            route,
+        );
+        let crossing = std::iter::once(start)
+            .chain(pulled.iter().map(|w| w.feet))
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find_map(|p| {
+                (p[0].x <= 7.0 && p[1].x >= 7.0 && p[1].x > p[0].x)
+                    .then(|| p[0].lerp(p[1], (7.0 - p[0].x) / (p[1].x - p[0].x)))
+            })
+            .expect("pulled route crosses the stairs");
+        assert!(
+            crossing.z.abs() <= 1.8,
+            "pull must retain the safer lane: {pulled:?}"
+        );
     }
 
     #[test]
