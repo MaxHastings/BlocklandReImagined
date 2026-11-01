@@ -301,6 +301,15 @@ class GateEnvironment(unittest.TestCase):
         env = gate_env_for({"BRI_CONTENT": "mine"})
         self.assertEqual(env["BRI_CONTENT"], "mine")
 
+    def test_isolated_gate_content_is_used_and_cannot_disagree_with_tests(self):
+        content = Path("isolated") / "content"
+        with patch.dict(os.environ, {"BRI_GATE_CONTENT": str(content)}):
+            self.assertEqual(gate.gate_content(), content.resolve())
+        env = gate.gate_env({"BRI_GATE_CONTENT": str(content)}, content)
+        self.assertEqual(env["BRI_CONTENT"], str(content))
+        with self.assertRaisesRegex(gate.GateError, "must match"):
+            gate.gate_env({"BRI_GATE_CONTENT": str(content), "BRI_CONTENT": "elsewhere"}, content)
+
 
 class BinaryEnvironment(unittest.TestCase):
     def test_a_test_binary_runs_in_the_gate_environment(self):

@@ -185,6 +185,12 @@ def main_checkout():
     return common_dir().parent
 
 
+def gate_content():
+    """Explicit isolated content for a gate, or the main checkout's content."""
+    chosen = os.environ.get("BRI_GATE_CONTENT")
+    return Path(chosen).resolve() if chosen else main_checkout() / "content"
+
+
 def gate_root():
     return Path(os.environ.get("BRI_GATE_DIR") or main_checkout().parent / ".bri-gate")
 
@@ -557,13 +563,18 @@ def prepare_worktree(root, sha):
         git("clean", "-fdxq", "-e", "/content", "-e", "/artifacts", "-e", "/target",
             cwd=worktree)
     content = worktree / "content"
+    source = gate_content()
+    if not source.is_dir():
+        raise GateError(f"Gate content does not exist: {source}")
     if not content.exists():
-        source = main_checkout() / "content"
         if os.name == "nt":
             subprocess.run(["cmd", "/c", "mklink", "/J", str(content), str(source)],
                            check=True, capture_output=True)
         else:
             content.symlink_to(source, target_is_directory=True)
+    elif content.resolve() != source.resolve():
+        raise GateError(f"Gate worktree content points at {content.resolve()}, not {source.resolve()}; "
+                        "choose a separate BRI_GATE_DIR for this content")
     # Ignored tests write reports under artifacts/<name>/ and expect the
     # directory to exist, as it does in the main checkout.
     for directory in (main_checkout() / "artifacts").glob("*/"):
@@ -581,6 +592,9 @@ def gate_env(environ, content):
     """
     env = dict(environ, CARGO_TERM_COLOR="never", CARGO_INCREMENTAL="0")
     env.pop("CARGO_TARGET_DIR", None)
+    if env.get("BRI_GATE_CONTENT") and env.get("BRI_CONTENT"):
+        if Path(env["BRI_CONTENT"]).resolve() != Path(content).resolve():
+            raise GateError("BRI_CONTENT must match BRI_GATE_CONTENT for an isolated gate")
     env.setdefault("BRI_CONTENT", str(content))
     return env
 
@@ -978,7 +992,7 @@ def already_passed(root, sha, inputs, needs_corpus):
 def full_gate(sha, root, changed=()):
     root.mkdir(parents=True, exist_ok=True)
     passed = root / "passed" / sha
-    content = main_checkout() / "content"
+    content = gate_content()
     needs_corpus = touches_saves(changed)
     inputs = gate_inputs(sha, content)
     if already_passed(root, sha, inputs, needs_corpus):
@@ -1167,7 +1181,7 @@ def scoped_gate(sha, root):
         (root / "logs").mkdir(exist_ok=True)
         log = root / "logs" / f"{sha[:12]}-scoped.log"
         log.write_text("", encoding="utf-8")
-        env = gate_env(os.environ, main_checkout() / "content")
+        env = gate_env(os.environ, gate_content())
         steps = [
             ("tool-tests", [sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"]),
             ("docs", [sys.executable, "tools/check_docs.py"]),
@@ -1833,7 +1847,7 @@ def main():
         if args.perf_only:
             top = Path(git("rev-parse", "--show-toplevel").strip())
             env = dict(os.environ, CARGO_TERM_COLOR="never")
-            env.setdefault("BRI_CONTENT", str(main_checkout() / "content"))
+            env.setdefault("BRI_CONTENT", str(gate_content()))
             return 0 if perf_budget(top, None, env, dry_run=args.dry_run) else 1
         if args.push:
             return 0 if push_main() else 1
