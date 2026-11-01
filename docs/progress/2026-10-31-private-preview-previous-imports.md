@@ -32,3 +32,14 @@ verification. `python -m unittest discover -s tools -p
 test_preview_packaging_guard.py` passed. Its first assertion assumed PowerShell
 would not line-wrap an error; the test was corrected to match the stable error
 text and passed without changing the guard.
+
+The actual private workflow subsequently reconstructed 102 prior conversions,
+replaced Slayer and its rules with a fresh pinned-source import, and used the
+current generated ambience. The Windows preview packager produced a private
+folder and its explicit preview verification passed 13,458 manifest files,
+default Add-Ons and ten menu images. This was a packaging smoke check with the
+older preview.2 executable, not a delivered new build or release validation.
+It exposed stale generated-recipe hashes in the copied credits; reconstruction
+now regenerates credits when current generated content is substituted. A second
+actual reconstruction confirmed both generated package hashes appear in its
+credits. Normal release verification remains strict.

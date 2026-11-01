@@ -24,8 +24,18 @@ The targeted commands were `cargo test --locked --profile playtest -p bri-sim
 `bri-addon-import --test slayer` cases. The synthetic tests are not yet an
 actual replay of either Afghan save; preview.2 does not contain these fixes.
 
-The reported slow objective pursuit is a separate open regression. Both saves
-have bot-filled CTF teams; reproduce their initial objectives, planning and
-movement under the actual saved world and compare with an earlier build after
-the active play session. The new test also emitted a stall warning in its
-synthetic battle, but that alone does not establish the Afghan cause.
+Subsequently ran both actual saves with a fresh import of the pinned Slayer ZIP
+in an isolated content copy. Both loaded with no set-aside bricks. The owner
+left, the bots remained alive, seven previously present bots moved more than
+half a unit during two simulated seconds without the owner, and the owner
+rejoined in each save. The previous Slayer policy fails the same probe because
+the bots' bodies disappear. The probe now has an explicit `--leave-rejoin`
+mode and uses normal session commands, without writing the source saves.
+Reports: `v043-afghan-leave-continue-rejoin.json` and
+`v043-afghan-zombies-leave-continue-rejoin.json` in the private planning
+evidence. This is one-host headless evidence, not a multiplayer or long-run
+test. `cargo clippy --locked --profile playtest -p bri-net --bin
+bot_scenario_probe -- -D warnings` passed.
+
+The separate reported slow objective pursuit and its saved-world before/after
+evidence are recorded in `2026-10-31-afghan-stair-route-feedback.md`.

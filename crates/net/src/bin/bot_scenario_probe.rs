@@ -5,7 +5,7 @@
 use anyhow::{Context, Result, ensure};
 use bri_sim::{
     player::MoveInput,
-    session::{CameraView, Command, Session},
+    session::{CameraView, Command, MiniGameRequest, Session},
 };
 use glam::Vec3;
 use serde_json::{Value, json};
@@ -115,12 +115,13 @@ fn main() -> Result<()> {
     let mut args: Vec<_> = std::env::args().skip(1).collect();
     let audit = args.last().is_some_and(|arg| arg == "--static-route-audit");
     let trace = args.last().is_some_and(|arg| arg == "--every-tick");
-    if audit || trace {
+    let leave_rejoin = args.last().is_some_and(|arg| arg == "--leave-rejoin");
+    if audit || trace || leave_rejoin {
         args.pop();
     }
     ensure!(
         args.len() == 7,
-        "Usage: bot_scenario_probe <content> <save> <feet-x> <feet-y> <feet-z> <ticks> <report.json> [--static-route-audit|--every-tick]"
+        "Usage: bot_scenario_probe <content> <save> <feet-x> <feet-y> <feet-z> <ticks> <report.json> [--static-route-audit|--every-tick|--leave-rejoin]"
     );
     let content = PathBuf::from(&args[0]);
     let save = PathBuf::from(&args[1]);
@@ -201,6 +202,75 @@ fn main() -> Result<()> {
             pitch: 0.0,
         })),
     )?;
+    let departure = if leave_rejoin {
+        let game = session
+            .minigame_views()
+            .into_iter()
+            .find(|g| g.members.contains(&owner))
+            .context("The saved game did not include the owner")?
+            .id;
+        let alive = |s: &Session| {
+            s.vitals()
+                .iter()
+                .filter_map(|(id, v)| (s.is_bot(*id) && v.alive).then_some(*id))
+                .collect::<Vec<_>>()
+        };
+        let before = alive(session);
+        ensure!(
+            !before.is_empty(),
+            "The saved game has no living bots to observe"
+        );
+        session.command(owner, 3, Command::MiniGame(MiniGameRequest::Leave))?;
+        for _ in 0..3 {
+            session.step()?;
+        }
+        let after = alive(session);
+        let left = session
+            .minigame_views()
+            .iter()
+            .all(|g| !g.members.contains(&owner));
+        ensure!(
+            left && !after.is_empty(),
+            "Leaving must keep the battle's bots alive"
+        );
+        let positions: std::collections::BTreeMap<_, _> = session
+            .motion_states()
+            .into_iter()
+            .filter_map(|(state, _)| {
+                session
+                    .is_bot(state.owner)
+                    .then_some((state.owner, Vec3::from(state.feet)))
+            })
+            .collect();
+        for _ in 0..240 {
+            session.step()?;
+        }
+        let moved = session
+            .motion_states()
+            .into_iter()
+            .filter(|(state, _)| {
+                positions
+                    .get(&state.owner)
+                    .is_some_and(|before| before.distance(Vec3::from(state.feet)) > 0.5)
+            })
+            .count();
+        ensure!(moved > 0, "No surviving bot moved while the owner was away");
+        session.command(owner, 4, Command::MiniGame(MiniGameRequest::Join { game }))?;
+        for _ in 0..3 {
+            session.step()?;
+        }
+        let rejoined = session
+            .minigame_views()
+            .iter()
+            .any(|g| g.id == game && g.members.contains(&owner));
+        ensure!(rejoined, "The owner could not rejoin the saved game");
+        Some(
+            json!({"game": game, "alive_before": before, "alive_after_leave": after,
+                    "left": left, "moved_while_away": moved, "rejoined": rejoined}),
+        )
+    } else {
+        None
+    };
     let mut snapshots = vec![sample(session)];
     let grounded_bot = |session: &Session| {
         session
@@ -233,6 +303,7 @@ fn main() -> Result<()> {
         "merge_notes": host.merge_notes, "pending_map_behaviour": pending_objects, "ticks": ticks,
         "elapsed_seconds": start.elapsed().as_secs_f64(), "snapshots": snapshots,
         "static_route_audit": route_audit,
+        "leave_rejoin": departure,
     });
     std::fs::write(&args[6], serde_json::to_vec_pretty(&report)?)?;
     println!(

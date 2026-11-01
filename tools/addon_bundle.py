@@ -846,7 +846,12 @@ def from_release(args):
         credits = root / CREDITS
         if not credits.is_file():
             fail(f'The release at {root} carries originals but no {CREDITS}.')
-        shutil.copyfile(credits, work / CREDITS)
+        if args.preview_content:
+            # Generated content came from a different build; its recipe and
+            # attribution receipt must match what this preview actually ships.
+            (work / CREDITS).write_text(credits_text(entries), encoding='utf-8')
+        else:
+            shutil.copyfile(credits, work / CREDITS)
     (work / 'bundle.json').write_text(json.dumps({
         'schema_version': BUNDLE_SCHEMA, 'taken_from_release': root.name, 'addons': entries}, indent=2) + '\n',
         encoding='utf-8')
