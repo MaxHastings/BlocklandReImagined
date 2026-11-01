@@ -581,9 +581,21 @@ fn each_body_plans_with_its_own_reach() {
         );
         let mut widest = 0.0f32;
         let mut arrived = None;
+        let mut route_trace = Vec::new();
         for second in 0..60 {
             g.steps(120);
             let feet = g.feet(bot);
+            if jumps && let Some(thought) = g.s.bot_thoughts().into_iter().find(|t| t.bot == bot) {
+                route_trace.push((
+                    second,
+                    feet,
+                    thought.next,
+                    thought.path_steps,
+                    thought.searching,
+                    thought.input.jump,
+                    thought.why(g.s.simulation().state().tick),
+                ));
+            }
             widest = widest.max(feet.z.abs());
             if flat(feet - post) < 2.5 {
                 arrived = Some(second);
@@ -596,7 +608,10 @@ fn each_body_plans_with_its_own_reach() {
             g.feet(bot)
         );
         if jumps {
-            assert!(widest < 6.0, "{kind} went over the wall: out to {widest}");
+            assert!(
+                widest < 6.0,
+                "{kind} went over the wall: out to {widest}; trace: {route_trace:?}"
+            );
         } else {
             assert!(widest > 8.0, "{kind} went around the wall: out to {widest}");
         }
