@@ -195,6 +195,14 @@ fn bot_kinds() -> Vec<bri_sim::bot_kind::BotKind> {
     .unwrap()
 }
 
+/// A bot whose authored body is independent of the mode player type.
+fn blockhead_kinds() -> Vec<bri_sim::bot_kind::BotKind> {
+    let mut kinds = bot_kinds();
+    kinds.iter_mut().find(|kind| kind.id == BOT).unwrap().body =
+        Some("v20.player.playerstandardarmor".into());
+    kinds
+}
+
 /// A plate: 1 wide, 0.2 tall, 0.5 deep.
 fn definitions() -> Definitions {
     let mesh = Mesh {
@@ -294,6 +302,14 @@ impl Game {
         Self::server_with_pack(world, mode, weapons())
     }
     fn server_with_pack(world: World, mode: bool, pack: bri_weapons::Pack) -> Self {
+        Self::server_with_bots(world, mode, pack, bot_kinds())
+    }
+    fn server_with_bots(
+        world: World,
+        mode: bool,
+        pack: bri_weapons::Pack,
+        kinds: Vec<bri_sim::bot_kind::BotKind>,
+    ) -> Self {
         let mut s = Session::new(
             Simulation::new(
                 world,
@@ -318,7 +334,7 @@ impl Game {
             .into(),
         )
         .unwrap();
-        s.set_vehicle_pack(vehicles(), bot_kinds()).unwrap();
+        s.set_vehicle_pack(vehicles(), kinds).unwrap();
         s.set_tool_catalog(ToolCatalog {
             items: [CARBINE.to_string()].into(),
             vehicles: [BUGGY, BOT, STOMPER, FIZZER].map(String::from).into(),
@@ -801,6 +817,11 @@ fn a_blockhead_bot_fights_the_runners() {
             .collect();
     assert_eq!(bots.len(), 1, "the spawn brick made a bot");
     let bot = *bots.iter().next().unwrap();
+    assert_eq!(
+        g.body(bot),
+        RUNNER,
+        "an unspecified bot body follows the mode"
+    );
     let game = g.s.vitals()[&p].minigame;
     assert_eq!(
         g.s.vitals()[&bot].minigame,
@@ -924,7 +945,7 @@ fn a_blockhead_bot_fires_the_carbine_from_its_own_hand() {
     let mut world = World::new("Playground".into(), "playground".into(), vec![[1.0; 4]]);
     fort(&mut world);
     bot_spawn(&mut world, [12.0, 0.1, -6.25]);
-    let mut g = Game::with(world);
+    let mut g = Game::server_with_bots(world, true, weapons(), blockhead_kinds());
     g.s.set_spawn_points(vec![SPAWN, Vec3::new(12.0, 0.05, -12.0)])
         .unwrap();
     let p = g.join("Ann");
@@ -946,6 +967,7 @@ fn a_blockhead_bot_fires_the_carbine_from_its_own_hand() {
         ) else {
             continue;
         };
+        assert_eq!(g.body(bot), "v20.player.playerstandardarmor");
         assert_eq!(g.held(bot).as_deref(), Some(CARBINE));
         let tuning = g.s.archetypes().resolve(state.archetype).movement.clone();
         let grip = bri_weapons::muzzle::Grip {
@@ -1128,7 +1150,7 @@ fn a_bot_drives_the_look_steered_buggy_at_a_runner() {
     ] {
         pack.projectiles.get_mut(id).unwrap().damage = 0.1;
     }
-    let mut g = Game::server_with_pack(world, true, pack);
+    let mut g = Game::server_with_bots(world, true, pack, blockhead_kinds());
     g.s.set_spawn_points(vec![
         Vec3::new(0.0, 0.05, 30.0),
         Vec3::new(40.0, 0.05, 44.0),
@@ -1142,6 +1164,7 @@ fn a_bot_drives_the_look_steered_buggy_at_a_runner() {
             .copied()
             .find(|o| g.s.is_bot(*o))
             .unwrap();
+    assert_eq!(g.body(bot), "v20.player.playerstandardarmor");
     let buggy =
         g.s.spawn_vehicle_at(bot, BUGGY, Vec3::new(44.0, 1.0, 40.0), 1.2, Vec3::ZERO)
             .unwrap();
