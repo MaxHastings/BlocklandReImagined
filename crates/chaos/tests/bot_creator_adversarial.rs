@@ -707,6 +707,7 @@ fn tool_loss_case(v: Variant, revoke_goal: bool) -> bool {
     let mut gripped = false;
     let mut rejected = false;
     let mut loss_tick = None;
+    let mut loss_spawn_tick = None;
     let mut first_grip_frame = None;
     let mut first_loss_frame = None;
     let mut first_hold_clear = None;
@@ -818,6 +819,7 @@ fn tool_loss_case(v: Variant, revoke_goal: bool) -> bool {
                 "the loss must precede input admission, not cancel an accepted input"
             );
             loss_tick = Some(tick);
+            loss_spawn_tick = Some(g.s.vitals()[&g.bots[0]].spawn_tick);
             first_loss_frame = Some(g.loss_frame(loss_tick));
         }
         if inside && first_entry.is_none() {
@@ -845,7 +847,16 @@ fn tool_loss_case(v: Variant, revoke_goal: bool) -> bool {
             if !held_now && first_hold_clear.is_none() {
                 first_hold_clear = Some(tick);
             }
-            if tick > lost {
+            // A new life receives its authored loadout again. Tool loss is
+            // a per-life condition, not a permanent ban on future spawns.
+            let same_life = Some(g.s.vitals()[&g.bots[0]].spawn_tick) == loss_spawn_tick;
+            if !same_life {
+                assert!(
+                    g.s.death_results()
+                        .any(|d| d.victim == g.bots[0] && d.tick >= lost)
+                );
+            }
+            if same_life && tick > lost {
                 assert!(
                     !hold_method,
                     "removed tool remains selected beyond next brain tick: {causal_trace:#?}"
@@ -855,25 +866,27 @@ fn tool_loss_case(v: Variant, revoke_goal: bool) -> bool {
                     "removed tool's command image remains mounted beyond next tick: {causal_trace:#?}"
                 );
             }
-            if tick >= lost + release_bound {
+            if same_life && tick >= lost + release_bound {
                 assert!(
                     !held_now,
                     "native hold survives ordinary hook/queue release bound: {causal_trace:#?}"
                 );
             }
-            if first_hold_clear.is_some() {
+            if same_life && first_hold_clear.is_some() {
                 assert!(
                     !held_now,
                     "removed tool reacquired native grip: {causal_trace:#?}"
                 );
             }
-            for bot in &g.bots {
-                assert!(
-                    g.s.tool_inventories()[bot]
-                        .slots
-                        .iter()
-                        .all(Option::is_none)
-                );
+            if same_life {
+                for bot in &g.bots {
+                    assert!(
+                        g.s.tool_inventories()[bot]
+                            .slots
+                            .iter()
+                            .all(Option::is_none)
+                    );
+                }
             }
             if revoke_goal {
                 assert_eq!(
@@ -941,19 +954,27 @@ fn tool_loss_case(v: Variant, revoke_goal: bool) -> bool {
     );
     for bot in &g.bots {
         assert_eq!(g.s.vitals()[bot].score, if actual_winner { 31 } else { 0 });
-        assert!(g.s.held_by(*bot).is_none());
-        assert!(
-            g.s.tool_inventories()[bot]
-                .slots
-                .iter()
-                .all(Option::is_none)
-        );
+        if Some(g.s.vitals()[bot].spawn_tick) == loss_spawn_tick {
+            assert!(g.s.held_by(*bot).is_none());
+            assert!(
+                g.s.tool_inventories()[bot]
+                    .slots
+                    .iter()
+                    .all(Option::is_none)
+            );
+        }
     }
     assert_eq!(
         g.s.simulation().state().bricks[&goal].color_effect,
         if actual_winner { 1 } else { 0 }
     );
-    assert_eq!(g.s.vitals()[&g.author].score, 0);
+    // A genuine credited kill can award the author a normal point; the
+    // authored goal must never award them the 31-point objective score.
+    let kills =
+        g.s.death_results()
+            .filter(|d| d.killer == Some(g.author))
+            .count();
+    assert_eq!(g.s.vitals()[&g.author].score, kills as i64);
     if revoke_goal {
         assert!(g.s.round_results().next_back().is_none());
         if let Some(entered) = first_entry {
