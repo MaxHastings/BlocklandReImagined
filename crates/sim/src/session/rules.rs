@@ -453,6 +453,15 @@ impl Session {
     ) -> Result<mg::GameId> {
         let e = self
             .rule_subject(context, target, Subject::MiniGame)
+            // A bot spawn input carries the bot but no activating player.
+            // Use its actual game when a player-targeted action needs one;
+            // ownership and matching membership are still checked below.
+            .or_else(|| {
+                matches!(target.class, Class::Player | Class::Client)
+                    .then(|| self.game_of(target.id.index))
+                    .flatten()
+                    .map(|game| super::events::entity(Class::MiniGame, game.0))
+            })
             .context("This action needs a mini-game")?;
         let game = mg::GameId(e.id.index);
         let source = self
@@ -1830,6 +1839,42 @@ mod tests {
     }
     fn score(s: &Session, p: OwnerId) -> i64 {
         s.minigames.player(s.peers[&p].combat.player).unwrap().score
+    }
+
+    #[test]
+    fn target_game_fallback_cannot_change_another_owners_game() {
+        let (mut s, owner, other) = setup();
+        let brick = s.create_rule_lab(owner, "switch").unwrap()[0];
+        s.minigame_request(
+            other,
+            MiniGameRequest::Create {
+                color: 1,
+                settings: Default::default(),
+            },
+        )
+        .unwrap();
+        let source = super::super::events::id(brick);
+        let mut cx = Trigger::new(source, "onBotSpawn", 1);
+        let owner_game = s.game_of(owner).unwrap();
+        assert_eq!(
+            s.rule_game_context(&cx, source, s.player_entity(owner))
+                .unwrap(),
+            owner_game
+        );
+        assert!(
+            s.rule_game_context(&cx, source, s.player_entity(other))
+                .is_err(),
+            "another owner's target game must not be writable"
+        );
+        cx.targets.insert(
+            Slot::MiniGame,
+            super::super::events::entity(Class::MiniGame, owner_game.0),
+        );
+        assert!(
+            s.rule_game_context(&cx, source, s.player_entity(other))
+                .is_err(),
+            "an explicit game cannot authorize a target in another game"
+        );
     }
     #[test]
     fn switch_recipe_uses_a_solid_upright_door_and_real_delayed_close() {

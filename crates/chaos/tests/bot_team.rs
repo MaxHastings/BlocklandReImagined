@@ -205,6 +205,56 @@ impl Field {
 }
 
 #[test]
+fn a_spawn_event_assigns_its_bot_to_a_minigame_team() {
+    use bri_events::{Slot, Value};
+    use bri_world::{EventRow, EventTarget, authority::Edit};
+    let mut f = Field::new();
+    f.s.set_event_catalog(bri_events::testing::catalog_extended(), Vec::new())
+        .unwrap();
+    let bot = f.bots()[0];
+    let born = f.s.spawn_tick(bot).unwrap();
+    let red = f.team(1);
+    let row = |input: &str, target, output: &str, params| EventRow {
+        conditions: vec![],
+        preserved: None,
+        enabled: true,
+        input: input.into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(target),
+        output: output.into(),
+        params,
+    };
+    f.s.edit_brick(
+        f.author,
+        1,
+        Edit::Events(vec![
+            row(
+                "onBotSpawn",
+                Slot::Bot,
+                "setTeam",
+                vec![Value::Int(i64::from(red))],
+            ),
+            row("onActivate", Slot::SelfBrick, "respawnBot", vec![]),
+        ]),
+    )
+    .unwrap();
+    f.steps(30);
+    f.s.fire_brick_input(1, "onActivate", Some(f.author));
+    f.steps(120);
+    let diagnostics = f.s.take_event_diagnostics();
+    assert!(
+        f.s.spawn_tick(bot).unwrap() > born,
+        "the first pad respawned its bot; bots {:?}, diagnostics {diagnostics:?}",
+        f.bots()
+            .iter()
+            .map(|id| (*id, f.s.spawn_tick(*id)))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(f.s.vitals()[&bot].team, Some(red), "{diagnostics:?}");
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
 fn a_bot_reads_its_allies_intents_and_drops_a_dead_or_departed_ones() {
     let mut f = Field::new();
     let [a, b, c] = f.bots()[..] else {
