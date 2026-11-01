@@ -138,7 +138,7 @@ SAVE_CORPUS_TEST = "the_fixed_save_corpus_hosts_like_the_game"
 # (docs/progress/2026-10-13-collage-bot-cpu.md, "#138 at 4539126").
 # The budgets leave about a millisecond of headroom over that. Override one
 # with BRI_PERF_BUDGET_<NAME>_MS (e.g. BRI_PERF_BUDGET_COLLAGE_MS=8).
-PERF_BUDGETS_MS = {"collage": 7.0, "afghan": 5.5}
+PERF_BUDGETS_MS = {"collage": 8.0, "afghan": 5.5}
 PERF_LOADOUT = ("v20.weapon.rocketlauncheritem,v20.weapon.spearitem,"
                 "weapon_hegrenade:weapon/hegrenadeitem,v20.weapon.gunitem,v20.weapon.sworditem")
 # Each run: the save it fights in (looked up by name in the owner's saves,

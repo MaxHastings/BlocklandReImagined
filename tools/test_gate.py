@@ -507,6 +507,8 @@ class PerfBudget(unittest.TestCase):
         ok, message = gate.perf_verdict("collage", 6.0, self.output, 0)
         self.assertFalse(ok)
         self.assertIn("OVER BUDGET", message)
+        above_new_limit = self.output.replace('"step_mean_ms": 6.25', '"step_mean_ms": 8.01')
+        self.assertFalse(gate.perf_verdict("collage", gate.perf_budget_ms("collage", {}), above_new_limit, 0)[0])
 
     def test_a_debug_build_a_crash_or_a_missing_line_fails(self):
         debug = self.output.replace('"release"', '"debug"')
@@ -520,7 +522,7 @@ class PerfBudget(unittest.TestCase):
         self.assertIn("SKIPPED", message)
 
     def test_budgets_default_and_env_overrides(self):
-        self.assertEqual(gate.perf_budget_ms("collage", {}), 7.0)
+        self.assertEqual(gate.perf_budget_ms("collage", {}), 8.0)
         self.assertEqual(gate.perf_budget_ms("afghan", {}), 5.5)
         self.assertEqual(gate.perf_budget_ms("afghan", {"BRI_PERF_BUDGET_AFGHAN_MS": "6.5"}), 6.5)
         with self.assertRaises(gate.GateError):
