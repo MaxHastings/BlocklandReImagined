@@ -1557,6 +1557,68 @@ fn brick_specular_parameters_control_highlights_without_emission() -> Result<()>
 }
 
 #[test]
+fn brick_specular_responds_to_a_local_point_light() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let center = (32 * 64 + 32) * 4;
+    for mode in [0.0, 1.0, 3.0] {
+        let mut camera = Camera {
+            ambient: [0.0, 0.0, 0.0, mode],
+            sun_color: [0.0; 4],
+            eye: [0.0, 0.0, 2.0, 1.0],
+            ..Default::default()
+        };
+        camera.set_sky_ambient(true);
+        for kind in [MaterialKind::BrickOverlay, MaterialKind::BrickSurfaces] {
+            renderer.update_lights(
+                &gpu.queue,
+                &[PointLight {
+                    position_radius: [0.0, 0.0, 1.5, 4.0],
+                    color: [0.4, 0.4, 0.4, 0.0],
+                    ..Default::default()
+                }],
+            )?;
+            let mut data = triangle([0.25, 0.25, 0.25, 1.0], 0.3, AlphaMode::Opaque);
+            data.materials[0] = Material::brick_overlay("brick", 0);
+            data.materials[0].kind = kind;
+            data.materials[0].set_brick_specular(0.0, 32.0)?;
+            let matte = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+            data.materials[0].set_brick_specular(0.5, 32.0)?;
+            let glossy = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+            let base = gpu.frame(&mut renderer, &[&matte], &camera, (64, 64))?;
+            let shiny = gpu.frame(&mut renderer, &[&glossy], &camera, (64, 64))?;
+            assert!(
+                shiny[center] > base[center] + 5,
+                "mode {mode} {kind:?}: local light should make gloss visible: {:?} -> {:?}",
+                &base[center..center + 4],
+                &shiny[center..center + 4]
+            );
+            assert_eq!(shiny[center + 3], base[center + 3]);
+            renderer.update_lights(
+                &gpu.queue,
+                &[PointLight {
+                    position_radius: [0.0, 0.0, -1.0, 4.0],
+                    color: [0.4, 0.4, 0.4, 0.0],
+                    ..Default::default()
+                }],
+            )?;
+            let behind = gpu.frame(&mut renderer, &[&glossy], &camera, (64, 64))?;
+            assert!(
+                behind[center..center + 3].iter().all(|value| *value <= 2),
+                "a light behind the surface must not create a highlight"
+            );
+            renderer.update_lights(&gpu.queue, &[])?;
+            let unlit = gpu.frame(&mut renderer, &[&glossy], &camera, (64, 64))?;
+            assert!(
+                unlit[center..center + 3].iter().all(|value| *value <= 2),
+                "gloss cannot emit after the local light is removed"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn brick_normal_maps_modify_direct_light_without_changing_alpha() -> Result<()> {
     let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);

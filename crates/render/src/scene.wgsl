@@ -1223,6 +1223,29 @@ fn glint(n:vec3<f32>,toward_light:vec3<f32>,toward_eye:vec3<f32>,power:f32)->f32
     let h=normalize(toward_light+toward_eye);
     return pow(max(dot(n,h),0.0),power);
 }
+// Ordinary live point lights are separate from the map's shaded light list.
+// Match their existing attenuation and cone; map overflow is not duplicated.
+fn brick_point_glint(p:vec3<f32>,n:vec3<f32>,eye:vec3<f32>,power:f32)->vec3<f32> {
+    var result=vec3<f32>(0.0);
+    let list=light_cell(p);
+    for(var i=0u;i<list.y;i+=1u) {
+        let light=listed_light(list,i);
+        if light.color.w>0.5 {continue;}
+        let delta=light.position_radius.xyz-p;
+        let d2=dot(delta,delta);
+        let radius=light.position_radius.w;
+        if d2>=radius*radius || d2<0.00000001 {continue;}
+        let toward=delta*inverseSqrt(d2);
+        if dot(n,toward)<=0.0 {continue;}
+        var attenuation=1.0/(1.0+GL_QUADRATIC_ATTENUATION*d2);
+        if lighting_mode()==3 {
+            let fade=max(1.0-sqrt(d2)/max(radius,0.0001),0.0);
+            attenuation=fade*fade;
+        }
+        result+=light.color.rgb*attenuation*point_cone(light,-toward)*glint(n,toward,eye,power);
+    }
+    return result;
+}
 struct LocalLight { diffuse:vec3<f32>, specular:vec3<f32> };
 // The map compiler's light: full colour to the inner radius, then linear to
 // nothing at the outer, on every surface facing it. The map's own surfaces
@@ -1828,7 +1851,8 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
             }
             if lighting_mode()==3 {local=dynamic_light_sum(v.world_position,normal,power).specular;}
             else if lighting_mode()!=0 {local=map_light_sum(v.world_position,normal,map_visibility(v.world_position,normal),true,power).specular;}
-            specular=(camera.sun_color.rgb*sun_share*select(0.0,glint(normal,sun_toward,eye,power),facing>0.0)+local)*material[4].y;
+            specular=(camera.sun_color.rgb*sun_share*select(0.0,glint(normal,sun_toward,eye,power),facing>0.0)
+                +local+brick_point_glint(v.world_position,normal,eye,power))*material[4].y;
         }
         if fx.x==3u {
             // Glow aims the normal at the sun, 1/min(1, sun rgb) long.
