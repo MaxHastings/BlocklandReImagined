@@ -54,3 +54,15 @@ The temporary example was removed; the original archive was not changed.
 This is an offline source-data inspection, not an implementation or visual
 verification. The 250 ms cycle is an input record, not a promise that a guessed
 on/off lamp reproduces the source.
+
+## Reusable bounded inspection
+
+`tools/inspect_interior_lights.py` now reads a DIF and its matching converter
+provenance, selects a detail level, and reports names as bytes, flags, timing,
+surface indices and mask offsets without inventing mask semantics. It checks
+section bounds, record widths, referenced ranges, terminated names and mask
+offsets. Two synthetic tests cover normal decoding and malformed input:
+`python -m unittest discover -s tools -p 'test_inspect_interior_lights.py'`.
+Running it on the private BadDream DIF/provenance confirmed the four state times,
+29 records per state and 3,312 mask bytes above. This tool makes source
+inspection repeatable; it does not add animated-light rendering or actor light.
