@@ -8,6 +8,7 @@ import regenerate_content
 
 REPO = Path(__file__).resolve().parents[1]
 RECEIPT = 'import-generation.json'
+COMPATIBILITY = 'packages/imported-addon-compatibility.json'
 
 
 @functools.cache
@@ -90,3 +91,29 @@ def previous_generation_problems(directory):
         return problems(directory, recipe)
     except (OSError, ValueError, TypeError) as error:
         return [f'Imported Add-On lacks a valid generation receipt: {error}']
+
+
+def reviewed_generation_problems(directory, repo, current_recipe, package_id):
+    """Validate a specifically reviewed earlier conversion for this recipe.
+
+    The repository lock pins the receipt bytes, and the receipt in turn pins
+    every generated file, including companion rules. A new importer/port
+    recipe invalidates the review. This does not rewrite the old receipt or
+    establish that a package is compatible merely by having an intact receipt.
+    """
+    try:
+        lock = json.loads((Path(repo) / COMPATIBILITY).read_text(encoding='utf-8'))
+        if lock.get('schema_version') != 1 or lock.get('reviewed_recipe_sha256') != current_recipe:
+            return ['No compatibility review for the current importer recipe']
+        entries = lock.get('receipts')
+        if not isinstance(entries, dict):
+            raise ValueError('invalid compatibility receipts')
+        expected = entries.get(package_id)
+        if not isinstance(expected, str) or len(expected) != 64 or any(c not in '0123456789abcdef' for c in expected):
+            return [f'No reviewed previous conversion for {package_id}']
+        data = (Path(directory) / RECEIPT).read_bytes()
+        if hashlib.sha256(data).hexdigest() != expected:
+            return [f'Previous conversion receipt for {package_id} differs from its review']
+        return previous_generation_problems(directory)
+    except (OSError, ValueError, TypeError) as error:
+        return [f'No valid previous-conversion review: {error}']

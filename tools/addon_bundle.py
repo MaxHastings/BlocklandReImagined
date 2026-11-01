@@ -578,7 +578,16 @@ def problems(directory, addon, repo=REPO, recipe=None, *, previous_imports=False
         if previous_imports:
             out += imported_addons.previous_generation_problems(directory)
         else:
-            out += imported_addons.problems(directory, recipe or imported_addons.recipe_hash(repo))
+            current_recipe = recipe or imported_addons.recipe_hash(repo)
+            generation = imported_addons.problems(directory, current_recipe)
+            if generation and (pathlib.Path(repo) / imported_addons.COMPATIBILITY).is_file():
+                reviewed = imported_addons.reviewed_generation_problems(
+                    directory, repo, current_recipe, addon['id'])
+                if not reviewed:
+                    generation = []
+                else:
+                    generation += reviewed
+            out += generation
         sha = pinned_sha(manifest)
         if sha not in original['sha256']:
             out.append(f"{manifest_path} was imported from a copy of {original['addon']} the list does not pin "

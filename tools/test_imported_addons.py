@@ -94,6 +94,45 @@ class ImportedGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'rules.rhai'):
             addon_bundle.default_sources(self.repo, self.repo / 'content', previous_imports=True)
 
+    def test_reviewed_previous_conversion_is_exact_and_recipe_bound(self):
+        import hashlib
+        original = {'id': 'zombie', 'original': {'addon': 'Bot_Zombie', 'sha256': ['a' * 64],
+                    'authors': ['Tester'], 'version': '1.0.0'}}
+        (self.repo / 'packages').mkdir()
+        self.write(self.addon / 'package.json', {'id': 'zombie', 'version': '1.0.0',
+                   'authors': ['Tester'], 'companions': ['zombie-rules'],
+                   'provenance': {'source': 'original sha256 ' + 'a' * 64}})
+        self.write(self.rules / 'package.json', {'id': 'zombie-rules',
+                   'dependencies': {'zombie': '^1.0.0'}})
+        old_recipe = imported_addons.recipe_hash(self.repo)
+        imported_addons.write_receipt(self.addon, old_recipe)
+        self.port.write_text('new importer policy', encoding='utf-8')
+        current_recipe = imported_addons.recipe_hash(self.repo)
+        receipt = self.addon / imported_addons.RECEIPT
+        lock = self.repo / imported_addons.COMPATIBILITY
+        data = {'schema_version': 1, 'reviewed_recipe_sha256': current_recipe,
+                'receipts': {'zombie': hashlib.sha256(receipt.read_bytes()).hexdigest()}}
+        self.write(lock, data)
+        self.assertEqual(addon_bundle.problems(self.addon, original, self.repo), [])
+
+        data['receipts'] = {}
+        self.write(lock, data)
+        self.assertIn('No reviewed previous conversion', ' '.join(addon_bundle.problems(self.addon, original, self.repo)))
+        data['receipts'] = {'zombie': hashlib.sha256(receipt.read_bytes()).hexdigest()}
+        self.write(lock, data)
+
+        (self.rules / 'rules.rhai').write_text('modified rules', encoding='utf-8')
+        self.assertIn('rules.rhai', ' '.join(addon_bundle.problems(self.addon, original, self.repo)))
+        (self.rules / 'rules.rhai').write_text('correct team policy', encoding='utf-8')
+        imported_addons.write_receipt(self.addon, 'b' * 64)
+        self.assertIn('differs from its review', ' '.join(addon_bundle.problems(self.addon, original, self.repo)))
+        imported_addons.write_receipt(self.addon, old_recipe)
+        self.port.write_text('another importer policy', encoding='utf-8')
+        self.assertIn('current importer recipe', ' '.join(addon_bundle.problems(self.addon, original, self.repo)))
+        self.port.write_text('new importer policy', encoding='utf-8')
+        original['original']['sha256'] = ['c' * 64]
+        self.assertIn('does not pin', ' '.join(addon_bundle.problems(self.addon, original, self.repo)))
+
     def test_reference_uses_pinned_dependency_without_modifying_the_install(self):
         vanilla = self.repo / 'v20'
         (vanilla / 'base').mkdir(parents=True)
