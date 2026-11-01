@@ -295,7 +295,8 @@ fn loss_of_sight_search_reacquires_and_actually_wins_elimination() {
             });
         }
         let mut lost = false;
-        let mut probe = false;
+        let mut hidden_start = None::<f32>;
+        let mut hidden_nearest = f32::INFINITY;
         let mut reacquired = false;
         let mut elimination_plan = false;
         let mut planned_life = None;
@@ -320,7 +321,14 @@ fn loss_of_sight_search_reacquires_and_actually_wins_elimination() {
                 }
                 hidden_evidence = Some(evidence);
             }
-            probe |= t.search_phase == "unchecked-space probe";
+            if t.visible.is_none()
+                && let Some(evidence) = t.remembered.filter(|e| e.subject == g.human)
+                && let Some(bot) = g.s.snapshot().players.iter().find(|p| p.owner == g.bot)
+            {
+                let distance = Vec3::from(bot.feet).distance(Vec3::from(evidence.position));
+                hidden_start.get_or_insert(distance);
+                hidden_nearest = hidden_nearest.min(distance);
+            }
             reacquired |= lost && t.visible == Some(g.human);
             elimination_plan |= t
                 .objective_detail
@@ -343,8 +351,8 @@ fn loss_of_sight_search_reacquires_and_actually_wins_elimination() {
         }
         assert!(lost, "sight never lost: {:?}", g.s.bot_thoughts());
         assert!(
-            probe,
-            "unchecked-space stage missing: {:?}",
+            hidden_start.is_some_and(|start| hidden_nearest + 0.5 < start),
+            "bot made no observed progress toward dated evidence: start={hidden_start:?}, nearest={hidden_nearest}; {:?}",
             g.s.bot_thoughts()
         );
         assert!(
