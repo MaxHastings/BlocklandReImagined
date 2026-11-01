@@ -1606,8 +1606,10 @@ fn a_crew_pursues_only_the_last_observation_after_its_target_hides() {
     }
 }
 
-/// A bot from a brick at the origin boards a chassis about 40 units out
-/// and pursues a visible human about 60 units out who then runs away. The
+/// A bot boards a chassis and pursues a visible human who then runs away.
+/// The diagonal case starts 40 units from the chassis; the flank case puts
+/// the vehicle closer so boarding is a useful choice instead of an imposed
+/// detour. The
 /// mount's own pursuit leash (`mounted` in the kind) keeps the chase going
 /// past the on-foot chase radius, and a far target is turned toward rather
 /// than driven at in reverse: it may back up, but only to swing its nose
@@ -1620,9 +1622,16 @@ fn a_mounted_driver_keeps_closing_on_a_retreating_target_beyond_its_walking_leas
     ] {
         let mut s = session(1.0);
         s.set_spawn_points(vec![human_at]).unwrap();
-        let mut g = Game::with_layout(s, PURSUER, &[Vec3::new(0.0, 0.1, 0.0)], false, false);
+        // In the flank layout, place the bot close enough that boarding the
+        // unarmed vehicle can plausibly beat walking straight to the target.
+        let spawn = if label == "renamed-flank" {
+            Vec3::new(-20.0, 0.1, 20.0)
+        } else {
+            Vec3::new(0.0, 0.1, 0.0)
+        };
+        let mut g = Game::with_layout(s, PURSUER, &[spawn], false, false);
         let bot = g.bots()[0];
-        let home = Vec3::new(0.25, 0.0, 0.25);
+        let home = Vec3::new(spawn.x + 0.25, 0.0, spawn.z + 0.25);
         let mut boarded = false;
         for _ in 0..120 * 20 {
             g.steps(1);
