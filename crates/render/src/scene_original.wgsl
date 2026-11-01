@@ -685,6 +685,14 @@ fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
     let c=shadow_coord(position,normal);
     if lighting_mode()==3 {return dynamic_sun(position,normal);}
     let n=normal/max(length(normal),0.0001);
+    // The receiver's dynamic (player/object) shadow wins over every map
+    // shadow: `min(map, dynamic)` is zero whatever the map layer says when
+    // the receiver is fully covered, so skip the map PCSS search/filter
+    // there instead of paying its ~49 texture reads for a shadow that is
+    // already solid. Exact-equivalent: min(map, 0) == 0. No tap counts or
+    // quality constants change, so the look is unchanged.
+    let dynamic=shadow_lit(c);
+    if dynamic<=0.0 {return 0.0;}
     var map=vis.low.x;
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
         var lit=map_cascade_lit(c.near);
@@ -696,7 +704,7 @@ fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
         map=far_map_lit(position,n,map);
     }
     if map<=0.0 {return 0.0;}
-    return min(map,shadow_lit(c));
+    return min(map,dynamic);
 }
 // Lamp slot `slot`'s light reaching a surface past the same casters: the
 // cube face the surface lies in, a 2x2 bilinear comparison per tap (so
