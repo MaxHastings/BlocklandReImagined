@@ -195,6 +195,11 @@ Pasting never runs a command until you press Enter. As in v20, **Ctrl+V**
 paste and **Ctrl+C** copy also work in chat and any other text box; there,
 copy takes the field's text.
 
+While the console is open it captures all keyboard and mouse input, as in
+v20: your typing and paste go to its entry line, chat keys stay quiet (a
+line in the log says why), and clicks go to its window. Close it with
+**Esc** or **~**, then chat and wrench fields take text again.
+
 Administrators can use **F8** to fly through geometry and **F7** to move their
 player to the camera, including in games that hide the building interface.
 Server permissions and any explicit game policy still apply.

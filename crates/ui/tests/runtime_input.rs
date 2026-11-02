@@ -111,6 +111,7 @@ fn fixture() -> Rc<Pack> {
             "newMessageHud",
             vec![node("GuiTextEditCtrl", "NMH_Type", 10, "")],
         ),
+        ("wrenchDlg", vec![node("GuiTextEditCtrl", "Wrench_Name", 10, "")]),
         (
             "escapeMenu",
             vec![node("GuiButtonCtrl", "disconnect", 10, "escapeFromGame();")],
@@ -1339,6 +1340,60 @@ fn chat_paste_lands_in_the_field_and_waits_for_enter() {
         u.handle_input(InputEvent::Char('x'));
     }
     assert_eq!(text(&u).chars().count(), 255);
+}
+
+/// While the console is open it captures every key (v20's
+/// `sinkAllKeyEvents`): the chat bind opens nothing under it, and a line in
+/// the log says why instead of failing silently.
+#[test]
+fn chat_key_is_sunk_while_the_console_is_open() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+
+    let mut u = ui();
+    play(&mut u);
+    u.core.toggle_console();
+    u.update(16);
+    let before = bri_console::log::lines().len();
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::Console, "the console stays on top");
+    assert!(
+        !u.is_open(ScreenId::MessageInput(ChatChannel::Say)),
+        "chat must not open under a capturing console"
+    );
+    let fresh = bri_console::log::lines();
+    assert!(
+        fresh[before..].iter().any(|l| l.text.contains("captures all input")),
+        "the log explains why the chat key did nothing: {fresh:?}"
+    );
+}
+
+/// Paste reaches the wrench's name field too: after a click focuses it, the
+/// host's character path lands in Wrench_Name and nothing is sent until the
+/// player acts.
+#[test]
+fn wrench_name_field_takes_pasted_text() {
+    let mut u = ui();
+    play(&mut u);
+    u.apply(UiUpdate::OpenWrench {
+        brick: 10,
+        variant: WrenchVariant::Normal,
+        owner: "Owner".into(),
+        data: WrenchData::default(),
+        admin_override: false,
+        events_allowed: true,
+    });
+    let id = ScreenId::Wrench(WrenchVariant::Normal);
+    assert_eq!(u.top_id(), id);
+    click(&mut u, id, "Wrench_Name");
+    assert!(u.takes_text(), "the clicked name field takes text");
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    let v = u.screen(id).unwrap().view();
+    assert_eq!(v.edit_text(v.id("Wrench_Name").unwrap()), "apples");
 }
 
 /// Ctrl+C's source is whatever entry line has focus, wherever it lives;

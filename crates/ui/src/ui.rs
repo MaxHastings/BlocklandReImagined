@@ -3048,6 +3048,20 @@ impl Ui {
                 .iter()
                 .any(|d| d.captures_keyboard() || d.modal())
         {
+            // A capturing window (the console) swallows gameplay binds; when
+            // the player presses a chat key, say why in the log they can see.
+            if !repeat && self.top_id() == ScreenId::Console {
+                let chat = self.core.game_command_for_key(key, mods).is_some_and(|c| {
+                    c.eq_ignore_ascii_case("globalChat") || c.eq_ignore_ascii_case("teamChat")
+                });
+                if chat {
+                    const HINT: &str = "The console is open and captures all input; press Esc or ~ to close it before chatting.";
+                    let lines = bri_console::log::lines();
+                    if lines.last().is_none_or(|l| l.text != HINT) {
+                        bri_console::echo(HINT);
+                    }
+                }
+            }
             return;
         }
         let Some(cmd) = self
