@@ -2710,8 +2710,9 @@ impl View {
                 // that character (single-line edits, like V21's mouse
                 // selection over chat text).
                 if b == MouseButton::Left {
-                    self.edit_drag =
-                        self.char_bounds(t, pack).map(|b| (t, Self::index_at(&b, x), b));
+                    self.edit_drag = self
+                        .char_bounds(t, pack)
+                        .map(|b| (t, Self::index_at(&b, x), b));
                 }
             }
             "GuiSliderCtrl" if b == MouseButton::Left => {
@@ -3171,9 +3172,7 @@ impl View {
                 break;
             }
         }
-        if idx + 1 < bounds.len()
-            && x - bounds[idx] > (bounds[idx + 1] - bounds[idx]) / 2
-        {
+        if idx + 1 < bounds.len() && x - bounds[idx] > (bounds[idx + 1] - bounds[idx]) / 2 {
             idx += 1;
         }
         idx

@@ -20,7 +20,8 @@ fn fixture() -> Rc<Pack> {
     let mut p = UiPack::default();
     // A measurable 7px-per-character font so mouse hit-testing over entry
     // lines is exact; its row height matches the fontless default (16).
-    p.fonts.insert("test_font".into(), bri_ui::testing::font("Test", 12));
+    p.fonts
+        .insert("test_font".into(), bri_ui::testing::font("Test", 12));
     p.styles.insert(
         "GuiDefaultProfile".into(),
         Style {
@@ -121,7 +122,10 @@ fn fixture() -> Rc<Pack> {
             "newMessageHud",
             vec![node("GuiTextEditCtrl", "NMH_Type", 10, "")],
         ),
-        ("wrenchDlg", vec![node("GuiTextEditCtrl", "Wrench_Name", 10, "")]),
+        (
+            "wrenchDlg",
+            vec![node("GuiTextEditCtrl", "Wrench_Name", 10, "")],
+        ),
         (
             "escapeMenu",
             vec![node("GuiButtonCtrl", "disconnect", 10, "escapeFromGame();")],
@@ -1395,7 +1399,9 @@ fn chat_key_is_sunk_while_the_console_is_open() {
     );
     let fresh = bri_console::log::lines();
     assert!(
-        fresh[before..].iter().any(|l| l.text.contains("captures all input")),
+        fresh[before..]
+            .iter()
+            .any(|l| l.text.contains("captures all input")),
         "the log explains why the chat key did nothing: {fresh:?}"
     );
 }
