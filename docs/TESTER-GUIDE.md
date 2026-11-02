@@ -190,10 +190,18 @@ To report an exact bad spot, open the in-game console with **~**, type `where`
 and press Enter. It prints your map, feet position and camera direction, and
 copies the report to the clipboard. Paste it into your report with a screenshot.
 The console accepts **Ctrl+V** paste and **Ctrl+A** select-all; **Ctrl+C** copies
-the entry, or the console log when the entry is empty. Use Command on macOS.
-Pasting never runs a command until you press Enter. As in v20, **Ctrl+V**
-paste and **Ctrl+C** copy also work in chat and any other text box; there,
-copy takes the field's text.
+the selected text first, then the whole entry line, or the console log when the
+entry is empty. Use Command on macOS. Pasting never runs a command until you
+press Enter.
+
+As in v20, **Ctrl+V** paste and **Ctrl+C** copy work in chat and any other
+text box. To select part of a line before copying or overtyping it: hold
+**Shift** and press **Left**, **Right**, **Home** or **End** to extend the
+selection from where you started, or click and drag across the text (single-line
+boxes such as chat and the wrench name search; the multi-line description box
+selects with the keyboard). A plain arrow key collapses the selection to that
+edge without moving past it, and typing replaces the selection. **Ctrl+C**
+copies the selected range first, then the whole line when nothing is selected.
 
 While the console is open it captures all keyboard and mouse input, as in
 v20: your typing and paste go to its entry line, chat keys stay quiet (a

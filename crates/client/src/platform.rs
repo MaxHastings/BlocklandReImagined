@@ -827,8 +827,9 @@ impl Runner {
     /// whatever text box has focus, as v20's engine did in every field; we
     /// read the OS text and type it in through the ordinary character path,
     /// so no Enter can slip through and the field's length cap still applies.
-    /// Ctrl/Cmd+C copies that focused line (or the console's log when its
-    /// entry is empty).
+    /// Ctrl/Cmd+C copies that line's selection (Shift+arrows or a mouse drag)
+    /// when there is one, else the whole focused line (or the console's log
+    /// when its entry is empty).
     fn clipboard(&mut self, key: Key, mods: Modifiers) -> bool {
         let top = self.config.app.ui().top_id();
         if !(mods.ctrl || mods.cmd) || mods.alt {
@@ -861,9 +862,14 @@ impl Runner {
             _ => false,
         }
     }
-    /// What Ctrl/Cmd+C copies: the console's entry line (or its log when the
-    /// entry is empty), else the focused entry line of any screen, as in v20.
+    /// What Ctrl/Cmd+C copies: the focused line's selection (Shift+arrows or
+    /// a mouse drag) when there is one, else the console's entry line (or its
+    /// log when the entry is empty), else the focused entry line of any
+    /// screen, as in v20.
     fn copy_text(&self, top: bri_ui::screens::ScreenId) -> Option<String> {
+        if let Some(selection) = self.config.app.ui().focused_edit_selection() {
+            return Some(selection);
+        }
         if top == bri_ui::screens::ScreenId::Console {
             return self.config.app.ui().console_copy_text();
         }

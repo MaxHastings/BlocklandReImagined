@@ -1888,6 +1888,12 @@ impl Ui {
     pub fn focused_edit_text(&self) -> Option<String> {
         self.screen(self.top_id())?.view().focused_edit_text()
     }
+    /// The selected text of the top screen's focused entry line, if any
+    /// (Shift+arrows or a mouse drag); Ctrl/Cmd+C copies this before falling
+    /// back to the whole line.
+    pub fn focused_edit_selection(&self) -> Option<String> {
+        self.screen(self.top_id())?.view().focused_edit_selection()
+    }
     pub fn is_open(&self, id: ScreenId) -> bool {
         self.content.id() == id || self.dialogs.iter().any(|d| d.id() == id)
     }

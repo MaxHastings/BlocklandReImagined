@@ -88,8 +88,10 @@ pub struct NodeState {
     /// Vertical scroll offset (scroll controls).
     pub scroll_y: i32,
     pub cursor: usize,
-    /// The edit's complete text is selected (Ctrl/Cmd+A).
-    pub select_all: bool,
+    /// Selection anchor in char indices. When it differs from `cursor`,
+    /// the edit shows a selection spanning both (Shift+arrows, Ctrl/Cmd+A,
+    /// mouse drag); when equal or None the caret is collapsed.
+    pub select_anchor: Option<usize>,
     /// Animation frame (animated bitmaps).
     pub frame: usize,
     /// Text-list row height from the profile font (`View::measure`).
@@ -363,6 +365,9 @@ pub struct View {
     /// Window being resized by its right and/or bottom edge: (window, last
     /// mouse x, y, width, height).
     window_resize: Option<(NodeId, i32, i32, bool, bool)>,
+    /// Single-line edit being drag-selected: (control, char index under the
+    /// press point, absolute x of every character boundary).
+    edit_drag: Option<(NodeId, usize, Vec<i32>)>,
     last_click: Option<(NodeId, u64)>,
     pub time_ms: u64,
     canvas: (i32, i32),
@@ -432,6 +437,7 @@ impl View {
             popup_shown: Vec::new(),
             popup_group: None,
             scroll_drag: None,
+            edit_drag: None,
             window_drag: None,
             window_resize: None,
             last_click: None,
@@ -470,7 +476,7 @@ impl View {
                 back: None,
                 scroll_y: 0,
                 cursor: 0,
-                select_all: false,
+                select_anchor: None,
                 frame: 0,
                 row_height: 16,
                 moved: (0, 0),
@@ -633,7 +639,7 @@ impl View {
         let n = &mut self.nodes[id];
         if matches!(n.state.value, Value::Text(_)) {
             n.state.cursor = t.chars().count();
-            n.state.select_all = false;
+            n.state.select_anchor = None;
             n.state.value = Value::Text(t.clone());
         }
         n.state.text = Some(t);
@@ -1320,10 +1326,24 @@ impl View {
                         }
                         _ => 0,
                     };
-                    if self.focus == Some(id) && n.state.select_all && dl.push_clip(inner) {
-                        let width = font.as_ref().map_or(inner.w, |f| f.width(&shown));
+                    if self.focus == Some(id)
+                        && let Some((s, e)) = self.selected_range(id)
+                        && dl.push_clip(inner)
+                    {
+                        // Single-line edits highlight the exact range; wrapped
+                        // multi-line ones fall back to the whole field.
+                        let (x0, width) = if n.ctrl.class == "GuiTextEditCtrl" {
+                            let before: String = shown.chars().take(s).collect();
+                            let sel: String = shown.chars().skip(s).take(e - s).collect();
+                            (
+                                font.as_ref().map_or(0, |f| f.width(&before)),
+                                font.as_ref().map_or(inner.w, |f| f.width(&sel)).max(1),
+                            )
+                        } else {
+                            (0, inner.w)
+                        };
                         dl.fill(
-                            Rect::new(inner.x - scroll, inner.y, width, inner.h),
+                            Rect::new(inner.x + x0 - scroll, inner.y, width, inner.h),
                             [120, 170, 230, 255],
                         );
                         dl.pop_clip();
@@ -2529,6 +2549,7 @@ impl View {
         self.scroll_drag = None;
         self.window_drag = None;
         self.window_resize = None;
+        self.edit_drag = None;
         self.row_drag = None;
         self.close_hot = false;
     }
@@ -2569,6 +2590,25 @@ impl View {
                 node: id,
                 kind: EventKind::Changed,
             });
+        }
+        if let Some((id, MouseButton::Left)) = self.pressed
+            && let Some((pid, press_idx, bounds)) = self.edit_drag.clone()
+            && pid == id
+        {
+            // First move after the press starts the selection at the pressed
+            // character; later moves extend it (V21-style).
+            let n = &mut self.nodes[pid];
+            if n.state.select_anchor.is_none() {
+                n.state.select_anchor = Some(press_idx);
+            }
+            let idx = Self::index_at(&bounds, x);
+            if idx != n.state.cursor {
+                n.state.cursor = idx;
+                out.push(ViewEvent {
+                    node: pid,
+                    kind: EventKind::Changed,
+                });
+            }
         }
         let t = self.target(x, y);
         if t != self.hover {
@@ -2663,9 +2703,16 @@ impl View {
             }
             "GuiTextEditCtrl" | "GuiMLTextEditCtrl" => {
                 self.focus = Some(t);
-                self.nodes[t].state.select_all = false;
+                self.nodes[t].state.select_anchor = None;
                 let len = self.edit_text(t).chars().count();
                 self.nodes[t].state.cursor = len;
+                // Remember where the press landed so a drag can select from
+                // that character (single-line edits, like V21's mouse
+                // selection over chat text).
+                if b == MouseButton::Left {
+                    self.edit_drag =
+                        self.char_bounds(t, pack).map(|b| (t, Self::index_at(&b, x), b));
+                }
             }
             "GuiSliderCtrl" if b == MouseButton::Left => {
                 self.slide_to(t, x);
@@ -2857,6 +2904,7 @@ impl View {
         let Some((p, pb)) = self.pressed.take() else {
             return;
         };
+        self.edit_drag = None;
         if pb != b {
             return;
         }
@@ -2939,6 +2987,16 @@ impl View {
                     node: p,
                     kind: EventKind::RightClick,
                 });
+            }
+            ("GuiTextEditCtrl" | "GuiMLTextEditCtrl", MouseButton::Left) => {
+                // A drag that ended back on its start point selected nothing:
+                // collapse to the plain-click state (caret at end of text).
+                let len = self.edit_text(p).chars().count();
+                let s = &mut self.nodes[p].state;
+                if s.select_anchor == Some(s.cursor) {
+                    s.select_anchor = None;
+                    s.cursor = len;
+                }
             }
             _ => {}
         }
@@ -3053,6 +3111,74 @@ impl View {
         }
     }
 
+    /// The active selection of an edit control as (start, end) char indices,
+    /// or None when the caret is collapsed.
+    pub fn selected_range(&self, n: NodeId) -> Option<(usize, usize)> {
+        let len = self.edit_text(n).chars().count();
+        let c = self.nodes[n].state.cursor.min(len);
+        let a = self.nodes[n].state.select_anchor?.min(len);
+        (a != c).then(|| (a.min(c), a.max(c)))
+    }
+
+    /// The selected text of the focused edit control, if any. Ctrl/Cmd+C
+    /// copies this before falling back to the whole line.
+    pub fn focused_edit_selection(&self) -> Option<String> {
+        let f = self.focus?;
+        let (s, e) = self.selected_range(f)?;
+        Some(self.edit_text(f).chars().skip(s).take(e - s).collect())
+    }
+
+    /// Absolute x of every character boundary in a single-line edit's text,
+    /// laid out the way the renderer draws it: style offset plus 2px inset,
+    /// minus caret scroll. None without a measurable font (bare fixtures) or
+    /// for wrapped multi-line edits, so mouse selection degrades gracefully.
+    fn char_bounds(&self, id: NodeId, pack: &Pack) -> Option<Vec<i32>> {
+        let n = &self.nodes[id];
+        if n.ctrl.class != "GuiTextEditCtrl" {
+            return None;
+        }
+        let s = self.style(pack, id)?;
+        let font = Self::font_id(pack, s).and_then(|f| Font::get(pack, f))?;
+        let t = self.edit_text(id);
+        let shown = if n.ctrl.field("password") == Some("1") {
+            "*".repeat(t.chars().count())
+        } else {
+            t
+        };
+        let r = n.rect;
+        let inner_x = r.x + s.text_offset[0] + 2;
+        let before: String = shown.chars().take(n.state.cursor).collect();
+        let scroll = (font.width(&before) - (r.w - 4 - 2)).max(0);
+        let base = inner_x - scroll;
+        let mut xs = Vec::with_capacity(shown.chars().count() + 1);
+        let mut pref = String::new();
+        xs.push(base);
+        for ch in shown.chars() {
+            pref.push(ch);
+            xs.push(base + font.width(&pref));
+        }
+        Some(xs)
+    }
+
+    /// Char index under pixel x for `char_bounds` offsets: the caret snaps to
+    /// the nearer edge of the character under x, like a text editor.
+    fn index_at(bounds: &[i32], x: i32) -> usize {
+        let mut idx = 0;
+        for (k, &b) in bounds.iter().enumerate() {
+            if b <= x {
+                idx = k;
+            } else {
+                break;
+            }
+        }
+        if idx + 1 < bounds.len()
+            && x - bounds[idx] > (bounds[idx + 1] - bounds[idx]) / 2
+        {
+            idx += 1;
+        }
+        idx
+    }
+
     /// Keyboard for the focused edit control. Returns true if consumed.
     pub fn key(&mut self, key: Key, mods: Modifiers, out: &mut Vec<ViewEvent>) -> bool {
         if let Some(p) = self.popup {
@@ -3074,27 +3200,63 @@ impl View {
                 "GuiTextEditCtrl" | "GuiMLTextEditCtrl"
             )
         {
-            self.nodes[f].state.select_all = true;
+            // Select the whole line: anchor at the start, caret at the end.
+            self.nodes[f].state.select_anchor = Some(0);
             self.nodes[f].state.cursor = t.len();
             return true;
         }
-        if self.nodes[f].state.select_all && matches!(key, Key::Backspace | Key::Delete) {
-            self.nodes[f].state.select_all = false;
-            self.nodes[f].state.cursor = 0;
-            self.nodes[f].state.value = Value::Text(String::new());
-            out.push(ViewEvent {
-                node: f,
-                kind: EventKind::Changed,
-            });
+        // Shift+arrows extend the selection from its anchor (or start one at
+        // the caret), like V21's text editing.
+        if mods.shift
+            && !mods.ctrl
+            && !mods.cmd
+            && !mods.alt
+            && matches!(key, Key::Left | Key::Right | Key::Home | Key::End)
+        {
+            let cur = self.nodes[f].state.cursor.min(t.len());
+            if self.nodes[f].state.select_anchor.is_none() {
+                self.nodes[f].state.select_anchor = Some(cur);
+            }
+            match key {
+                Key::Left => self.nodes[f].state.cursor = cur.saturating_sub(1),
+                Key::Right => self.nodes[f].state.cursor = (cur + 1).min(t.len()),
+                Key::Home => self.nodes[f].state.cursor = 0,
+                _ => self.nodes[f].state.cursor = t.len(),
+            }
             return true;
         }
-        if self.nodes[f].state.select_all && matches!(key, Key::Left | Key::Right) {
-            self.nodes[f].state.select_all = false;
-            self.nodes[f].state.cursor = if key == Key::Left { 0 } else { t.len() };
-            return true;
+        if let Some((s, e)) = self.selected_range(f) {
+            match key {
+                // Backspace/Delete remove the whole selection.
+                Key::Backspace | Key::Delete => {
+                    t.drain(s..e);
+                    self.nodes[f].state.select_anchor = None;
+                    self.nodes[f].state.cursor = s;
+                    let text: String = t.into_iter().collect();
+                    self.nodes[f].state.value = Value::Text(text);
+                    out.push(ViewEvent {
+                        node: f,
+                        kind: EventKind::Changed,
+                    });
+                    return true;
+                }
+                // A plain arrow collapses the selection to the edge it points
+                // at (Notepad/VS Code semantics), without moving past it.
+                Key::Left => {
+                    self.nodes[f].state.select_anchor = None;
+                    self.nodes[f].state.cursor = s;
+                    return true;
+                }
+                Key::Right => {
+                    self.nodes[f].state.select_anchor = None;
+                    self.nodes[f].state.cursor = e;
+                    return true;
+                }
+                _ => {}
+            }
         }
         if matches!(key, Key::Home | Key::End) {
-            self.nodes[f].state.select_all = false;
+            self.nodes[f].state.select_anchor = None;
         }
         match key {
             Key::Backspace if cur > 0 => {
@@ -3148,6 +3310,7 @@ impl View {
             };
             self.focus = Some(edits[j]);
             let len = self.edit_text(edits[j]).chars().count();
+            self.nodes[edits[j]].state.select_anchor = None;
             self.nodes[edits[j]].state.cursor = len;
         }
     }
@@ -3180,10 +3343,11 @@ impl View {
             .and_then(|m| m.parse::<usize>().ok())
             .unwrap_or(255);
         let mut t: Vec<char> = self.edit_text(f).chars().collect();
-        if self.nodes[f].state.select_all {
-            t.clear();
-            self.nodes[f].state.cursor = 0;
-            self.nodes[f].state.select_all = false;
+        if let Some((s, e)) = self.selected_range(f) {
+            // Typing replaces the selection, like a normal text editor.
+            t.drain(s..e);
+            self.nodes[f].state.cursor = s;
+            self.nodes[f].state.select_anchor = None;
         }
         if t.len() >= max {
             return true;
