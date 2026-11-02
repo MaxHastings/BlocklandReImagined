@@ -53,7 +53,11 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 bri-weather = { path = "../weather" }
 
 bri-foliage = { path = "../foliage" }
-arboard = { version = "3", default-features = false }
+# wayland-data-control: on Wayland sessions read/write the native clipboard
+# (wl-clipboard-rs); arboard falls back to X11 otherwise. Without it, paste
+# fails on Wayland because the XWayland bridge does not serve text copied by
+# native apps.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 bri-client-sandbox = { path = "../client-sandbox" }
 
 # Checking the window and GPU libraries before they are needed
