@@ -829,7 +829,8 @@ impl Runner {
     /// so no Enter can slip through and the field's length cap still applies.
     /// Ctrl/Cmd+C copies that line's selection (Shift+arrows or a mouse drag)
     /// when there is one, else the whole focused line (or the console's log
-    /// when its entry is empty).
+    /// when its entry is empty). Ctrl/Cmd+X cuts: it copies exactly what
+    /// Ctrl/Cmd+C would and removes that text from the focused line.
     fn clipboard(&mut self, key: Key, mods: Modifiers) -> bool {
         let top = self.config.app.ui().top_id();
         if !(mods.ctrl || mods.cmd) || mods.alt {
@@ -859,13 +860,23 @@ impl Runner {
                 }
                 None => false,
             },
+            Key::Letter('x') if self.focused_text() => {
+                let Some(text) = self.copy_text(top) else {
+                    return false;
+                };
+                if let Err(error) = arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
+                    bri_console::warn(format!("Could not cut: {error}"));
+                }
+                self.config.app.ui_mut().cut_focused_edit();
+                true
+            }
             _ => false,
         }
     }
-    /// What Ctrl/Cmd+C copies: the focused line's selection (Shift+arrows or
-    /// a mouse drag) when there is one, else the console's entry line (or its
-    /// log when the entry is empty), else the focused entry line of any
-    /// screen, as in v20.
+    /// What Ctrl/Cmd+C copies (and Ctrl/Cmd+X copies before removing it):
+    /// the focused line's selection (Shift+arrows or a mouse drag) when there
+    /// is one, else the console's entry line (or its log when the entry is
+    /// empty), else the focused entry line of any screen, as in v20.
     fn copy_text(&self, top: bri_ui::screens::ScreenId) -> Option<String> {
         if let Some(selection) = self.config.app.ui().focused_edit_selection() {
             return Some(selection);

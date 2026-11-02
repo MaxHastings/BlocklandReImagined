@@ -3129,6 +3129,39 @@ impl View {
         Some(self.edit_text(f).chars().skip(s).take(e - s).collect())
     }
 
+    /// Ctrl/Cmd+X: remove the focused edit's selection, or the whole line
+    /// when nothing is selected (mirroring what Ctrl/Cmd+C copies). The
+    /// caret lands where the cut range began. Returns true when a text box
+    /// had focus.
+    pub fn cut_focused_edit(&mut self, out: &mut Vec<ViewEvent>) -> bool {
+        let Some(f) = self.focus else {
+            return false;
+        };
+        if !matches!(
+            self.nodes[f].ctrl.class.as_str(),
+            "GuiTextEditCtrl" | "GuiMLTextEditCtrl"
+        ) {
+            return false;
+        }
+        let len = self.edit_text(f).chars().count();
+        let c = self.nodes[f].state.cursor.min(len);
+        let (s, e) = match self.nodes[f].state.select_anchor {
+            Some(a) if a != c => (a.min(c), a.max(c)),
+            _ => (0, len),
+        };
+        let mut t: Vec<char> = self.edit_text(f).chars().collect();
+        t.drain(s..e);
+        self.nodes[f].state.select_anchor = None;
+        self.nodes[f].state.cursor = s;
+        let text: String = t.into_iter().collect();
+        self.nodes[f].state.value = Value::Text(text);
+        out.push(ViewEvent {
+            node: f,
+            kind: EventKind::Changed,
+        });
+        true
+    }
+
     /// Absolute x of every character boundary in a single-line edit's text,
     /// laid out the way the renderer draws it: style offset plus 2px inset,
     /// minus caret scroll. None without a measurable font (bare fixtures) or

@@ -1527,6 +1527,41 @@ fn ctrl_a_selects_the_whole_line_and_typing_replaces_it() {
     assert_eq!(u.focused_edit_text().as_deref(), Some("x"));
 }
 
+/// Ctrl/Cmd+X cuts the Shift+arrow selection: the range is removed, the
+/// anchor is cleared, and the caret lands where the cut range began.
+#[test]
+fn cut_replaces_the_selection_and_clears_the_anchor() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left); // selection [3, 6) = "les"
+    assert!(u.cut_focused_edit());
+    assert_eq!(u.focused_edit_text().as_deref(), Some("app"));
+    assert_eq!(u.focused_edit_selection(), None);
+    u.handle_input(InputEvent::Char('x')); // caret was at index 3
+    assert_eq!(u.focused_edit_text().as_deref(), Some("appx"));
+}
+
+/// Ctrl/Cmd+X with nothing selected cuts the whole line, the same text
+/// Ctrl/Cmd+C would have copied.
+#[test]
+fn cut_with_no_selection_clears_the_whole_line() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    assert!(u.cut_focused_edit());
+    assert_eq!(u.focused_edit_text().as_deref(), Some(""));
+    assert_eq!(u.focused_edit_selection(), None);
+}
+
 /// A mouse drag over an entry line selects from the pressed character to the
 /// released one (V21-style); a plain click keeps the old caret-at-end behavior.
 #[test]

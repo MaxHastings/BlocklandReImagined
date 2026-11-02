@@ -1894,6 +1894,19 @@ impl Ui {
     pub fn focused_edit_selection(&self) -> Option<String> {
         self.screen(self.top_id())?.view().focused_edit_selection()
     }
+
+    /// Ctrl/Cmd+X: cut the top screen's focused entry line — its selection
+    /// when there is one, else the whole line. Returns true when a text box
+    /// had focus.
+    pub fn cut_focused_edit(&mut self) -> bool {
+        let top = self.dialogs.len().checked_sub(1);
+        let mut out = Vec::new();
+        let cut = self.with_target(top, |s, _| s.view_mut().cut_focused_edit(&mut out));
+        if cut {
+            self.dispatch(top, out);
+        }
+        cut
+    }
     pub fn is_open(&self, id: ScreenId) -> bool {
         self.content.id() == id || self.dialogs.iter().any(|d| d.id() == id)
     }
