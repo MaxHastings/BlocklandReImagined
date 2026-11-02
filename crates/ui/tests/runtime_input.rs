@@ -1299,6 +1299,62 @@ fn chat_opens_over_the_escape_menu_and_player_list_and_returns_to_them() {
     assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
 }
 
+/// Ctrl+V pastes into the chat line through the host's character path:
+/// the burst lands in NMH_Type, the field's length cap still bounds it,
+/// and nothing is sent until Enter.
+#[test]
+fn chat_paste_lands_in_the_field_and_waits_for_enter() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+    // The host reads the clipboard and types each character in.
+    for ch in "pasted".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    let text = |u: &Ui| {
+        let v = u
+            .screen(ScreenId::MessageInput(ChatChannel::Say))
+            .unwrap()
+            .view();
+        v.edit_text(v.id("NMH_Type").unwrap())
+    };
+    assert_eq!(text(&u), "pasted");
+    assert!(
+        actions(&mut u)
+            .iter()
+            .all(|a| !matches!(a, UiAction::Chat { .. })),
+        "pasted text must wait for Enter"
+    );
+    down(&mut u, Key::Return);
+    let a = actions(&mut u);
+    assert!(a.contains(&UiAction::Chat {
+        channel: ChatChannel::Say,
+        text: "pasted".into()
+    }));
+    // A long paste is bounded by the field's cap (255 without maxLength).
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+    for _ in 0..300 {
+        u.handle_input(InputEvent::Char('x'));
+    }
+    assert_eq!(text(&u).chars().count(), 255);
+}
+
+/// Ctrl+C's source is whatever entry line has focus, wherever it lives;
+/// with no entry line focused there is nothing to copy.
+#[test]
+fn copy_reads_the_focused_entry_line() {
+    let mut u = ui();
+    play(&mut u);
+    assert_eq!(u.focused_edit_text(), None);
+    down(&mut u, Key::Letter('t'));
+    for ch in "copy me".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    assert_eq!(u.focused_edit_text().as_deref(), Some("copy me"));
+}
+
 /// Other dialogs keep their old behavior: the chat key opens nothing over
 /// a confirmation.
 #[test]

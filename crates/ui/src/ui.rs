@@ -1882,6 +1882,12 @@ impl Ui {
             entry
         })
     }
+    /// Copy of the top screen's focused entry line, if it has one; v20's
+    /// engine copied every text field. Native clipboard access stays with
+    /// the window host.
+    pub fn focused_edit_text(&self) -> Option<String> {
+        self.screen(self.top_id())?.view().focused_edit_text()
+    }
     pub fn is_open(&self, id: ScreenId) -> bool {
         self.content.id() == id || self.dialogs.iter().any(|d| d.id() == id)
     }

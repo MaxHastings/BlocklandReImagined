@@ -191,7 +191,9 @@ and press Enter. It prints your map, feet position and camera direction, and
 copies the report to the clipboard. Paste it into your report with a screenshot.
 The console accepts **Ctrl+V** paste and **Ctrl+A** select-all; **Ctrl+C** copies
 the entry, or the console log when the entry is empty. Use Command on macOS.
-Pasting never runs a command until you press Enter.
+Pasting never runs a command until you press Enter. As in v20, **Ctrl+V**
+paste and **Ctrl+C** copy also work in chat and any other text box; there,
+copy takes the field's text.
 
 Administrators can use **F8** to fly through geometry and **F7** to move their
 player to the camera, including in games that hide the building interface.

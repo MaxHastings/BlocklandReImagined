@@ -2206,6 +2206,17 @@ impl View {
         self.open_popup_node().or(self.focus)
     }
 
+    /// The focused entry line's text, if an edit control has focus; a
+    /// dropdown filter is not an entry line and has none.
+    pub fn focused_edit_text(&self) -> Option<String> {
+        let n = self.focus?;
+        matches!(
+            self.nodes[n].ctrl.class.as_str(),
+            "GuiTextEditCtrl" | "GuiMLTextEditCtrl"
+        )
+        .then(|| self.edit_text(n))
+    }
+
     /// What the player has typed into the open dropdown to filter it.
     pub fn popup_query(&self) -> Option<&str> {
         self.popup.map(|_| self.popup_query.as_str())
