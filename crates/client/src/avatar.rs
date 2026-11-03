@@ -1285,6 +1285,9 @@ pub struct AvatarAnimationInput {
     /// A seated rider's full mount rotation, in place of the upright yaw,
     /// so they sit flush with a tilted seat.
     pub mount_rotation: Option<Quat>,
+    /// A seated rider's seat base facing (without the look turn), used to
+    /// keep seat-hand IK targets stable when the rider looks around.
+    pub seat_facing: Option<Quat>,
     /// A seated gunner's aim across the gun's pitch range, 0 highest to 1
     /// lowest: the body's `seat_aim` clip holds there in place of `look`,
     /// so the whole seated pose bends with the gun.
@@ -2613,6 +2616,7 @@ impl AvatarMesh {
             player,
             pose,
             animation_input.mount_rotation,
+            animation_input.seat_facing,
             animation_input.lean_tilt,
             Holds {
                 raised,
@@ -2630,6 +2634,7 @@ impl AvatarMesh {
         player: &PlayerState,
         mut pose: bri_content::animation::Pose,
         mount_rotation: Option<Quat>,
+        seat_facing: Option<Quat>,
         lean_tilt: f32,
         holds: Holds,
     ) -> Result<()> {
@@ -2694,6 +2699,7 @@ impl AvatarMesh {
                         .hand(0)
                         .map_or(Vec3::ZERO, |s| Vec3::from(s.offset)),
                     model_transform,
+                    seat_facing,
                     holds: BodyHolds {
                         raised: holds.raised,
                         pitch: holds.pitch,

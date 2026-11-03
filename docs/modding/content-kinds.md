@@ -621,8 +621,14 @@ no seats cannot be mounted. These fields exist for Add-Ons:
   each a point light at a node of its model, moved `offset` along the
   node's axes so it lights the road ahead rather than the lens. The light
   key in the driving seat (`controls`) turns them all on or off for
-  everyone; they go out when the vehicle is destroyed. Colour is linear
+  everyone; they go out when the vehicle is destroyed. Rules that declare
+  `"on_vehicle_lights"` (rules.md) are told each time a driver toggles them,
+  so one can play a switch click or dim a garage map. Colour is linear
   RGB, 0 to 8 (above 1 is brighter); radius above 0 up to 100 units.
+  A lamp may name `"lens_objects": ["headlight_l"]` — objects on its model
+  that are the lens in front of it: they draw plain black while none of the
+  lamps naming them is lit, and as authored otherwise (the SpeedKart Jeep's
+  headlight plates).
 
 - `"skid": { "emitter": "your-id:skid", "sound": "your-id:squeal" }`
   makes its tyres skid. A grounded wheel whose contact slides sideways

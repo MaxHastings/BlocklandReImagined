@@ -55,6 +55,19 @@ pub struct VehicleAssets {
     /// Models whose definitions play animation threads (a propeller), keyed
     /// by the model's asset path.
     threads: BTreeMap<String, ThreadRig>,
+    /// Models whose definitions turn a sequence with the steering input
+    /// (a steering wheel), keyed by the model's asset path.
+    steers: BTreeMap<String, SteerRig>,
+    /// The headlight lens plates this definition names (`Lamp::lens_objects`):
+    /// each such model draws its plate apart from the body — black while none
+    /// of those beams are lit, as authored otherwise. Keyed by asset path,
+    /// off/on draw keys.
+    lamp_lens: BTreeMap<String, (String, String)>,
+
+    /// Each model's node rest transforms, by lower-case name: a seat's hand
+    /// grip point on the vehicle's own model, when it is not posed by a
+    /// steering sequence.
+    model_nodes: BTreeMap<String, BTreeMap<String, Mat4>>,
     /// Independently posed geometry; immutable textures remain on the model.
     skinned: BTreeMap<(String, u64), SkinnedModel>,
     /// Model asset paths by lower-case source path (`add-ons/vehicle_jeep/jeeptire.dts`).
@@ -175,6 +188,18 @@ struct ThreadRig {
     parts: Vec<(String, usize, Mat4)>,
 }
 
+/// A model whose `Definition::steering_sequence` turns with the vehicle's
+/// steering: the objects on the nodes that sequence moves (a steering
+/// wheel) are drawn apart and posed each frame by the steering input.
+struct SteerRig {
+    shape: Shape,
+    /// The model's sequences the definitions name, by lower-case name,
+    /// scrubbed (looping forced off at load so the endpoints hold).
+    clips: BTreeMap<String, Animation>,
+    /// Model key, node, and the inverse of the node's rest transform.
+    parts: Vec<(String, usize, Mat4)>,
+}
+
 /// Draws of the moving parts of a model with animation threads, `seconds`
 /// into the game, for a vehicle moving at `speed`. Of each slot's threads
 /// the first whose speed range holds `speed` plays, at its rate.
@@ -208,6 +233,29 @@ fn threaded<'a>(
         });
     }
     let Ok(pose) = bri_content::animation::sample_layers(&rig.shape, &layers) else {
+        return Vec::new();
+    };
+    rig.parts
+        .iter()
+        .map(|(key, node, inverse)| (key.as_str(), transform * pose.nodes[*node] * *inverse))
+        .collect()
+}
+
+/// Draws of the moving parts of a model with a steering sequence, for a
+/// vehicle at `steering` (-1 full left, +1 full right). The clip is
+/// scrubbed from full right (phase 0) to full left (phase 1), as authored.
+fn steered<'a>(
+    rig: &'a SteerRig,
+    sequence: &str,
+    steering: f32,
+    transform: Mat4,
+) -> Vec<(&'a str, Mat4)> {
+    let Some(clip) = rig.clips.get(&sequence.to_ascii_lowercase()) else {
+        return Vec::new();
+    };
+    let phase = ((1.0 - steering.clamped(-1.0, 1.0)) / 2.0).clamped(0.0, 1.0);
+    let Ok(pose) = bri_content::animation::sample(&rig.shape, Some(clip), phase * clip.duration)
+    else {
         return Vec::new();
     };
     rig.parts
@@ -327,9 +375,14 @@ impl VehicleAssets {
             .collect();
         let mut models = BTreeMap::new();
         let mut weapon_nodes: BTreeMap<String, BTreeMap<String, Mat4>> = BTreeMap::new();
+        let mut model_nodes: BTreeMap<String, BTreeMap<String, Mat4>> = BTreeMap::new();
         let mut lamps: BTreeMap<String, Vec<BoundLamp>> = BTreeMap::new();
+        // The headlight lens plates each model's definitions name (`Lamp::lens_objects`), keyed by the model's asset path: off/on draw keys.
+        let mut lamp_lens: std::collections::BTreeMap<String, (String, String)> =
+            BTreeMap::new();
         let mut looks = BTreeMap::new();
         let mut threads = BTreeMap::new();
+        let mut steers = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
             let shape = crate::items::checked_read(
                 &bri_vehicles::asset_root(&root, asset),
@@ -353,6 +406,20 @@ impl VehicleAssets {
             if gunner_models.contains(&asset.path) {
                 let rest = bri_content::animation::sample(&shape, None, 0.0)?;
                 weapon_nodes.insert(
+                    asset.path.clone(),
+                    shape
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, node)| (node.name.to_ascii_lowercase(), rest.nodes[i]))
+                        .collect(),
+                );
+            }
+            // Every model's node rest transforms, for a seat's hand grip
+            // point on the vehicle's own model.
+            {
+                let rest = bri_content::animation::sample(&shape, None, 0.0)?;
+                model_nodes.insert(
                     asset.path.clone(),
                     shape
                         .nodes
@@ -404,9 +471,10 @@ impl VehicleAssets {
                 .contains(&asset.path)
                 .then(|| bri_vehicles::muzzle::look_clip(&look_clips, &shape))
                 .flatten();
-            let mut insert = |key: String, pose: &bri_content::animation::Pose| -> Result<()> {
-                let data =
-                    native_shape_scene(&key, &shape, &refs, [1.0; 4], false, Mat4::IDENTITY, pose)?;
+            let mut insert = |key: String,
+                              pose: &bri_content::animation::Pose,
+                              textures: &[&SceneImage]| -> Result<()> {
+                let data = native_shape_scene(&key, &shape, textures, [1.0; 4], false, Mat4::IDENTITY, pose)?;
                 let metal = metal_centre(&data);
                 models.insert(
                     key,
@@ -423,6 +491,17 @@ impl VehicleAssets {
             };
             let Some(look) = look else {
                 let rest = bri_content::animation::sample(&shape, None, 0.0)?;
+                // Every model's node rest transforms, for a seat's hand grip
+                // point on the vehicle's own model.
+                model_nodes.insert(
+                    asset.path.clone(),
+                    shape
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, node)| (node.name.to_ascii_lowercase(), rest.nodes[i]))
+                        .collect(),
+                );
                 // The sequences this model's definitions play by themselves.
                 let mut clips = BTreeMap::new();
                 for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
@@ -436,26 +515,91 @@ impl VehicleAssets {
                         }
                     }
                 }
-                let mut moving = std::collections::BTreeSet::new();
-                for clip in clips.values() {
-                    for step in 1..=8 {
-                        let other = bri_content::animation::sample(
-                            &shape,
-                            Some(clip),
-                            clip.duration * step as f32 / 8.0,
-                        )?;
-                        for (i, object) in shape.objects.iter().enumerate() {
-                            if let Some(node) = object.node
-                                && !other.nodes[node].abs_diff_eq(rest.nodes[node], 1e-5)
-                                && object.meshes.iter().all(|m| {
-                                    shape
-                                        .meshes
-                                        .get(*m)
-                                        .and_then(Option::as_ref)
-                                        .is_none_or(|m| m.skin.is_none())
-                                })
+                // The sequences this model's definitions scrub by steering.
+                // Scrubbed, so looping is forced off: the endpoints must hold
+                // at full left and full right.
+                let mut steer_clips = BTreeMap::new();
+                for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
+                    if let Some(seq) = d.steering_sequence.as_ref() {
+                        if let Some(clip) = shape
+                            .animations
+                            .iter()
+                            .find(|a| a.name.eq_ignore_ascii_case(seq))
+                        {
+                            let mut clip = clip.clone();
+                            clip.looping = false;
+                            steer_clips.insert(seq.to_ascii_lowercase(), clip);
+                        }
+                    }
+                }
+                // The objects on the nodes each channel's clips move, so the
+                // base draw can leave them out and each rig can pose them.
+                let detect = |clips: &BTreeMap<String, Animation>| -> Result<
+                    std::collections::BTreeSet<(usize, usize)>,
+                > {
+                    let mut out = std::collections::BTreeSet::new();
+                    for clip in clips.values() {
+                        for step in 1..=8 {
+                            let other = bri_content::animation::sample(
+                                &shape,
+                                Some(clip),
+                                clip.duration * step as f32 / 8.0,
+                            )?;
+                            for (i, object) in shape.objects.iter().enumerate() {
+                                if let Some(node) = object.node
+                                    && !other.nodes[node].abs_diff_eq(rest.nodes[node], 1e-5)
+                                    && object.meshes.iter().all(|m| {
+                                        shape
+                                            .meshes
+                                            .get(*m)
+                                            .and_then(Option::as_ref)
+                                            .is_none_or(|m| m.skin.is_none())
+                                    })
+                                {
+                                    out.insert((node, i));
+                                }
+                            }
+                        }
+                    }
+                    Ok(out)
+                };
+                let steer_moving = detect(&steer_clips)?;
+                let thread_moving = detect(&clips)?;
+                let moving: std::collections::BTreeSet<(usize, usize)> = thread_moving
+                    .iter()
+                    .chain(steer_moving.iter())
+                    .copied()
+                    .collect();
+                // The headlight lens plates this model's definitions name
+                // (`Lamp::lens_objects`): drawn apart from the body, black
+                // while none of their beams is lit and as authored otherwise.
+                let mut lens = std::collections::BTreeSet::new();
+                for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
+                    for lamp in &d.lights {
+                        for name in &lamp.lens_objects {
+                            if let Some(i) = shape
+                                .objects
+                                .iter()
+                                .position(|o| o.name.eq_ignore_ascii_case(name))
                             {
-                                moving.insert((node, i));
+                                lens.insert(i);
+                            } else {
+                                bri_console::warn(format!(
+                                    "{}: no object {} for its light lens",
+                                    d.id, name
+                                ));
+                            }
+                        }
+                    }
+                }
+                let mut lens_slots = std::collections::BTreeSet::new();
+                for i in &lens {
+                    for m in shape.objects[*i].meshes.iter() {
+                        if let Some(mesh) = shape.meshes.get(*m).and_then(Option::as_ref) {
+                            for p in &mesh.primitives {
+                                if let Some(slot) = p.material {
+                                    lens_slots.insert(slot);
+                                }
                             }
                         }
                     }
@@ -471,28 +615,82 @@ impl VehicleAssets {
                 };
                 insert(
                     asset.path.clone(),
-                    &only(&|i| !moving.iter().any(|(_, o)| *o == i))?,
+                    &only(&|i| !moving.iter().any(|(_, o)| *o == i) && !lens.contains(&i))?,
+                    &refs,
                 )?;
-                if !moving.is_empty() {
+                if !lens.is_empty() {
+                    // The off plate is a black paint at exactly the slots its
+                    // meshes use, so nothing else on the model changes.
+                    let mut images_off = images.clone();
+                    for slot in &lens_slots {
+                        if let Some(image) = images_off.get_mut(*slot) {
+                            *image = SceneImage {
+                                label: "headlight lens off".into(),
+                                width: 1,
+                                height: 1,
+                                rgba: [0, 0, 0, 255].to_vec(),
+                                srgb: false,
+                            };
+                        }
+                    }
+                    let refs_off: Vec<&SceneImage> = images_off.iter().collect();
+                    let part = only(&|i| lens.contains(&i))?;
+                    let on_key = format!("{}#lens-on", asset.path);
+                    let off_key = format!("{}#lens-off", asset.path);
+                    insert(on_key.clone(), &part, &refs)?;
+                    insert(off_key.clone(), &part, &refs_off)?;
+                    lamp_lens.insert(asset.path.clone(), (off_key, on_key));
+                }
+                // A node both channels move goes to the steering rig: it is
+                // the more specific channel and the one the grip points follow.
+                let steer_nodes: std::collections::BTreeSet<usize> =
+                    steer_moving.iter().map(|(n, _)| *n).collect();
+                if !steer_moving.is_empty() {
                     let mut parts = Vec::new();
-                    let nodes: std::collections::BTreeSet<usize> =
-                        moving.iter().map(|(n, _)| *n).collect();
-                    for node in nodes {
+                    for node in &steer_nodes {
+                        let key = format!("{}#steer{node}", asset.path);
+                        insert(
+                            key.clone(),
+                            &only(&|i| shape.objects[i].node == Some(*node))?,
+                            &refs,
+                        )?;
+                        parts.push((key, *node, rest.nodes[*node].inverse()));
+                    }
+                    steers.insert(
+                        asset.path.clone(),
+                        SteerRig {
+                            shape: shape.clone(),
+                            clips: steer_clips,
+                            parts,
+                        },
+                    );
+                }
+                if !thread_moving.is_empty() {
+                    let mut parts = Vec::new();
+                    let thread_nodes: std::collections::BTreeSet<usize> =
+                        thread_moving.iter().map(|(n, _)| *n).collect();
+                    for node in thread_nodes {
+                        if steer_nodes.contains(&node) {
+                            continue;
+                        }
                         let key = format!("{}#thread{node}", asset.path);
                         insert(
                             key.clone(),
                             &only(&|i| shape.objects[i].node == Some(node))?,
+                            &refs,
                         )?;
                         parts.push((key, node, rest.nodes[node].inverse()));
                     }
-                    threads.insert(
-                        asset.path.clone(),
-                        ThreadRig {
-                            shape: shape.clone(),
-                            clips,
-                            parts,
-                        },
-                    );
+                    if !parts.is_empty() {
+                        threads.insert(
+                            asset.path.clone(),
+                            ThreadRig {
+                                shape: shape.clone(),
+                                clips,
+                                parts,
+                            },
+                        );
+                    }
                 }
                 continue;
             };
@@ -500,7 +698,7 @@ impl VehicleAssets {
             // frame; everything else is baked once.
             let pose = bri_content::animation::sample(&shape, Some(look), 0.0)?;
             if shape.meshes.iter().flatten().any(|m| m.skin.is_some()) {
-                insert(asset.path.clone(), &pose)?;
+                insert(asset.path.clone(), &pose, &refs)?;
                 looks.insert(
                     asset.path.clone(),
                     LookRig {
@@ -544,6 +742,7 @@ impl VehicleAssets {
             insert(
                 asset.path.clone(),
                 &only(&|i| !moving.iter().any(|(_, o)| *o == i))?,
+                &refs,
             )?;
             let mut parts = Vec::new();
             let nodes: std::collections::BTreeSet<usize> = moving.iter().map(|(n, _)| *n).collect();
@@ -552,6 +751,7 @@ impl VehicleAssets {
                 insert(
                     key.clone(),
                     &only(&|i| shape.objects[i].node == Some(node))?,
+                    &refs,
                 )?;
                 parts.push((key, node, pose.nodes[node].inverse()));
             }
@@ -592,11 +792,17 @@ impl VehicleAssets {
                     .into_iter()
                     .flatten()
                 {
+                    let key = node.to_ascii_lowercase();
+                    // A grip node may live on the weapon attachment or on the
+                    // vehicle's own model (a steering wheel).
                     let found = definition
                         .attachment_model
                         .as_ref()
                         .and_then(|model| weapon_nodes.get(model))
-                        .is_some_and(|nodes| nodes.contains_key(&node.to_ascii_lowercase()));
+                        .is_some_and(|nodes| nodes.contains_key(&key))
+                        || model_nodes
+                            .get(&definition.model)
+                            .is_some_and(|nodes| nodes.contains_key(&key));
                     if !found {
                         crate::cosmetic::add_on_fault(
                             definition
@@ -628,6 +834,9 @@ impl VehicleAssets {
             weapon_nodes,
             looks,
             threads,
+            steers,
+            lamp_lens,
+            model_nodes,
             skinned: BTreeMap::new(),
             sources,
             lamps,
@@ -1229,6 +1438,49 @@ impl ClientVehicles {
                 * local_node,
         )
     }
+    /// A node on the vehicle's own model (a steering wheel, or a grip point
+    /// on it), posed by the definition's steering sequence if it has one,
+    /// else at rest. Unlike `weapon_node`, this resolves against the body
+    /// model rather than a weapon attachment.
+    pub fn model_node(
+        &self,
+        assets: &VehicleAssets,
+        info: &VehicleInfo,
+        node: &str,
+    ) -> Option<Mat4> {
+        let d = assets.definition(&info.definition)?;
+        let frame = self.frame(info.id)?;
+        let model = &d.model;
+        let local_node = if let (Some(rig), Some(sequence)) =
+            (assets.steers.get(model), d.steering_sequence.as_ref())
+        {
+            let Some(clip) = rig.clips.get(&sequence.to_ascii_lowercase()) else {
+                return None;
+            };
+            let phase = ((1.0 - frame.steering.clamped(-1.0, 1.0)) / 2.0).clamped(0.0, 1.0);
+            let pose = bri_content::animation::sample(
+                &rig.shape,
+                Some(clip),
+                phase * clip.duration,
+            )
+            .ok()?;
+            let index = rig
+                .shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case(node))?;
+            pose.nodes[index]
+        } else {
+            *assets.model_nodes.get(model)?.get(&node.to_ascii_lowercase())?
+        };
+        Some(
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(info.scale),
+                frame.rotation,
+                frame.position,
+            ) * local_node,
+        )
+    }
     /// World transform of a seat node (players' feet ride there).
     pub fn seat(
         &self,
@@ -1350,9 +1602,15 @@ impl ClientVehicles {
         );
         [0, 1].map(|hand| {
             if let Some(node) = d.seats.get(seat)?.hands.node(hand) {
-                return self
-                    .weapon_node(assets, info, node)
-                    .map(|m| m.w_axis.truncate());
+                // A grip node may live on the weapon attachment or on the
+                // vehicle's own model (a steering wheel).
+                if let Some(m) = self.weapon_node(assets, info, node) {
+                    return Some(m.w_axis.truncate());
+                }
+                if let Some(m) = self.model_node(assets, info, node) {
+                    return Some(m.w_axis.truncate());
+                }
+                return None;
             }
             d.hand_hold(seat, hand, frame.turret_aim)
                 .map(|at| body.transform_point3(at))
@@ -1411,6 +1669,8 @@ impl ClientVehicles {
             models,
             looks,
             threads,
+            steers,
+            lamp_lens,
             skinned,
             ..
         } = assets;
@@ -1571,6 +1831,33 @@ impl ClientVehicles {
                 {
                     push(model, transform, tint);
                 }
+            }
+            if let Some(rig) = steers.get(&d.model) {
+                if let Some(sequence) = &d.steering_sequence {
+                    for (model, transform) in steered(rig, sequence, frame.steering, drawn_body) {
+                        push(model, transform, tint);
+                    }
+                }
+            }
+            // The headlight lens plates follow their beams: as authored while
+            // any lamp that names them is lit (the spotlight's predicate),
+            // black otherwise.
+            if let Some((off_key, on_key)) = lamp_lens.get(&d.model) {
+                // `VehicleAssets::driver_present`, with the definition at hand.
+                let driver = d
+                    .control_seat()
+                    .and_then(|seat| info.occupants.get(seat))
+                    .is_some_and(Option::is_some);
+                let lit = !info.destroyed
+                    && d.lights.iter().any(|lamp| {
+                        !lamp.lens_objects.is_empty()
+                            && lamp.activation.enabled(
+                                info.lights,
+                                driver,
+                                frame.driver_jump_held,
+                            )
+                    });
+                push(if lit { on_key } else { off_key }, drawn_body, tint);
             }
             // A wreck's tires are gone (`emptyTire`): it rests on its body.
             for (i, wheel) in d.wheels.iter().enumerate().filter(|_| !info.destroyed) {
@@ -3255,5 +3542,124 @@ pub(crate) mod tests {
             );
         }
         assert!((vehicles.frame(1).unwrap().position.x - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn headlight_lens_plates_follow_their_beams() -> Result<()> {
+        use bri_vehicles::schema::{Lamp, LampActivation};
+        let dir = crate::testing::ScratchDir::new("lamp-lens")?;
+        crate::testing::vehicles::write_pack(dir.path())?;
+
+        // The test car's model gains a headlight lens plate (a second object
+        // on the same node and paint), and its definition a switchable beam
+        // naming it.
+        let pack_path = dir.path().join("vehicles.json");
+        let mut pack: bri_vehicles::Pack = serde_json::from_slice(&std::fs::read(&pack_path)?)?;
+        let car_model = pack
+            .definitions
+            .iter()
+            .find(|d| d.id == bri_vehicles::testing::CAR)
+            .context("test car")?
+            .model
+            .clone();
+        let model_path = dir.path().join(&car_model);
+        let mut shape: bri_content::shape::Shape =
+            serde_json::from_slice(&std::fs::read(&model_path)?)?;
+        shape.meshes.push(shape.meshes[0].clone());
+        shape.objects.push(bri_content::shape::Object {
+            name: "lens".into(),
+            node: Some(0),
+            meshes: vec![1],
+            visibility: 1.0,
+            frame: 0,
+            material_frame: 0,
+            live: None,
+        });
+        shape.details[0].object_count = shape.objects.len();
+        shape.validate()?;
+        let bytes = serde_json::to_vec(&shape)?;
+        std::fs::write(&model_path, &bytes)?;
+        for asset in &mut pack.assets {
+            if asset.kind == "model" && asset.path == car_model {
+                asset.sha256 = crate::testing::sha256(&bytes);
+            }
+        }
+        for d in &mut pack.definitions {
+            if d.id == bri_vehicles::testing::CAR {
+                d.lights.push(Lamp {
+                    activation: LampActivation::Switch,
+                    effect: None,
+                    node: "root".into(),
+                    offset: [0.; 3],
+                    color: [1.5; 3],
+                    radius: 20.,
+                    cone: Some(bri_vehicles::schema::LampCone {
+                        inner: 20.,
+                        outer: 45.,
+                        axis: [0., 0., -1.],
+                    }),
+                    ramp: None,
+                    lens_objects: vec!["lens".into()],
+                });
+            }
+        }
+        pack.validate()?;
+        std::fs::write(&pack_path, serde_json::to_vec_pretty(&pack)?)?;
+
+        let mut assets = VehicleAssets::load(dir.path())?;
+        let car_id = bri_vehicles::testing::CAR.to_string();
+        let model_key = assets.definition(&car_id).context("car")?.model.clone();
+        let (off_key, on_key) = {
+            let pair = assets.lamp_lens.get(&model_key).context("lens variants")?;
+            (pair.0.clone(), pair.1.clone())
+        };
+
+        // Both variants exist and draw only the plate: black when off, as
+        // authored when on, with nothing else on the model changed.
+        let base = assets.models.get(&model_key).context("base model")?;
+        let off = assets.models.get(&off_key).context("off variant")?;
+        let on = assets.models.get(&on_key).context("on variant")?;
+        assert!(!base.data.vertices.is_empty(), "the body stays in the base draw");
+        assert_eq!(off.data.vertices.len(), on.data.vertices.len());
+        // RGB only: the plate's alpha stays opaque.
+        let black = |images: &[bri_render::scene::SceneImage]| {
+            images.iter().any(|i| {
+                i.width == 1
+                    && i.height == 1
+                    && i.rgba.len() >= 3
+                    && i.rgba[..3].iter().all(|b| *b < 8)
+            })
+        };
+        assert!(black(&off.data.images), "the off plate is near-black");
+        assert!(!black(&on.data.images), "the on plate keeps its authored paint");
+        assert!(!black(&base.data.images), "nothing else on the model changes");
+
+        // The right variant draws with the light key, as the beams do.
+        for lights in [false, true] {
+            let info = VehicleInfo {
+                id: 1,
+                definition: car_id.clone(),
+                scale: 1.,
+                color: None,
+                occupants: vec![],
+                destroyed: false,
+                turret_broken: false,
+                lights,
+            };
+            let mut client = ClientVehicles::default();
+            client.update(
+                &BTreeMap::from([(1, info.clone())]),
+                &BTreeMap::from([(1, pose(1, 0.))]),
+                Some(1.),
+                None,
+                &Default::default(),
+            );
+            client.prepare(&mut assets, &BTreeMap::from([(1, info)]));
+            let on_pushed = !assets.models.get(&on_key).unwrap().transforms.is_empty();
+            let off_pushed = !assets.models.get(&off_key).unwrap().transforms.is_empty();
+            assert_eq!(on_pushed, lights, "lights={lights}");
+            assert_eq!(off_pushed, !lights, "lights={lights}");
+        }
+        Ok(())
     }
 }

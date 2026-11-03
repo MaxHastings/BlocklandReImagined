@@ -915,6 +915,13 @@ pub struct Definition {
     /// Animations the model plays by itself.
     #[serde(default)]
     pub threads: Vec<AnimationThread>,
+    /// The model's sequence that turns with the vehicle's steering, scrubbed
+    /// from full right (phase 0) to full left (phase 1) as the clip is
+    /// authored: a steering wheel and whatever sits on its nodes. A seat's
+    /// hand grip points on those nodes follow the turn. Left out, the model
+    /// is rigid under steering, as in v20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering_sequence: Option<String>,
     /// The engine's torque against wheel speed: `[share of the top wheel
     /// speed, share of engine_force]` points, by rising speed, joined by
     /// straight lines and held flat past the last. Empty is Torque's
@@ -1037,6 +1044,13 @@ pub struct Lamp {
     /// How fast it comes up to full light and goes out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp: Option<LampRamp>,
+    /// Objects on its model that are a lens — the glass in front of
+    /// headlights. When one or more lamps name them they draw apart from the
+    /// body's base paint (which leaves those objects out): black while none is
+    /// lit, and their authored look as soon as any lights up. Lenses shared by
+    /// several beams turn together; a lamp that names no lens changes nothing.
+    #[serde(default)]
+    pub lens_objects: Vec<String>,
 }
 /// A lamp's beam ([`Lamp::cone`]): full light within `inner` degrees of
 /// `axis` (in the node's own frame), fading to none at `outer`.
@@ -1615,6 +1629,11 @@ impl Pack {
                             && l.radius <= 100.
                             && l.cone.is_none_or(|c| c.valid())
                             && l.ramp.is_none_or(|r| r.valid())
+                            && l.lens_objects.iter().all(|n| {
+                                !n.is_empty()
+                                    && n.len() <= 64
+                                    && !n.chars().any(char::is_control)
+                            })
                             && l.effect.as_ref().is_none_or(|id| {
                                 !id.is_empty()
                                     && id.len() <= 160
@@ -1965,7 +1984,7 @@ impl Pack {
                 "invalid seat hands"
             );
             ensure!(
-                d.seats.iter().enumerate().all(|(index, seat)| {
+                d.seats.iter().all(|seat| {
                     [seat.hands.node(0), seat.hands.node(1)]
                         .into_iter()
                         .flatten()
@@ -1973,11 +1992,9 @@ impl Pack {
                             !node.is_empty()
                                 && node.len() <= 64
                                 && !node.chars().any(char::is_control)
-                                && d.weapon_seat() == Some(index)
-                                && d.attachment_model.is_some()
                         })
                 }),
-                "seat hand nodes need a weapon attachment seat and names up to 64 characters"
+                "seat hand nodes need names up to 64 characters"
             );
             ensure!(
                 d.turret_acceleration

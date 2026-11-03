@@ -507,6 +507,7 @@ impl Session {
         if !self.vehicles.lit.remove(&vehicle) {
             self.vehicles.lit.insert(vehicle);
         }
+        self.deliver_vehicle_lights(owner, vehicle.0, self.vehicles.lit.contains(&vehicle));
         true
     }
     /// Same-tick vehicle basis for the rider's canonical body frame.
@@ -2900,6 +2901,7 @@ mod tests {
             radius: 20.0,
             cone: None,
             ramp: None,
+            lens_objects: vec!["lens".into()],
         };
         let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
             d.lights = vec![lamp.clone()]
@@ -2938,6 +2940,76 @@ mod tests {
         assert!(s.vehicle_infos()[0].lights, "on for everyone");
         assert!(s.toggle_vehicle_lights(7));
         assert!(!s.vehicle_infos()[0].lights, "and off again");
+    }
+
+    #[test]
+    fn a_declared_hook_hears_the_lamps_turn_on_and_off() {
+        let lamp = bri_vehicles::schema::Lamp {
+            activation: Default::default(),
+            effect: None,
+            node: "mount0".into(),
+            offset: [0.0, 0.0, -1.0],
+            color: [1.0; 3],
+            radius: 20.0,
+            cone: None,
+            ramp: None,
+            lens_objects: vec!["lens".into()],
+        };
+        let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
+            d.lights = vec![lamp.clone()]
+        }));
+        // A package that declares on_vehicle_lights and logs each delivery.
+        use bri_package::packages::{PackageEntry, PackageSet, Side};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+        let set = PackageSet {
+            schema_version: 1,
+            packages: vec![PackageEntry {
+                id: "vehicle-light-watcher".into(),
+                version: "0.1.0".into(),
+                side: Side::Server,
+                dir: "vehicle-light-watcher".into(),
+                role: None,
+            }],
+        };
+        s.install_packages(
+            std::sync::Arc::new(bri_package_runtime::Catalog::load(&root, &set, true).unwrap()),
+            None,
+        )
+        .unwrap();
+        let driver = s
+            .vehicles
+            .world
+            .as_ref()
+            .unwrap()
+            .definition(bri_vehicles::testing::TANK)
+            .unwrap()
+            .seats
+            .iter()
+            .position(|seat| seat.controls)
+            .unwrap();
+        s.vehicles.mounted.insert(
+            7,
+            Mount {
+                vehicle: VehicleId(tank),
+                seat: driver,
+            },
+        );
+        let log = |s: &Session| -> Vec<String> {
+            s.package_state()
+                .packages["vehicle-light-watcher"]
+                .global["log"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_owned())
+                .collect()
+        };
+        let on = String::from("7 vehicle:1 true");
+        let off = String::from("7 vehicle:1 false");
+        assert!(s.toggle_vehicle_lights(7));
+        assert_eq!(log(&s), vec![on.clone()], "on is heard");
+        assert!(s.toggle_vehicle_lights(7));
+        assert_eq!(log(&s), vec![on, off], "and off again");
     }
 
     #[test]

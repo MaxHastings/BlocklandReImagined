@@ -609,6 +609,7 @@ impl App {
                 // Riders sit exactly on their rendered vehicle's seat, tilted
                 // with it (`Player::processTick` takes the mount transform).
                 self.mounts.rider_rotations.clear();
+                self.mounts.rider_seat_facing.clear();
                 self.mounts.rider_fallback_hips.clear();
                 self.mounts.rider_hands.clear();
                 self.mounts.rider_aims.clear();
@@ -679,6 +680,12 @@ impl App {
                                     - std::f32::consts::PI
                             })
                         };
+                        // Store the seat's base facing (without the look turn)
+                        // so the hand IK target stays stable when the rider
+                        // looks around.
+                        self.mounts
+                            .rider_seat_facing
+                            .insert(*owner, rotation);
                         rotation *= glam::Quat::from_rotation_y(-turn);
                         yaw += turn;
                         self.mounts.rider_rotations.insert(*owner, rotation);
@@ -764,6 +771,9 @@ impl App {
                                 - std::f32::consts::PI
                         })
                     };
+                    self.mounts
+                        .rider_seat_facing
+                        .insert(*owner, rotation);
                     let rotation = rotation * glam::Quat::from_rotation_y(-turn);
                     self.mounts.rider_rotations.insert(*owner, rotation);
                     self.motion.override_presented(
@@ -1356,6 +1366,7 @@ impl App {
                         .and_then(|_| self.mounts.rider_fallback_hips.get(owner).copied()),
                     look_limits,
                     mount_rotation: self.mounts.rider_rotations.get(owner).copied(),
+                    seat_facing: self.mounts.rider_seat_facing.get(owner).copied(),
                     seat_aim: self.mounts.rider_aims.get(owner).copied().filter(|_| !dead),
                     seat_overlays: self
                         .mounts
