@@ -40,7 +40,39 @@ measures the first map selection plus two disconnect/rehost selections. The
 clock ends only after InGame, an authoritative player pose and a completed
 world frame. App startup and GPU initialization are separate; no artificial
 shader warmup is inserted before selection. Per-phase loading logs and GPU
-identity go in the report. Optimized loading measurements remain pending.
+identity go in the report. The probe reuses production backend ordering and
+the actual compiler pixel probe through `platform::offscreen_gpu`, without a
+surface. The preferred BGRA format and allocator tuning match the client.
+The helper executable runs beside copies of the packaged pinned compiler
+DLLs, outside Git and outside the manifest-verified playable folder.
+
+The first generic Headless run selected Vulkan, unlike the normal Windows
+backend order. Those diagnostics are retained separately, not presented as
+normal Windows evidence. A corrected DX12 run overlapped clippy; an additional
+run without a concurrent build is the reported measurement below. Filesystem
+and driver caches are warm; private application state is fresh per process.
+
+| Map | First selection to completed frame (s) | Rehost 1 (s) | Rehost 2 (s) |
+| --- | --- | --- | --- |
+| Bedroom | 9.869 | 1.425 | 1.425 |
+| Kitchen | 11.071 | 1.860 | 1.921 |
+| Slate | 8.182 | 0.857 | 0.868 |
+
+GPU: RTX 4070 SUPER, DX12, driver 32.0.16.1692. The compiler log says Auto
+with a passing pixel probe; DLL presence does not establish which compiler
+wgpu selected internally. First selections miss the five-second target;
+all six repeated selections meet three seconds. Phase logs identify initial
+scene-pipeline compilation as the main delay. This is not a new measured
+regression against an identical previous binary, nor a performance fix.
+Next supported loading correction is reuse/compilation of scene pipelines
+without hiding load time, weakening readiness, or changing content validity.
+App/GPU startup is measured separately in the reports. The selected ordinary
+map configurations do not establish all saves, Add-On combinations or native
+window presentation latency. Raw reports are in `map-loads-native-exclusive`.
+
+Warning-free client all-target clippy, changed-file rustfmt, 55 gate-tool
+tests and the maintained-document check pass. The cheap seat anchor and pose
+composition targets are included in ordinary PR CI to catch stale fixtures.
 
 The destruction stress findings and new candidate stay in the separate
 [open destruction PR](https://github.com/MaxHastings/BlocklandReImagined/pull/437).
