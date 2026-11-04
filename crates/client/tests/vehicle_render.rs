@@ -304,12 +304,37 @@ fn authored_vehicle_presentation_offscreen() -> Result<()> {
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     std::fs::create_dir_all(&out)?;
     let mut images = vec![];
-    for (index, (steering, switched, braking)) in [
-        (-1., false, false),
-        (0., false, false),
-        (1., false, false),
-        (0., true, false),
-        (0., false, true),
+    let mut rear_images = vec![];
+    let mut states = vec![];
+    for (index, (name, steering, switched, braking, reversing, occupied, destroyed, jump)) in [
+        ("left", -1., false, false, false, true, false, false),
+        ("neutral", 0., false, false, false, true, false, false),
+        ("right", 1., false, false, false, true, false, false),
+        ("switched", 0., true, false, false, true, false, false),
+        ("braking", 0., false, true, false, true, false, false),
+        ("reversing", 0., false, false, true, true, false, false),
+        ("jump", 0., false, false, false, true, false, true),
+        ("empty-braking", 0., false, true, false, false, false, false),
+        (
+            "empty-reversing",
+            0.,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+        ),
+        (
+            "destroyed-switched",
+            0.,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -319,8 +344,8 @@ fn authored_vehicle_presentation_offscreen() -> Result<()> {
             definition: d.id.clone(),
             scale: 1.,
             color: Some([0.25, 0.5, 0.8, 1.]),
-            occupants: vec![Some(1); d.seats.len()],
-            destroyed: false,
+            occupants: vec![occupied.then_some(1); d.seats.len()],
+            destroyed,
             turret_broken: false,
             lights: switched,
         };
@@ -338,8 +363,8 @@ fn authored_vehicle_presentation_offscreen() -> Result<()> {
             wheel_tire: vec![Default::default(); d.wheels.len()],
             turret_aim: [0.; 2],
             jetting: false,
-            driver_jump_held: false,
-            driver_reversing: false,
+            driver_jump_held: jump,
+            driver_reversing: reversing,
             driver_braking: braking,
             angular_velocity: [0.; 3],
             mouse_steering: [0.; 2],
@@ -358,6 +383,60 @@ fn authored_vehicle_presentation_offscreen() -> Result<()> {
             &Default::default(),
         );
         vehicles.prepare(&mut assets, &infos);
+        let expected: Vec<_> = d
+            .lights
+            .iter()
+            .filter(|l| {
+                !destroyed
+                    && l.radius > 0.
+                    && l.activation
+                        .enabled(switched, occupied, jump, reversing, braking)
+            })
+            .map(|l| {
+                vehicles
+                    .model_node(&assets, &info, &l.node)
+                    .context("authored lamp node")
+                    .map(|node| {
+                        (
+                            (node * glam::Mat4::from_translation(l.offset.into()))
+                                .w_axis
+                                .truncate(),
+                            l.color,
+                        )
+                    })
+            })
+            .collect::<Result<_>>()?;
+        let since = std::time::Instant::now();
+        let lights = loop {
+            let lights = assets.lamp_lights(&vehicles, &infos);
+            if lights.len() == expected.len()
+                && lights.iter().all(|l| {
+                    expected.iter().any(|(at, color)| {
+                        at.distance(glam::Vec3::from_array(
+                            l.position_radius[..3].try_into().unwrap(),
+                        )) < 1e-4
+                            && l.color[..3] == color[..]
+                    })
+                })
+            {
+                break lights;
+            }
+            ensure!(
+                since.elapsed() < std::time::Duration::from_secs(30),
+                "authored lamp transition did not settle: {name}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        ensure!(
+            lights.iter().all(|l| l
+                .position_radius
+                .iter()
+                .chain(l.color.iter())
+                .chain(l.cone.iter())
+                .all(|v| v.is_finite())),
+            "nonfinite authored lamp: {name}"
+        );
+        renderer.update_lights(&gpu.queue, &lights)?;
         for (seat, definition) in d.seats.iter().enumerate() {
             let holds = vehicles.hand_holds(&assets, &info, seat);
             for (hand, hold) in holds.iter().enumerate() {
@@ -393,13 +472,48 @@ fn authored_vehicle_presentation_offscreen() -> Result<()> {
             image::ColorType::Rgba8,
         )?;
         images.push(pixels);
+        let rear_eye = center
+            + glam::Vec3::new(-0.8, 0.45, 0.8).normalize() * radius / 25f32.to_radians().sin();
+        let rear = Camera::perspective(
+            rear_eye.to_array(),
+            center.to_array(),
+            1.,
+            50f32.to_radians(),
+            0.05,
+            200.,
+        );
+        let rear_pixels = render(&gpu, &mut renderer, &assets, &rear)?;
+        image::save_buffer(
+            out.join(format!("authored-{index}-rear.png")),
+            &rear_pixels,
+            SIZE,
+            SIZE,
+            image::ColorType::Rgba8,
+        )?;
+        rear_images.push(rear_pixels);
+        states.push(serde_json::json!({"index":index,"name":name,"lamps":lights.len(),"occupied":occupied,"destroyed":destroyed}));
     }
     ensure!(
         images[0] != images[2],
         "steering endpoints rendered identically"
     );
     ensure!(images[1] != images[3], "switched appearance never changed");
-    // A rear-facing render is left to a separately chosen camera if required;
-    // the synthetic test checks independent bindings and braking state directly.
+    ensure!(
+        rear_images[1] != rear_images[4],
+        "rear brake appearance did not change"
+    );
+    ensure!(
+        rear_images[4] == rear_images[5],
+        "authored brake/reverse OR conditions disagree"
+    );
+    ensure!(
+        rear_images[1] == rear_images[6],
+        "JumpHeld was redefined as a brake"
+    );
+    ensure!(
+        rear_images[1] == rear_images[7] && rear_images[1] == rear_images[8],
+        "empty vehicle kept driver-only brake/reverse visuals"
+    );
+    std::fs::write(out.join("states.json"), serde_json::to_vec_pretty(&states)?)?;
     Ok(())
 }
