@@ -13,6 +13,7 @@ use bri_console::Clamp;
 
 const LIST: &str = "AO_List";
 const SEARCH: &str = "AO_Search";
+const LIST_SCROLL: &str = "AO_Scroll";
 const DETAILS: &str = "AO_Details";
 const DETAIL_SCROLL: &str = "AO_DetailScroll";
 const ENABLED: &str = "AO_Enabled";
@@ -83,7 +84,7 @@ impl AddOns {
             ),
             SEARCH,
         ));
-        let mut list_scroll = scroll("AO_Scroll", Rect::new(12, 58, 236, 316));
+        let mut list_scroll = scroll(LIST_SCROLL, Rect::new(12, 58, 236, 316));
         let mut list = named(
             ctrl(
                 "GuiTextListCtrl",
@@ -499,7 +500,13 @@ impl Screen for AddOns {
             .unwrap_or_default();
         match (name.as_str(), ev.kind) {
             (_, EventKind::Close) | (DONE, EventKind::Click) => core.pop(self.id()),
-            (SEARCH, EventKind::Changed) => self.refresh(core),
+            (SEARCH, EventKind::Changed) => {
+                self.refresh(core);
+                // Filtering can leave the list scrolled past its shorter results.
+                if let Some(scroll) = self.view.id(LIST_SCROLL) {
+                    self.view.scroll_to(scroll, 0);
+                }
+            }
             (LIST, EventKind::Changed | EventKind::Submit | EventKind::Toggle) => {
                 let item = self.view.selected(ev.node);
                 match item.filter(|&i| i != HEADING) {
@@ -1225,6 +1232,51 @@ mod tests {
         );
         let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
         assert_eq!(actions, [UiAction::OpenAddOnsFolder]);
+    }
+
+    #[test]
+    fn searching_a_scrolled_list_returns_results_to_the_top() {
+        let mut ui = ui();
+        let rows = (0..40)
+            .map(|i| {
+                let mut row = row(&format!("addon-{i:02}"), "Other", false);
+                if i == 39 {
+                    row.name = "Townsfolk Bots".into();
+                }
+                row
+            })
+            .collect();
+        ui.apply(UiUpdate::AddOns(AddOnsView {
+            rows,
+            notice: String::new(),
+        }));
+        let mut s = AddOns::new(&ui.core);
+        let list = s.view.id(LIST).unwrap();
+        let scroll = s.view.id(LIST_SCROLL).unwrap();
+        s.view.scroll_to(scroll, i32::MAX);
+        assert!(s.view.node(scroll).state.scroll_y > 0);
+
+        let search = s.view.id(SEARCH).unwrap();
+        s.view.set_text(search, "Towns");
+        s.on_event(
+            &ViewEvent {
+                node: search,
+                kind: EventKind::Changed,
+            },
+            &mut ui.core,
+        );
+
+        let items: Vec<_> = s
+            .view
+            .node(list)
+            .state
+            .items
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert_eq!(items, ["\t\tOTHER", "[ ]\t\tTownsfolk Bots"]);
+        assert_eq!(s.view.node(scroll).state.scroll_y, 0);
+        assert_eq!(s.view.node(list).rect.y, s.view.node(scroll).rect.y);
     }
 
     #[test]
