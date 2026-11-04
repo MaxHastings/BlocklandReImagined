@@ -1368,6 +1368,7 @@ fn a_driver_is_predicted_with_the_hosts_steering_prefs() {
         turret_aim: [0.0; 2],
         jetting: false,
         driver_jump_held: false,
+        driver_reversing: false,
         angular_velocity: [0.0; 3],
         mouse_steering: [0.0; 2],
         driver_input: 0,
@@ -1782,7 +1783,9 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     app.mounts
         .rider_rotations
         .insert(3, glam::Quat::from_rotation_y(1.0));
-    app.mounts.rider_hands.insert(3, [Some(Vec3::ONE), None]);
+    app.mounts
+        .rider_hands
+        .insert(3, [Some(bri_content::body_pose::HandHold::position_only(Vec3::ONE)), None]);
     app.view.observer_eye = Some(Vec3::ONE);
     app.view.rendered_camera = Some((Vec3::ONE, 1.0, 0.5));
     app.view.rendered_roll = 0.3;

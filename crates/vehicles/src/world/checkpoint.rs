@@ -55,6 +55,9 @@ pub struct VehicleSave {
     pub still: u8,
     pub previous_velocity: [f32; 3],
     pub jump_held: bool,
+    /// The driver drives in reverse (a `reverse_or_brake` lamp follows it).
+    #[serde(default)]
+    pub reversing: bool,
     pub fire_held: bool,
     pub mounted_once: bool,
     pub mouse_steering: [f32; 2],
@@ -126,6 +129,7 @@ impl VehiclesWorld {
                 still: v.still,
                 previous_velocity: v.previous_velocity.to_array(),
                 jump_held: v.jump_held,
+                reversing: v.reversing,
                 fire_held: v.fire_held,
                 mounted_once: v.mounted_once,
                 mouse_steering: v.mouse_steering,
@@ -288,6 +292,7 @@ impl VehiclesWorld {
                     water: saved.water,
                     previous_velocity: Vec3::from_array(saved.previous_velocity),
                     jump_held: saved.jump_held,
+                    reversing: saved.reversing,
                     fire_held: saved.fire_held,
                     mounted_once: saved.mounted_once,
                     water_coverage: saved.water_coverage,

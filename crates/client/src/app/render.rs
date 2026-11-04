@@ -1501,6 +1501,7 @@ impl App {
                         info.lights,
                         assets.driver_present(info),
                         f.driver_jump_held,
+                        f.driver_reversing,
                         info.definition.clone(),
                     ))
                 })

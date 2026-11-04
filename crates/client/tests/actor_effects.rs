@@ -975,6 +975,7 @@ fn ground_trails_require_their_own_wheel_and_ignore_vertical_speed() {
         wheel_contact: vec![false; 4],
         turret_aim: [0.; 2],
         driver_jump_held: false,
+        driver_reversing: false,
     };
     assert_eq!(
         vehicle_trails(1, &d, &frame)

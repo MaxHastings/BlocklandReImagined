@@ -5,6 +5,7 @@ use crate::items::native_shape_scene;
 use crate::portal_view::Straddle;
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
+use bri_content::body_pose::HandHold;
 use bri_content::passage::Passages;
 use bri_content::shape::{Animation, Shape};
 use bri_render::scene::{
@@ -58,11 +59,11 @@ pub struct VehicleAssets {
     /// Models whose definitions turn a sequence with the steering input
     /// (a steering wheel), keyed by the model's asset path.
     steers: BTreeMap<String, SteerRig>,
-    /// The headlight lens plates this definition names (`Lamp::lens_objects`):
-    /// each such model draws its plate apart from the body — black while none
-    /// of those beams are lit, as authored otherwise. Keyed by asset path,
-    /// off/on draw keys.
-    lamp_lens: BTreeMap<String, (String, String)>,
+    /// The lens plates this definition names (`Lamp::lens_objects`): each such
+    /// model draws its plate apart from the body — black while none of the
+    /// beams naming it are lit, as authored otherwise. Keyed by asset path,
+    /// then lower-case object name, to off/on draw keys.
+    lamp_lens: BTreeMap<String, BTreeMap<String, (String, String)>>,
 
     /// Each model's node rest transforms, by lower-case name: a seat's hand
     /// grip point on the vehicle's own model, when it is not posed by a
@@ -377,9 +378,11 @@ impl VehicleAssets {
         let mut weapon_nodes: BTreeMap<String, BTreeMap<String, Mat4>> = BTreeMap::new();
         let mut model_nodes: BTreeMap<String, BTreeMap<String, Mat4>> = BTreeMap::new();
         let mut lamps: BTreeMap<String, Vec<BoundLamp>> = BTreeMap::new();
-        // The headlight lens plates each model's definitions name (`Lamp::lens_objects`), keyed by the model's asset path: off/on draw keys.
-        let mut lamp_lens: std::collections::BTreeMap<String, (String, String)> =
-            BTreeMap::new();
+        // The lens plates each model's definitions name (`Lamp::lens_objects`), keyed by the model's asset path and lower-case object name: off/on draw keys.
+        let mut lamp_lens: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, (String, String)>,
+        > = BTreeMap::new();
         let mut looks = BTreeMap::new();
         let mut threads = BTreeMap::new();
         let mut steers = BTreeMap::new();
@@ -592,18 +595,6 @@ impl VehicleAssets {
                         }
                     }
                 }
-                let mut lens_slots = std::collections::BTreeSet::new();
-                for i in &lens {
-                    for m in shape.objects[*i].meshes.iter() {
-                        if let Some(mesh) = shape.meshes.get(*m).and_then(Option::as_ref) {
-                            for p in &mesh.primitives {
-                                if let Some(slot) = p.material {
-                                    lens_slots.insert(slot);
-                                }
-                            }
-                        }
-                    }
-                }
                 let only = |keep: &dyn Fn(usize) -> bool| {
                     let mut part = bri_content::animation::sample(&shape, None, 0.0)?;
                     for (i, v) in part.visibility.iter_mut().enumerate() {
@@ -619,27 +610,39 @@ impl VehicleAssets {
                     &refs,
                 )?;
                 if !lens.is_empty() {
-                    // The off plate is a black paint at exactly the slots its
-                    // meshes use, so nothing else on the model changes.
-                    let mut images_off = images.clone();
-                    for slot in &lens_slots {
-                        if let Some(image) = images_off.get_mut(*slot) {
-                            *image = SceneImage {
-                                label: "headlight lens off".into(),
-                                width: 1,
-                                height: 1,
-                                rgba: [0, 0, 0, 255].to_vec(),
-                                srgb: false,
-                            };
+                    // Each plate's off variant is a black paint at exactly the
+                    // slots its meshes use, so nothing else on the model
+                    // changes.
+                    let mut plates = std::collections::BTreeMap::new();
+                    for i in &lens {
+                        let name = shape.objects[*i].name.to_ascii_lowercase();
+                        let mut images_off = images.clone();
+                        for m in shape.objects[*i].meshes.iter() {
+                            if let Some(mesh) = shape.meshes.get(*m).and_then(Option::as_ref) {
+                                for p in &mesh.primitives {
+                                    if let Some(slot) = p.material {
+                                        if let Some(image) = images_off.get_mut(slot) {
+                                            *image = SceneImage {
+                                                label: "lamp lens off".into(),
+                                                width: 1,
+                                                height: 1,
+                                                rgba: [0, 0, 0, 255].to_vec(),
+                                                srgb: false,
+                                            };
+                                        }
+                                    }
+                                }
+                            }
                         }
+                        let refs_off: Vec<&SceneImage> = images_off.iter().collect();
+                        let part = only(&|j| j == *i)?;
+                        let on_key = format!("{}#lens-on-{name}", asset.path);
+                        let off_key = format!("{}#lens-off-{name}", asset.path);
+                        insert(on_key.clone(), &part, &refs)?;
+                        insert(off_key.clone(), &part, &refs_off)?;
+                        plates.insert(name, (off_key, on_key));
                     }
-                    let refs_off: Vec<&SceneImage> = images_off.iter().collect();
-                    let part = only(&|i| lens.contains(&i))?;
-                    let on_key = format!("{}#lens-on", asset.path);
-                    let off_key = format!("{}#lens-off", asset.path);
-                    insert(on_key.clone(), &part, &refs)?;
-                    insert(off_key.clone(), &part, &refs_off)?;
-                    lamp_lens.insert(asset.path.clone(), (off_key, on_key));
+                    lamp_lens.insert(asset.path.clone(), plates);
                 }
                 // A node both channels move goes to the steering rig: it is
                 // the more specific channel and the one the grip points follow.
@@ -848,7 +851,7 @@ impl VehicleAssets {
     /// from each vehicle's presented body.
     pub fn lamp_lights(
         &mut self,
-        infos: impl IntoIterator<Item = (u64, Mat4, bool, bool, bool, String)>,
+        infos: impl IntoIterator<Item = (u64, Mat4, bool, bool, bool, bool, String)>,
     ) -> Vec<bri_render::scene::PointLight> {
         let now = std::time::Instant::now();
         let dt = self
@@ -857,7 +860,7 @@ impl VehicleAssets {
             .map_or(0., |before| (now - before).as_secs_f32().min(0.25));
         let mut out = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
-        for (id, body, on, driver, jump, definition) in infos {
+        for (id, body, on, driver, jump, reversing, definition) in infos {
             for (slot, bound) in self
                 .lamps
                 .get(&definition)
@@ -869,7 +872,7 @@ impl VehicleAssets {
                 if lamp.radius <= 0. {
                     continue;
                 }
-                let wanted = lamp.activation.enabled(on, driver, jump);
+                let wanted = lamp.activation.enabled(on, driver, jump, reversing);
                 // A lamp with a ramp fades toward its state; without one it
                 // switches at once.
                 let level = match lamp.ramp {
@@ -1067,6 +1070,8 @@ pub struct VehicleFrame {
     pub turret_aim: [f32; 2],
     /// The driver is holding the jump input (from the newest pose).
     pub driver_jump_held: bool,
+    /// The driver drives in reverse (from the newest pose).
+    pub driver_reversing: bool,
 }
 
 #[derive(Default)]
@@ -1198,6 +1203,7 @@ impl ClientVehicles {
                     info.lights,
                     assets.driver_present(info),
                     frame.driver_jump_held,
+                    frame.driver_reversing,
                 ) {
                     continue;
                 }
@@ -1576,7 +1582,9 @@ impl ClientVehicles {
         Some(position + rotation * offset * info.scale)
     }
     /// Where seat `seat`'s rider holds on in the world, right hand then
-    /// left (`Seat::hands`), turned with the turret and gun as drawn.
+    /// left (`Seat::hands`), turned with the turret and gun as drawn. A grip
+    /// node on the vehicle's own model also carries how far it has turned
+    /// since rest (world frame) so a reached hand can follow its wheel.
     /// None for a hand the seat leaves free, and for both while a broken
     /// turret's gunner sits on the hull's fallback seat.
     pub fn hand_holds(
@@ -1584,7 +1592,7 @@ impl ClientVehicles {
         assets: &VehicleAssets,
         info: &VehicleInfo,
         seat: usize,
-    ) -> [Option<Vec3>; 2] {
+    ) -> [Option<HandHold>; 2] {
         let Some((frame, d)) = self
             .frames
             .get(&info.id)
@@ -1605,15 +1613,27 @@ impl ClientVehicles {
                 // A grip node may live on the weapon attachment or on the
                 // vehicle's own model (a steering wheel).
                 if let Some(m) = self.weapon_node(assets, info, node) {
-                    return Some(m.w_axis.truncate());
+                    return Some(HandHold::position_only(m.w_axis.truncate()));
                 }
                 if let Some(m) = self.model_node(assets, info, node) {
-                    return Some(m.w_axis.truncate());
+                    // The grip's turn since rest, in the world: its current
+                    // orientation against its rested one. Identity at rest,
+                    // so a hand that only tracks position is unchanged.
+                    let (_, turned, _) = m.to_scale_rotation_translation();
+                    let rested = assets
+                        .model_nodes
+                        .get(&d.model)
+                        .and_then(|nodes| nodes.get(&node.to_ascii_lowercase()))
+                        .map_or(Quat::IDENTITY, |r| r.to_scale_rotation_translation().1);
+                    return Some(HandHold {
+                        position: m.w_axis.truncate(),
+                        turn: turned * rested.conjugate() * frame.rotation.conjugate(),
+                    });
                 }
                 return None;
             }
             d.hand_hold(seat, hand, frame.turret_aim)
-                .map(|at| body.transform_point3(at))
+                .map(|at| HandHold::position_only(body.transform_point3(at)))
         })
     }
     /// How far seat `seat`'s gun aims across its pitch range as drawn, 0 at
@@ -1839,25 +1859,30 @@ impl ClientVehicles {
                     }
                 }
             }
-            // The headlight lens plates follow their beams: as authored while
-            // any lamp that names them is lit (the spotlight's predicate),
+            // The lens plates follow their beams: each plate is as authored
+            // while any lamp naming it is lit (the spotlight's predicate),
             // black otherwise.
-            if let Some((off_key, on_key)) = lamp_lens.get(&d.model) {
+            if let Some(plates) = lamp_lens.get(&d.model) {
                 // `VehicleAssets::driver_present`, with the definition at hand.
                 let driver = d
                     .control_seat()
                     .and_then(|seat| info.occupants.get(seat))
                     .is_some_and(Option::is_some);
-                let lit = !info.destroyed
-                    && d.lights.iter().any(|lamp| {
-                        !lamp.lens_objects.is_empty()
-                            && lamp.activation.enabled(
-                                info.lights,
-                                driver,
-                                frame.driver_jump_held,
-                            )
-                    });
-                push(if lit { on_key } else { off_key }, drawn_body, tint);
+                for (name, (off_key, on_key)) in plates {
+                    let lit = !info.destroyed
+                        && d.lights.iter().any(|lamp| {
+                            lamp.lens_objects
+                                .iter()
+                                .any(|object| object.eq_ignore_ascii_case(name))
+                                && lamp.activation.enabled(
+                                    info.lights,
+                                    driver,
+                                    frame.driver_jump_held,
+                                    frame.driver_reversing,
+                                )
+                        });
+                    push(if lit { on_key } else { off_key }, drawn_body, tint);
+                }
             }
             // A wreck's tires are gone (`emptyTire`): it rests on its body.
             for (i, wheel) in d.wheels.iter().enumerate().filter(|_| !info.destroyed) {
@@ -2020,6 +2045,7 @@ fn frame_of(pose: &VehiclePose) -> VehicleFrame {
         wheel_contact: pose.wheel_contact.clone(),
         turret_aim: pose.turret_aim,
         driver_jump_held: pose.driver_jump_held,
+        driver_reversing: pose.driver_reversing,
     }
 }
 
@@ -2100,6 +2126,7 @@ fn sample(
                     fa.turret_aim[1] + (fb.turret_aim[1] - fa.turret_aim[1]) * t,
                 ],
                 driver_jump_held: fb.driver_jump_held,
+                driver_reversing: fb.driver_reversing,
             };
             if let Some(carry) = carried
                 && passages
@@ -2155,6 +2182,7 @@ pub(crate) mod tests {
             turret_aim: [0.0; 2],
             jetting: false,
             driver_jump_held: false,
+            driver_reversing: false,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,
@@ -2646,10 +2674,13 @@ pub(crate) mod tests {
             .context("animated attachment node")?
             .w_axis
             .truncate();
-        let actual = vehicles.hand_holds(&assets, &info, seat)[0].context("named hold")?;
+        let actual = vehicles
+            .hand_holds(&assets, &info, seat)[0]
+            .context("named hold")?
+            .position;
         assert!(actual.abs_diff_eq(expected, 1e-5));
         info.scale = 1.;
-        let unscaled = vehicles.hand_holds(&assets, &info, seat)[0].unwrap();
+        let unscaled = vehicles.hand_holds(&assets, &info, seat)[0].unwrap().position;
         let origin = vehicles.frame(1).unwrap().position;
         assert!(
             (actual - origin).abs_diff_eq((unscaled - origin) * 2., 1e-5),
@@ -2663,8 +2694,10 @@ pub(crate) mod tests {
             .w_axis
             .truncate();
         assert!(
-            vehicles.hand_holds(&assets, &info, seat)[0]
+            vehicles
+                .hand_holds(&assets, &info, seat)[0]
                 .unwrap()
+                .position
                 .abs_diff_eq(expected, 1e-5)
         );
         assets.pack.definitions[index].seats[seat].hands.right_node = Some("missing-grip".into());
@@ -3545,14 +3578,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn headlight_lens_plates_follow_their_beams() -> Result<()> {
+    fn lens_plates_follow_only_the_beams_that_name_them() -> Result<()> {
         use bri_vehicles::schema::{Lamp, LampActivation};
         let dir = crate::testing::ScratchDir::new("lamp-lens")?;
         crate::testing::vehicles::write_pack(dir.path())?;
 
-        // The test car's model gains a headlight lens plate (a second object
-        // on the same node and paint), and its definition a switchable beam
-        // naming it.
+        // The test car's model gains a headlight lens plate and a tail-light
+        // plate (two objects on the same node and paint), and its definition
+        // a switchable beam naming the first and a reverse-or-brake beam
+        // naming the second.
         let pack_path = dir.path().join("vehicles.json");
         let mut pack: bri_vehicles::Pack = serde_json::from_slice(&std::fs::read(&pack_path)?)?;
         let car_model = pack
@@ -3565,16 +3599,18 @@ pub(crate) mod tests {
         let model_path = dir.path().join(&car_model);
         let mut shape: bri_content::shape::Shape =
             serde_json::from_slice(&std::fs::read(&model_path)?)?;
-        shape.meshes.push(shape.meshes[0].clone());
-        shape.objects.push(bri_content::shape::Object {
-            name: "lens".into(),
-            node: Some(0),
-            meshes: vec![1],
-            visibility: 1.0,
-            frame: 0,
-            material_frame: 0,
-            live: None,
-        });
+        for name in ["lens", "tail"] {
+            shape.meshes.push(shape.meshes[0].clone());
+            shape.objects.push(bri_content::shape::Object {
+                name: name.into(),
+                node: Some(0),
+                meshes: vec![shape.meshes.len() - 1],
+                visibility: 1.0,
+                frame: 0,
+                material_frame: 0,
+                live: None,
+            });
+        }
         shape.details[0].object_count = shape.objects.len();
         shape.validate()?;
         let bytes = serde_json::to_vec(&shape)?;
@@ -3601,6 +3637,17 @@ pub(crate) mod tests {
                     ramp: None,
                     lens_objects: vec!["lens".into()],
                 });
+                d.lights.push(Lamp {
+                    activation: LampActivation::ReverseOrBrake,
+                    effect: None,
+                    node: "root".into(),
+                    offset: [0.; 3],
+                    color: [1.4, 0.25, 0.2],
+                    radius: 6.,
+                    cone: None,
+                    ramp: None,
+                    lens_objects: vec!["tail".into()],
+                });
             }
         }
         pack.validate()?;
@@ -3609,18 +3656,20 @@ pub(crate) mod tests {
         let mut assets = VehicleAssets::load(dir.path())?;
         let car_id = bri_vehicles::testing::CAR.to_string();
         let model_key = assets.definition(&car_id).context("car")?.model.clone();
-        let (off_key, on_key) = {
-            let pair = assets.lamp_lens.get(&model_key).context("lens variants")?;
-            (pair.0.clone(), pair.1.clone())
-        };
+        // Each named object gets its own off/on pair, keyed by lower-case name.
+        let plates = assets.lamp_lens.get(&model_key).context("lens variants")?;
+        let (off_lens, on_lens) = (plates["lens"].0.clone(), plates["lens"].1.clone());
+        let (off_tail, on_tail) = (plates["tail"].0.clone(), plates["tail"].1.clone());
 
-        // Both variants exist and draw only the plate: black when off, as
+        // Each plate exists and draws only its object: black when off, as
         // authored when on, with nothing else on the model changed.
         let base = assets.models.get(&model_key).context("base model")?;
-        let off = assets.models.get(&off_key).context("off variant")?;
-        let on = assets.models.get(&on_key).context("on variant")?;
         assert!(!base.data.vertices.is_empty(), "the body stays in the base draw");
-        assert_eq!(off.data.vertices.len(), on.data.vertices.len());
+        for (off_key, on_key) in [(&off_lens, &on_lens), (&off_tail, &on_tail)] {
+            let off = assets.models.get(off_key).context("off variant")?;
+            let on = assets.models.get(on_key).context("on variant")?;
+            assert_eq!(off.data.vertices.len(), on.data.vertices.len());
+        }
         // RGB only: the plate's alpha stays opaque.
         let black = |images: &[bri_render::scene::SceneImage]| {
             images.iter().any(|i| {
@@ -3630,18 +3679,35 @@ pub(crate) mod tests {
                     && i.rgba[..3].iter().all(|b| *b < 8)
             })
         };
-        assert!(black(&off.data.images), "the off plate is near-black");
-        assert!(!black(&on.data.images), "the on plate keeps its authored paint");
+        for (off_key, on_key) in [(&off_lens, &on_lens), (&off_tail, &on_tail)] {
+            assert!(
+                black(&assets.models.get(off_key).unwrap().data.images),
+                "the off plate is near-black"
+            );
+            assert!(
+                !black(&assets.models.get(on_key).unwrap().data.images),
+                "the on plate keeps its authored paint"
+            );
+        }
         assert!(!black(&base.data.images), "nothing else on the model changes");
 
-        // The right variant draws with the light key, as the beams do.
-        for lights in [false, true] {
+        // Each plate follows only the beams that name it: a lit headlight
+        // leaves the tail dark, and braking lights the tail alone. The driver
+        // sits in the control seat for the reverse-or-brake beam to matter.
+        for (lights, reversing, lens_on, tail_on) in [
+            (false, false, false, false),
+            (true, false, true, false),
+            (false, true, false, true),
+            (true, true, true, true),
+        ] {
+            let mut p = pose(1, 0.);
+            p.driver_reversing = reversing;
             let info = VehicleInfo {
                 id: 1,
                 definition: car_id.clone(),
                 scale: 1.,
                 color: None,
-                occupants: vec![],
+                occupants: vec![Some(1)],
                 destroyed: false,
                 turret_broken: false,
                 lights,
@@ -3649,16 +3715,17 @@ pub(crate) mod tests {
             let mut client = ClientVehicles::default();
             client.update(
                 &BTreeMap::from([(1, info.clone())]),
-                &BTreeMap::from([(1, pose(1, 0.))]),
+                &BTreeMap::from([(1, p)]),
                 Some(1.),
                 None,
                 &Default::default(),
             );
             client.prepare(&mut assets, &BTreeMap::from([(1, info)]));
-            let on_pushed = !assets.models.get(&on_key).unwrap().transforms.is_empty();
-            let off_pushed = !assets.models.get(&off_key).unwrap().transforms.is_empty();
-            assert_eq!(on_pushed, lights, "lights={lights}");
-            assert_eq!(off_pushed, !lights, "lights={lights}");
+            let pushed = |key: &String| !assets.models.get(key).unwrap().transforms.is_empty();
+            assert_eq!(pushed(&on_lens), lens_on, "lights={lights} reversing={reversing}");
+            assert_eq!(pushed(&off_lens), !lens_on, "lights={lights} reversing={reversing}");
+            assert_eq!(pushed(&on_tail), tail_on, "lights={lights} reversing={reversing}");
+            assert_eq!(pushed(&off_tail), !tail_on, "lights={lights} reversing={reversing}");
         }
         Ok(())
     }

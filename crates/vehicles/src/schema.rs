@@ -1097,14 +1097,23 @@ pub enum LampActivation {
     Always,
     /// While the driver holds the jump input.
     JumpHeld,
+    /// While the driver brakes or drives in reverse (tail lights).
+    ReverseOrBrake,
 }
 impl LampActivation {
-    pub fn enabled(self, switched: bool, driver: bool, jump_held: bool) -> bool {
+    pub fn enabled(
+        self,
+        switched: bool,
+        driver: bool,
+        jump_held: bool,
+        reversing: bool,
+    ) -> bool {
         match self {
             Self::Switch => switched,
             Self::Driver => driver,
             Self::Always => true,
             Self::JumpHeld => driver && jump_held,
+            Self::ReverseOrBrake => driver && (jump_held || reversing),
         }
     }
 }
@@ -2112,10 +2121,16 @@ mod tests {
     #[test]
     fn a_jump_held_lamp_follows_the_driver_holding_jump() {
         use super::LampActivation::*;
-        assert!(JumpHeld.enabled(false, true, true));
-        assert!(!JumpHeld.enabled(true, true, false));
-        assert!(!JumpHeld.enabled(true, false, true), "nobody driving");
-        assert!(Switch.enabled(true, false, false) && Always.enabled(false, false, false));
+        assert!(JumpHeld.enabled(false, true, true, false));
+        assert!(!JumpHeld.enabled(true, true, false, false));
+        assert!(!JumpHeld.enabled(true, false, true, false), "nobody driving");
+        // A reverse-or-brake lamp (tail lights) follows either input.
+        assert!(ReverseOrBrake.enabled(false, true, true, false), "braking");
+        assert!(ReverseOrBrake.enabled(false, true, false, true), "reversing");
+        assert!(!ReverseOrBrake.enabled(true, true, false, false), "neither input");
+        assert!(!ReverseOrBrake.enabled(true, false, true, true), "nobody driving");
+        assert!(Switch.enabled(true, false, false, false)
+            && Always.enabled(false, false, false, false));
     }
 
     #[test]
