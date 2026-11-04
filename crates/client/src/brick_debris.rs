@@ -44,6 +44,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::f32::consts::FRAC_PI_2;
 mod foley;
 mod sections;
+pub use sections::{ChunkSnapshot, SectionSnapshot};
 use sections::{Section, SectionPiece};
 
 /// The limit a player who never chose gets: v20's default Physics Quality,
@@ -299,6 +300,7 @@ pub struct BrickDebris {
     section_turn: usize,
     body_turn: usize,
     surroundings: Surroundings,
+    collision_query_revision: u64,
     foley: foley::Foley,
     /// Bricks this client saw die that have not come back yet.
     dead: BTreeSet<BrickId>,
@@ -339,6 +341,7 @@ impl BrickDebris {
             section_turn: 0,
             body_turn: 0,
             surroundings: Surroundings::default(),
+            collision_query_revision: 0,
             foley: Default::default(),
             dead: BTreeSet::new(),
             cursor: 0,

@@ -72,6 +72,7 @@ enum Static {
 /// demand.
 #[derive(Default)]
 pub struct Surroundings {
+    revision: u64,
     /// The map's colliders here, from the building's
     /// [`Building::map_generation`] (0 before any).
     map: Vec<ColliderHandle>,
@@ -137,6 +138,9 @@ impl LocalRegion {
     }
 }
 impl Surroundings {
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
     /// A newly restored/inserted solid can overlap a sleeper without an active
     /// dynamic pair to wake it. Query the existing broad phase at that solid,
     /// instead of restarting the sleep timer for the whole debris world.
@@ -179,6 +183,7 @@ impl Surroundings {
                 .map(|collider| world.insert_collider(collider.clone(), None))
                 .collect();
             self.map_generation = building.map_generation();
+            self.revision = self.revision.wrapping_add(1);
             // Another map: none of the old bricks or terrain belong to it.
             self.clear(world);
         }
@@ -211,6 +216,7 @@ impl Surroundings {
         for key in &stale {
             if let Some(Some(handle)) = self.statics.remove(key) {
                 world.remove_collider(handle);
+                self.revision = self.revision.wrapping_add(1);
             }
         }
         true
@@ -233,6 +239,7 @@ impl Surroundings {
                 }
                 let handle = Self::insert_static(world, ColliderBuilder::new(shape).position(pose));
                 self.statics.insert(Static::Brick(id), Some(handle));
+                self.revision = self.revision.wrapping_add(1);
                 added += 1;
             }
             let chunk = |v: f32| (v / TERRAIN_CHUNK).floor() as i32;
@@ -316,6 +323,7 @@ impl Surroundings {
                     }
                     let h = Self::insert_static(world, ColliderBuilder::new(shape).position(pose));
                     self.statics.insert(Static::Brick(id), Some(h));
+                    self.revision = self.revision.wrapping_add(1);
                 }
                 _ => {}
             }
@@ -368,6 +376,9 @@ impl Surroundings {
             _ => Some(SharedShape::compound(shapes)),
         };
         let handle = shape.map(|shape| Self::insert_static(world, ColliderBuilder::new(shape)));
+        if handle.is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
         self.statics.insert(Static::Terrain(cx, cz), handle);
         Ok(())
     }
@@ -381,11 +392,15 @@ impl Surroundings {
     pub fn forget_brick(&mut self, world: &mut PhysicsWorld, brick: BrickId) {
         if let Some(Some(handle)) = self.statics.remove(&Static::Brick(brick)) {
             world.remove_collider(handle);
+            self.revision = self.revision.wrapping_add(1);
         }
     }
     /// Drop every nearby brick and terrain patch (the map stays), and wake
     /// the bodies that rested on them.
     pub fn clear(&mut self, world: &mut PhysicsWorld) {
+        if !self.statics.is_empty() {
+            self.revision = self.revision.wrapping_add(1);
+        }
         self.cache_area = None;
         self.brick_tiles.clear();
         for handle in self.statics.drain().filter_map(|(_, h)| h) {

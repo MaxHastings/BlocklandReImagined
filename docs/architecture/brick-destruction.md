@@ -169,9 +169,10 @@ separate resources. Every admitted member keeps its original mesh, color,
 print and shape. The landing index prepares256 members and models upload at
 most four new appearances per frame. All received material remains visible.
 Complete delivery and GPU readiness permit the shared fall; landing-index work
-continues during flight. Tall
-sections lean around a lowest footprint near the severed support; wide slabs
-drop and tilt; long spans rotate. Corners and 64 distributed material witnesses
+continues during flight. A detached section falls under gravity without an
+invented hinge or shape-dependent rotation; observed contact hands motion to
+local chunk physics. Corners and 64 distributed material witnesses, including
+the base,
 probe a 0.2-second contact horizon under a 4096-unit budget. The displayed clock
 advances through checked time rather than accumulating a delayed jump.
 Contact remains a cosmetic approximation, not a structural collision solver.
@@ -186,7 +187,7 @@ at first contact, rather than becoming permanent hundred-brick bodies.
 
 At most64 resident chunk bodies still share the ordinary debris body budget,
 with2048 resident proxy boxes globally. Exact rectangular face merging preserves
-gaps. Groups beyond that pool retain their compound shapes and use resumable
+gaps. Groups beyond that pool retain their compound shapes and use completed bounded
 translation sweeps against real map, terrain, bricks and other rubble, plus
 shape-based player/vehicle contacts. Physics Off uses this contact path without
 allocating dynamic bodies. The cheaper path holds angular orientation rather
@@ -200,11 +201,13 @@ distance is measured once per actor before selection; sorting does not rescan
 every chunk per comparison. Extent-aware admission covers the ends of long
 members, and farther low-ID actors do not displace a closer actor's contact.
 
-The existing512-query-equivalent section collision budget is split between
-resident window preparation and overflow contacts. Metadata cursor visits cost
-one unit; real shape casts cost16. Both work paths remain resumable and chunks
-take turns. Overflow contact snapshots share source shapes and use a spatial
-index; no rigid body is allocated per visual group. Extreme demand can still
+The existing512-query-equivalent section collision budget is one shared pool
+for collision-window preparation and overflow contacts. Metadata cursor visits
+cost one unit; real shape casts cost16. Preparation is resumable; overflow
+reserves enough work to complete a bounded motion step, with chunks taking turns.
+Every chunk reuses the same prepared static query world. Moving rubble shares
+source shapes and a current-frame spatial index, never a snapshot retained over
+paused frames; no rigid body is allocated per visual group. Extreme demand can still
 reduce update frequency; these bounds do not promise instantaneous simulation
 of arbitrary skyscrapers. The ordinary visual lifetime remains unchanged.
 
