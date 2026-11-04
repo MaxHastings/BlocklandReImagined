@@ -206,6 +206,11 @@ pub struct VehicleSnapshot {
     /// The driver is holding the jump input: what an input-lit lamp follows.
     #[serde(default)]
     pub driver_jump_held: bool,
+    /// The driver drives in reverse (throttle against forward): what a
+    /// presentation condition follows.
+    #[serde(default)]
+    pub driver_reversing: bool,
+    pub driver_braking: bool,
     pub turret_aim: [f32; 2],
     pub turret_damage: Option<f32>,
     pub turret_transform: Option<Transform>,
@@ -403,6 +408,8 @@ struct Instance {
     water: bool,
     previous_velocity: Vec3,
     jump_held: bool,
+    reversing: bool,
+    braking: bool,
     fire_held: bool,
     mounted_once: bool,
     water_coverage: f32,
@@ -997,6 +1004,8 @@ impl VehiclesWorld {
                 water: false,
                 previous_velocity: Vec3::ZERO,
                 jump_held: false,
+                reversing: false,
+                braking: false,
                 fire_held: false,
                 mounted_once: false,
                 water_coverage: 0.,
@@ -2005,7 +2014,10 @@ impl VehiclesWorld {
                     v.relocations += 1;
                     carried.push((*id, carry));
                 }
+                // Preserve each control independently for presentation.
                 v.jump_held = c.jump;
+                v.reversing = c.throttle < 0.;
+                v.braking = c.brake;
                 if alive {
                     weapon_step(self.tick, *id, v, d, world, &mut self.intents);
                 }
@@ -2028,7 +2040,10 @@ impl VehiclesWorld {
             }
             if resting {
                 self.resting_skips += 1;
+                // Preserve each control independently for presentation.
                 v.jump_held = c.jump;
+                v.reversing = c.throttle < 0.;
+                v.braking = c.brake;
                 if alive {
                     weapon_step(self.tick, *id, v, d, world, &mut self.intents);
                 }
@@ -2184,7 +2199,10 @@ impl VehiclesWorld {
                     }
                 }
             }
+            // Preserve each control independently for presentation.
             v.jump_held = c.jump;
+            v.reversing = c.throttle < 0.;
+            v.braking = c.brake;
             if !v.wheels.is_empty() {
                 self.wheel_rays += v.wheels.len() as u64;
                 let through = if passages.list.is_empty() {
@@ -2672,6 +2690,8 @@ impl VehiclesWorld {
             energy: v.energy,
             jetting: v.jetting,
             driver_jump_held: v.jump_held,
+            driver_reversing: v.reversing,
+            driver_braking: v.braking,
             turret_aim: [if d.is_actor() { 0. } else { barrel[0] }, barrel[1]],
             turret_damage: v.turret_damage,
             turret_transform: d

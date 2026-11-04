@@ -378,6 +378,7 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 color: from,
                 brightness: 1.0,
                 radius: start,
+                cone: None,
                 color_curves: Some(std::array::from_fn(|i| Curve {
                     period: lifetime,
                     linear: true,

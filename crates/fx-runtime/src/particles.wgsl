@@ -1,4 +1,4 @@
-struct PointLight { position_radius:vec4<f32>, color:vec4<f32> }
+struct PointLight { position_radius:vec4<f32>, color:vec4<f32>, cone:vec4<f32> }
 struct Camera { view_projection:mat4x4<f32>, right:vec4<f32>, up:vec4<f32>, position:vec4<f32>, atmosphere:vec4<f32>, fog_color:vec4<f32>, haze:vec4<f32>, ambient:vec4<f32>, sun_direction:vec4<f32>, sun_color:vec4<f32>, light_count:vec4<u32>, lights:array<PointLight,256> }
 @group(0) @binding(0) var<uniform> camera:Camera;
 @group(1) @binding(0) var images:texture_2d_array<f32>;
@@ -46,7 +46,9 @@ struct Out { @builtin(position) position:vec4<f32>, @location(0) uv:vec2<f32>, @
             let distance=length(delta);
             if distance<lamp.position_radius.w {
                 // Same quadratic point attenuation as native vertex-lit models.
-                light+=lamp.color.rgb*max(dot(normal,delta/max(distance,0.00001)),0.)/(1.+0.1*distance*distance);
+                let toward=delta/max(distance,0.00001);
+                let angular=select(1.,clamp(dot(-toward,lamp.cone.xyz)-lamp.cone.w,0.,1.),dot(lamp.cone.xyz,lamp.cone.xyz)>0.);
+                light+=lamp.color.rgb*angular*max(dot(normal,delta/max(distance,0.00001)),0.)/(1.+0.1*distance*distance);
             }
         }
         tint=vec4(color.rgb*light,color.a);

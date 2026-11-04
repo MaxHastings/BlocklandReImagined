@@ -8,7 +8,7 @@ use bri_content::{
     avatar::{Appearance, Dress, Outfit, Package, Rig},
     body::{Animations, CrouchComposition, Role, RoleClips, Sockets},
     body_pose::{
-        BodyFitInput, BodyFits as Fits, BodyFittingInput, BodyHolds, BodySocketInput,
+        BodyFitInput, BodyFits as Fits, BodyFittingInput, BodyHolds, BodySocketInput, HandHold,
         apply_body_fitting, body_mount_action, body_mount_node, body_offset_socket,
         build_body_fits, first_person_hand_frame, sample_reference_tool_action,
     },
@@ -1218,7 +1218,7 @@ struct Holds {
     /// [`AvatarAnimationInput::support`].
     support: Option<Vec3>,
     /// [`AvatarAnimationInput::hand_holds`].
-    seat: [Option<Vec3>; 2],
+    seat: [Option<HandHold>; 2],
     /// Explicit seat-frame shift; None retains legacy fitting.
     seat_shift: Option<Vec3>,
 }
@@ -1252,6 +1252,25 @@ impl HeldToolPose {
             (true, false) => Self::Right,
             (false, true) => Self::Left,
             (true, true) => Self::Both,
+        }
+    }
+
+    /// A rider's seat hand holds ([`AvatarAnimationInput::hand_holds`]), with
+    /// the hands this pose raises to hold a tool let go: they cannot grip
+    /// and hold at once. Index 0 is the right hand.
+    pub fn release_seat_holds(
+        self,
+        holds: [Option<HandHold>; 2],
+        supporting: bool,
+    ) -> [Option<HandHold>; 2] {
+        if supporting {
+            return [None; 2];
+        }
+        match self {
+            Self::None => holds,
+            Self::Right => [None, holds[1]],
+            Self::Left => [holds[0], None],
+            Self::Both => [None; 2],
         }
     }
 }
@@ -1295,8 +1314,11 @@ pub struct AvatarAnimationInput {
     pub seat_overlays: Vec<(String, f32)>,
     /// Where a seated rider's right and left hands hold on, in the world
     /// (a seat's `hands`): each arm reaches its hand there after the clip
-    /// pose ([`reach_hands`]).
-    pub hand_holds: [Option<Vec3>; 2],
+    /// pose ([`reach_hands`]). A hand holding a tool lets go of its grip
+    /// (`HeldToolPose::release_seat_holds`). A seat target on the vehicle's
+    /// own model also carries how far it has turned since rest, so the hand
+    /// follows its wheel.
+    pub hand_holds: [Option<HandHold>; 2],
     /// Where the off hand holds what the right hand holds in both hands,
     /// in the right hand's frame (`ItemAssets::image_support`). A fitted
     /// body reaches its left hand there.
@@ -3261,6 +3283,32 @@ pub fn body_models(dir: &Path, id: &str) -> Vec<(String, Option<String>)> {
 mod tests {
     use super::*;
 
+    /// A raised tool hand lets go of its seat grip, and stowing resumes it.
+    #[test]
+    fn a_tool_hand_lets_go_of_the_seat_grip() {
+        let grip = [
+            Some(HandHold::position_only(Vec3::ONE)),
+            Some(HandHold::position_only(-Vec3::ONE)),
+        ];
+        assert_eq!(HeldToolPose::None.release_seat_holds(grip, false), grip);
+        assert_eq!(
+            HeldToolPose::Right.release_seat_holds(grip, false),
+            [None, Some(HandHold::position_only(-Vec3::ONE))]
+        );
+        assert_eq!(
+            HeldToolPose::Left.release_seat_holds(grip, false),
+            [Some(HandHold::position_only(Vec3::ONE)), None]
+        );
+        assert_eq!(
+            HeldToolPose::Both.release_seat_holds(grip, false),
+            [None; 2]
+        );
+        assert_eq!(
+            HeldToolPose::Right.release_seat_holds(grip, true),
+            [None; 2]
+        );
+    }
+
     /// UE2 links animation sets to a mesh: a body's archetype lists `animation_libraries` and the clips join the body's, keyed by
     /// their original names, matched without regard to case; the body's own clips win, and a missing library fails the body.
     #[test]
@@ -4152,7 +4200,8 @@ mod tests {
                     .collect();
                 let targets =
                     ends.map(|end| before[end].w_axis.truncate() + Vec3::new(0.01, 0.04, -0.09));
-                input.hand_holds = targets.map(|v| Some(frame.transform_point3(v)));
+                input.hand_holds =
+                    targets.map(|v| Some(HandHold::position_only(frame.transform_point3(v))));
                 let mut expected = before.clone();
                 for n in 0..2 {
                     reach_hands(
@@ -4178,7 +4227,13 @@ mod tests {
                     "seat holds must work when generic fitting is bypassed"
                 );
                 assert!(frame.abs_diff_eq(body.model_transform, 1e-6));
-                input.hand_holds = [Some(Vec3::NAN), None];
+                input.hand_holds = [
+                    Some(HandHold {
+                        position: Vec3::NAN,
+                        ..Default::default()
+                    }),
+                    None,
+                ];
                 body.pose_with_animation(&assets, &p, 0., &input)?;
                 assert!(
                     body.posed_nodes
@@ -5772,7 +5827,10 @@ mod tests {
         let rest = [hand(&mesh, 0)?, hand(&mesh, 1)?];
         // Each hand a little forward and up of where the sit leaves it.
         let forward = Quat::from_rotation_y(0.4) * Vec3::new(0.0, 0.12, -0.12);
-        input.hand_holds = [Some(rest[0] + forward), Some(rest[1] + forward)];
+        input.hand_holds = [
+            Some(HandHold::position_only(rest[0] + forward)),
+            Some(HandHold::position_only(rest[1] + forward)),
+        ];
         mesh.pose_with_animation(assets, &player(), 0.0, &input)?;
         for (n, rest) in rest.into_iter().enumerate() {
             let reached = hand(&mesh, n)?.distance(rest + forward);

@@ -198,6 +198,7 @@ impl WeaponEffects {
                 color: p.light_color,
                 brightness: 1.,
                 radius: p.light_radius,
+                cone: None,
                 color_curves: None,
                 brightness_curve: None,
                 radius_curve: None,
@@ -215,6 +216,7 @@ impl WeaponEffects {
                 color: light.color,
                 brightness: 1.,
                 radius: light.radius,
+                cone: light.cone,
                 color_curves: None,
                 brightness_curve: None,
                 radius_curve: None,
@@ -669,7 +671,7 @@ impl WeaponEffects {
     pub fn sync_image_lights(
         &mut self,
         view: &WeaponView,
-        at: impl Fn(u64, u8) -> Option<Vec3>,
+        at: impl Fn(u64, u8) -> Option<SourceTransform>,
     ) -> Result<()> {
         let mut desired = BTreeMap::new();
         for (owner, images) in &view.images {
@@ -679,9 +681,9 @@ impl WeaponEffects {
                     .images
                     .get(&m.image)
                     .is_some_and(|i| i.light.is_some())
-                    && let Some(position) = at(*owner, m.hand).filter(|p| p.is_finite())
+                    && let Some(transform) = at(*owner, m.hand).filter(|t| valid_transform(*t))
                 {
-                    desired.insert((*owner, m.hand), (m.image.clone(), m.paint, position));
+                    desired.insert((*owner, m.hand), (m.image.clone(), m.paint, transform));
                 }
             }
         }
@@ -696,11 +698,7 @@ impl WeaponEffects {
             }
             keep
         });
-        for (key, (image, paint, position)) in desired {
-            let transform = SourceTransform {
-                position,
-                ..Default::default()
-            };
+        for (key, (image, paint, transform)) in desired {
             if let Some((_, _, handle)) = self.image_lights.get(&key) {
                 self.world.update_source(*handle, transform)?;
                 continue;

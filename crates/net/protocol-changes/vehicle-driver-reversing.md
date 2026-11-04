@@ -1,0 +1,1 @@
+`VehicleView::driver_reversing` (and `VehiclePose::driver_reversing`, `VehicleSnapshot::driver_reversing`): the vehicle's driver is driving in reverse (throttle against forward), replicated with the pose so every client can follow it (input-lit lamps). Defaults false.

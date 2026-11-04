@@ -180,6 +180,8 @@ mod tests {
             wheel_rotation: vec![rotation; d.wheels.len()],
             wheel_contact: vec![true; d.wheels.len()],
             driver_jump_held: false,
+            driver_reversing: false,
+            driver_braking: false,
             turret_aim: [0.; 2],
         }
     }

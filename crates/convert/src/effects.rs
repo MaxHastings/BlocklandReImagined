@@ -383,6 +383,7 @@ pub fn light(d: &Declaration) -> Result<(Light, Vec<String>)> {
         color: [color[0], color[1], color[2]],
         brightness: f.number("brightness", 1.0)?,
         radius: f.number("radius", 10.0)?,
+        cone: None,
         color_curves,
         brightness_curve,
         radius_curve,

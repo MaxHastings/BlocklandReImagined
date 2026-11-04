@@ -1350,6 +1350,14 @@ impl App {
                     mounted_seat,
                     view.weapons.images.get(owner).map(Vec::as_slice),
                 );
+                // A hand holding a tool lets go of the wheel grip it would
+                // otherwise hold; stowing the tool resumes the grip.
+                let held_pose = if dead {
+                    self.combat.hugging.remove(owner);
+                    crate::avatar::HeldToolPose::None
+                } else {
+                    self.combat.hug_pose(*owner, held)
+                };
                 let input = crate::avatar::AvatarAnimationInput {
                     seat_ready,
                     seat_fallback_hip: mounted_seat
@@ -1364,20 +1372,17 @@ impl App {
                         .cloned()
                         .filter(|_| !dead)
                         .unwrap_or_default(),
-                    hand_holds: self
-                        .mounts
-                        .rider_hands
-                        .get(owner)
-                        .copied()
-                        .filter(|_| !dead)
-                        .unwrap_or_default(),
+                    hand_holds: held_pose.release_seat_holds(
+                        self.mounts
+                            .rider_hands
+                            .get(owner)
+                            .copied()
+                            .filter(|_| !dead)
+                            .unwrap_or_default(),
+                        support.is_some(),
+                    ),
                     support,
-                    held_tool_pose: if dead {
-                        self.combat.hugging.remove(owner);
-                        crate::avatar::HeldToolPose::None
-                    } else {
-                        self.combat.hug_pose(*owner, held)
-                    },
+                    held_tool_pose: held_pose,
                     action: self
                         .avatar
                         .avatar_actions

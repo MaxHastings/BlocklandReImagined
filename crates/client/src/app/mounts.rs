@@ -19,7 +19,8 @@ pub(super) struct Mounts {
     pub(super) rider_fallback_hips: BTreeMap<bri_world::OwnerId, Vec3>,
     /// This frame's seat hand holds for every vehicle rider whose seat has
     /// them, right then left.
-    pub(super) rider_hands: BTreeMap<bri_world::OwnerId, [Option<Vec3>; 2]>,
+    pub(super) rider_hands:
+        BTreeMap<bri_world::OwnerId, [Option<bri_content::body_pose::HandHold>; 2]>,
     /// This frame's aim across its range for every gunner, 0 aiming
     /// highest to 1 lowest (`ClientVehicles::seat_aim`).
     pub(super) rider_aims: BTreeMap<bri_world::OwnerId, f32>,

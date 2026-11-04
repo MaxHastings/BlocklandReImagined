@@ -55,6 +55,11 @@ pub struct VehicleSave {
     pub still: u8,
     pub previous_velocity: [f32; 3],
     pub jump_held: bool,
+    /// The driver drives in reverse (presentation conditions can follow it).
+    #[serde(default)]
+    pub reversing: bool,
+    #[serde(default)]
+    pub braking: bool,
     pub fire_held: bool,
     pub mounted_once: bool,
     pub mouse_steering: [f32; 2],
@@ -126,6 +131,8 @@ impl VehiclesWorld {
                 still: v.still,
                 previous_velocity: v.previous_velocity.to_array(),
                 jump_held: v.jump_held,
+                reversing: v.reversing,
+                braking: v.braking,
                 fire_held: v.fire_held,
                 mounted_once: v.mounted_once,
                 mouse_steering: v.mouse_steering,
@@ -136,7 +143,7 @@ impl VehiclesWorld {
             });
         }
         Ok(Checkpoint {
-            schema_version: 3,
+            schema_version: 4,
             content_fingerprint: self.catalog_fingerprint.clone(),
             tick: self.tick,
             vehicles,
@@ -288,6 +295,8 @@ impl VehiclesWorld {
                     water: saved.water,
                     previous_velocity: Vec3::from_array(saved.previous_velocity),
                     jump_held: saved.jump_held,
+                    reversing: saved.reversing,
+                    braking: saved.braking,
                     fire_held: saved.fire_held,
                     mounted_once: saved.mounted_once,
                     water_coverage: saved.water_coverage,
@@ -321,7 +330,7 @@ impl VehiclesWorld {
         c: &Checkpoint,
         allowed: &mut impl FnMut(Occupant, &Spawn, usize) -> bool,
     ) -> Result<()> {
-        ensure!(c.schema_version == 3, "unsupported checkpoint schema");
+        ensure!(c.schema_version == 4, "unsupported checkpoint schema");
         ensure!(
             c.content_fingerprint == self.catalog_fingerprint,
             "checkpoint content fingerprint mismatch"

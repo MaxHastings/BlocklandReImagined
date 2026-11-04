@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "vehicle-light-watcher",
+  "version": "0.1.0",
+  "api": 1,
+  "name": "Vehicle Light Watcher (test fixture)",
+  "description": "Test fixture: logs every on_vehicle_lights delivery for the sim tests.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "behaviour", "id": "vehicle-light-watcher:behaviour/main", "file": "behaviour.json" },
+    { "kind": "script", "id": "vehicle-light-watcher:script/main", "file": "main.rhai" }
+  ]
+}

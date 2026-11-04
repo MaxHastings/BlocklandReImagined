@@ -1,7 +1,7 @@
 // Merge into SceneRenderer's shader; group/binding numbers are host-selected.
 // Upload bytemuck::cast_slice(frame.lights.map(GpuLight::from)) to STORAGE|COPY_DST.
 // Bind only the initialized range (or pass a separate active count).
-struct FxLight { position_radius:vec4<f32>, color:vec4<f32> }
+struct FxLight { position_radius:vec4<f32>, color:vec4<f32>, cone:vec4<f32> }
 @group(3) @binding(0) var<storage,read> fx_lights:array<FxLight>;
 
 fn native_effect_lighting(world_position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
@@ -13,7 +13,8 @@ fn native_effect_lighting(world_position:vec3<f32>,normal:vec3<f32>)->vec3<f32> 
         if radius>0. && distance<radius {
             let direction=delta/max(distance,0.0001);
             let attenuation=max(0.,1.-distance/radius);
-            sum+=light.color.rgb*max(dot(normal,direction),0.)*attenuation*attenuation;
+            let angular=select(1.,clamp(dot(-direction,light.cone.xyz)-light.cone.w,0.,1.),dot(light.cone.xyz,light.cone.xyz)>0.);
+            sum+=light.color.rgb*max(dot(normal,direction),0.)*attenuation*attenuation*angular;
         }
     }
     return sum;

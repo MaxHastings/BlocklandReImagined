@@ -1314,3 +1314,53 @@ fn leaving_other_seats_preserves_the_gunners_held_charge(f: &Fixture) {
     assert!(v.drain_intents().iter().any(|i| matches!(i, Intent::Fire(f) if f.occupant == Some(OccupantId(22)))));
 }
 }
+
+// Brake, jump and reverse are separate controls, including at rest, while
+// airborne, after checkpoint restore, and after releasing the controls.
+#[test]
+fn driver_lamp_inputs_remain_independent_and_checkpointed() {
+    let f = Fixture::synthetic();
+    for y in [2., 40.] {
+        let (mut a, mut aw) = setup(&f);
+        spawn(&mut a, &mut aw, f.car, y);
+        mount(&mut a, &aw, 0);
+        for (jump, brake, throttle) in [
+            (false, true, 0.),
+            (true, false, 0.),
+            (false, false, -1.),
+            (false, false, 0.),
+        ] {
+            a.set_controls(
+                OwnerId(10),
+                OccupantId(20),
+                Controls {
+                    jump,
+                    brake,
+                    throttle,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            step(&mut a, &mut aw, 1, None);
+            let assert_inputs = |v: &VehiclesWorld, w: &PhysicsWorld| {
+                let snapshot = v.snapshot(w);
+                let car = &snapshot.vehicles[0];
+                assert_eq!(
+                    (
+                        car.driver_jump_held,
+                        car.driver_braking,
+                        car.driver_reversing
+                    ),
+                    (jump, brake, throttle < 0.)
+                );
+            };
+            assert_inputs(&a, &aw);
+            let cp = save(&mut a, &aw);
+            let (mut restored, mut rw) = setup(&f);
+            restored
+                .restore_checkpoint(&mut rw, cp, |_, _, _| true)
+                .unwrap();
+            assert_inputs(&restored, &rw);
+        }
+    }
+}

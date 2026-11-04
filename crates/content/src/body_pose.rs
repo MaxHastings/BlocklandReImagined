@@ -331,6 +331,25 @@ pub fn build_body_fits(input: BodyFitInput<'_>) -> BodyFits {
     fits
 }
 
+/// A seat hand target: where a rider's hand reaches (`position`, world), and
+/// how far its grip node has turned since rest (`turn`, world frame) so the
+/// hand can follow — identity for targets without a named node to turn with
+/// (authored points, gunner grips).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HandHold {
+    pub position: Vec3,
+    pub turn: Quat,
+}
+impl HandHold {
+    /// A target with no grip node to turn with.
+    pub fn position_only(position: Vec3) -> Self {
+        Self {
+            position,
+            turn: Quat::IDENTITY,
+        }
+    }
+}
+
 /// Already selected hold eligibility; thread2 liveness remains with the caller.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BodyHolds {
@@ -338,7 +357,7 @@ pub struct BodyHolds {
     pub pitch: f32,
     pub support: Option<Vec3>,
     /// World-space seat targets, right then left.
-    pub seat: [Option<Vec3>; 2],
+    pub seat: [Option<HandHold>; 2],
 }
 
 /// Nodes and indices must describe the same native rig. Invalid hand indices
@@ -364,19 +383,60 @@ pub fn apply_body_fitting(nodes: &mut [Mat4], input: BodyFittingInput<'_>) {
         if inverse.is_finite() && input.parents.len() == nodes.len() {
             for n in 0..2 {
                 if let (Some(end), Some(hold)) = (ends[n], input.holds.seat[n])
-                    && hold.is_finite()
+                    && hold.position.is_finite()
                 {
+                    let local_target = inverse.transform_point3(hold.position);
                     crate::hold::reach(
                         input.parents,
                         nodes,
                         end,
                         ends[1 - n].or(input.eye),
-                        inverse.transform_point3(hold),
+                        local_target,
                     );
+                    if !hold.turn.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                        follow_grip_turn(
+                            input.parents,
+                            nodes,
+                            end,
+                            hold.turn,
+                            input.model_transform,
+                        );
+                    }
                 }
             }
         }
     }
+}
+
+/// Turn a reached seat hand with its grip node's turn since rest (`turn`,
+/// world frame): rotate only the subtree below the wrist — the socket's
+/// parent — about the socket itself, so the hand stays on its target and
+/// turns as if rigidly held by the wheel while the arm that reached it is
+/// left exactly as solved. Identity `turn` leaves every node unchanged.
+fn follow_grip_turn(
+    parents: &[Option<usize>],
+    nodes: &mut [Mat4],
+    end: usize,
+    turn: Quat,
+    model_transform: Mat4,
+) {
+    let count = nodes.len();
+    if end >= count || parents.len() != count || !turn.is_finite() || !turn.is_normalized() {
+        return;
+    }
+    // The turn is a world-frame rotation; conjugate it into the body's
+    // rest-pose space so rotating there turns the hand in the world.
+    let (_, body_rotation, _) = model_transform.to_scale_rotation_translation();
+    if !body_rotation.is_finite() {
+        return;
+    }
+    crate::hold::turn_subtree(
+        parents,
+        nodes,
+        parents[end].unwrap_or(end),
+        nodes[end].w_axis.truncate(),
+        body_rotation.conjugate() * turn * body_rotation,
+    );
 }
 
 fn apply_generic_fitting(nodes: &mut [Mat4], input: &BodyFittingInput<'_>) {
@@ -640,7 +700,7 @@ mod tests {
                     right_socket_offset: Vec3::ZERO,
                     model_transform: Mat4::IDENTITY,
                     holds: BodyHolds {
-                        seat: [Some(Vec3::ONE); 2],
+                        seat: [Some(HandHold::position_only(Vec3::ONE)); 2],
                         ..Default::default()
                     },
                 },
@@ -690,7 +750,8 @@ mod tests {
                             raised: [true; 2],
                             pitch: f32::NAN,
                             support: Some(Vec3::ONE),
-                            seat: targets.map(|v| Some(frame.transform_point3(v))),
+                            seat: targets
+                                .map(|v| Some(HandHold::position_only(frame.transform_point3(v)))),
                         },
                     },
                 );
@@ -704,6 +765,140 @@ mod tests {
                 .zip(&bind)
                 .any(|(a, b)| !a.abs_diff_eq(*b, 1e-4))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn seat_grips_stay_in_world_space_while_a_scaled_body_looks_around() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let parents: Vec<_> = rig.shape.nodes.iter().map(|n| n.parent).collect();
+        let ends = ["Mount0", "Mount1"]
+            .map(|name| rig.shape.nodes.iter().position(|n| n.name == name).unwrap());
+        let mut bind = crate::animation::sample(&rig.shape, None, 0.)?.nodes;
+        let shoulders = ["RightArm", "LeftArm"]
+            .map(|name| rig.shape.nodes.iter().position(|n| n.name == name).unwrap());
+        // Give this coordinate-frame test two articulated, equal-length
+        // segments. The Blockhead fixture's short socket segment deliberately
+        // selects a one-bone reach, which cannot shorten its reach radius.
+        let wrists = ["RightHand", "LeftHand"]
+            .map(|name| rig.shape.nodes.iter().position(|n| n.name == name).unwrap());
+        for n in 0..2 {
+            bind[wrists[n]].w_axis =
+                ((bind[ends[n]].w_axis.truncate() + bind[shoulders[n]].w_axis.truncate()) * 0.5)
+                    .extend(1.);
+        }
+        for scale in [0.5, 1.7] {
+            let seat = Mat4::from_scale_rotation_translation(
+                Vec3::splat(scale),
+                Quat::from_rotation_z(0.3),
+                Vec3::new(2., 3., 4.),
+            );
+            let targets = std::array::from_fn::<_, 2, _>(|n| {
+                seat.transform_point3(
+                    bind[ends[n]]
+                        .w_axis
+                        .truncate()
+                        .lerp(bind[shoulders[n]].w_axis.truncate(), 0.2),
+                )
+            });
+            for look in [-0.15, 0., 0.15] {
+                let frame = seat * Mat4::from_rotation_y(look);
+                let mut nodes = bind.clone();
+                apply_body_fitting(
+                    &mut nodes,
+                    BodyFittingInput {
+                        parents: &parents,
+                        hands: ends.map(Some),
+                        eye: None,
+                        fits: None,
+                        right_socket_offset: Vec3::ZERO,
+                        model_transform: frame,
+                        holds: BodyHolds {
+                            seat: targets.map(|p| Some(HandHold::position_only(p))),
+                            ..Default::default()
+                        },
+                    },
+                );
+                for n in 0..2 {
+                    let actual = frame.transform_point3(nodes[ends[n]].w_axis.truncate());
+                    assert!(
+                        actual.distance(targets[n]) < 1e-3,
+                        "scale {scale}, look {look}, hand {n}: {actual:?} vs {:?}",
+                        targets[n]
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fitting_seat_hands_turn_with_their_grip_nodes() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let parents: Vec<_> = rig.shape.nodes.iter().map(|n| n.parent).collect();
+        let index = |name: &str| rig.shape.nodes.iter().position(|n| n.name == name).unwrap();
+        let ends = [index("Mount0"), index("Mount1")];
+        let arms = [index("RightArm"), index("LeftArm")];
+        let wrists = [index("RightHand"), index("LeftHand")];
+        let bind = crate::animation::sample(&rig.shape, None, 0.)?.nodes;
+        let frame = Mat4::from_scale_rotation_translation(
+            Vec3::splat(1.7),
+            Quat::from_rotation_z(0.4),
+            Vec3::new(2., 3., 4.),
+        );
+        let targets = ends.map(|i| bind[i].w_axis.truncate() + Vec3::new(0.02, 0.08, -0.1));
+        let world_rotation =
+            |nodes: &[Mat4], i: usize| (frame * nodes[i]).to_scale_rotation_translation().1;
+        let fit = |turn: Quat| -> Vec<Mat4> {
+            let mut nodes = bind.clone();
+            apply_body_fitting(
+                &mut nodes,
+                BodyFittingInput {
+                    parents: &parents,
+                    hands: ends.map(Some),
+                    eye: None,
+                    fits: None,
+                    right_socket_offset: Vec3::ZERO,
+                    model_transform: frame,
+                    holds: BodyHolds {
+                        seat: targets.map(|v| {
+                            Some(HandHold {
+                                position: frame.transform_point3(v),
+                                turn,
+                            })
+                        }),
+                        ..Default::default()
+                    },
+                },
+            );
+            nodes
+        };
+        let rested = fit(Quat::IDENTITY);
+        let turned = fit(Quat::from_rotation_y(0.6));
+        for n in 0..2 {
+            // The socket turns with its grip node, exactly, in the world.
+            assert!(world_rotation(&turned, ends[n]).abs_diff_eq(
+                Quat::from_rotation_y(0.6) * world_rotation(&rested, ends[n]),
+                1e-5
+            ));
+            // It stays on its target while it turns.
+            assert!(
+                turned[ends[n]]
+                    .w_axis
+                    .truncate()
+                    .abs_diff_eq(rested[ends[n]].w_axis.truncate(), 1e-5)
+            );
+            // The arm chain is exactly as the reach solved it; only the
+            // subtree below the wrist moved.
+            assert!(
+                turned[arms[n]].abs_diff_eq(rested[arms[n]], 1e-6),
+                "arm {n} moved"
+            );
+            assert!(
+                !turned[wrists[n]].abs_diff_eq(rested[wrists[n]], 1e-4),
+                "hand {n} did not turn"
+            );
+        }
         Ok(())
     }
 

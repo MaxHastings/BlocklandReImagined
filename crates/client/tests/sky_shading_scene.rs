@@ -91,6 +91,8 @@ fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
             turret_aim: [0.; 2],
             jetting: false,
             driver_jump_held: false,
+            driver_reversing: false,
+            driver_braking: false,
             angular_velocity: [0.; 3],
             mouse_steering: [0.; 2],
             driver_input: 0,

@@ -381,6 +381,7 @@ fn main() -> Result<()> {
                 color: start,
                 brightness: 1.,
                 radius: start_radius,
+                cone: None,
                 color_curves: Some(std::array::from_fn(|i| Curve {
                     period: lifetime,
                     linear: true,
