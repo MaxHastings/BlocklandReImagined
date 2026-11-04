@@ -201,6 +201,11 @@ impl Session {
                 next: (!b.surprise.standing())
                     .then(|| b.plan.first().map(|p| p.feet.to_array()))
                     .flatten(),
+                next_mode: b
+                    .plan
+                    .first()
+                    .filter(|_| !b.surprise.standing())
+                    .map(|w| w.mode),
                 next_actions: (!b.surprise.standing())
                     .then(|| b.plan.first().map(|p| [p.jump, p.crouch]))
                     .flatten(),
@@ -303,6 +308,7 @@ mod tests {
             task: None,
             goal: None,
             next: None,
+            next_mode: None,
             next_actions: None,
             path_steps: 0,
             searching: false,

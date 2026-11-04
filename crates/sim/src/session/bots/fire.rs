@@ -2,6 +2,12 @@
 //! the hand's fire gates and charge, arming and a body's bite.
 use super::*;
 
+/// A currently eligible body-attack contact, shared by planning and execution.
+pub(super) struct BiteContact {
+    pub vehicle: Option<u64>,
+    pub point: Vec3,
+}
+
 /// A shot at the bot's target as it stands now ([`Session::bot_shot`]).
 pub(super) struct Shot {
     pub crew_ready: bool,
@@ -472,8 +478,38 @@ impl Session {
         }
         Ok(())
     }
-    /// A hit with the bot's body (`BotKind::melee`) on `target`, if it
-    /// reaches them and the damage rules let it hurt them.
+    /// Current contact admitted by the body attack's range and damage rules.
+    pub(super) fn bot_bite_contact(
+        &self,
+        bot: OwnerId,
+        target: OwnerId,
+        melee: &crate::bot_kind::BotMelee,
+    ) -> Option<BiteContact> {
+        let (me, them) = (self.peers.get(&bot)?, self.peers.get(&target)?);
+        if !them.combat.alive || !self.can_damage_player(bot, target, false) {
+            return None;
+        }
+        let eye = me.player.eye();
+        let state = them.player.state();
+        let feet = Vec3::from(state.feet);
+        let height = crate::water::body_height(state, them.player.tuning()) * state.scale;
+        let point = Vec3::new(feet.x, eye.y.clamp(feet.y, feet.y + height), feet.z);
+        let width = them.player.tuning().width * state.scale * 0.5;
+        if point.distance(eye) <= melee.reach + width {
+            Some(BiteContact {
+                vehicle: None,
+                point,
+            })
+        } else {
+            self.bite_hull(melee, target, eye)
+                .filter(|(_, at)| at.distance(eye) <= melee.reach)
+                .map(|(vehicle, point)| BiteContact {
+                    vehicle: Some(vehicle),
+                    point,
+                })
+        }
+    }
+
     pub(super) fn bot_bite(
         &mut self,
         bot: OwnerId,
@@ -481,49 +517,25 @@ impl Session {
         melee: &crate::bot_kind::BotMelee,
         tick: u64,
     ) -> Result<()> {
-        let (Some(me), Some(them)) = (self.peers.get(&bot), self.peers.get(&target)) else {
+        let Some(contact) = self.bot_bite_contact(bot, target, melee) else {
             return Ok(());
         };
-        if !them.combat.alive {
-            return Ok(());
-        }
-        let eye = me.player.eye();
-        // The nearest point of their body, feet to head.
-        let state = them.player.state();
-        let feet = Vec3::from(state.feet);
-        let height = crate::water::body_height(state, them.player.tuning()) * state.scale;
-        let point = Vec3::new(feet.x, eye.y.clamp(feet.y, feet.y + height), feet.z);
-        let width = them.player.tuning().width * state.scale * 0.5;
-        if !self.can_damage_player(bot, target, false) {
-            return Ok(());
-        }
-        if point.distance(eye) > melee.reach + width {
-            // Seated out of reach: the hull it sits in is what it lands on.
-            let hull = self
-                .bite_hull(melee, target, eye)
-                .filter(|(_, at)| at.distance(eye) <= melee.reach);
-            if let Some((vehicle, at)) = hull {
-                if let Some(action) = &melee.action {
-                    self.play_thread(tick, bot, MELEE_THREAD, action);
-                }
-                self.damage_vehicle(
-                    vehicle,
-                    melee.damage,
-                    bot,
-                    &melee.name,
-                    at,
-                    crate::session::vehicles::VehicleHarm::Weapon { projectile: None },
-                )?;
-            }
-            return Ok(());
-        }
         if let Some(action) = &melee.action {
             self.play_thread(tick, bot, MELEE_THREAD, action);
         }
-        // The source collision policy tests existing health before its
-        // ordinary damage handler. An eligible contact converts instead of
-        // first killing a critically hurt bot or converting a healthy one
-        // on the bite that merely crosses the threshold.
+        if let Some(vehicle) = contact.vehicle {
+            self.damage_vehicle(
+                vehicle,
+                melee.damage,
+                bot,
+                &melee.name,
+                contact.point,
+                crate::session::vehicles::VehicleHarm::Weapon { projectile: None },
+            )?;
+            return Ok(());
+        }
+        // Conversion checks existing health before ordinary damage, as the
+        // source collision policy does. Revalidate contact at execution time.
         if self.try_convert_bitten_bot(bot, target, melee)? {
             return Ok(());
         }
@@ -532,7 +544,7 @@ impl Session {
             melee.damage,
             combat::DamageKind::weapon(melee.name.clone(), true),
             Some(bot),
-            Some(point),
+            Some(contact.point),
         )?;
         Ok(())
     }
