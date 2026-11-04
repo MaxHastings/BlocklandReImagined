@@ -144,6 +144,7 @@ impl Session {
                     .starved(*bot, tick, SIGHT_STARVED_TICKS),
                 route_short: b
                     .partial_route
+                    .is_some()
                     .then(|| {
                         let (goal, end) = (b.goal?.point(b.leash), b.plan.last()?.feet);
                         Some([flat(goal - end).length(), goal.y - end.y])
@@ -151,6 +152,7 @@ impl Session {
                     .flatten(),
                 route_end: b
                     .partial_route
+                    .is_some()
                     .then(|| b.plan.last().map(|w| w.feet.to_array()))
                     .flatten(),
                 unnoticed_hit: self

@@ -78,6 +78,9 @@ compiled dependencies; it is not recorded as a full pass. Windows formatting
 was run per package after a combined cargo-fmt invocation exceeded the command
 line limit. No retry-only success is characterized as a clean flaky-test pass.
 
-Platform CI on the final pushed head, final history/protocol check and merge
-remain required. The rocket-collapse and zombie-tower reports are separate
+Final head `51798d555` passed the history/protocol check and all seven executed
+platform CI jobs (Windows check and shipping binaries, Linux wheel routing,
+four Linux test shards). The conditional Windows test job was skipped; local
+Windows runtime checks are scoped above. Merged as `0fcf77f0d` on November 4.
+The rocket-collapse and zombie-tower reports are separate
 next-release work; no correction or interactive acceptance is claimed here.

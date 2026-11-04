@@ -1862,15 +1862,18 @@ const SHALLOW_DROP: f32 = 4.0;
 
 #[derive(Clone, Copy, PartialEq)]
 struct Open {
+    rise: f32,
     f: f32,
+    cost: f32,
     node: Node,
 }
 impl Eq for Open {}
 impl Ord for Open {
     fn cmp(&self, other: &Self) -> Ordering {
         other
-            .f
-            .total_cmp(&self.f)
+            .rise
+            .total_cmp(&self.rise)
+            .then_with(|| other.f.total_cmp(&self.f))
             .then_with(|| other.node.cmp(&self.node))
     }
 }
@@ -1928,6 +1931,7 @@ pub struct Search {
     /// Nodes it expands before it settles for the closest it reached
     /// ([`MAX_EXPANSIONS`] unless [`Search::limited`]).
     limit: u32,
+    continuation: u32,
     /// Nodes farther than this from the start (or from where an opening
     /// lets out), across, are not visited.
     bound: f32,
@@ -1944,6 +1948,7 @@ pub struct Search {
     jet_tests: u32,
     /// The body's walking speed, once known: the estimate's unit.
     walk_speed: f32,
+    elevation_first: bool,
 }
 impl Search {
     /// A search on foot and swimming, with no jets.
@@ -1961,6 +1966,7 @@ impl Search {
             best: None,
             expanded: 0,
             limit: MAX_EXPANSIONS,
+            continuation: MAX_EXPANSIONS,
             bound,
             links: Vec::new(),
             pending: None,
@@ -1969,7 +1975,15 @@ impl Search {
             launches: FxHashSet::default(),
             jet_tests: 0,
             walk_speed: 1.0,
+            elevation_first: false,
         }
+    }
+    /// Seek a feasible route to another floor before minimizing traversal
+    /// cost. Vertical progress leads, then distance to the goal. Every edge
+    /// still comes from this body's ordinary directed movement graph.
+    pub fn elevation_first(mut self) -> Self {
+        self.elevation_first = true;
+        self
     }
     /// This search with no limit on its expansions, for tools that plan
     /// offline (a bot's own search settles for the closest it reached).
@@ -1978,9 +1992,11 @@ impl Search {
         self
     }
     /// This search settling for the closest it reached after `limit`
-    /// expansions instead of [`MAX_EXPANSIONS`].
+    /// expansions instead of [`MAX_EXPANSIONS`]. Each resumption permits
+    /// another window of that size, without restarting the frontier.
     pub fn limited(mut self, limit: u32) -> Self {
         self.limit = limit.min(MAX_EXPANSIONS);
+        self.continuation = limit.clamp(1, MAX_EXPANSIONS);
         self
     }
     /// Continue a budget-limited search from its retained frontier.
@@ -1988,17 +2004,23 @@ impl Search {
     /// per-tick work limits still apply, with the navigation cache's existing
     /// node bound as a hard ceiling for this exceptional detour investigation.
     pub fn resume(&mut self) -> bool {
-        if self.pending.is_none()
-            || self.came.len() >= MAX_SAMPLES
-            || self.limit >= MAX_SAMPLES as u32
-        {
+        if !self.can_resume() {
             return false;
         }
         self.limit = self
             .limit
-            .saturating_add(MAX_EXPANSIONS)
+            .saturating_add(self.continuation)
             .min(MAX_SAMPLES as u32);
         true
+    }
+    /// A retained frontier is unfinished work, not proof of disconnection.
+    pub fn can_resume(&self) -> bool {
+        self.pending.is_some() && self.came.len() < MAX_SAMPLES && self.limit < MAX_SAMPLES as u32
+    }
+    /// No unexamined frontier remains and the retained-node ceiling was not
+    /// reached. A resource ceiling is not evidence of disconnection.
+    pub fn exhausted(&self) -> bool {
+        self.pending.is_none() && self.open.is_empty() && self.came.len() < MAX_SAMPLES
     }
     /// Whether this search takes swim legs for `body`.
     fn swims(&self, body: &Body) -> bool {
@@ -2056,11 +2078,31 @@ impl Search {
         }
         self.came.insert(to, came);
         let h = self.h(to);
-        if self.best.is_none_or(|(_, best)| h < best) {
+        if self.best.is_none_or(|(old, best)| {
+            if self.elevation_first {
+                (to.feet().y - self.goal.y)
+                    .abs()
+                    .total_cmp(&(old.feet().y - self.goal.y).abs())
+                    .then_with(|| h.total_cmp(&best))
+                    .is_lt()
+            } else {
+                h < best
+            }
+        }) {
             self.best = Some((to, h));
         }
         self.open.push(Open {
-            f: came.cost + h,
+            rise: if self.elevation_first {
+                (to.feet().y - self.goal.y).abs()
+            } else {
+                0.0
+            },
+            f: if self.elevation_first {
+                h
+            } else {
+                came.cost + h
+            },
+            cost: came.cost,
             node: to,
         });
     }
@@ -2345,7 +2387,13 @@ impl Search {
                     },
                 );
                 self.open.push(Open {
+                    rise: if self.elevation_first {
+                        (node.feet().y - self.goal.y).abs()
+                    } else {
+                        0.0
+                    },
                     f: self.h(node),
+                    cost: 0.0,
                     node,
                 });
                 self.best = Some((node, self.h(node)));
@@ -2361,7 +2409,7 @@ impl Search {
                     };
                     let g = self.came[&open.node].cost;
                     // A stale heap entry for a node since reached cheaper.
-                    if open.f > g + self.h(open.node) + 1e-4 {
+                    if open.cost > g + 1e-4 {
                         continue;
                     }
                     open.node
@@ -3830,6 +3878,70 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.iter().all(|w| !w.jump), "stairs need no jump: {a:?}");
         assert!((a.last().unwrap().feet.y - 3.0).abs() < 0.11);
+    }
+
+    #[test]
+    fn elevation_order_keeps_directed_stairs_budgets_and_unreachable_floor_evidence() {
+        let mut boxes = vec![floor()];
+        for i in 0..8 {
+            let x = 3.0 + i as f32;
+            boxes.push((
+                Vec3::new(x, 0.0, -3.0),
+                Vec3::new(x + 1.0, 0.6 * (i + 1) as f32, 3.0),
+            ));
+        }
+        boxes.push((Vec3::new(11.0, 0.0, -3.0), Vec3::new(17.0, 4.8, 3.0)));
+        let stairs = world(&boxes);
+        let isolated = world(&[(Vec3::new(-4.0, -1.0, -4.0), Vec3::new(4.0, 0.0, 4.0))]);
+        let body = body();
+        for (physics, from, to, reachable) in [
+            (&stairs, Vec3::ZERO, Vec3::new(14.0, 4.8, 0.0), true),
+            (&stairs, Vec3::new(14.0, 4.8, 0.0), Vec3::ZERO, true),
+            (&isolated, Vec3::ZERO, Vec3::Y * 10.0, false),
+        ] {
+            let ground = Ground {
+                physics,
+                terrain: &no_terrain,
+                passages: &NO_PASSAGES,
+                waters: &[],
+                bodies: &[],
+                motions: &[],
+                solid: &all_solid,
+            };
+            let mut nav = Nav::default();
+            let mut search = Search::new(from, to, 40.0)
+                .elevation_first()
+                .limited(EXPANSIONS_PER_TICK);
+            let mut result = None;
+            for _ in 0..10_000 {
+                nav.begin_tick();
+                let samples = nav.sampled;
+                let arcs = nav.swept;
+                let found = search.step(&mut nav, &ground, &body);
+                assert!(nav.sampled - samples <= u64::from(SAMPLES_PER_TICK));
+                assert!(nav.swept - arcs <= u64::from(ARCS_PER_TICK));
+                if let Some(found) = found {
+                    if matches!(found, Found::Partial(_)) && search.resume() {
+                        continue;
+                    }
+                    result = Some(found);
+                    break;
+                }
+            }
+            let result = result.expect("a bounded graph must terminate");
+            assert_eq!(
+                matches!(result, Found::Path(_)),
+                reachable,
+                "{from:?} -> {to:?}: {result:?}"
+            );
+            if !reachable {
+                assert!(
+                    search.exhausted(),
+                    "a search window is not an unreachable floor proof"
+                );
+                assert!(!search.can_resume());
+            }
+        }
     }
 
     #[test]

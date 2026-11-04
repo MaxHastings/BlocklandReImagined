@@ -123,7 +123,10 @@ bot does through the same code.
    [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
    walk grid (`crate::nav`, shared by every bot of a body size, updated as
    bricks change, portals included) finds the way a little each tick,
-   walking, jumping, swimming or jetting wherever that is the cheapest. Gaps only
+   walking, jumping, swimming or jetting from the body's admitted capabilities.
+   General tasks use traversal costs. A chase/search across floors prioritizes
+   a feasible elevation change and offers bounded route segments early; it may
+   choose a longer route in exchange for earlier pursuit. Gaps only
    a crouched body fits (crawlspaces) are on the grid: crawling costs
    more than walking, and the bot crouches into them. A wheeled driver's body
    uses the chassis footprint and clearance, with no pedestrian jump, crawl or
@@ -381,6 +384,17 @@ band, or higher than a jump brings within it), the bot first executes the
 reachable partial route. Only after that route is exhausted is chasing or
 searching that same point worth nothing until the evidence or geometry changes.
 A pending route is progress to try, not evidence that no approach exists.
+  Partial routes distinguish an unfinished planning window from an exhausted
+  graph. A body-sized rise toward another floor is useful progress even when
+  the target is horizontally close. After walking such a limited segment,
+  pursuit continues from the observed endpoint. Unproductive detours retain
+  their frontier instead of repeatedly restarting. Work per tick is unchanged;
+  resumption uses the search's original expansion window. Neither a window nor
+  a retained-node ceiling proves an obstruction should be breached.
+  Returning to an idle home is ineligible while a valid enabled pursuit or
+  dated search still has work. Evidence expiry, target death, explicit anchored
+  intents and exhausted routes still end that pursuit. Add-On behavior weights
+  can disable pursuit as before.
 A bot standing on something the grid leaves out (a vehicle's roof) plans
 from the floor beneath.
 
