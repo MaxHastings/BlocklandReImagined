@@ -395,7 +395,6 @@ impl App {
                 takes_turret: false,
                 seat_report: None,
                 rider_rotations: BTreeMap::new(),
-                rider_seat_facing: BTreeMap::new(),
                 rider_fallback_hips: BTreeMap::new(),
                 rider_hands: BTreeMap::new(),
                 rider_aims: BTreeMap::new(),

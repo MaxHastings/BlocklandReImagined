@@ -85,6 +85,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0],
                 brightness: 9.0,
                 radius: 10.0,
+                cone: None,
                 color_curves: None,
                 brightness_curve: None,
                 radius_curve: None,

@@ -1471,6 +1471,9 @@ pub struct ImageLight {
     /// Units, above 0 and at most [`MAX_IMAGE_LIGHT_RADIUS`]
     /// (`lightRadius`).
     pub radius: f32,
+    /// Shared native spotlight geometry in the mounted image's local frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cone: Option<bri_content::presentation::LightCone>,
     /// RGB from 0 to 1 (`lightColor`). Worn in a paint colour (a
     /// `paint_tint` image), the light takes that colour too.
     pub color: [f32; 3],
@@ -4545,6 +4548,7 @@ impl Pack {
                 image.light.is_none_or(|l| {
                     l.radius > 0.0
                         && l.radius <= MAX_IMAGE_LIGHT_RADIUS
+                        && l.cone.is_none_or(|c| c.valid())
                         && l.color.iter().all(|c| (0.0..=1.0).contains(c))
                 }),
                 "Invalid image light {id}: radius above 0 to {MAX_IMAGE_LIGHT_RADIUS}, colour 0 to 1"

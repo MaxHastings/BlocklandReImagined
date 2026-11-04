@@ -625,10 +625,9 @@ no seats cannot be mounted. These fields exist for Add-Ons:
   `"on_vehicle_lights"` (rules.md) are told each time a driver toggles them,
   so one can play a switch click or dim a garage map. Colour is linear
   RGB, 0 to 8 (above 1 is brighter); radius above 0 up to 100 units.
-  A lamp may name `"lens_objects": ["headlight_l"]` — objects on its model
-  that are the lens in front of it: they draw plain black while none of the
-  lamps naming them is lit, and as authored otherwise (the SpeedKart Jeep's
-  headlight plates).
+  Cone geometry is shared with native effect lights and mounted image lights.
+  Conditional model appearances are independent `visuals` bindings, not lamp
+  lens attributes. See [native presentation](native-presentation.md).
 
 - `"skid": { "emitter": "your-id:skid", "sound": "your-id:squeal" }`
   makes its tyres skid. A grounded wheel whose contact slides sideways

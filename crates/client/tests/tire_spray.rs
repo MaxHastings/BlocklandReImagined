@@ -106,6 +106,7 @@ fn frame(d: &bri_vehicles::Definition, speed: f32, contact: bool) -> VehicleFram
         turret_aim: [0.; 2],
         driver_jump_held: false,
         driver_reversing: false,
+        driver_braking: false,
     }
 }
 

@@ -654,6 +654,7 @@ fn driving_jeep() -> bri_sim::session::VehiclePose {
         jetting: false,
         driver_jump_held: false,
         driver_reversing: false,
+        driver_braking: false,
         angular_velocity: [0.1, 0.4, 0.0],
         mouse_steering: [0.3, 0.0],
         driver_input: 123_456,

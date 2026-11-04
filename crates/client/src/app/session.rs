@@ -272,7 +272,6 @@ impl App {
         self.mounts.takes_turret = false;
         self.mounts.seat_report = None;
         self.mounts.rider_rotations.clear();
-        self.mounts.rider_seat_facing.clear();
         self.mounts.rider_fallback_hips.clear();
         self.mounts.rider_hands.clear();
         self.mounts.rider_aims.clear();

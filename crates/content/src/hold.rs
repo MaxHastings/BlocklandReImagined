@@ -121,8 +121,11 @@ pub fn reach(
                 .clamped(-1.0, 1.0)
                 .acos();
             let (u, v) = ((s - e).normalize(), (h - e).normalize());
-            let current = u.dot(v).clamped(-1.0, 1.0).acos();
-            let axis = [u.cross(v), u.cross(target - s), Vec3::NEG_X]
+            // atan2 keeps precision near a straight elbow. If the arm and
+            // target are collinear, bending must still use a perpendicular
+            // axis; a fixed world axis changes the solved reach length.
+            let current = u.cross(v).length().atan2(u.dot(v));
+            let axis = [u.cross(v), u.cross(target - s), u.any_orthonormal_vector()]
                 .into_iter()
                 .find(|k| k.length_squared() > 1e-8)
                 .unwrap_or(Vec3::NEG_X)

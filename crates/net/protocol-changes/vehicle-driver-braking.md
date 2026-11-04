@@ -1,0 +1,1 @@
+VehicleView adds driver_braking, independent of driver_jump_held and driver_reversing. Brake lamps use brake or reverse input; JumpHeld retains jump-only semantics. The protocol change counter increases VERSION; incompatible peers are rejected before joining, not decoded as old vehicle tuples.

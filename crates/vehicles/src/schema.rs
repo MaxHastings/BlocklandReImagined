@@ -915,6 +915,9 @@ pub struct Definition {
     /// Animations the model plays by itself.
     #[serde(default)]
     pub threads: Vec<AnimationThread>,
+    /// Conditional model appearances, independent of lights or any vehicle role.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visuals: Vec<bri_content::presentation::ObjectVariant>,
     /// The model's sequence that turns with the vehicle's steering, scrubbed
     /// from full right (phase 0) to full left (phase 1) as the clip is
     /// authored: a steering wheel and whatever sits on its nodes. A seat's
@@ -1044,37 +1047,9 @@ pub struct Lamp {
     /// How fast it comes up to full light and goes out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp: Option<LampRamp>,
-    /// Objects on its model that are a lens — the glass in front of
-    /// headlights. When one or more lamps name them they draw apart from the
-    /// body's base paint (which leaves those objects out): black while none is
-    /// lit, and their authored look as soon as any lights up. Lenses shared by
-    /// several beams turn together; a lamp that names no lens changes nothing.
-    #[serde(default)]
-    pub lens_objects: Vec<String>,
 }
-/// A lamp's beam ([`Lamp::cone`]): full light within `inner` degrees of
-/// `axis` (in the node's own frame), fading to none at `outer`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LampCone {
-    pub inner: f32,
-    pub outer: f32,
-    #[serde(default = "LampCone::forward")]
-    pub axis: [f32; 3],
-}
-impl LampCone {
-    fn forward() -> [f32; 3] {
-        [0.0, 0.0, -1.0]
-    }
-    fn valid(&self) -> bool {
-        (0.0..=180.0).contains(&self.inner)
-            && self.outer.is_finite()
-            && self.outer > self.inner
-            && self.outer <= 180.0
-            && self.axis.iter().all(|v| v.is_finite())
-            && self.axis.iter().any(|v| *v != 0.0)
-    }
-}
+/// Shared native cone geometry; the vehicle only supplies its attachment frame.
+pub use bri_content::presentation::LightCone as LampCone;
 /// Seconds a lamp takes to reach full light from dark and to go dark again
 /// ([`Lamp::ramp`]): a client's own cosmetic fade.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1088,7 +1063,7 @@ impl LampRamp {
         (0.0..=60.0).contains(&self.up) && (0.0..=60.0).contains(&self.down)
     }
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LampActivation {
     #[default]
@@ -1097,17 +1072,31 @@ pub enum LampActivation {
     Always,
     /// While the driver holds the jump input.
     JumpHeld,
-    /// While the driver brakes or drives in reverse (tail lights).
-    ReverseOrBrake,
+    /// A bounded condition over this adapter's named facts.
+    When(bri_content::presentation::Condition),
 }
 impl LampActivation {
-    pub fn enabled(self, switched: bool, driver: bool, jump_held: bool, reversing: bool) -> bool {
+    pub fn enabled(
+        &self,
+        switched: bool,
+        driver: bool,
+        jump_held: bool,
+        reversing: bool,
+        braking: bool,
+    ) -> bool {
         match self {
             Self::Switch => switched,
             Self::Driver => driver,
             Self::Always => true,
             Self::JumpHeld => driver && jump_held,
-            Self::ReverseOrBrake => driver && (jump_held || reversing),
+            Self::When(condition) => condition.evaluate(|name| match name {
+                "switch" => switched,
+                "occupied" => driver,
+                "jump" => jump_held,
+                "brake" => braking,
+                "reverse" => reversing,
+                _ => false, // Rejected by Pack::validate before runtime admission.
+            }),
         }
     }
 }
@@ -1609,6 +1598,41 @@ impl Pack {
         ensure!(self.assets.len() <= 4096, "too many assets");
         let mut ids = std::collections::BTreeSet::new();
         for d in &self.definitions {
+            let supports = |s: &str| {
+                [
+                    "switch",
+                    "occupied",
+                    "jump",
+                    "brake",
+                    "reverse",
+                    "destroyed",
+                ]
+                .contains(&s)
+            };
+            ensure!(d.visuals.len() <= 64, "Too many vehicle visual bindings");
+            let mut bound = std::collections::BTreeSet::new();
+            for visual in &d.visuals {
+                visual.validate(supports)?;
+                for object in &visual.objects {
+                    ensure!(
+                        bound.insert(object.to_ascii_lowercase()),
+                        "Conflicting visual bindings for {object}"
+                    );
+                }
+            }
+            for lamp in &d.lights {
+                if let LampActivation::When(condition) = &lamp.activation {
+                    condition.validate(|s| supports(s) && s != "destroyed")?;
+                }
+            }
+
+            ensure!(
+                d.steering_sequence.as_ref().is_none_or(|s| !s.is_empty()
+                    && s.len() <= 64
+                    && !s.chars().any(char::is_control)),
+                "invalid vehicle steering sequence"
+            );
+
             ensure!(
                 ids.insert(&d.id)
                     && (d.id.starts_with("v20.vehicle.")
@@ -1632,9 +1656,6 @@ impl Pack {
                             && l.radius <= 100.
                             && l.cone.is_none_or(|c| c.valid())
                             && l.ramp.is_none_or(|r| r.valid())
-                            && l.lens_objects.iter().all(|n| {
-                                !n.is_empty() && n.len() <= 64 && !n.chars().any(char::is_control)
-                            })
                             && l.effect.as_ref().is_none_or(|id| {
                                 !id.is_empty()
                                     && id.len() <= 160
@@ -2113,28 +2134,31 @@ mod tests {
     #[test]
     fn a_jump_held_lamp_follows_the_driver_holding_jump() {
         use super::LampActivation::*;
-        assert!(JumpHeld.enabled(false, true, true, false));
-        assert!(!JumpHeld.enabled(true, true, false, false));
+        assert!(JumpHeld.enabled(false, true, true, false, false));
+        assert!(!JumpHeld.enabled(true, true, false, false, false));
         assert!(
-            !JumpHeld.enabled(true, false, true, false),
+            !JumpHeld.enabled(true, false, true, false, false),
             "nobody driving"
         );
-        // A reverse-or-brake lamp (tail lights) follows either input.
-        assert!(ReverseOrBrake.enabled(false, true, true, false), "braking");
+        // Content chooses the relationship between independent input facts.
+        let inputs = When(bri_content::presentation::Condition {
+            all: vec!["occupied".into()],
+            any: vec!["brake".into(), "reverse".into()],
+            none: vec![],
+        });
+        assert!(inputs.enabled(false, true, false, false, true), "braking");
+        assert!(inputs.enabled(false, true, false, true, false), "reversing");
         assert!(
-            ReverseOrBrake.enabled(false, true, false, true),
-            "reversing"
-        );
-        assert!(
-            !ReverseOrBrake.enabled(true, true, false, false),
+            !inputs.enabled(true, true, false, false, false),
             "neither input"
         );
         assert!(
-            !ReverseOrBrake.enabled(true, false, true, true),
+            !inputs.enabled(true, false, true, true, false),
             "nobody driving"
         );
         assert!(
-            Switch.enabled(true, false, false, false) && Always.enabled(false, false, false, false)
+            Switch.enabled(true, false, false, false, false)
+                && Always.enabled(false, false, false, false, false)
         );
     }
 

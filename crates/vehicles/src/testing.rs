@@ -264,6 +264,7 @@ fn base(id: &str, name: &str, family: Family) -> Definition {
         steering: SteeringSettings::default(),
         wheeled_flight: None,
         threads: vec![],
+        visuals: vec![],
         steering_sequence: None,
         engine_curve: vec![],
         gravity_scale: None,

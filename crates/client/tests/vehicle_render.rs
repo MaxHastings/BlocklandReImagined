@@ -135,6 +135,7 @@ fn vehicles_render_with_wheels_and_paint(f: &VehicleFixture) -> Result<()> {
                 jetting: false,
                 driver_jump_held: false,
                 driver_reversing: false,
+                driver_braking: false,
                 angular_velocity: [0.0; 3],
                 mouse_steering: [0.0; 2],
                 driver_input: 0,
@@ -221,6 +222,7 @@ fn riders_tilt_with_a_car_on_a_slope(f: &VehicleFixture) -> Result<()> {
             jetting: false,
             driver_jump_held: false,
             driver_reversing: false,
+            driver_braking: false,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,
@@ -275,5 +277,129 @@ fn every_explosion_debris_model_is_in_the_vehicle_pack(f: &VehicleFixture) -> Re
             spec.model
         );
     }
+    Ok(())
+}
+
+/// Bounded real-asset evidence, separate from the content-free regression suite.
+#[test]
+#[ignore = "requires external authored vehicle assets; set BRI_REVIEW_VEHICLE_ASSETS and BRI_REVIEW_OUTPUT"]
+fn authored_vehicle_presentation_offscreen() -> Result<()> {
+    let path = std::path::PathBuf::from(
+        std::env::var("BRI_REVIEW_VEHICLE_ASSETS").context("set BRI_REVIEW_VEHICLE_ASSETS")?,
+    );
+    let out = std::path::PathBuf::from(
+        std::env::var("BRI_REVIEW_OUTPUT").context("set BRI_REVIEW_OUTPUT")?,
+    );
+    let f = VehicleFixture::synthetic()?;
+    let source_dir = path.to_string_lossy().into_owned();
+    let mut assets = VehicleAssets::load_with(&f.dir, &[(source_dir, path)])?;
+    let d = assets
+        .pack()
+        .definitions
+        .iter()
+        .find(|d| d.steering_sequence.is_some())
+        .context("authored steering vehicle")?
+        .clone();
+    let gpu = gpu::turn().context("offscreen authored vehicle adapter")?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    std::fs::create_dir_all(&out)?;
+    let mut images = vec![];
+    for (index, (steering, switched, braking)) in [
+        (-1., false, false),
+        (0., false, false),
+        (1., false, false),
+        (0., true, false),
+        (0., false, true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let info = VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            scale: 1.,
+            color: Some([0.25, 0.5, 0.8, 1.]),
+            occupants: vec![Some(1); d.seats.len()],
+            destroyed: false,
+            turret_broken: false,
+            lights: switched,
+        };
+        let pose = VehiclePose {
+            passage_frame: Default::default(),
+            id: 1,
+            tick: 1,
+            position: [0.; 3],
+            rotation: glam::Quat::IDENTITY.to_array(),
+            velocity: [0.; 3],
+            steering,
+            wheel_suspension: d.wheels.iter().map(|w| w.rest_length).collect(),
+            wheel_rotation: vec![0.; d.wheels.len()],
+            wheel_contact: vec![true; d.wheels.len()],
+            wheel_tire: vec![Default::default(); d.wheels.len()],
+            turret_aim: [0.; 2],
+            jetting: false,
+            driver_jump_held: false,
+            driver_reversing: false,
+            driver_braking: braking,
+            angular_velocity: [0.; 3],
+            mouse_steering: [0.; 2],
+            driver_input: 0,
+            driver_steering: (false, false),
+            steering_quiet: 0,
+            actor: None,
+        };
+        let infos = BTreeMap::from([(1, info.clone())]);
+        let mut vehicles = ClientVehicles::default();
+        vehicles.update(
+            &infos,
+            &BTreeMap::from([(1, pose)]),
+            Some(1.),
+            None,
+            &Default::default(),
+        );
+        vehicles.prepare(&mut assets, &infos);
+        for (seat, definition) in d.seats.iter().enumerate() {
+            let holds = vehicles.hand_holds(&assets, &info, seat);
+            for (hand, hold) in holds.iter().enumerate() {
+                if definition.hands.node(hand).is_some() {
+                    ensure!(
+                        hold.is_some_and(|h| h.position.is_finite() && h.turn.is_finite()),
+                        "missing authored grip"
+                    );
+                }
+            }
+        }
+        ClientVehicles::upload(&mut assets, &renderer, &gpu.device, &gpu.queue)?;
+        let low = glam::Vec3::from(d.bounds_min);
+        let high = glam::Vec3::from(d.bounds_max);
+        let center = (low + high) * 0.5;
+        let radius = (high - low).length() * 0.5;
+        let eye = center
+            + glam::Vec3::new(0.8, 0.45, -0.8).normalize() * radius / 25f32.to_radians().sin();
+        let camera = Camera::perspective(
+            eye.to_array(),
+            center.to_array(),
+            1.,
+            50f32.to_radians(),
+            0.05,
+            200.,
+        );
+        let pixels = render(&gpu, &mut renderer, &assets, &camera)?;
+        image::save_buffer(
+            out.join(format!("authored-{index}.png")),
+            &pixels,
+            SIZE,
+            SIZE,
+            image::ColorType::Rgba8,
+        )?;
+        images.push(pixels);
+    }
+    ensure!(
+        images[0] != images[2],
+        "steering endpoints rendered identically"
+    );
+    ensure!(images[1] != images[3], "switched appearance never changed");
+    // A rear-facing render is left to a separately chosen camera if required;
+    // the synthetic test checks independent bindings and braking state directly.
     Ok(())
 }

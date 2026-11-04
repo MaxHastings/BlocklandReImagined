@@ -1258,7 +1258,14 @@ impl HeldToolPose {
     /// A rider's seat hand holds ([`AvatarAnimationInput::hand_holds`]), with
     /// the hands this pose raises to hold a tool let go: they cannot grip
     /// and hold at once. Index 0 is the right hand.
-    pub fn release_seat_holds(self, holds: [Option<HandHold>; 2]) -> [Option<HandHold>; 2] {
+    pub fn release_seat_holds(
+        self,
+        holds: [Option<HandHold>; 2],
+        supporting: bool,
+    ) -> [Option<HandHold>; 2] {
+        if supporting {
+            return [None; 2];
+        }
         match self {
             Self::None => holds,
             Self::Right => [None, holds[1]],
@@ -1297,9 +1304,6 @@ pub struct AvatarAnimationInput {
     /// A seated rider's full mount rotation, in place of the upright yaw,
     /// so they sit flush with a tilted seat.
     pub mount_rotation: Option<Quat>,
-    /// A seated rider's seat base facing (without the look turn), used to
-    /// keep seat-hand IK targets stable when the rider looks around.
-    pub seat_facing: Option<Quat>,
     /// A seated gunner's aim across the gun's pitch range, 0 highest to 1
     /// lowest: the body's `seat_aim` clip holds there in place of `look`,
     /// so the whole seated pose bends with the gun.
@@ -2631,7 +2635,6 @@ impl AvatarMesh {
             player,
             pose,
             animation_input.mount_rotation,
-            animation_input.seat_facing,
             animation_input.lean_tilt,
             Holds {
                 raised,
@@ -2643,14 +2646,12 @@ impl AvatarMesh {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn finish_pose(
         &mut self,
         assets: &AvatarAssets,
         player: &PlayerState,
         mut pose: bri_content::animation::Pose,
         mount_rotation: Option<Quat>,
-        seat_facing: Option<Quat>,
         lean_tilt: f32,
         holds: Holds,
     ) -> Result<()> {
@@ -2715,7 +2716,6 @@ impl AvatarMesh {
                         .hand(0)
                         .map_or(Vec3::ZERO, |s| Vec3::from(s.offset)),
                     model_transform,
-                    seat_facing,
                     holds: BodyHolds {
                         raised: holds.raised,
                         pitch: holds.pitch,
@@ -3290,16 +3290,23 @@ mod tests {
             Some(HandHold::position_only(Vec3::ONE)),
             Some(HandHold::position_only(-Vec3::ONE)),
         ];
-        assert_eq!(HeldToolPose::None.release_seat_holds(grip), grip);
+        assert_eq!(HeldToolPose::None.release_seat_holds(grip, false), grip);
         assert_eq!(
-            HeldToolPose::Right.release_seat_holds(grip),
+            HeldToolPose::Right.release_seat_holds(grip, false),
             [None, Some(HandHold::position_only(-Vec3::ONE))]
         );
         assert_eq!(
-            HeldToolPose::Left.release_seat_holds(grip),
+            HeldToolPose::Left.release_seat_holds(grip, false),
             [Some(HandHold::position_only(Vec3::ONE)), None]
         );
-        assert_eq!(HeldToolPose::Both.release_seat_holds(grip), [None; 2]);
+        assert_eq!(
+            HeldToolPose::Both.release_seat_holds(grip, false),
+            [None; 2]
+        );
+        assert_eq!(
+            HeldToolPose::Right.release_seat_holds(grip, true),
+            [None; 2]
+        );
     }
 
     /// UE2 links animation sets to a mesh: a body's archetype lists `animation_libraries` and the clips join the body's, keyed by

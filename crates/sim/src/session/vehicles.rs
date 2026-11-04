@@ -214,9 +214,10 @@ pub struct VehiclePose {
     /// The driver is holding the jump input (lamps that follow it).
     #[serde(default)]
     pub driver_jump_held: bool,
-    /// The driver drives in reverse (`reverse_or_brake` lamps follow it).
+    /// The driver drives in reverse (presentation conditions can follow it).
     #[serde(default)]
     pub driver_reversing: bool,
+    pub driver_braking: bool,
     /// The body's spin (rad/s) and the driver's accumulated mouse steering:
     /// with the rest, all a driving client needs to predict its vehicle.
     pub angular_velocity: [f32; 3],
@@ -491,8 +492,8 @@ impl Session {
             })
             .collect()
     }
-    /// The light key in a driving seat turns the vehicle's lamps on or off;
-    /// false when `owner` drives nothing with lamps.
+    /// The light key toggles the driving seat's presentation switch when
+    /// lamps or object appearances consume it; false without a live consumer.
     pub(super) fn toggle_vehicle_lights(&mut self, owner: OwnerId) -> bool {
         let Some(mount) = self.vehicles.mounted.get(&owner) else {
             return false;
@@ -500,9 +501,14 @@ impl Session {
         let Some(world) = &self.vehicles.world else {
             return false;
         };
-        let drives = world.definition_of(mount.vehicle).is_some_and(|d| {
-            !d.lights.is_empty() && d.seats.get(mount.seat).is_some_and(|s| s.controls)
-        });
+        let drives = world.is_alive(mount.vehicle)
+            && world.definition_of(mount.vehicle).is_some_and(|d| {
+                let consumes_switch = !d.lights.is_empty()
+                    || d.visuals
+                        .iter()
+                        .any(|v| v.when.signals().any(|name| name == "switch"));
+                consumes_switch && d.seats.get(mount.seat).is_some_and(|s| s.controls)
+            });
         if !drives {
             return false;
         }
@@ -607,6 +613,7 @@ impl Session {
                 jetting: v.jetting,
                 driver_jump_held: v.driver_jump_held,
                 driver_reversing: v.driver_reversing,
+                driver_braking: v.driver_braking,
                 angular_velocity: v.angular_velocity,
                 mouse_steering: v.mouse_steering,
                 steering_quiet: v.steering_quiet,
@@ -2905,7 +2912,6 @@ mod tests {
             radius: 20.0,
             cone: None,
             ramp: None,
-            lens_objects: vec!["lens".into()],
         };
         let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
             d.lights = vec![lamp.clone()]
@@ -2947,6 +2953,50 @@ mod tests {
     }
 
     #[test]
+    fn a_visual_only_switch_works_without_a_lamp_and_stops_when_destroyed() {
+        let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
+            d.lights.clear();
+            d.invulnerable_ticks = 0;
+            d.visuals = serde_json::from_value(serde_json::json!([
+                {"objects":["indicator"],"when":{"all":["switch"]},"off":{"visible":false}}
+            ]))
+            .unwrap();
+        }));
+        let seat = s
+            .vehicles
+            .world
+            .as_ref()
+            .unwrap()
+            .definition(bri_vehicles::testing::TANK)
+            .unwrap()
+            .control_seat()
+            .unwrap();
+        s.vehicles.mounted.insert(
+            7,
+            Mount {
+                vehicle: VehicleId(tank),
+                seat,
+            },
+        );
+        assert!(s.toggle_vehicle_lights(7));
+        assert!(s.vehicle_infos()[0].lights);
+        s.vehicles
+            .world
+            .as_mut()
+            .unwrap()
+            .damage(
+                &s.simulation.physics,
+                VehicleId(tank),
+                f32::MAX,
+                veh::OwnerId(7),
+            )
+            .unwrap();
+        // Deliberately retain the mount until the next ordinary lifecycle tick.
+        assert!(!s.toggle_vehicle_lights(7));
+        assert!(!s.vehicle_infos()[0].lights);
+    }
+
+    #[test]
     fn a_declared_hook_hears_the_lamps_turn_on_and_off() {
         let lamp = bri_vehicles::schema::Lamp {
             activation: Default::default(),
@@ -2957,7 +3007,6 @@ mod tests {
             radius: 20.0,
             cone: None,
             ramp: None,
-            lens_objects: vec!["lens".into()],
         };
         let (mut s, tank) = tank_session_with(bri_vehicles::testing::pack_with(|d| {
             d.lights = vec![lamp.clone()]

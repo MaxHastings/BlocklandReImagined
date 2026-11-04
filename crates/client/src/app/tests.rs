@@ -1369,6 +1369,7 @@ fn a_driver_is_predicted_with_the_hosts_steering_prefs() {
         jetting: false,
         driver_jump_held: false,
         driver_reversing: false,
+        driver_braking: false,
         angular_velocity: [0.0; 3],
         mouse_steering: [0.0; 2],
         driver_input: 0,
@@ -1417,6 +1418,7 @@ fn world_and_weapon_effects_share_depth_order_and_nearest_light_budget() {
         position: Vec3::new(x, 0., 0.),
         color: Vec3::ONE,
         radius: 1.,
+        cone: bri_content::presentation::ALL_ROUND,
     };
     let world = bri_fx_runtime::FrameEffects {
         particles: vec![particle(-3., 2)],

@@ -370,12 +370,6 @@ pub struct BodyFittingInput<'a> {
     pub right_socket_offset: Vec3,
     /// Completed model frame including any root/seat/posture composition.
     pub model_transform: Mat4,
-    /// Seat facing (the seat rotation without the rider's look turn), as a
-    /// rotation. When present, the seat reach is solved against this frame
-    /// instead of [`Self::model_transform`], so the hands stay locked to the
-    /// wheel (or other seat target) no matter where the rider's body is
-    /// turned to look. `None` falls back to [`Self::model_transform`].
-    pub seat_facing: Option<Quat>,
     pub holds: BodyHolds,
 }
 
@@ -384,54 +378,14 @@ pub struct BodyFittingInput<'a> {
 pub fn apply_body_fitting(nodes: &mut [Mat4], input: BodyFittingInput<'_>) {
     apply_generic_fitting(nodes, &input);
     if input.holds.seat.iter().any(Option::is_some) {
+        let inverse = input.model_transform.inverse();
         let ends = input.hands.map(|n| n.filter(|&i| i < nodes.len()));
-        if input.parents.len() == nodes.len() {
-            // Solve the reach against the seat facing (without the rider's
-            // look turn) when available, so the hands stay locked to the
-            // seat target no matter where the body is turned to look. The
-            // seat facing is a rotation only; the reach target is a point in
-            // the body's rest-pose space, so we rotate it by the inverse of
-            // the seat facing's rotation about the body's origin.
-            let seat_rotation = input
-                .seat_facing
-                .filter(|q| q.is_finite() && q.is_normalized());
+        if inverse.is_finite() && input.parents.len() == nodes.len() {
             for n in 0..2 {
                 if let (Some(end), Some(hold)) = (ends[n], input.holds.seat[n])
                     && hold.position.is_finite()
                 {
-                    let local_target = match seat_rotation {
-                        Some(q) => {
-                            // `hold` is in world space. The body's rest-pose
-                            // space is related to world space by
-                            // `model_transform` (which includes the look
-                            // turn). We want the target in the body's
-                            // rest-pose space as if the body faced the seat
-                            // (no look turn). That is: take the world point,
-                            // undo the look turn (which is the difference
-                            // between `model_transform`'s rotation and the
-                            // seat facing), and keep the rest.
-                            //
-                            // `model_transform` rotation = seat_facing * look_turn
-                            // (approximately; seat_facing is the seat rotation
-                            // without the turn). So look_turn =
-                            // seat_facing.inverse() * model_rotation.
-                            //
-                            // The local target in the body's rest-pose space
-                            // is `model_transform.inverse() * hold`. We want
-                            // to remove the look_turn from that, i.e. use
-                            // `(seat_facing * translation).inverse() * hold`
-                            // where the translation is the body's position.
-                            let model_position =
-                                input.model_transform.to_scale_rotation_translation().2;
-                            let seat_frame =
-                                Mat4::from_scale_rotation_translation(Vec3::ONE, q, model_position);
-                            seat_frame.inverse().transform_point3(hold.position)
-                        }
-                        None => input
-                            .model_transform
-                            .inverse()
-                            .transform_point3(hold.position),
-                    };
+                    let local_target = inverse.transform_point3(hold.position);
                     crate::hold::reach(
                         input.parents,
                         nodes,
@@ -467,7 +421,7 @@ fn follow_grip_turn(
     model_transform: Mat4,
 ) {
     let count = nodes.len();
-    if end >= count || parents.len() != count || !turn.is_finite() {
+    if end >= count || parents.len() != count || !turn.is_finite() || !turn.is_normalized() {
         return;
     }
     // The turn is a world-frame rotation; conjugate it into the body's
@@ -745,7 +699,6 @@ mod tests {
                     fits: None,
                     right_socket_offset: Vec3::ZERO,
                     model_transform: Mat4::IDENTITY,
-                    seat_facing: None,
                     holds: BodyHolds {
                         seat: [Some(HandHold::position_only(Vec3::ONE)); 2],
                         ..Default::default()
@@ -793,7 +746,6 @@ mod tests {
                         fits: fit,
                         right_socket_offset: Vec3::ZERO,
                         model_transform: model,
-                        seat_facing: None,
                         holds: BodyHolds {
                             raised: [true; 2],
                             pitch: f32::NAN,
@@ -813,6 +765,70 @@ mod tests {
                 .zip(&bind)
                 .any(|(a, b)| !a.abs_diff_eq(*b, 1e-4))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn seat_grips_stay_in_world_space_while_a_scaled_body_looks_around() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let parents: Vec<_> = rig.shape.nodes.iter().map(|n| n.parent).collect();
+        let ends = ["Mount0", "Mount1"]
+            .map(|name| rig.shape.nodes.iter().position(|n| n.name == name).unwrap());
+        let mut bind = crate::animation::sample(&rig.shape, None, 0.)?.nodes;
+        let shoulders = ["RightArm", "LeftArm"]
+            .map(|name| rig.shape.nodes.iter().position(|n| n.name == name).unwrap());
+        // Give this coordinate-frame test two articulated, equal-length
+        // segments. The Blockhead fixture's short socket segment deliberately
+        // selects a one-bone reach, which cannot shorten its reach radius.
+        let wrists = ["RightHand", "LeftHand"]
+            .map(|name| rig.shape.nodes.iter().position(|n| n.name == name).unwrap());
+        for n in 0..2 {
+            bind[wrists[n]].w_axis =
+                ((bind[ends[n]].w_axis.truncate() + bind[shoulders[n]].w_axis.truncate()) * 0.5)
+                    .extend(1.);
+        }
+        for scale in [0.5, 1.7] {
+            let seat = Mat4::from_scale_rotation_translation(
+                Vec3::splat(scale),
+                Quat::from_rotation_z(0.3),
+                Vec3::new(2., 3., 4.),
+            );
+            let targets = std::array::from_fn::<_, 2, _>(|n| {
+                seat.transform_point3(
+                    bind[ends[n]]
+                        .w_axis
+                        .truncate()
+                        .lerp(bind[shoulders[n]].w_axis.truncate(), 0.2),
+                )
+            });
+            for look in [-0.15, 0., 0.15] {
+                let frame = seat * Mat4::from_rotation_y(look);
+                let mut nodes = bind.clone();
+                apply_body_fitting(
+                    &mut nodes,
+                    BodyFittingInput {
+                        parents: &parents,
+                        hands: ends.map(Some),
+                        eye: None,
+                        fits: None,
+                        right_socket_offset: Vec3::ZERO,
+                        model_transform: frame,
+                        holds: BodyHolds {
+                            seat: targets.map(|p| Some(HandHold::position_only(p))),
+                            ..Default::default()
+                        },
+                    },
+                );
+                for n in 0..2 {
+                    let actual = frame.transform_point3(nodes[ends[n]].w_axis.truncate());
+                    assert!(
+                        actual.distance(targets[n]) < 1e-3,
+                        "scale {scale}, look {look}, hand {n}: {actual:?} vs {:?}",
+                        targets[n]
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -844,7 +860,6 @@ mod tests {
                     fits: None,
                     right_socket_offset: Vec3::ZERO,
                     model_transform: frame,
-                    seat_facing: None,
                     holds: BodyHolds {
                         seat: targets.map(|v| {
                             Some(HandHold {

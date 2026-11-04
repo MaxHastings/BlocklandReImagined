@@ -365,6 +365,7 @@ impl EffectsRenderer {
                 l.position_radius.iter().all(|v| v.is_finite())
                     && l.position_radius[3] >= 0.
                     && l.color.iter().all(|v| v.is_finite())
+                    && l.cone.iter().all(|v| v.is_finite())
                     && l.color[..3].iter().all(|v| *v >= 0.)
             }),
             "Invalid particle point light"

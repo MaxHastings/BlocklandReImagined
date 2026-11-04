@@ -19,6 +19,9 @@ use std::{
     path::Path,
 };
 
+mod body;
+use body::BodyRig;
+
 const HISTORY: usize = 16;
 /// Render other vehicles this many server ticks behind the newest pose.
 pub(crate) const INTERPOLATION_TICKS: f64 = 9.0;
@@ -53,17 +56,9 @@ pub struct VehicleAssets {
     /// Gunner models with a `look` clip (tank turret, pirate cannon), keyed
     /// by the model's asset path.
     looks: BTreeMap<String, LookRig>,
-    /// Models whose definitions play animation threads (a propeller), keyed
-    /// by the model's asset path.
-    threads: BTreeMap<String, ThreadRig>,
-    /// Models whose definitions turn a sequence with the steering input
-    /// (a steering wheel), keyed by the model's asset path.
-    steers: BTreeMap<String, SteerRig>,
-    /// The lens plates this definition names (`Lamp::lens_objects`): each such
-    /// model draws its plate apart from the body — black while none of the
-    /// beams naming it are lit, as authored otherwise. Keyed by asset path,
-    /// then lower-case object name, to off/on draw keys.
-    lamp_lens: BTreeMap<String, BTreeMap<String, (String, String)>>,
+    /// Composed authored body animation and lens parts, shared by definitions
+    /// using this model. Selection and lamp policy stay with each definition.
+    bodies: BTreeMap<String, BodyRig>,
 
     /// Each model's node rest transforms, by lower-case name: a seat's hand
     /// grip point on the vehicle's own model, when it is not posed by a
@@ -140,10 +135,42 @@ struct SkinnedModel {
 }
 
 impl SkinnedModel {
+    fn new(base: &Model) -> Self {
+        Self {
+            data: bri_render::scene::SceneData {
+                materials: base.data.materials.clone(),
+                images: vec![],
+                ..Default::default()
+            },
+            layout: None,
+            gpu: None,
+            instances: None,
+            transforms: vec![],
+            clips: vec![],
+            topology_dirty: true,
+            faulted: false,
+        }
+    }
+    fn push(&mut self, transform: Mat4, tint: [f32; 4], straddle: Option<&Straddle>) {
+        self.transforms.push(SceneTransform { transform, tint });
+        if let Some(s) = straddle {
+            self.transforms.push(SceneTransform {
+                transform: s.carried(transform),
+                tint,
+            });
+            self.clips.extend([s.near, s.far]);
+        } else {
+            self.clips.push(KEEP_ALL);
+        }
+    }
+
     fn pose(&mut self, rig: &LookRig, phase: f32, bob: Option<Bob<'_>>) -> Result<()> {
         let pose = rig.sample(phase, bob)?;
-        let detail = rig
-            .shape
+        self.pose_shape(&rig.shape, &pose)
+    }
+
+    fn pose_shape(&mut self, shape: &Shape, pose: &bri_content::animation::Pose) -> Result<()> {
+        let detail = shape
             .details
             .iter()
             .enumerate()
@@ -151,13 +178,13 @@ impl SkinnedModel {
             .max_by(|(_, a), (_, b)| a.pixel_threshold.total_cmp(&b.pixel_threshold))
             .map(|(i, _)| i)
             .context("Animated vehicle has no visible detail")?;
-        let materials: Vec<_> = (0..rig.shape.materials.len()).collect();
-        let colors = vec![Some([1.; 4]); rig.shape.objects.len()];
+        let materials: Vec<_> = (0..shape.materials.len()).collect();
+        let colors = vec![Some([1.; 4]); shape.objects.len()];
         self.topology_dirty |= crate::avatar_mesh::Layout::pose(
             &mut self.layout,
             &mut self.data,
             &crate::avatar_mesh::Binding {
-                shape: &rig.shape,
+                shape,
                 detail,
                 materials: &materials,
                 translucent_materials: &materials,
@@ -165,7 +192,7 @@ impl SkinnedModel {
                 colors: &colors,
                 material_colors: &[],
             },
-            &pose,
+            pose,
             Mat4::IDENTITY,
         )?;
         Ok(())
@@ -177,92 +204,6 @@ fn swap_geometry(a: &mut bri_render::scene::SceneData, b: &mut bri_render::scene
     std::mem::swap(&mut a.vertices, &mut b.vertices);
     std::mem::swap(&mut a.indices, &mut b.indices);
     std::mem::swap(&mut a.batches, &mut b.batches);
-}
-
-/// A model whose `Definition::threads` animate it: the objects on nodes
-/// those sequences move are drawn apart and posed each frame.
-struct ThreadRig {
-    shape: Shape,
-    /// The model's sequences the threads name, by lower-case name.
-    clips: BTreeMap<String, Animation>,
-    /// Model key, node, and the inverse of the node's rest transform.
-    parts: Vec<(String, usize, Mat4)>,
-}
-
-/// A model whose `Definition::steering_sequence` turns with the vehicle's
-/// steering: the objects on the nodes that sequence moves (a steering
-/// wheel) are drawn apart and posed each frame by the steering input.
-struct SteerRig {
-    shape: Shape,
-    /// The model's sequences the definitions name, by lower-case name,
-    /// scrubbed (looping forced off at load so the endpoints hold).
-    clips: BTreeMap<String, Animation>,
-    /// Model key, node, and the inverse of the node's rest transform.
-    parts: Vec<(String, usize, Mat4)>,
-}
-
-/// Draws of the moving parts of a model with animation threads, `seconds`
-/// into the game, for a vehicle moving at `speed`. Of each slot's threads
-/// the first whose speed range holds `speed` plays, at its rate.
-fn threaded<'a>(
-    rig: &'a ThreadRig,
-    threads: &[bri_vehicles::schema::AnimationThread],
-    speed: f32,
-    seconds: f64,
-    transform: Mat4,
-) -> Vec<(&'a str, Mat4)> {
-    let mut layers = Vec::new();
-    for slot in 0..4 {
-        let Some(t) = threads.iter().find(|t| t.slot == slot && t.matches(speed)) else {
-            continue;
-        };
-        let Some(clip) = rig.clips.get(&t.sequence.to_ascii_lowercase()) else {
-            continue;
-        };
-        // Whole loops are dropped in f64 so the phase keeps its precision
-        // however long the game runs.
-        let time = seconds * f64::from(t.rate);
-        let time = if clip.looping && clip.duration > 0.0 {
-            time.rem_euclid(f64::from(clip.duration))
-        } else {
-            time
-        };
-        layers.push(bri_content::animation::Layer {
-            animation: clip,
-            time: time as f32,
-            weight: 1.0,
-        });
-    }
-    let Ok(pose) = bri_content::animation::sample_layers(&rig.shape, &layers) else {
-        return Vec::new();
-    };
-    rig.parts
-        .iter()
-        .map(|(key, node, inverse)| (key.as_str(), transform * pose.nodes[*node] * *inverse))
-        .collect()
-}
-
-/// Draws of the moving parts of a model with a steering sequence, for a
-/// vehicle at `steering` (-1 full left, +1 full right). The clip is
-/// scrubbed from full right (phase 0) to full left (phase 1), as authored.
-fn steered<'a>(
-    rig: &'a SteerRig,
-    sequence: &str,
-    steering: f32,
-    transform: Mat4,
-) -> Vec<(&'a str, Mat4)> {
-    let Some(clip) = rig.clips.get(&sequence.to_ascii_lowercase()) else {
-        return Vec::new();
-    };
-    let phase = ((1.0 - steering.clamped(-1.0, 1.0)) / 2.0).clamped(0.0, 1.0);
-    let Ok(pose) = bri_content::animation::sample(&rig.shape, Some(clip), phase * clip.duration)
-    else {
-        return Vec::new();
-    };
-    rig.parts
-        .iter()
-        .map(|(key, node, inverse)| (key.as_str(), transform * pose.nodes[*node] * *inverse))
-        .collect()
 }
 
 /// A pitch across `range` (low, high radians, up positive): 0 at the
@@ -378,14 +319,8 @@ impl VehicleAssets {
         let mut weapon_nodes: BTreeMap<String, BTreeMap<String, Mat4>> = BTreeMap::new();
         let mut model_nodes: BTreeMap<String, BTreeMap<String, Mat4>> = BTreeMap::new();
         let mut lamps: BTreeMap<String, Vec<BoundLamp>> = BTreeMap::new();
-        // The lens plates each model's definitions name (`Lamp::lens_objects`), keyed by the model's asset path and lower-case object name: off/on draw keys.
-        let mut lamp_lens: std::collections::BTreeMap<
-            String,
-            std::collections::BTreeMap<String, (String, String)>,
-        > = BTreeMap::new();
         let mut looks = BTreeMap::new();
-        let mut threads = BTreeMap::new();
-        let mut steers = BTreeMap::new();
+        let mut bodies = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
             let shape = crate::items::checked_read(
                 &bri_vehicles::asset_root(&root, asset),
@@ -501,208 +436,23 @@ impl VehicleAssets {
                 );
                 Ok(())
             };
+            if pack.definitions.iter().any(|d| {
+                d.model == asset.path
+                    && (d.steering_sequence.is_some()
+                        || !d.visuals.is_empty()
+                        || !d.threads.is_empty())
+            }) {
+                match BodyRig::load(&asset.path, &shape, look, &pack, &images, &mut insert) {
+                    Ok(rig) => {
+                        bodies.insert(asset.path.clone(), rig);
+                    }
+                    Err(error) => fault(asset, error)?,
+                }
+                continue;
+            }
             let Some(look) = look else {
                 let rest = bri_content::animation::sample(&shape, None, 0.0)?;
-                // Every model's node rest transforms, for a seat's hand grip
-                // point on the vehicle's own model.
-                model_nodes.insert(
-                    asset.path.clone(),
-                    shape
-                        .nodes
-                        .iter()
-                        .enumerate()
-                        .map(|(i, node)| (node.name.to_ascii_lowercase(), rest.nodes[i]))
-                        .collect(),
-                );
-                // The sequences this model's definitions play by themselves.
-                let mut clips = BTreeMap::new();
-                for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
-                    for t in &d.threads {
-                        if let Some(clip) = shape
-                            .animations
-                            .iter()
-                            .find(|a| a.name.eq_ignore_ascii_case(&t.sequence))
-                        {
-                            clips.insert(t.sequence.to_ascii_lowercase(), clip.clone());
-                        }
-                    }
-                }
-                // The sequences this model's definitions scrub by steering.
-                // Scrubbed, so looping is forced off: the endpoints must hold
-                // at full left and full right.
-                let mut steer_clips = BTreeMap::new();
-                for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
-                    if let Some(seq) = d.steering_sequence.as_ref()
-                        && let Some(clip) = shape
-                            .animations
-                            .iter()
-                            .find(|a| a.name.eq_ignore_ascii_case(seq))
-                    {
-                        let mut clip = clip.clone();
-                        clip.looping = false;
-                        steer_clips.insert(seq.to_ascii_lowercase(), clip);
-                    }
-                }
-                // The objects on the nodes each channel's clips move, so the
-                // base draw can leave them out and each rig can pose them.
-                let detect = |clips: &BTreeMap<String, Animation>| -> Result<
-                    std::collections::BTreeSet<(usize, usize)>,
-                > {
-                    let mut out = std::collections::BTreeSet::new();
-                    for clip in clips.values() {
-                        for step in 1..=8 {
-                            let other = bri_content::animation::sample(
-                                &shape,
-                                Some(clip),
-                                clip.duration * step as f32 / 8.0,
-                            )?;
-                            for (i, object) in shape.objects.iter().enumerate() {
-                                if let Some(node) = object.node
-                                    && !other.nodes[node].abs_diff_eq(rest.nodes[node], 1e-5)
-                                    && object.meshes.iter().all(|m| {
-                                        shape
-                                            .meshes
-                                            .get(*m)
-                                            .and_then(Option::as_ref)
-                                            .is_none_or(|m| m.skin.is_none())
-                                    })
-                                {
-                                    out.insert((node, i));
-                                }
-                            }
-                        }
-                    }
-                    Ok(out)
-                };
-                let steer_moving = detect(&steer_clips)?;
-                let thread_moving = detect(&clips)?;
-                let moving: std::collections::BTreeSet<(usize, usize)> = thread_moving
-                    .iter()
-                    .chain(steer_moving.iter())
-                    .copied()
-                    .collect();
-                // The headlight lens plates this model's definitions name
-                // (`Lamp::lens_objects`): drawn apart from the body, black
-                // while none of their beams is lit and as authored otherwise.
-                let mut lens = std::collections::BTreeSet::new();
-                for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
-                    for lamp in &d.lights {
-                        for name in &lamp.lens_objects {
-                            if let Some(i) = shape
-                                .objects
-                                .iter()
-                                .position(|o| o.name.eq_ignore_ascii_case(name))
-                            {
-                                lens.insert(i);
-                            } else {
-                                bri_console::warn(format!(
-                                    "{}: no object {} for its light lens",
-                                    d.id, name
-                                ));
-                            }
-                        }
-                    }
-                }
-                let only = |keep: &dyn Fn(usize) -> bool| {
-                    let mut part = bri_content::animation::sample(&shape, None, 0.0)?;
-                    for (i, v) in part.visibility.iter_mut().enumerate() {
-                        if !keep(i) {
-                            *v = 0.0;
-                        }
-                    }
-                    anyhow::Ok(part)
-                };
-                insert(
-                    asset.path.clone(),
-                    &only(&|i| !moving.iter().any(|(_, o)| *o == i) && !lens.contains(&i))?,
-                    &refs,
-                )?;
-                if !lens.is_empty() {
-                    // Each plate's off variant is a black paint at exactly the
-                    // slots its meshes use, so nothing else on the model
-                    // changes.
-                    let mut plates = std::collections::BTreeMap::new();
-                    for i in &lens {
-                        let name = shape.objects[*i].name.to_ascii_lowercase();
-                        let mut images_off = images.clone();
-                        for m in shape.objects[*i].meshes.iter() {
-                            if let Some(mesh) = shape.meshes.get(*m).and_then(Option::as_ref) {
-                                for p in &mesh.primitives {
-                                    if let Some(slot) = p.material
-                                        && let Some(image) = images_off.get_mut(slot)
-                                    {
-                                        *image = SceneImage {
-                                            label: "lamp lens off".into(),
-                                            width: 1,
-                                            height: 1,
-                                            rgba: [0, 0, 0, 255].to_vec(),
-                                            srgb: false,
-                                        };
-                                    }
-                                }
-                            }
-                        }
-                        let refs_off: Vec<&SceneImage> = images_off.iter().collect();
-                        let part = only(&|j| j == *i)?;
-                        let on_key = format!("{}#lens-on-{name}", asset.path);
-                        let off_key = format!("{}#lens-off-{name}", asset.path);
-                        insert(on_key.clone(), &part, &refs)?;
-                        insert(off_key.clone(), &part, &refs_off)?;
-                        plates.insert(name, (off_key, on_key));
-                    }
-                    lamp_lens.insert(asset.path.clone(), plates);
-                }
-                // A node both channels move goes to the steering rig: it is
-                // the more specific channel and the one the grip points follow.
-                let steer_nodes: std::collections::BTreeSet<usize> =
-                    steer_moving.iter().map(|(n, _)| *n).collect();
-                if !steer_moving.is_empty() {
-                    let mut parts = Vec::new();
-                    for node in &steer_nodes {
-                        let key = format!("{}#steer{node}", asset.path);
-                        insert(
-                            key.clone(),
-                            &only(&|i| shape.objects[i].node == Some(*node))?,
-                            &refs,
-                        )?;
-                        parts.push((key, *node, rest.nodes[*node].inverse()));
-                    }
-                    steers.insert(
-                        asset.path.clone(),
-                        SteerRig {
-                            shape: shape.clone(),
-                            clips: steer_clips,
-                            parts,
-                        },
-                    );
-                }
-                if !thread_moving.is_empty() {
-                    let mut parts = Vec::new();
-                    let thread_nodes: std::collections::BTreeSet<usize> =
-                        thread_moving.iter().map(|(n, _)| *n).collect();
-                    for node in thread_nodes {
-                        if steer_nodes.contains(&node) {
-                            continue;
-                        }
-                        let key = format!("{}#thread{node}", asset.path);
-                        insert(
-                            key.clone(),
-                            &only(&|i| shape.objects[i].node == Some(node))?,
-                            &refs,
-                        )?;
-                        parts.push((key, node, rest.nodes[node].inverse()));
-                    }
-                    if !parts.is_empty() {
-                        threads.insert(
-                            asset.path.clone(),
-                            ThreadRig {
-                                shape: shape.clone(),
-                                clips,
-                                parts,
-                            },
-                        );
-                    }
-                }
+                insert(asset.path.clone(), &rest, &refs)?;
                 continue;
             };
             // Objects on nodes the clip moves are drawn apart and posed each
@@ -798,7 +548,7 @@ impl VehicleAssets {
             }
         }
         for definition in &pack.definitions {
-            for seat in &definition.seats {
+            for (seat_index, seat) in definition.seats.iter().enumerate() {
                 for node in [seat.hands.node(0), seat.hands.node(1)]
                     .into_iter()
                     .flatten()
@@ -810,7 +560,9 @@ impl VehicleAssets {
                         .attachment_model
                         .as_ref()
                         .and_then(|model| weapon_nodes.get(model))
-                        .is_some_and(|nodes| nodes.contains_key(&key))
+                        .is_some_and(|nodes| {
+                            definition.weapon_seat() == Some(seat_index) && nodes.contains_key(&key)
+                        })
                         || model_nodes
                             .get(&definition.model)
                             .is_some_and(|nodes| nodes.contains_key(&key));
@@ -844,9 +596,7 @@ impl VehicleAssets {
             models,
             weapon_nodes,
             looks,
-            threads,
-            steers,
-            lamp_lens,
+            bodies,
             model_nodes,
             skinned: BTreeMap::new(),
             sources,
@@ -859,7 +609,8 @@ impl VehicleAssets {
     /// from each vehicle's presented body.
     pub fn lamp_lights(
         &mut self,
-        infos: impl IntoIterator<Item = (u64, Mat4, bool, bool, bool, bool, String)>,
+        vehicles: &ClientVehicles,
+        infos: &BTreeMap<u64, VehicleInfo>,
     ) -> Vec<bri_render::scene::PointLight> {
         let now = std::time::Instant::now();
         let dt = self
@@ -868,10 +619,22 @@ impl VehicleAssets {
             .map_or(0., |before| (now - before).as_secs_f32().min(0.25));
         let mut out = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
-        for (id, body, on, driver, jump, reversing, definition) in infos {
+        for (id, info) in infos {
+            if info.destroyed {
+                continue;
+            }
+            let Some(frame) = vehicles.frame(*id) else {
+                continue;
+            };
+            let body = Mat4::from_scale_rotation_translation(
+                Vec3::splat(info.scale),
+                frame.rotation,
+                frame.position,
+            );
+            let driver = self.driver_present(info);
             for (slot, bound) in self
                 .lamps
-                .get(&definition)
+                .get(&info.definition)
                 .into_iter()
                 .flatten()
                 .enumerate()
@@ -880,13 +643,19 @@ impl VehicleAssets {
                 if lamp.radius <= 0. {
                     continue;
                 }
-                let wanted = lamp.activation.enabled(on, driver, jump, reversing);
+                let wanted = lamp.activation.enabled(
+                    info.lights,
+                    driver,
+                    frame.driver_jump_held,
+                    frame.driver_reversing,
+                    frame.driver_braking,
+                );
                 // A lamp with a ramp fades toward its state; without one it
                 // switches at once.
                 let level = match lamp.ramp {
                     None => f32::from(u8::from(wanted)),
                     Some(ramp) => {
-                        let level = self.lamp_levels.entry((id, slot)).or_insert(0.);
+                        let level = self.lamp_levels.entry((*id, slot)).or_insert(0.);
                         let seconds = if wanted { ramp.up } else { ramp.down };
                         let step = if seconds > 0. { dt / seconds } else { 1. };
                         *level = if wanted {
@@ -894,14 +663,18 @@ impl VehicleAssets {
                         } else {
                             (*level - step).max(0.)
                         };
-                        seen.insert((id, slot));
+                        seen.insert((*id, slot));
                         *level
                     }
                 };
                 if level <= 0. {
                     continue;
                 }
-                let at = body * bound.transform;
+                let at = vehicles
+                    .model_node(self, info, &lamp.node)
+                    .map_or(body * bound.transform, |node| {
+                        node * Mat4::from_translation(Vec3::from(lamp.offset))
+                    });
                 let cone = lamp.cone.map_or([0.; 4], |c| {
                     let axis = at.transform_vector3(Vec3::from(c.axis)).normalize_or_zero();
                     if axis == Vec3::ZERO {
@@ -1080,6 +853,7 @@ pub struct VehicleFrame {
     pub driver_jump_held: bool,
     /// The driver drives in reverse (from the newest pose).
     pub driver_reversing: bool,
+    pub driver_braking: bool,
 }
 
 #[derive(Default)]
@@ -1212,11 +986,16 @@ impl ClientVehicles {
                     assets.driver_present(info),
                     frame.driver_jump_held,
                     frame.driver_reversing,
+                    frame.driver_braking,
                 ) {
                     continue;
                 }
-                let (_, rotation, position) =
-                    (body * bound.transform).to_scale_rotation_translation();
+                let at = self
+                    .model_node(assets, info, &bound.lamp.node)
+                    .map_or(body * bound.transform, |node| {
+                        node * Mat4::from_translation(Vec3::from(bound.lamp.offset))
+                    });
+                let (_, rotation, position) = at.to_scale_rotation_translation();
                 out.push(crate::weapon_effects::AttachedLight {
                     owner: *id,
                     slot: slot as u16,
@@ -1465,14 +1244,15 @@ impl ClientVehicles {
         let d = assets.definition(&info.definition)?;
         let frame = self.frame(info.id)?;
         let model = &d.model;
-        let local_node = if let (Some(rig), Some(sequence)) =
-            (assets.steers.get(model), d.steering_sequence.as_ref())
-        {
-            let clip = rig.clips.get(&sequence.to_ascii_lowercase())?;
-            let phase = ((1.0 - frame.steering.clamped(-1.0, 1.0)) / 2.0).clamped(0.0, 1.0);
-            let pose =
-                bri_content::animation::sample(&rig.shape, Some(clip), phase * clip.duration)
-                    .ok()?;
+        let local_node = if let Some(rig) = assets.bodies.get(model) {
+            let pose = rig
+                .sample(
+                    d,
+                    frame,
+                    self.clock / TICK_RATE,
+                    self.turret_bob(d, info.id),
+                )
+                .ok()?;
             let index = rig
                 .shape
                 .nodes
@@ -1532,6 +1312,26 @@ impl ClientVehicles {
                 * Mat4::from_rotation_y(frame.turret_aim[0])
                 * Mat4::from_translation(-pivot)
                 * local;
+        }
+        if fallback.is_none()
+            && let Some(rig) = assets.bodies.get(&d.model)
+            && let Some(node) = rig
+                .shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case(&s.node))
+            && let Some(rest) = assets
+                .model_nodes
+                .get(&d.model)
+                .and_then(|n| n.get(&s.node.to_ascii_lowercase()))
+            && let Ok(pose) = rig.sample(
+                d,
+                frame,
+                self.clock / TICK_RATE,
+                self.turret_bob(d, info.id),
+            )
+        {
+            local = pose.nodes[node] * rest.inverse() * local;
         }
         // Match authoritative effective_seat_pose: scale the entire local
         // translation after turret-pivot rotation, leaving orientation unit.
@@ -1618,7 +1418,9 @@ impl ClientVehicles {
             if let Some(node) = d.seats.get(seat)?.hands.node(hand) {
                 // A grip node may live on the weapon attachment or on the
                 // vehicle's own model (a steering wheel).
-                if let Some(m) = self.weapon_node(assets, info, node) {
+                if d.weapon_seat() == Some(seat)
+                    && let Some(m) = self.weapon_node(assets, info, node)
+                {
                     return Some(HandHold::position_only(m.w_axis.truncate()));
                 }
                 if let Some(m) = self.model_node(assets, info, node) {
@@ -1694,20 +1496,25 @@ impl ClientVehicles {
             index,
             models,
             looks,
-            threads,
-            steers,
-            lamp_lens,
+            bodies,
             skinned,
             ..
         } = assets;
         skinned.retain(|(model, id), _| {
-            looks.contains_key(model)
+            (looks.contains_key(model)
+                || bodies
+                    .values()
+                    .any(|r| r.parts.iter().any(|p| p.keys().any(|k| k == model))))
                 && infos
                     .get(id)
                     .and_then(|info| index.get(&info.definition))
                     .map(|i| &pack.definitions[*i])
                     .is_some_and(|d| {
-                        d.model == *model || d.attachment_model.as_ref() == Some(model)
+                        d.model == *model
+                            || d.attachment_model.as_ref() == Some(model)
+                            || bodies.get(&d.model).is_some_and(|r| {
+                                r.parts.iter().any(|p| p.keys().any(|k| k == model))
+                            })
                     })
         });
         for model in skinned.values_mut() {
@@ -1789,6 +1596,47 @@ impl ClientVehicles {
             }
             let tint = body_tint(d, info);
             let phase = d.look_phase(frame.turret_aim[1]);
+            let mut body_draws = vec![];
+            if let Some(rig) = bodies.get(&d.model) {
+                match rig.sample(d, frame, self.clock / TICK_RATE, bob) {
+                    Ok(pose) => {
+                        for part in &rig.parts {
+                            let Some(key) = part.key(d, info, frame) else {
+                                continue;
+                            };
+                            let transform = part.node.map_or(drawn_body, |node| {
+                                drawn_body * pose.nodes[node] * part.inverse
+                            });
+                            if part.skinned {
+                                let Some(base) = models.get(key) else {
+                                    continue;
+                                };
+                                let slot = skinned
+                                    .entry((key.to_string(), *id))
+                                    .or_insert_with(|| SkinnedModel::new(base));
+                                let part_pose = rig.part_pose(&pose, part);
+                                // The rest of the model remains absent even if a clip
+                                // animates object visibility.
+                                if let Err(error) = slot.pose_shape(&rig.shape, &part_pose) {
+                                    if !slot.faulted {
+                                        bri_console::warn(format!(
+                                            "Vehicle animation {key}: {error:#}"
+                                        ));
+                                        slot.faulted = true;
+                                    }
+                                    continue;
+                                }
+                                slot.push(drawn_body, tint, straddle.as_ref());
+                            } else {
+                                body_draws.push((key, transform));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        bri_console::warn(format!("Vehicle animation {}: {error:#}", d.id))
+                    }
+                }
+            }
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
                 if let Some(rig) = looks.get(model).filter(|r| r.skinned) {
                     let Some(base) = models.get(model) else {
@@ -1849,47 +1697,14 @@ impl ClientVehicles {
                     }
                 }
             };
-            push(&d.model, drawn_body, tint);
-            if let Some(rig) = threads.get(&d.model) {
-                let speed = frame.velocity.length();
-                for (model, transform) in
-                    threaded(rig, &d.threads, speed, self.clock / TICK_RATE, drawn_body)
-                {
-                    push(model, transform, tint);
+            if bodies.contains_key(&d.model) {
+                for (key, transform) in body_draws {
+                    push(key, transform, tint);
                 }
+            } else {
+                push(&d.model, drawn_body, tint);
             }
-            if let Some(rig) = steers.get(&d.model)
-                && let Some(sequence) = &d.steering_sequence
-            {
-                for (model, transform) in steered(rig, sequence, frame.steering, drawn_body) {
-                    push(model, transform, tint);
-                }
-            }
-            // The lens plates follow their beams: each plate is as authored
-            // while any lamp naming it is lit (the spotlight's predicate),
-            // black otherwise.
-            if let Some(plates) = lamp_lens.get(&d.model) {
-                // `VehicleAssets::driver_present`, with the definition at hand.
-                let driver = d
-                    .control_seat()
-                    .and_then(|seat| info.occupants.get(seat))
-                    .is_some_and(Option::is_some);
-                for (name, (off_key, on_key)) in plates {
-                    let lit = !info.destroyed
-                        && d.lights.iter().any(|lamp| {
-                            lamp.lens_objects
-                                .iter()
-                                .any(|object| object.eq_ignore_ascii_case(name))
-                                && lamp.activation.enabled(
-                                    info.lights,
-                                    driver,
-                                    frame.driver_jump_held,
-                                    frame.driver_reversing,
-                                )
-                        });
-                    push(if lit { on_key } else { off_key }, drawn_body, tint);
-                }
-            }
+
             // A wreck's tires are gone (`emptyTire`): it rests on its body.
             for (i, wheel) in d.wheels.iter().enumerate().filter(|_| !info.destroyed) {
                 let suspension = frame
@@ -2052,6 +1867,7 @@ fn frame_of(pose: &VehiclePose) -> VehicleFrame {
         turret_aim: pose.turret_aim,
         driver_jump_held: pose.driver_jump_held,
         driver_reversing: pose.driver_reversing,
+        driver_braking: pose.driver_braking,
     }
 }
 
@@ -2133,6 +1949,7 @@ fn sample(
                 ],
                 driver_jump_held: fb.driver_jump_held,
                 driver_reversing: fb.driver_reversing,
+                driver_braking: fb.driver_braking,
             };
             if let Some(carry) = carried
                 && passages
@@ -2189,6 +2006,7 @@ pub(crate) mod tests {
             jetting: false,
             driver_jump_held: false,
             driver_reversing: false,
+            driver_braking: false,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,
@@ -2453,94 +2271,6 @@ pub(crate) mod tests {
             let rolled = wheel_transform(&tire(x), 0.3, 0.2, 0.0).transform_vector3(Vec3::Y);
             assert!(rolled.z < -0.1, "forward spin must carry the top forward");
         }
-    }
-    /// A propeller whose `slow` and `fast` sequences turn it a quarter turn
-    /// per frame over one second and a quarter second.
-    fn propeller() -> ThreadRig {
-        let quarter =
-            |i: usize| Quat::from_rotation_z(i as f32 * std::f32::consts::FRAC_PI_2).to_array();
-        let clip = |name: &str, duration: f32| Animation {
-            name: name.into(),
-            frames: 4,
-            duration,
-            looping: true,
-            additive: false,
-            parent_translations: false,
-            priority: 0,
-            nodes: vec![bri_content::shape::NodeTrack {
-                node: "prop".into(),
-                rotations: (0..4).map(quarter).collect(),
-                translations: vec![],
-                scales: vec![],
-                scale_rotations: vec![],
-            }],
-            objects: vec![],
-            rotation_interpolation: Default::default(),
-            ground_translations: vec![],
-            ground_rotations: vec![],
-            triggers: vec![],
-        };
-        let node = |name: &str, parent| bri_content::shape::Node {
-            name: name.into(),
-            parent,
-            translation: [0.0; 3],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-        };
-        ThreadRig {
-            shape: Shape {
-                schema_version: 1,
-                id: "plane".into(),
-                nodes: vec![node("root", None), node("prop", Some(0))],
-                objects: vec![],
-                details: vec![],
-                meshes: vec![],
-                materials: vec![],
-                animations: vec![],
-            },
-            clips: [("slow", 1.0), ("fast", 0.25)]
-                .into_iter()
-                .map(|(n, d)| (n.to_string(), clip(n, d)))
-                .collect(),
-            parts: vec![("plane#thread1".into(), 1, Mat4::IDENTITY)],
-        }
-    }
-    #[test]
-    fn threads_pick_their_sequence_by_speed_and_play_at_their_rate() {
-        use bri_vehicles::schema::AnimationThread;
-        let rig = propeller();
-        let thread =
-            |sequence: &str, min: Option<f32>, max: Option<f32>, rate: f32| AnimationThread {
-                slot: 0,
-                sequence: sequence.into(),
-                rate,
-                min_speed: min,
-                max_speed: max,
-            };
-        let blade = |threads: &[AnimationThread], speed: f32, seconds: f64| {
-            let draws = threaded(&rig, threads, speed, seconds, Mat4::IDENTITY);
-            assert_eq!(draws.len(), 1);
-            let tip = draws[0].1.transform_vector3(Vec3::X);
-            tip.y.atan2(tip.x).to_degrees().round()
-        };
-        let switch = [
-            thread("slow", None, Some(5.0), 1.0),
-            thread("fast", Some(5.0), None, 1.0),
-        ];
-        // Slow below speed 5: a quarter turn a quarter second in.
-        assert_eq!(blade(&switch, 0.0, 0.25), 90.0);
-        // Fast from speed 5: a whole turn by then, a quarter an eighth later.
-        assert_eq!(blade(&switch, 5.0, 0.25), 0.0);
-        assert_eq!(blade(&switch, 30.0, 0.3125), 90.0);
-        // Twice the rate, and a negative rate turning it backwards.
-        assert_eq!(blade(&[thread("slow", None, None, 2.0)], 0.0, 0.125), 90.0);
-        assert_eq!(blade(&[thread("slow", None, None, -1.0)], 0.0, 0.25), -90.0);
-        // Hours in, the phase is still exact.
-        assert_eq!(blade(&switch, 0.0, 36_000.25), 90.0);
-        // No thread matches: the blade rests.
-        assert_eq!(
-            blade(&[thread("fast", Some(5.0), None, 1.0)], 0.0, 0.25),
-            0.0
-        );
     }
     /// A vehicle pack on disk with gunners whose barrels a `look` clip
     /// poses, and vehicles that have none.
@@ -3641,10 +3371,11 @@ pub(crate) mod tests {
                         axis: [0., 0., -1.],
                     }),
                     ramp: None,
-                    lens_objects: vec!["lens".into()],
                 });
                 d.lights.push(Lamp {
-                    activation: LampActivation::ReverseOrBrake,
+                    activation: LampActivation::When(serde_json::from_value(
+                        serde_json::json!({"all":["occupied"],"any":["brake","reverse"]}),
+                    )?),
                     effect: None,
                     node: "root".into(),
                     offset: [0.; 3],
@@ -3652,10 +3383,18 @@ pub(crate) mod tests {
                     radius: 6.,
                     cone: None,
                     ramp: None,
-                    lens_objects: vec!["tail".into()],
                 });
             }
         }
+        let d = pack
+            .definitions
+            .iter_mut()
+            .find(|d| d.id == bri_vehicles::testing::CAR)
+            .unwrap();
+        d.visuals = serde_json::from_value(serde_json::json!([
+            {"objects":["lens"], "when":{"all":["switch"],"none":["destroyed"]}, "off":{"color":[0,0,0,255]}},
+            {"objects":["tail"], "when":{"all":["occupied"],"any":["brake","reverse"],"none":["destroyed"]}, "off":{"color":[0,0,0,255]}}
+        ]))?;
         pack.validate()?;
         std::fs::write(&pack_path, serde_json::to_vec_pretty(&pack)?)?;
 
@@ -3663,7 +3402,16 @@ pub(crate) mod tests {
         let car_id = bri_vehicles::testing::CAR.to_string();
         let model_key = assets.definition(&car_id).context("car")?.model.clone();
         // Each named object gets its own off/on pair, keyed by lower-case name.
-        let plates = assets.lamp_lens.get(&model_key).context("lens variants")?;
+        let rig = assets.bodies.get(&model_key).context("lens variants")?;
+        let plates: BTreeMap<_, _> = rig
+            .parts
+            .iter()
+            .filter_map(|p| {
+                let name = p.object_state.as_ref()?;
+                let pair = p.variants.get(&car_id)?;
+                Some((name.as_str(), (pair[0].clone()?, pair[1].clone()?)))
+            })
+            .collect();
         let (off_lens, on_lens) = (plates["lens"].0.clone(), plates["lens"].1.clone());
         let (off_tail, on_tail) = (plates["tail"].0.clone(), plates["tail"].1.clone());
 

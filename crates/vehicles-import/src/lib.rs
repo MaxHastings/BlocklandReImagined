@@ -620,6 +620,7 @@ pub fn lower(
             _ => None,
         },
         threads: vec![],
+        visuals: vec![],
         steering_sequence: None,
         engine_curve: vec![],
         gravity_scale: None,

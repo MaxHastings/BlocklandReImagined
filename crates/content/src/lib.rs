@@ -22,6 +22,7 @@ pub mod interior;
 pub mod light_animation;
 pub mod mover;
 pub mod passage;
+pub mod presentation;
 pub mod regions;
 pub mod scatter;
 pub mod scene;

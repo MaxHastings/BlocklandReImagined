@@ -517,6 +517,7 @@ mod tests {
             jetting: true,
             driver_jump_held: true,
             driver_reversing: false,
+            driver_braking: false,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,

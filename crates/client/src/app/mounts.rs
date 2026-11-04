@@ -15,10 +15,6 @@ pub(super) struct Mounts {
     pub(super) seat_report: Option<bri_sim::session::SeatSince>,
     /// This frame's seat rotation for every mounted player.
     pub(super) rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
-    /// This frame's seat base facing (without the rider's look turn) for
-    /// every mounted player. Used to keep seat-hand IK targets stable when
-    /// the rider looks around.
-    pub(super) rider_seat_facing: BTreeMap<bri_world::OwnerId, glam::Quat>,
     /// Rebuilt every frame in the seat frame, never the passenger-turn frame.
     pub(super) rider_fallback_hips: BTreeMap<bri_world::OwnerId, Vec3>,
     /// This frame's seat hand holds for every vehicle rider whose seat has

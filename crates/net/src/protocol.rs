@@ -470,6 +470,7 @@ pub struct VehicleView {
     pub driver_jump_held: bool,
     #[serde(default)]
     pub driver_reversing: bool,
+    pub driver_braking: bool,
     /// None for the identity frame (no passage crossed). Last and left out
     /// when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -491,6 +492,7 @@ impl VehicleView {
             jetting: pose.jetting,
             driver_jump_held: pose.driver_jump_held,
             driver_reversing: pose.driver_reversing,
+            driver_braking: pose.driver_braking,
             passage_frame: (pose.passage_frame != Default::default()).then_some(pose.passage_frame),
         }
     }
@@ -517,6 +519,7 @@ impl VehicleView {
             jetting: self.jetting,
             driver_jump_held: self.driver_jump_held,
             driver_reversing: self.driver_reversing,
+            driver_braking: self.driver_braking,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,
@@ -1601,12 +1604,27 @@ mod driver_input_tests {
 
     #[test]
     fn the_driver_input_bits_travel_in_the_vehicle_view() {
-        let mut pose = VehicleView::of(&sample_pose()).into_pose();
-        assert!(!pose.driver_jump_held && !pose.driver_reversing);
-        pose.driver_jump_held = true;
-        pose.driver_reversing = true;
-        let round = VehicleView::of(&pose).into_pose();
-        assert!(round.driver_jump_held && round.driver_reversing);
+        for bits in 0..8 {
+            let mut pose = sample_pose();
+            pose.driver_jump_held = bits & 1 != 0;
+            pose.driver_reversing = bits & 2 != 0;
+            pose.driver_braking = bits & 4 != 0;
+            let wire = crate::codec::encode_datagram(&VehicleView::of(&pose)).unwrap();
+            let decoded: VehicleView = crate::codec::decode_datagram(&wire).unwrap();
+            let round = decoded.into_pose();
+            assert_eq!(
+                (
+                    round.driver_jump_held,
+                    round.driver_reversing,
+                    round.driver_braking
+                ),
+                (
+                    pose.driver_jump_held,
+                    pose.driver_reversing,
+                    pose.driver_braking
+                )
+            );
+        }
     }
 
     fn sample_pose() -> bri_sim::session::VehiclePose {
@@ -1624,6 +1642,7 @@ mod driver_input_tests {
             jetting: false,
             driver_jump_held: false,
             driver_reversing: false,
+            driver_braking: false,
             passage_frame: None,
         }
         .into_pose()
