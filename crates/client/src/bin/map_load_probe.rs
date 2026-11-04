@@ -20,7 +20,7 @@ use std::{
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const SIZE: (u32, u32) = (1280, 720);
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const HANG: Duration = Duration::from_secs(120);
 
 fn draw(
@@ -55,10 +55,11 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    bri_net::allocator::tune();
     let root = PathBuf::from(std::env::var_os("BRI_LOAD_CONTENT").context("set BRI_LOAD_CONTENT")?);
     let out = PathBuf::from(std::env::var_os("BRI_LOAD_OUT").context("set BRI_LOAD_OUT")?);
     let map = std::env::var("BRI_LOAD_MAP").context("set BRI_LOAD_MAP")?;
-    // One ignored test in this process, set before any server/runtime starts.
+    // This standalone probe sets ports before any server/runtime starts.
     unsafe {
         std::env::set_var("BRI_TEST_HOST_PORT", "0");
         std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
@@ -74,7 +75,7 @@ fn main() -> Result<()> {
     app.ui.core.pop(ScreenId::DefaultControls);
     let startup_ms = opened.elapsed().as_secs_f64() * 1000.;
     let gpu_started = Instant::now();
-    let gpu = Headless::new()?;
+    let gpu = bri_client::platform::offscreen_gpu()?;
     let mut ui = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, FORMAT)?;
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {

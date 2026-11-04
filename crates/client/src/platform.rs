@@ -400,6 +400,34 @@ struct Graphics {
     display: winit::event_loop::OwnedDisplayHandle,
 }
 
+/// Open an offscreen device with the game's backend order and compiler probe.
+/// No native window or surface is created.
+pub fn offscreen_gpu() -> Result<bri_ui::gpu::Headless> {
+    let mut failures = Vec::new();
+    for (backends, software) in backend_order() {
+        let descriptor = || {
+            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+            descriptor.backends = backends;
+            descriptor
+        };
+        match open_device(&descriptor, None, software) {
+            Ok(gpu) => {
+                log_adapter(&gpu.adapter, &failures, gpu.compiler);
+                return Ok(bri_ui::gpu::Headless {
+                    adapter_info: gpu.adapter.get_info(),
+                    device: gpu.device,
+                    queue: gpu.queue,
+                });
+            }
+            Err(error) => failures.push(format!(
+                "{backends:?}{}: {error:#}",
+                if software { " (software)" } else { "" }
+            )),
+        }
+    }
+    Err(anyhow::anyhow!("No usable GPU backend: {}", failures.join("; ")).context(NO_GPU_HELP))
+}
+
 /// Open the discrete GPU on the first backend that works. A broken or missing
 /// driver for one API (a common DX12 or Vulkan failure on older machines)
 /// falls through to the next instead of ending the game; software rendering
