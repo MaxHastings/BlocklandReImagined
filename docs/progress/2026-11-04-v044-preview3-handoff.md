@@ -34,6 +34,10 @@ saved host position by ordinary controls has not been established, so the
 cube result is unresolved, not a passing pursuit assertion. Trace-only test
 completion does not imply success. Evidence folders are `zombie-house-exit`
 and `zombie-cube` under the AFK evidence root.
+Read-only decoding confirms the cube save has five authored bricks: a 16x
+cube, player spawn and three zombie holes, without an authored staircase.
+Surrounding map reachability remains unproven; this does not justify a
+content-name workaround or a fabricated jump capability.
 
 The [vehicle/loading receipt](2026-11-04-afk-vehicle-and-load-probes.md) records
 20 Speedkart transition captures, seat integration checks, two cone GPU tests
@@ -64,4 +68,6 @@ staircase, house balcony and Beta16 tower from their saved player spawns.
 The updated author give-back remains
 `E:\Downloads\Speedkart-addon-v0.4.4-preview.1.zip`; its API and contents
 remain compatible and unchanged. Interactive driving acceptance is still his.
+All three native packages also pass preview.3's packaged Add-On checker;
+individual checker output is beside the preview startup evidence.
 Keep the warm worktree while #437 and follow-up validation remain active.

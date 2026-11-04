@@ -51,8 +51,11 @@ Fourteen default-budget offscreen real-geometry captures also pass; representati
 first-contact/breakup frames were inspected. That is technical/visual evidence,
 not Maxwell's interactive acceptance or source-game fidelity.
 
-Final scoped clippy/format/docs, new-head CI, optimized map-load measurements
-and preview.3 packaging remain pending. The broader vehicle and loading work
+Final scoped clippy/format/docs pass. Optimized map-load measurements and
+manifest/startup-verified preview.3 are recorded in the
+[preview handoff](2026-11-04-v044-preview3-handoff.md). New-head CI remains
+required before any merge; #437 additionally stays held for motion judgment.
+The broader vehicle and loading work
 has its [own receipt](2026-11-04-afk-vehicle-and-load-probes.md). The new
 standalone map-load CLI is explicitly opt-in rather than an empty test harness.
 The external private-save repro is classified alongside existing manual gate
