@@ -5,6 +5,18 @@ Launch `Launch.cmd`; the binary reports `v0.4.4-preview.3 (c76b31a18)`.
 Earlier previews and user saves remain available. No interactive playtest was
 automated. The destruction PR #437 remains held for Maxwell's motion judgment.
 
+QA PR #440 merged as `21f74083629eccca8d5d51a34319586b432101ba` after all
+seven executed platform checks passed on exact head
+`c2e2fabb0e47e79438262eb2fe129bf5b411a361`; the conditional Windows test was
+skipped. The fresh Actions check-run receipt is `qa-final-ci.json` in the AFK
+evidence directory. Main is integrated into this candidate without replacing
+recent work. The automatic merge duplicated four identical manual gate
+entries; integration removes only those duplicates, retaining each probe and
+the destruction repro once. History/protocol sanity and gate-tool tests pass.
+No normal-game behavior changed after the preview.3 source build; later
+changes are offscreen tooling, integration and documentation. #437 still needs
+its final-head CI and Maxwell's motion judgment before any merge.
+
 Compared with preview.2, this includes the bounded collision-work scheduling
 correction from the [AFK destruction receipt](2026-11-04-afk-destruction-scheduling.md).
 Preparation and motion no longer repeatedly favor the same prefix of a large
