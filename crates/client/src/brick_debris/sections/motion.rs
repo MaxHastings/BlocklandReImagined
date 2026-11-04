@@ -158,11 +158,11 @@ impl Chunk {
         world: &PhysicsWorld,
         ready: bool,
         work: &mut u32,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let Frame { dt, actors, scene } = *frame;
         self.debt = (self.debt + dt).min(0.1);
         let Some(shape) = &self.proxy else {
-            return Ok(());
+            return Ok(false);
         };
         let half = (self.turn * Vec3::X).abs() * self.half.x
             + (self.turn * Vec3::Y).abs() * self.half.y
@@ -184,7 +184,7 @@ impl Chunk {
         // shared pool naturally. Never pause midway over a moving snapshot.
         let required = (2 * near.len() as u32 + 2 * (SLIDES + 1)) * cost;
         if !ready || *work < required || self.debt <= 0.0 {
-            return Ok(());
+            return Ok(false);
         }
         let step = self.debt.min(MAX_STEP);
         let mut velocity = self.velocity - Vec3::Y * (GRAVITY * step);
@@ -316,6 +316,6 @@ impl Chunk {
         self.center = at;
         self.velocity = velocity;
         self.debt = (self.debt - step).max(0.0);
-        Ok(())
+        Ok(true)
     }
 }

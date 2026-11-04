@@ -11,6 +11,8 @@ mod motion;
 mod partition;
 mod proxy;
 mod release;
+#[cfg(test)]
+mod scheduling_tests;
 pub(super) mod shots;
 use partition::Partition;
 
@@ -20,6 +22,9 @@ const WITNESSES: usize = 72;
 const MAX_PROXY_PARTS: usize = 2048;
 const MAX_CHUNK_MEMBERS: usize = 16;
 const MAX_CHUNK_SPAN: f32 = 6.;
+// Collision work follows fixed simulation steps, keeping the same per-second
+// allowance when a frame must advance several local physics steps.
+const COLLISION_QUERIES_PER_STEP: u32 = 256;
 const CONTACT_SKIN: f32 = 0.02;
 const RESTITUTION: f32 = 0.25;
 
@@ -139,6 +144,7 @@ pub(super) struct Section {
     probe_generation: u64,
     pub landed: bool,
     chunk_turn: usize,
+    preparation_turn: usize,
     pending: VecDeque<(SectionProbe, f32, Vec3, Vec3)>,
     contact_point: Option<Vec3>,
     contact_normal: Vec3,
@@ -224,6 +230,7 @@ impl Section {
             probe_generation: 0,
             landed: false,
             chunk_turn: 0,
+            preparation_turn: 0,
             pending: VecDeque::new(),
             contact_point: None,
             contact_normal: Vec3::ZERO,
@@ -820,7 +827,9 @@ impl BrickDebris {
     pub(super) fn advance_sections(&mut self, dt: f32, building: &Building) -> Result<()> {
         let mut contacts = 4096;
         let mut planning = 4096;
-        let mut collision = 512 * crate::local_physics::COLLISION_QUERY_COST;
+        let steps = (((self.accumulator + dt) / STEP) as u32).clamp(1, MAX_STEPS);
+        let mut collision =
+            COLLISION_QUERIES_PER_STEP * steps * crate::local_physics::COLLISION_QUERY_COST;
         let mut material = 256;
         let mut recovery = 256;
         let mut keys: Vec<_> = self.sections.keys().copied().collect();
@@ -942,13 +951,25 @@ impl BrickDebris {
         }
         // Collision geometry is prepared once and shared by both backends.
         // No bodyless chunk repeats the same brick scan for every tiny step.
+        keys.sort_unstable();
+        let collision_start = self.section_collision_turn % keys.len().max(1);
+        keys.rotate_left(collision_start);
+        let mut last_served = None;
+        let before_preparation = collision;
         let mut ready_chunks = BTreeSet::new();
-        for &key in &keys {
+        for (order, &key) in keys.iter().enumerate() {
             let s = self.sections.get_mut(&key).unwrap();
             if s.finishing.is_some() {
                 continue;
             }
-            for (i, c) in s.chunks.iter_mut().enumerate().filter(|(_, c)| !c.released) {
+            let count = s.chunks.len();
+            let start = s.preparation_turn;
+            for offset in 0..count {
+                let i = (start + offset) % count;
+                let c = &mut s.chunks[i];
+                if c.released {
+                    continue;
+                }
                 if c.handle.is_some_and(|h| self.world.bodies[h].is_sleeping())
                     && c.collision.unchanged(building)
                 {
@@ -975,6 +996,7 @@ impl BrickDebris {
                 } else {
                     (h, velocity)
                 };
+                let before = collision;
                 let ready = c.collision.prepare(
                     &mut self.surroundings,
                     &mut self.world,
@@ -988,6 +1010,10 @@ impl BrickDebris {
                     &mut collision,
                     |id| self.dead.contains(&id),
                 )?;
+                if collision < before {
+                    s.preparation_turn = (i + 1) % count;
+                    last_served = Some(order);
+                }
                 if ready {
                     ready_chunks.insert((key.0, key.1, i));
                     if let Some(handle) = c.handle {
@@ -998,6 +1024,7 @@ impl BrickDebris {
                 }
             }
         }
+        self.diagnostics.section_preparation_work += u64::from(before_preparation - collision);
         let bodyless = self
             .sections
             .values()
@@ -1029,14 +1056,14 @@ impl BrickDebris {
                 .map(|c| c.parts)
                 .sum::<usize>();
         let mut part_slots = MAX_PROXY_PARTS.saturating_sub(used_parts);
-        for &key in &keys {
+        let before_motion = collision;
+        for (order, &key) in keys.iter().enumerate() {
             let s = self.sections.get_mut(&key).unwrap();
             if s.finishing.is_some() {
                 continue;
             }
             let count = s.chunks.len();
             let start = s.chunk_turn;
-            s.chunk_turn = s.chunk_turn.wrapping_add(1);
             for i in 0..count {
                 let index = (i + start) % count;
                 let c = &mut s.chunks[index];
@@ -1045,13 +1072,17 @@ impl BrickDebris {
                 }
                 let ready = ready_chunks.contains(&(key.0, key.1, index));
                 if !ready || available == 0 || c.parts > part_slots || c.proxy.is_none() {
-                    c.advance_fallback(
+                    if c.advance_fallback(
                         &frame,
                         (key.0, key.1, index),
                         &self.world,
                         ready,
                         &mut collision,
-                    )?;
+                    )? {
+                        s.chunk_turn = (index + 1) % count;
+                        last_served = Some(order);
+                        self.diagnostics.section_fallback_steps += 1;
+                    }
                     continue;
                 }
                 let (center, turn) = c.pose(&self.world);
@@ -1079,12 +1110,18 @@ impl BrickDebris {
                     ));
                 let (handle, _) = self.world.insert(body, collider);
                 c.handle = Some(handle);
+                s.chunk_turn = (index + 1) % count;
+                last_served = Some(order);
                 c.debt = 0.;
                 super::foley::configure(&mut self.world, handle, self.foley.policy.as_deref());
                 self.foley.born(handle, 0.12);
                 available -= 1;
                 part_slots -= c.parts;
             }
+        }
+        self.diagnostics.section_motion_work += u64::from(before_motion - collision);
+        if let Some(order) = last_served {
+            self.section_collision_turn = (collision_start + order + 1) % keys.len();
         }
         self.sections
             .retain(|_, s| s.age < 30. && (s.sealed || s.staging_age < 30.));

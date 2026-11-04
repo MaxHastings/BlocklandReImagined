@@ -29,6 +29,25 @@ struct Case {
 #[test]
 #[ignore = "needs regenerated content and Maxwell's two private rocket repro saves"]
 fn two_stock_rockets_replay_authority_and_client_section_motion() -> Result<()> {
+    let hz: u32 = std::env::var("BRI_DESTRUCTION_HZ")
+        .unwrap_or_else(|_| "60".into())
+        .parse()
+        .context("BRI_DESTRUCTION_HZ must be 30, 60 or 120")?;
+    ensure!(
+        matches!(hz, 30 | 60 | 120),
+        "BRI_DESTRUCTION_HZ must be 30, 60 or 120"
+    );
+    let limit: Option<usize> = std::env::var("BRI_DESTRUCTION_LIMIT")
+        .ok()
+        .map(|v| {
+            v.parse()
+                .context("BRI_DESTRUCTION_LIMIT must be an integer")
+        })
+        .transpose()?;
+    ensure!(
+        limit.is_none_or(|limit| limit <= bri_client::brick_debris::MAX_LIMIT),
+        "BRI_DESTRUCTION_LIMIT exceeds the supported quality range"
+    );
     let root = PathBuf::from(std::env::var("BRI_CONTENT").context("set BRI_CONTENT")?);
     let saves =
         PathBuf::from(std::env::var("BRI_DESTRUCTION_SAVES").context("set BRI_DESTRUCTION_SAVES")?);
@@ -101,6 +120,9 @@ fn two_stock_rockets_replay_authority_and_client_section_motion() -> Result<()> 
         building.sync_world(&world)?;
         building.set_world_tick(host.simulation().state().tick);
         let mut debris = BrickDebris::new();
+        if let Some(limit) = limit {
+            debris.set_limit(limit);
+        }
         let meshes = host
             .simulation()
             .definitions
@@ -129,10 +151,11 @@ fn two_stock_rockets_replay_authority_and_client_section_motion() -> Result<()> 
         let mut section_groups = BTreeSet::new();
         let mut shots_at = vec![];
         // Cover the ordinary 10-second solid and 3-second fade lifecycle,
-        // after both stock image fire/reload cycles, at 60 client frames/s.
-        for frame in 0..60 * 20 {
+        // after both stock image fire/reload cycles. Server ticks remain fixed;
+        // only presentation cadence and the existing quality budget vary.
+        for frame in 0..hz * 20 {
             let mut cues = vec![];
-            for _ in 0..2 {
+            for _ in 0..bri_world::TICKS_PER_SECOND as u32 / hz {
                 movement += 1;
                 host.movement(
                     owner,
@@ -210,11 +233,11 @@ fn two_stock_rockets_replay_authority_and_client_section_motion() -> Result<()> 
             if let Some(c) = &capture {
                 debris.prepare_models(&c.models);
             }
-            debris.advance(1.0 / 60.0, &building)?;
+            debris.advance(1.0 / hz as f32, &building)?;
             let advance_ms = before.elapsed().as_secs_f64() * 1000.0;
             if let Some(c) = &mut capture {
                 c.upload(&debris, &world.palette)?;
-                if [30, 60, 90, 120, 180, 240, 360].contains(&frame) {
+                if [hz / 2, hz, hz * 3 / 2, hz * 2, hz * 3, hz * 4, hz * 6].contains(&frame) {
                     c.save(
                         &world,
                         case.camera,
@@ -244,16 +267,15 @@ fn two_stock_rockets_replay_authority_and_client_section_motion() -> Result<()> 
                 trace,
                 "{}",
                 json!({"frame":frame,"tick":tick,"advance_ms":advance_ms,
+                "preparation_work":debris.diagnostics.section_preparation_work,
+                "motion_work":debris.diagnostics.section_motion_work,
+                "fallback_steps":debris.diagnostics.section_fallback_steps,
                 "sections":sections,"source_bricks":world.bricks.len(),"debris":debris.len(),
                 "support_visits":work.support_visits,"query_work":work.query_work,"detached":work.detached_bricks})
             )?;
         }
         // The old paused moving queries saturated the 100-ms debt cap for
         // seconds. These saved workloads must make progress within that cap.
-        ensure!(
-            max_debt < 0.1,
-            "fallback motion saturated its catch-up window: {max_debt}"
-        );
         if let Some(c) = &capture {
             ensure!(
                 c.models.diagnostics.looks_built > 0,
@@ -262,7 +284,7 @@ fn two_stock_rockets_replay_authority_and_client_section_motion() -> Result<()> 
         }
         trace.flush()?;
         cues_out.flush()?;
-        let report = json!({"case":case.name,"save":case.save,"map":case.map,"initial_bricks":initial_bricks,
+        let report = json!({"case":case.name,"save":case.save,"map":case.map,"initial_bricks":initial_bricks,"client_hz":hz,
             "shots":shots,"shot_poses":shots_at,"projectiles":projectiles,"groups":section_groups,
             "dropped_cues":host.dropped_cues(),"limit":debris.limit(),"max_debt":max_debt,"rendered":capture.is_some()});
         std::fs::write(
@@ -270,6 +292,10 @@ fn two_stock_rockets_replay_authority_and_client_section_motion() -> Result<()> 
             serde_json::to_vec_pretty(&report)?,
         )?;
         eprintln!("DESTRUCTION {report}");
+        ensure!(
+            max_debt < 0.1 - f32::EPSILON,
+            "fallback motion saturated its catch-up window: {max_debt}"
+        );
         ensure!(
             shots.len() == 2 && projectiles.len() == 2,
             "the repro must launch exactly two stock rockets"

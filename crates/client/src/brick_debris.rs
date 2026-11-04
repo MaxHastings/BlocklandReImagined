@@ -263,6 +263,9 @@ struct CosmeticBlast {
 
 #[derive(Clone, Debug, Default)]
 pub struct BrickDebrisDiagnostics {
+    pub section_preparation_work: u64,
+    pub section_motion_work: u64,
+    pub section_fallback_steps: u64,
     pub accepted: u64,
     pub duplicates: u64,
     /// Cues for bricks this client has no definition for.
@@ -298,6 +301,7 @@ pub struct BrickDebris {
     retired_sections: BTreeSet<(u64, u64)>,
     section_shots: sections::shots::Queries,
     section_turn: usize,
+    section_collision_turn: usize,
     body_turn: usize,
     surroundings: Surroundings,
     collision_query_revision: u64,
@@ -339,6 +343,7 @@ impl BrickDebris {
             retired_sections: BTreeSet::new(),
             section_shots: Default::default(),
             section_turn: 0,
+            section_collision_turn: 0,
             body_turn: 0,
             surroundings: Surroundings::default(),
             collision_query_revision: 0,

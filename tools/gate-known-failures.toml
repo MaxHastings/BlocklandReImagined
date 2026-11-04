@@ -12,6 +12,10 @@
 
 # Tests the gate never runs: they need hardware or setup a gate run lacks.
 
+[[skip]]
+test = "two_stock_rockets_replay_authority_and_client_section_motion"
+reason = "Needs Maxwell's private Towers/Pirate saves (BRI_DESTRUCTION_SAVES), generated content and BRI_DESTRUCTION_OUT; run the explicit destruction_repro target with --ignored."
+
 # Explicit private repros remain opt-in; their assertions are exercised with
 # the named inputs and evidence recorded in docs/progress/2026-11-04-*.md.
 [[skip]]

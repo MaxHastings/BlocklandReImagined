@@ -210,8 +210,15 @@ distance is measured once per actor before selection; sorting does not rescan
 every chunk per comparison. Extent-aware admission covers the ends of long
 members, and farther low-ID actors do not displace a closer actor's contact.
 
-The existing512-query-equivalent section collision budget is one shared pool
-for collision-window preparation and overflow contacts. Metadata cursor visits
+Section collision work uses256 query equivalents per existing fixed physics
+step:512 for an ordinary60-Hz frame, up to the local world's existing maximum
+catch-up steps. A frame without a physics step may prepare one quantum of
+background collision work. Preparation and overflow contacts share this pool;
+lower frame rate does not halve the work available per simulated second.
+Group, preparation and motion cursors resume after actual serviced work,
+rather than sliding their starting index by one while repeatedly serving the
+same prefix. Preparation/motion work and completed fallback steps are observable.
+Metadata cursor visits
 cost one unit; real shape casts cost16. Preparation is resumable; overflow
 reserves enough work to complete a bounded motion step, with chunks taking turns.
 Every chunk reuses the same prepared static query world. Moving rubble shares
