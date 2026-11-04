@@ -1367,7 +1367,7 @@ fn a_driver_is_predicted_with_the_hosts_steering_prefs() {
         wheel_tire: vec![],
         turret_aim: [0.0; 2],
         jetting: false,
-        driver_jump_held: false,
+        driver_inputs: 0,
         angular_velocity: [0.0; 3],
         mouse_steering: [0.0; 2],
         driver_input: 0,

@@ -639,7 +639,7 @@ impl VehicleAssets {
     /// from each vehicle's presented body.
     pub fn lamp_lights(
         &mut self,
-        infos: impl IntoIterator<Item = (u64, Mat4, bool, bool, bool, String)>,
+        infos: impl IntoIterator<Item = (u64, Mat4, bool, bool, u8, String)>,
     ) -> Vec<bri_render::scene::PointLight> {
         let now = std::time::Instant::now();
         let dt = self
@@ -648,7 +648,7 @@ impl VehicleAssets {
             .map_or(0., |before| (now - before).as_secs_f32().min(0.25));
         let mut out = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
-        for (id, body, on, driver, jump, definition) in infos {
+        for (id, body, on, driver, inputs, definition) in infos {
             for (slot, bound) in self
                 .lamps
                 .get(&definition)
@@ -660,7 +660,7 @@ impl VehicleAssets {
                 if lamp.radius <= 0. {
                     continue;
                 }
-                let wanted = lamp.activation.enabled(on, driver, jump);
+                let wanted = lamp.activation.enabled(on, driver, inputs);
                 // A lamp with a ramp fades toward its state; without one it
                 // switches at once.
                 let level = match lamp.ramp {
@@ -856,8 +856,8 @@ pub struct VehicleFrame {
     pub wheel_rotation: Vec<f32>,
     pub wheel_contact: Vec<bool>,
     pub turret_aim: [f32; 2],
-    /// The driver is holding the jump input (from the newest pose).
-    pub driver_jump_held: bool,
+    /// What the driver holds, `schema::driver_input` bits (from the newest pose).
+    pub driver_inputs: u8,
 }
 
 #[derive(Default)]
@@ -988,7 +988,7 @@ impl ClientVehicles {
                 if !bound.lamp.activation.enabled(
                     info.lights,
                     assets.driver_present(info),
-                    frame.driver_jump_held,
+                    frame.driver_inputs,
                 ) {
                     continue;
                 }
@@ -1732,7 +1732,7 @@ fn frame_of(pose: &VehiclePose) -> VehicleFrame {
         wheel_rotation: pose.wheel_rotation.clone(),
         wheel_contact: pose.wheel_contact.clone(),
         turret_aim: pose.turret_aim,
-        driver_jump_held: pose.driver_jump_held,
+        driver_inputs: pose.driver_inputs,
     }
 }
 
@@ -1812,7 +1812,7 @@ fn sample(
                     crate::motion::lerp_angle(fa.turret_aim[0], fb.turret_aim[0], t),
                     fa.turret_aim[1] + (fb.turret_aim[1] - fa.turret_aim[1]) * t,
                 ],
-                driver_jump_held: fb.driver_jump_held,
+                driver_inputs: fb.driver_inputs,
             };
             if let Some(carry) = carried
                 && passages
@@ -1867,7 +1867,7 @@ pub(crate) mod tests {
             wheel_tire: vec![Default::default()],
             turret_aim: [0.0; 2],
             jetting: false,
-            driver_jump_held: false,
+            driver_inputs: 0,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,

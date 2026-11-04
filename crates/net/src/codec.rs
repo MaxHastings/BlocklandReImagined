@@ -515,7 +515,7 @@ mod tests {
             wheel_tire: vec![Default::default(); 16],
             turret_aim: [1.0; 2],
             jetting: true,
-            driver_jump_held: true,
+            driver_inputs: 1,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,

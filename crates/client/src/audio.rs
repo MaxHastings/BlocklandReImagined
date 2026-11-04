@@ -2037,7 +2037,7 @@ mod tests {
             wheel_suspension: vec![],
             wheel_rotation: vec![],
             wheel_contact: vec![],
-            driver_jump_held: false,
+            driver_inputs: 0,
             turret_aim: [0.0; 2],
         };
         // Only a passenger: the engine is off.
@@ -2100,7 +2100,7 @@ mod tests {
             wheel_suspension: vec![],
             wheel_rotation: vec![],
             wheel_contact: vec![],
-            driver_jump_held: false,
+            driver_inputs: 0,
             turret_aim: [0.0; 2],
         };
         let at = |speed: f32| engine_loops(&d, &info, &frame(speed));
@@ -2154,7 +2154,7 @@ mod tests {
             wheel_suspension: vec![],
             wheel_rotation: vec![],
             wheel_contact: vec![grounded; wheels],
-            driver_jump_held: false,
+            driver_inputs: 0,
             turret_aim: [0.0; 2],
         };
         let straight = frame(glam::Vec3::new(0.0, 0.0, 25.0), true);

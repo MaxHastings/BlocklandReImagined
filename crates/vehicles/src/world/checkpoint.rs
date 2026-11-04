@@ -54,7 +54,8 @@ pub struct VehicleSave {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub still: u8,
     pub previous_velocity: [f32; 3],
-    pub jump_held: bool,
+    #[serde(default)]
+    pub inputs: u8,
     pub fire_held: bool,
     pub mounted_once: bool,
     pub mouse_steering: [f32; 2],
@@ -125,7 +126,7 @@ impl VehiclesWorld {
                 energy_phase: v.energy_phase,
                 still: v.still,
                 previous_velocity: v.previous_velocity.to_array(),
-                jump_held: v.jump_held,
+                inputs: v.inputs,
                 fire_held: v.fire_held,
                 mounted_once: v.mounted_once,
                 mouse_steering: v.mouse_steering,
@@ -287,7 +288,7 @@ impl VehiclesWorld {
                     animation: saved.animation,
                     water: saved.water,
                     previous_velocity: Vec3::from_array(saved.previous_velocity),
-                    jump_held: saved.jump_held,
+                    inputs: saved.inputs,
                     fire_held: saved.fire_held,
                     mounted_once: saved.mounted_once,
                     water_coverage: saved.water_coverage,

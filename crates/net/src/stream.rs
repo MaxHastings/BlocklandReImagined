@@ -183,7 +183,7 @@ fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
         && near(&a.turret_aim, &b.turret_aim, ANGLE)
         && a.wheel_contact == b.wheel_contact
         && a.jetting == b.jetting
-        && a.driver_jump_held == b.driver_jump_held
+        && a.driver_inputs == b.driver_inputs
         && a.driver_steering == b.driver_steering
         && a.passage_frame == b.passage_frame
 }
@@ -1067,7 +1067,7 @@ mod tests {
             wheel_tire: vec![Default::default(); 4],
             turret_aim: [0.0; 2],
             jetting: false,
-            driver_jump_held: false,
+            driver_inputs: 0,
             angular_velocity: [0.0, 0.4, 0.0],
             mouse_steering: [0.2, 0.0],
             driver_input: 42,
@@ -1115,7 +1115,7 @@ mod tests {
                 wheel_tire: vec![Default::default(); 4],
                 turret_aim: [0.0; 2],
                 jetting: false,
-                driver_jump_held: false,
+                driver_inputs: 0,
                 angular_velocity: [0.0; 3],
                 mouse_steering: [0.0; 2],
                 driver_input: 0,

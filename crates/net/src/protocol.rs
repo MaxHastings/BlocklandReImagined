@@ -467,7 +467,7 @@ pub struct VehicleView {
     pub turret_aim: [f32; 2],
     pub jetting: bool,
     #[serde(default)]
-    pub driver_jump_held: bool,
+    pub driver_inputs: u8,
     /// None for the identity frame (no passage crossed). Last and left out
     /// when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -487,7 +487,7 @@ impl VehicleView {
             wheel_contact: pose.wheel_contact.clone(),
             turret_aim: pose.turret_aim,
             jetting: pose.jetting,
-            driver_jump_held: pose.driver_jump_held,
+            driver_inputs: pose.driver_inputs,
             passage_frame: (pose.passage_frame != Default::default()).then_some(pose.passage_frame),
         }
     }
@@ -512,7 +512,7 @@ impl VehicleView {
             wheel_tire: Vec::new(),
             turret_aim: self.turret_aim,
             jetting: self.jetting,
-            driver_jump_held: self.driver_jump_held,
+            driver_inputs: self.driver_inputs,
             angular_velocity: [0.0; 3],
             mouse_steering: [0.0; 2],
             driver_input: 0,
@@ -1592,15 +1592,19 @@ pub enum Message {
 }
 
 #[cfg(test)]
-mod driver_jump_held_tests {
+mod driver_inputs_tests {
     use super::*;
 
     #[test]
-    fn the_jump_bit_travels_in_the_vehicle_view() {
+    fn the_driver_input_bits_travel_in_the_vehicle_view() {
+        use bri_vehicles::schema::driver_input::*;
         let mut pose = VehicleView::of(&sample_pose()).into_pose();
-        assert!(!pose.driver_jump_held);
-        pose.driver_jump_held = true;
-        assert!(VehicleView::of(&pose).into_pose().driver_jump_held);
+        assert_eq!(pose.driver_inputs, 0);
+        pose.driver_inputs = JUMP | REVERSE;
+        assert_eq!(
+            VehicleView::of(&pose).into_pose().driver_inputs,
+            JUMP | REVERSE
+        );
     }
 
     fn sample_pose() -> bri_sim::session::VehiclePose {
@@ -1616,7 +1620,7 @@ mod driver_jump_held_tests {
             wheel_contact: vec![],
             turret_aim: [0.0; 2],
             jetting: false,
-            driver_jump_held: false,
+            driver_inputs: 0,
             passage_frame: None,
         }
         .into_pose()

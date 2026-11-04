@@ -100,6 +100,22 @@ fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
         0.
     }
 }
+/// What the driver holds this tick, as `schema::driver_input` bits.
+fn driver_input_bits(c: Controls) -> u8 {
+    use crate::schema::driver_input;
+    let mut bits = 0;
+    if c.jump {
+        bits |= driver_input::JUMP;
+    }
+    if c.brake {
+        bits |= driver_input::BRAKE;
+    }
+    if c.throttle < 0. {
+        bits |= driver_input::REVERSE;
+    }
+    bits
+}
+
 impl Controls {
     fn validate(self) -> Result<Self> {
         ensure!(
@@ -203,9 +219,10 @@ pub struct VehicleSnapshot {
     pub charge: u8,
     pub energy: f32,
     pub jetting: bool,
-    /// The driver is holding the jump input: what an input-lit lamp follows.
+    /// What the driver holds, as `schema::driver_input` bits: what an
+    /// input-lit lamp follows.
     #[serde(default)]
-    pub driver_jump_held: bool,
+    pub driver_inputs: u8,
     pub turret_aim: [f32; 2],
     pub turret_damage: Option<f32>,
     pub turret_transform: Option<Transform>,
@@ -402,7 +419,7 @@ struct Instance {
     animation: String,
     water: bool,
     previous_velocity: Vec3,
-    jump_held: bool,
+    inputs: u8,
     fire_held: bool,
     mounted_once: bool,
     water_coverage: f32,
@@ -996,7 +1013,7 @@ impl VehiclesWorld {
                 animation: "root".into(),
                 water: false,
                 previous_velocity: Vec3::ZERO,
-                jump_held: false,
+                inputs: 0,
                 fire_held: false,
                 mounted_once: false,
                 water_coverage: 0.,
@@ -2005,7 +2022,7 @@ impl VehiclesWorld {
                     v.relocations += 1;
                     carried.push((*id, carry));
                 }
-                v.jump_held = c.jump;
+                v.inputs = driver_input_bits(c);
                 if alive {
                     weapon_step(self.tick, *id, v, d, world, &mut self.intents);
                 }
@@ -2028,7 +2045,7 @@ impl VehiclesWorld {
             }
             if resting {
                 self.resting_skips += 1;
-                v.jump_held = c.jump;
+                v.inputs = driver_input_bits(c);
                 if alive {
                     weapon_step(self.tick, *id, v, d, world, &mut self.intents);
                 }
@@ -2184,7 +2201,7 @@ impl VehiclesWorld {
                     }
                 }
             }
-            v.jump_held = c.jump;
+            v.inputs = driver_input_bits(c);
             if !v.wheels.is_empty() {
                 self.wheel_rays += v.wheels.len() as u64;
                 let through = if passages.list.is_empty() {
@@ -2671,7 +2688,7 @@ impl VehiclesWorld {
             charge: v.charge,
             energy: v.energy,
             jetting: v.jetting,
-            driver_jump_held: v.jump_held,
+            driver_inputs: v.inputs,
             turret_aim: [if d.is_actor() { 0. } else { barrel[0] }, barrel[1]],
             turret_damage: v.turret_damage,
             turret_transform: d
