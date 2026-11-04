@@ -25,6 +25,16 @@ tie-order experiment failed the tower assertion and was reverted. Expensive
 balcony detour searches can still pause for several simulated seconds. This
 remains a known planning limitation, not completed instant pursuit.
 
+Two additional 60-second diagnostic traces preserve ordinary controls and
+vulnerability. In the house-exit save the single zombie moves after eight
+ticks, reaches and kills the host, with no uncredited death. In the cube save
+all three begin moving after roughly six seconds, none reaches the host's
+floor and no kill occurs; repeated route attempts remain. Reachability of the
+saved host position by ordinary controls has not been established, so the
+cube result is unresolved, not a passing pursuit assertion. Trace-only test
+completion does not imply success. Evidence folders are `zombie-house-exit`
+and `zombie-cube` under the AFK evidence root.
+
 The [vehicle/loading receipt](2026-11-04-afk-vehicle-and-load-probes.md) records
 20 Speedkart transition captures, seat integration checks, two cone GPU tests
 and first/repeated load timings. First loads miss the five-second target;
