@@ -169,11 +169,20 @@ separate resources. Every admitted member keeps its original mesh, color,
 print and shape. The landing index prepares256 members and models upload at
 most four new appearances per frame. All received material remains visible.
 Complete delivery and GPU readiness permit the shared fall; landing-index work
-continues during flight. A detached section falls under gravity without an
-invented hinge or shape-dependent rotation; observed contact hands motion to
-local chunk physics. Corners and 64 distributed material witnesses, including
+continues during flight. A detached section keeps its causal radial impulse
+through the support proof and member delivery. Actual member-box mass, center
+of mass and inertia determine release translation and rotation; empty bounds
+do not receive force. Gravity contributes no invented hinge or random lean.
+The first observed fixed-world contact retains its normal and transfers a
+normal reaction into the clumps' linear and angular velocities, using their
+actual mass centers. Coplanar witness ties prefer contact nearest the material
+center, rather than arbitrarily selecting an outer corner. This remains a
+representative contact approximation, not a multi-contact structural solver.
+Corners and 64 distributed material witnesses, including
 the base,
-probe a 0.2-second contact horizon under a 4096-unit budget. The displayed clock
+probe at most a 0.2-second contact horizon under a 4096-unit budget. Rotating
+witness chords shorten that horizon to keep curvature within the existing
+contact margin. The displayed clock
 advances through checked time rather than accumulating a delayed jump.
 Contact remains a cosmetic approximation, not a structural collision solver.
 

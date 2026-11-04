@@ -379,6 +379,7 @@ fn response_timing_includes_support_proof_and_complete_section_delivery() {
                 &parameters,
             )
             .unwrap();
+            let admitted_blast = s.destruction.pending.back().unwrap().blast;
             let mut direct = None;
             let mut first_section = None;
             let mut ready = None;
@@ -399,9 +400,17 @@ fn response_timing_includes_support_proof_and_complete_section_delivery() {
                             direct.get_or_insert(tick);
                         }
                         CueKind::BrickKill {
-                            death: BrickDeath::Section { .. },
+                            death: BrickDeath::Section { impulse, .. },
                             ..
                         } => {
+                            assert_eq!(
+                                impulse,
+                                Some(crate::presentation::RadialImpulse {
+                                    origin: admitted_blast.origin.to_array(),
+                                    force: admitted_blast.force,
+                                    radius: admitted_blast.radius,
+                                })
+                            );
                             first_section.get_or_insert(tick);
                         }
                         CueKind::BrickSectionReady { .. } => {
@@ -658,6 +667,7 @@ fn independent_sections_share_commit_budget_and_report_complete_shape() {
             })
             .collect();
         s.destruction.detach.push_back(Detached {
+            impulse: None,
             scope: scope.clone(),
             ids: Arc::new(ids),
             next: None,
@@ -742,6 +752,7 @@ fn section_barrier_seals_only_committed_material_and_defers_respawn_until_delive
         .collect();
     let first = *ids.first().unwrap();
     s.destruction.detach.push_back(Detached {
+        impulse: None,
         scope,
         ids: Arc::new(ids),
         next: None,

@@ -14,6 +14,14 @@ pub const MAX_SECTION_BUCKETS: usize = 262_144;
 pub const MAX_SECTION_MEMBER_BUCKETS: usize = 256;
 /// Upper bound on a brick blast's force and falloff radius.
 pub const MAX_BRICK_FORCE: f32 = 1000.;
+/// The causal radial impulse retained while a detached section is proved and
+/// delivered. This is a presentation force, never authority over world bricks.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RadialImpulse {
+    pub origin: [f32; 3],
+    pub force: f32,
+    pub radius: f32,
+}
 /// How clients draw a brick's death. v20 draws the two differently
 /// (`blocklandv20.exe`; see docs/audits/brick-damage.md).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -38,6 +46,7 @@ pub enum BrickDeath {
         members: u32,
         half: [f32; 3],
         pivot: [f32; 3],
+        impulse: Option<RadialImpulse>,
     },
     /// Hidden original of a stud partition; no duplicate debris is drawn.
     Partition,
@@ -277,10 +286,24 @@ impl Cue {
                     members,
                     half,
                     pivot,
+                    impulse,
                 },
             ..
         } = &self.kind
         {
+            if let Some(impulse) = impulse {
+                ensure!(
+                    impulse
+                        .origin
+                        .iter()
+                        .all(|v| v.is_finite() && v.abs() <= 1_000_000.)
+                        && impulse.force.is_finite()
+                        && (0. ..=MAX_BRICK_FORCE).contains(&impulse.force)
+                        && impulse.radius.is_finite()
+                        && (0. ..=MAX_BRICK_FORCE).contains(&impulse.radius),
+                    "Invalid section impulse"
+                );
+            }
             ensure!(
                 *group > 0
                     && *started <= self.tick
@@ -672,6 +695,54 @@ pub fn pain_image(level: f32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn section_impulse_rejects_nonfinite_or_out_of_envelope_forces() {
+        let valid = RadialImpulse {
+            origin: [0.; 3],
+            force: 30.,
+            radius: 5.,
+        };
+        let cue = |impulse| Cue {
+            id: 1,
+            tick: 1,
+            position: [0.; 3],
+            kind: CueKind::BrickKill {
+                brick: 1,
+                death: BrickDeath::Section {
+                    group: 1,
+                    started: 1,
+                    members: 1,
+                    half: [1.; 3],
+                    pivot: [0.; 3],
+                    impulse: Some(impulse),
+                },
+                definition: bri_world::ContentRef::Resolved("brick".into()),
+                quarter_turns: 0,
+                color: 0,
+                color_effect: 0,
+                shape_effect: 0,
+                print: None,
+                origin: [0.; 3],
+                force: 0.,
+                radius: 0.,
+            },
+        };
+        assert!(cue(valid).validate().is_ok());
+        for force in [f32::NAN, f32::INFINITY, -1., MAX_BRICK_FORCE + 1.] {
+            assert!(cue(RadialImpulse { force, ..valid }).validate().is_err());
+        }
+        for radius in [f32::NAN, f32::INFINITY, -1., MAX_BRICK_FORCE + 1.] {
+            assert!(cue(RadialImpulse { radius, ..valid }).validate().is_err());
+        }
+        assert!(
+            cue(RadialImpulse {
+                origin: [f32::NAN, 0., 0.],
+                ..valid
+            })
+            .validate()
+            .is_err()
+        );
+    }
     #[test]
     fn a_mover_decal_cue_names_a_mover_and_a_unit_normal() {
         let cue = |mover: &str, normal: [f32; 3]| Cue {

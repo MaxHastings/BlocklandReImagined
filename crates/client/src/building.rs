@@ -435,7 +435,7 @@ impl Building {
     pub(crate) fn section_probe(&self, from: Vec3, to: Vec3) -> SectionProbe {
         let reach = from.distance(to).max(0.001);
         let direction = (to - from).normalize_or(Vec3::NEG_Y);
-        let nearest = self.map_ray(from, direction, reach).map(|h| h.0);
+        let nearest = self.map_ray(from, direction, reach).map(|h| (h.0, h.1));
         SectionProbe {
             from,
             direction,
@@ -449,7 +449,7 @@ impl Building {
         p: &mut SectionProbe,
         work: &mut u32,
         skip: impl Fn(BrickId) -> bool,
-    ) -> Result<Option<Option<f32>>> {
+    ) -> Result<Option<Option<(f32, Vec3)>>> {
         while *work > 0 {
             *work -= 1;
             match p.query.step(&self.camera_index) {
@@ -457,8 +457,10 @@ impl Building {
                 Some(Some(id)) if !skip(id) && !self.bricks[&id].damage_hidden => {
                     let mut hit = None;
                     self.trace_brick(id, p.from, p.direction, p.reach, &mut hit)?;
-                    if let Some(hit) = hit {
-                        p.nearest = Some(p.nearest.map_or(hit.distance, |d| d.min(hit.distance)));
+                    if let Some(hit) = hit
+                        && p.nearest.is_none_or(|(d, _)| hit.distance < d)
+                    {
+                        p.nearest = Some((hit.distance, hit.normal));
                     }
                 }
                 _ => {}
@@ -3806,6 +3808,6 @@ pub(crate) struct SectionProbe {
     from: Vec3,
     direction: Vec3,
     reach: f32,
-    nearest: Option<f32>,
+    nearest: Option<(f32, Vec3)>,
     query: grid::QueryCursor,
 }

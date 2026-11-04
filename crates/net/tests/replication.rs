@@ -1466,6 +1466,11 @@ fn cosmetic_backlog_keeps_section_recovery_seed_and_control_without_disconnect()
                         force: 0.,
                         radius: 0.,
                         death: BrickDeath::Section {
+                            impulse: Some(bri_sim::presentation::RadialImpulse {
+                                origin: [-2., 1., 0.],
+                                force: 30.,
+                                radius: 5.,
+                            }),
                             group: 1,
                             started: 10,
                             members: (MAX_CUES * 2) as u32,
@@ -1476,7 +1481,12 @@ fn cosmetic_backlog_keeps_section_recovery_seed_and_control_without_disconnect()
                 }
             })
             .collect();
-        replica.update(delta.clone()).unwrap();
+        let encoded = codec::encode(&Message::Update(delta.clone())).unwrap();
+        let Message::Update(decoded) = codec::decode(&encoded).unwrap() else {
+            panic!("expected section update");
+        };
+        assert_eq!(decoded.cues, delta.cues);
+        replica.update(decoded).unwrap();
     }
     delta.base = 2;
     delta.cursor = 3;

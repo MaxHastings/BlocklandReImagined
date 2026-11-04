@@ -229,7 +229,7 @@ fn two_stock_rockets_replay_authority_and_client_section_motion() -> Result<()> 
                 for chunk in &s.chunks {
                     max_debt = max_debt.max(chunk.debt);
                 }
-                if s.chunks.is_empty() && s.shown > 0.0 {
+                if s.chunks.is_empty() && s.shown > 0.0 && s.impulse.is_none() {
                     ensure!(
                         s.rotation == [0., 0., 0., 1.],
                         "unsupported assembly acquired an invented hinge"

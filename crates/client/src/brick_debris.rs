@@ -611,6 +611,7 @@ impl BrickDebris {
                 members,
                 half: section_half,
                 pivot,
+                impulse,
             } = death
             {
                 self.surroundings.forget_brick(&mut self.world, *brick);
@@ -618,6 +619,7 @@ impl BrickDebris {
                     .entry((*started, *group))
                     .or_default()
                     .push(SectionPiece {
+                        impulse: *impulse,
                         brick: *brick,
                         cue: cue.id,
                         look,

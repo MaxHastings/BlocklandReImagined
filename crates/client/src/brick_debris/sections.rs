@@ -10,6 +10,7 @@ mod interaction_tests;
 mod motion;
 mod partition;
 mod proxy;
+mod release;
 pub(super) mod shots;
 use partition::Partition;
 
@@ -19,11 +20,19 @@ const WITNESSES: usize = 72;
 const MAX_PROXY_PARTS: usize = 2048;
 const MAX_CHUNK_MEMBERS: usize = 16;
 const MAX_CHUNK_SPAN: f32 = 6.;
+const CONTACT_SKIN: f32 = 0.02;
+const RESTITUTION: f32 = 0.25;
 
 /// Read-only motion evidence for offscreen repros and diagnostics. Collecting
 /// this does not advance a clock, prepare collision or alter admission.
 #[derive(serde::Serialize)]
 pub struct SectionSnapshot {
+    pub impulse: Option<bri_sim::presentation::RadialImpulse>,
+    pub release_center: [f32; 3],
+    pub release_velocity: [f32; 3],
+    pub release_spin: [f32; 3],
+    pub impact_velocity: Option<[f32; 3]>,
+    pub impact_spin: Option<[f32; 3]>,
     pub key: [u64; 2],
     pub members: usize,
     pub expected: usize,
@@ -56,6 +65,7 @@ pub struct ChunkSnapshot {
 
 #[derive(Clone)]
 pub(super) struct SectionPiece {
+    pub impulse: Option<bri_sim::presentation::RadialImpulse>,
     pub brick: BrickId,
     pub cue: u64,
     pub look: Look,
@@ -106,6 +116,9 @@ impl Chunk {
     }
 }
 pub(super) struct Section {
+    impulse: Option<bri_sim::presentation::RadialImpulse>,
+    mass: release::Mass,
+    release: Option<release::Motion>,
     pub pieces: Vec<SectionPiece>,
     pub age: f32,
     pub(super) sealed: bool,
@@ -128,6 +141,8 @@ pub(super) struct Section {
     chunk_turn: usize,
     pending: VecDeque<(SectionProbe, f32, Vec3, Vec3)>,
     contact_point: Option<Vec3>,
+    contact_normal: Vec3,
+    impact_motion: Option<release::Motion>,
     snap_told: bool,
     landing_told: bool,
     target: f32,
@@ -186,6 +201,9 @@ impl Section {
     }
     fn new(p: &SectionPiece) -> Self {
         Self {
+            impulse: p.impulse,
+            mass: release::Mass::default(),
+            release: None,
             pieces: Vec::new(),
             age: 0.,
             sealed: false,
@@ -208,6 +226,8 @@ impl Section {
             chunk_turn: 0,
             pending: VecDeque::new(),
             contact_point: None,
+            contact_normal: Vec3::ZERO,
+            impact_motion: None,
             snap_told: false,
             landing_told: false,
             target: 0.,
@@ -224,12 +244,8 @@ impl Section {
         }
     }
     fn pose(&self, age: f32) -> (Vec3, Quat) {
-        // A detached assembly has no surviving hinge. Gravity translates every
-        // member together until observed contact hands motion to local physics.
-        (
-            self.origin - Vec3::Y * (0.5 * GRAVITY * age * age),
-            Quat::IDENTITY,
-        )
+        let motion = self.release.unwrap_or_else(|| self.mass.motion());
+        motion.pose(self.origin, age)
     }
     fn admit(&mut self, mut p: SectionPiece) {
         if self.ids.contains(&p.brick) {
@@ -243,6 +259,9 @@ impl Section {
         }
         self.ids.insert(p.brick);
         p.offset -= self.origin;
+        if p.active {
+            self.mass.add(&p, self.impulse, 1.);
+        }
         self.record_member(&p);
         self.pieces.push(p);
         self.assignment.push(None);
@@ -336,6 +355,7 @@ impl Section {
                 continue;
             };
             self.admit(SectionPiece {
+                impulse: self.impulse,
                 brick,
                 // Recovered from replicated section membership, not a death
                 // cue. A later matching cue supplies its real sequence.
@@ -393,6 +413,7 @@ impl Section {
         if !self.sealed || !self.gpu_ready || self.landed || self.pieces.is_empty() {
             return Ok(());
         }
+        let motion = *self.release.get_or_insert_with(|| self.mass.motion());
         let (at, _) = self.pose(self.shown);
         let extent = Vec3::splat(self.half.length());
         if building.query_changed_since(self.probe_generation, at - extent, at + extent) {
@@ -407,13 +428,25 @@ impl Section {
                 return Ok(());
             }
             *work -= WITNESSES as u32;
-            self.target = self.age + 0.2;
+            // Limit each rotating witness chord by the existing contact skin.
+            // Fast small fragments must not sweep across a wide arc as a line.
+            let radius = self.half.length() + motion.center.length();
+            let angle = (2.
+                * (1. - f64::from(CONTACT_SKIN) / f64::from(radius.max(CONTACT_SKIN))).acos())
+                as f32;
+            let window = if motion.spin.length() > 0. {
+                (angle / motion.spin.length()).min(0.2)
+            } else {
+                0.2
+            };
+            self.target = (self.age + 0.2).min(self.confirmed + window);
             self.contact = None;
             self.contact_point = None;
+            self.contact_normal = Vec3::ZERO;
             let (old, ot) = self.pose(self.confirmed);
             let (next, nt) = self.pose(self.target);
             for point in self.witnesses.iter().flatten() {
-                let from = old + ot * *point + Vec3::Y * 0.02;
+                let from = old + ot * *point + Vec3::Y * CONTACT_SKIN;
                 let to = next + nt * *point;
                 if from.distance_squared(to) < 1e-6 {
                     continue;
@@ -431,12 +464,27 @@ impl Section {
             let Some(hit) = building.step_section_probe(p, work, |id| dead.contains(&id))? else {
                 break;
             };
-            if let Some(distance) = hit {
-                let f = ((distance - 0.02) / reach.max(0.001)).clamped(0., 1.);
-                if self.contact.is_none_or(|old| f < old) {
-                    self.contact = Some(f);
-                    self.contact_point = Some(*from + *direction * distance);
+            if let Some((distance, normal)) = hit {
+                let f = ((distance - CONTACT_SKIN) / reach.max(0.001)).clamped(0., 1.);
+                let point = *from + *direction * distance;
+                let age = self.confirmed + (self.target - self.confirmed) * f;
+                let (center, turn) = motion.pose(self.origin, age);
+                let com = center + turn * motion.center;
+                let closer_on_same_face = self.contact.is_some_and(|old| {
+                    (f - old).abs() * *reach <= CONTACT_SKIN
+                        && normal == self.contact_normal
+                        && self.contact_point.is_some_and(|old| {
+                            point.distance_squared(com) < old.distance_squared(com)
+                        })
+                });
+                if self.contact.is_none_or(|old| {
+                    f < old && ((old - f) * *reach > CONTACT_SKIN || normal != self.contact_normal)
+                }) || closer_on_same_face
+                {
+                    self.contact_point = Some(point);
+                    self.contact_normal = normal;
                 }
+                self.contact = Some(self.contact.map_or(f, |old| old.min(f)));
             }
             self.pending.pop_front();
         }
@@ -448,6 +496,19 @@ impl Section {
         }
         self.shown = self.age.min(self.impact_at.unwrap_or(self.confirmed));
         self.landed = self.impact_at.is_some_and(|at| self.age >= at);
+        if self.landed
+            && self.impact_motion.is_none()
+            && let Some(point) = self.contact_point
+        {
+            let (center, turn) = self.pose(self.shown);
+            let mut incoming = motion;
+            incoming.velocity -= Vec3::Y * GRAVITY * self.shown;
+            self.impact_motion =
+                Some(
+                    self.mass
+                        .impact(incoming, turn, point - center, self.contact_normal),
+                );
+        }
         Ok(())
     }
     fn partition(&mut self, work: &mut u32) {
@@ -475,7 +536,12 @@ impl Section {
             self.finishing = Some(self.plan.take().unwrap().groups.into());
         }
         let (center, turn) = self.pose(self.shown);
-        let velocity = (Vec3::NEG_Y * GRAVITY * self.shown).clamp_length_max(MAX_SPEED);
+        let motion = self.impact_motion.unwrap_or_else(|| {
+            let mut motion = self.release.unwrap_or_else(|| self.mass.motion());
+            motion.velocity -= Vec3::Y * GRAVITY * self.shown;
+            motion
+        });
+        let velocity = motion.velocity;
         while self
             .finishing
             .as_ref()
@@ -495,8 +561,13 @@ impl Section {
             }
             let mut low = Vec3::splat(f32::INFINITY);
             let mut high = Vec3::splat(f32::NEG_INFINITY);
+            let mut weight = 0.;
+            let mut first = glam::DVec3::ZERO;
             for &i in &members {
                 let p = &self.pieces[i];
+                let mass = f64::from(p.half.x) * f64::from(p.half.y) * f64::from(p.half.z);
+                weight += mass;
+                first += p.offset.as_dvec3() * mass;
                 let h = (p.turn * Vec3::X).abs() * p.half.x
                     + (p.turn * Vec3::Y).abs() * p.half.y
                     + (p.turn * Vec3::Z).abs() * p.half.z;
@@ -505,6 +576,7 @@ impl Section {
                 self.assignment[i] = Some(self.chunks.len());
             }
             let local = (low + high) * 0.5;
+            let mass_center = (first / weight).as_vec3();
             let (proxy, parts) = proxy::shape(&self.pieces, &members, self.origin + local);
             debug_assert!(proxy.is_some(), "bounded groups fit exact proxies");
             self.chunks.push(Chunk {
@@ -512,10 +584,11 @@ impl Section {
                 half: (high - low) * 0.5,
                 proxy,
                 parts,
-                center: center + turn * local,
+                center: center + turn * local + self.recoil,
                 turn,
-                velocity,
-                spin: Vec3::ZERO,
+                velocity: (velocity + motion.spin.cross(turn * (mass_center - motion.center)))
+                    .clamp_length_max(MAX_SPEED),
+                spin: motion.spin,
                 handle: None,
                 collision: Default::default(),
                 released: false,
@@ -536,6 +609,20 @@ impl BrickDebris {
         self.sections.iter().map(|(key, s)| {
             let (center, turn) = s.pose(s.shown);
             SectionSnapshot {
+                impulse: s.impulse,
+                release_center: s
+                    .release
+                    .unwrap_or_else(|| s.mass.motion())
+                    .center
+                    .to_array(),
+                release_velocity: s
+                    .release
+                    .unwrap_or_else(|| s.mass.motion())
+                    .velocity
+                    .to_array(),
+                release_spin: s.release.unwrap_or_else(|| s.mass.motion()).spin.to_array(),
+                impact_velocity: s.impact_motion.map(|m| m.velocity.to_array()),
+                impact_spin: s.impact_motion.map(|m| m.spin.to_array()),
                 key: [key.0, key.1],
                 members: s.pieces.len(),
                 expected: s.expected,
@@ -757,6 +844,9 @@ impl BrickDebris {
                             [key.0, key.1],
                         )
                     {
+                        if s.release.is_none() {
+                            s.mass.add(piece, s.impulse, -1.);
+                        }
                         piece.active = false;
                         if let Some(chunk) = s.assignment[i]
                             && let std::collections::btree_map::Entry::Vacant(entry) =
@@ -981,7 +1071,7 @@ impl BrickDebris {
                 let collider = ColliderBuilder::new(c.proxy.as_ref().unwrap().clone())
                     .density(DENSITY)
                     .friction(PLASTIC_FRICTION)
-                    .restitution(0.25)
+                    .restitution(RESTITUTION)
                     .collision_groups(InteractionGroups::new(
                         Group::GROUP_2,
                         Group::GROUP_1 | Group::GROUP_2,
@@ -1040,6 +1130,7 @@ mod tests {
         let mut c = super::super::tests::kill(id, id, at, origin, 0., 0.);
         if let CueKind::BrickKill { death, .. } = &mut c.kind {
             *death = BrickDeath::Section {
+                impulse: None,
                 group: 7,
                 started: 0,
                 members: count,
@@ -1478,6 +1569,7 @@ mod landing_regressions {
     use super::*;
     pub(super) fn piece(id: u64, at: Vec3) -> SectionPiece {
         SectionPiece {
+            impulse: None,
             cue: id,
             brick: id,
             look: Look {
