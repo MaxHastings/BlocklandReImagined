@@ -169,20 +169,34 @@ fn secs(t: u64, t0: u64) -> f32 {
 #[test]
 #[ignore = "watching tool: needs generated content and a real save"]
 fn watch_bots_play_a_real_save() -> Result<()> {
-    watch(false)
+    watch(Check::Trace)
 }
 
 #[test]
 #[ignore = "needs regenerated content, saved Add-On choices and the private Beta16 zombie tower save"]
 fn saved_tower_zombies_pursue_the_stationary_host() -> Result<()> {
-    watch(true)
+    watch(Check::Tower)
 }
 
-fn watch(require_tower_pursuit: bool) -> Result<()> {
+#[test]
+#[ignore = "needs regenerated content, saved choices and a private Bedroom zombie traversal save"]
+fn saved_bedroom_zombies_navigate_and_kill_the_stationary_host() -> Result<()> {
+    watch(Check::Pursuit)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Check {
+    Trace,
+    Tower,
+    Pursuit,
+}
+
+fn watch(check: Check) -> Result<()> {
+    let require_tower_pursuit = check == Check::Tower;
     let Some(save) = env("BRI_WATCH_SAVE") else {
         anyhow::ensure!(
-            !require_tower_pursuit,
-            "set BRI_WATCH_SAVE to the Beta16 zombie tower save"
+            check == Check::Trace,
+            "set BRI_WATCH_SAVE to the required private zombie repro"
         );
         eprintln!("skipped: needs BRI_WATCH_SAVE");
         return Ok(());
@@ -453,13 +467,9 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
     );
 
     let t0 = s.simulation().state().tick;
-    let expected_bots: BTreeSet<_> = s.bot_thoughts().iter().map(|b| b.bot).collect();
-    if require_tower_pursuit {
-        anyhow::ensure!(
-            expected_bots.len() == 3,
-            "the saved repro must spawn all three zombies"
-        );
-    }
+    let mut expected_bots: BTreeSet<_> = s.bot_thoughts().iter().map(|b| b.bot).collect();
+    let mut host_killed_by_bot = false;
+    let mut bot_uncredited_deaths = 0;
     let mut observation_deadlines = BTreeMap::new();
     let mut first_walk = BTreeMap::new();
     let mut reacquired_on_host_floor = BTreeMap::new();
@@ -485,6 +495,8 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
     let mut tick_log = env("BRI_WATCH_TICKS")
         .map(|_| std::fs::File::create(out.join("ticks.jsonl")).map(std::io::BufWriter::new))
         .transpose()?;
+    let mut route_log = std::io::BufWriter::new(std::fs::File::create(out.join("routes.jsonl"))?);
+    let mut route_heads = BTreeMap::new();
     let floor = brick_points
         .iter()
         .map(|p| p[1])
@@ -509,6 +521,11 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
             s.bot_thoughts().into_iter().map(|t| (t.bot, t)).collect();
         let view = s.weapon_view();
         let alive = |o: &OwnerId| vitals.get(o).is_some_and(|v| v.alive);
+        // Saved spawn events may admit their actors after the initial tick.
+        // Capture every pursuer during the host's first ordinary life.
+        if alive(&host) && !host_killed_by_bot {
+            expected_bots.extend(thoughts.keys().copied());
+        }
         let team = |o: &OwnerId| vitals.get(o).and_then(|v| v.team);
         let names = s.names();
         let name = |o: &OwnerId| names.get(o).cloned().unwrap_or_else(|| format!("#{o}"));
@@ -525,6 +542,18 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
         for (bot, th) in &thoughts {
             let Some(st) = states.get(bot) else { continue };
             let feet = Vec3::from(st.feet);
+            let head = th.next.map(|p| p.map(f32::to_bits));
+            if route_heads.insert(*bot, head) != Some(head) {
+                let route: Vec<_> = s.bot_route(*bot).unwrap_or(&[]).iter().map(|w| {
+                    serde_json::json!({"feet":w.feet.to_array(), "mode":format!("{:?}",w.mode), "jump":w.jump, "crouch":w.crouch})
+                }).collect();
+                writeln!(
+                    route_log,
+                    "{}",
+                    serde_json::json!({"t":tick-t0,"bot":bot,"at":st.feet,"route":route})
+                )?;
+            }
+
             if th.visible == Some(host) {
                 if let Some(evidence) = &th.remembered {
                     observation_deadlines
@@ -567,6 +596,8 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
                     "searching": th.searching, "search_nodes": th.search_nodes,
                     "route_end": th.route_end, "route_short": th.route_short,
                     "next_actions": th.next_actions,
+                    "next_mode": th.next_mode.map(|m| format!("{m:?}")),
+                    "grounded": st.grounded, "jump_normal":st.jump.normal, "support_actor":th.support_actor,
                     "host_alive": alive(&host), "host_health": vitals.get(&host).map(|v| v.health),
                     "host_at": states.get(&host).map(|s| s.feet),
                     "nav_work": s.nav_work_counts(),
@@ -889,6 +920,12 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
             .cloned()
             .collect();
         for d in new {
+            if d.victim == host && d.killer.is_some_and(|k| expected_bots.contains(&k)) {
+                host_killed_by_bot = true;
+            }
+            if d.killer.is_none() && s.is_bot(d.victim) {
+                bot_uncredited_deaths += 1;
+            }
             last_death = last_death.max(d.tick);
             *deaths.entry(d.victim).or_default() += 1;
             let at = states
@@ -1001,6 +1038,7 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
     for m in &moments {
         *by_kind.entry(m.kind).or_default() += 1;
     }
+    route_log.flush()?;
     let summary = json!({
         "save": save.display().to_string(),
         "seconds": seconds,
@@ -1023,7 +1061,7 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
         "chat_lines": chat_log.len(),
         "clunk": clunk_totals.json(),
         "clunk_per_bot": tracks.iter().map(|(b, t)| (name(b), t.clunk.per_minute())).collect::<BTreeMap<_, _>>(),
-        "pursuit": {"first_walk_tick":first_walk,"first_observation_expiry":observation_deadlines,
+        "pursuit": {"expected_bots":expected_bots, "host_killed_by_bot":host_killed_by_bot, "bot_uncredited_deaths":bot_uncredited_deaths, "first_walk_tick":first_walk,"first_observation_expiry":observation_deadlines,
             "reacquired_on_host_floor_tick":reacquired_on_host_floor,"started_tick":t0},
     });
     std::fs::write(
@@ -1045,7 +1083,16 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
     std::fs::write(out.join("chat.txt"), chat_log.join("\n"))?;
     std::fs::write(out.join("bricks.json"), serde_json::to_vec(&brick_points)?)?;
     eprintln!("WATCH {}", serde_json::to_string_pretty(&summary)?);
-    if require_tower_pursuit {
+    if check != Check::Trace {
+        anyhow::ensure!(!expected_bots.is_empty(), "the saved repro spawned no bots");
+        anyhow::ensure!(
+            host_killed_by_bot,
+            "no pursuing bot killed the ordinary stationary host"
+        );
+        anyhow::ensure!(
+            bot_uncredited_deaths == 0,
+            "a bot fell/died without a killer during the replay"
+        );
         for bot in expected_bots {
             let began = first_walk
                 .get(&bot)
@@ -1057,10 +1104,12 @@ fn watch(require_tower_pursuit: bool) -> Result<()> {
                 began < deadline,
                 "zombie {bot} waited beyond the lifetime of its first target observation"
             );
-            anyhow::ensure!(
-                reacquired_on_host_floor.contains_key(&bot),
-                "zombie {bot} never reached the live host's floor and reacquired the target"
-            );
+            if require_tower_pursuit {
+                anyhow::ensure!(
+                    reacquired_on_host_floor.contains_key(&bot),
+                    "zombie {bot} never reached the live host's floor and reacquired the target"
+                );
+            }
         }
         anyhow::ensure!(
             s.bot_step_failures().0 == 0,

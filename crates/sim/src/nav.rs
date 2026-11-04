@@ -254,7 +254,29 @@ impl<'a> Ground<'a> {
     /// as straight legs that stray from the arc by no more than
     /// [`ARC_SAG`].
     pub fn sweep_arc(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
-        let motion = body.motion;
+        // The motor scales the vertical jump impulse by its actual support
+        // normal. Flat-floor reach must not promise a full-height ramp jump.
+        let normal = self
+            .support_contact(body, from, false, body.step + STEP_SLACK)
+            .map(|(_, normal)| normal)
+            .or_else(|| {
+                self.ray(
+                    from + Vec3::Y * (body.step + STEP_SLACK),
+                    Vec3::NEG_Y,
+                    2.0 * body.step + STEP_SLACK,
+                )
+                .map(|(_, normal)| normal)
+            });
+        let Some(normal) = normal else {
+            return false;
+        };
+        let motion = crate::route::Motion {
+            jump_speed: body.motion.jump_speed * normal.y,
+            ..body.motion
+        };
+        if to.y - from.y > motion.apex() + body.step {
+            return false;
+        }
         let flight = motion.hop(0.0, to.y - from.y);
         let pieces = (flight * (motion.gravity / (8.0 * ARC_SAG)).sqrt())
             .ceil()
@@ -522,6 +544,16 @@ impl<'a> Ground<'a> {
     /// Support under any part of the motor footprint, including the last
     /// portion of a ledge after the centre ray has crossed its edge.
     fn support_below(&self, body: &Body, feet: Vec3, crouched: bool, down: f32) -> Option<Vec3> {
+        self.support_contact(body, feet, crouched, down)
+            .map(|(feet, _)| feet)
+    }
+    fn support_contact(
+        &self,
+        body: &Body,
+        feet: Vec3,
+        crouched: bool,
+        down: f32,
+    ) -> Option<(Vec3, Vec3)> {
         if body.conservative {
             return None;
         }
@@ -552,8 +584,10 @@ impl<'a> Ground<'a> {
                 ..Default::default()
             },
         )?;
-        (hit.normal1.y >= body.floor_cos)
-            .then_some(raised - Vec3::Y * hit.time_of_impact + Vec3::Y * SETTLE_GAP)
+        (hit.normal1.y >= body.floor_cos).then_some((
+            raised - Vec3::Y * hit.time_of_impact + Vec3::Y * SETTLE_GAP,
+            Vec3::from_array(hit.normal1.to_array()),
+        ))
     }
     /// Whether a body stands (or crouches) at `feet` without touching
     /// fixed collision at this exact position.
@@ -1871,9 +1905,9 @@ impl Eq for Open {}
 impl Ord for Open {
     fn cmp(&self, other: &Self) -> Ordering {
         other
-            .rise
-            .total_cmp(&self.rise)
-            .then_with(|| other.f.total_cmp(&self.f))
+            .f
+            .total_cmp(&self.f)
+            .then_with(|| other.rise.total_cmp(&self.rise))
             .then_with(|| other.node.cmp(&self.node))
     }
 }
@@ -1948,7 +1982,7 @@ pub struct Search {
     jet_tests: u32,
     /// The body's walking speed, once known: the estimate's unit.
     walk_speed: f32,
-    elevation_first: bool,
+    prefer_goal_floor: bool,
 }
 impl Search {
     /// A search on foot and swimming, with no jets.
@@ -1975,14 +2009,14 @@ impl Search {
             launches: FxHashSet::default(),
             jet_tests: 0,
             walk_speed: 1.0,
-            elevation_first: false,
+            prefer_goal_floor: false,
         }
     }
-    /// Seek a feasible route to another floor before minimizing traversal
-    /// cost. Vertical progress leads, then distance to the goal. Every edge
-    /// still comes from this body's ordinary directed movement graph.
-    pub fn elevation_first(mut self) -> Self {
-        self.elevation_first = true;
+    /// Prefer the goal's floor when cost estimates tie, and prefer floor
+    /// progress for a budget-limited partial endpoint. Traversal costs remain
+    /// primary: stable footing and a shorter walking detour still count.
+    pub fn prefer_goal_floor(mut self) -> Self {
+        self.prefer_goal_floor = true;
         self
     }
     /// This search with no limit on its expansions, for tools that plan
@@ -2079,7 +2113,7 @@ impl Search {
         self.came.insert(to, came);
         let h = self.h(to);
         if self.best.is_none_or(|(old, best)| {
-            if self.elevation_first {
+            if self.prefer_goal_floor {
                 (to.feet().y - self.goal.y)
                     .abs()
                     .total_cmp(&(old.feet().y - self.goal.y).abs())
@@ -2092,16 +2126,14 @@ impl Search {
             self.best = Some((to, h));
         }
         self.open.push(Open {
-            rise: if self.elevation_first {
+            rise: if self.prefer_goal_floor {
                 (to.feet().y - self.goal.y).abs()
             } else {
                 0.0
             },
-            f: if self.elevation_first {
-                h
-            } else {
-                came.cost + h
-            },
+            // Height can guide discovery without erasing traversal costs:
+            // clearance, stable footing and takeoff time still matter.
+            f: came.cost + h,
             cost: came.cost,
             node: to,
         });
@@ -2387,7 +2419,7 @@ impl Search {
                     },
                 );
                 self.open.push(Open {
-                    rise: if self.elevation_first {
+                    rise: if self.prefer_goal_floor {
                         (node.feet().y - self.goal.y).abs()
                     } else {
                         0.0
@@ -3910,7 +3942,7 @@ mod tests {
             };
             let mut nav = Nav::default();
             let mut search = Search::new(from, to, 40.0)
-                .elevation_first()
+                .prefer_goal_floor()
                 .limited(EXPANSIONS_PER_TICK);
             let mut result = None;
             for _ in 0..10_000 {
@@ -3945,6 +3977,36 @@ mod tests {
     }
 
     #[test]
+    fn slope_takeoffs_do_not_inherit_flat_floor_jump_height() {
+        let body = body();
+        let flat = world(&[floor()]);
+        let goal = Vec3::new(0., 3., -2.);
+        assert!(
+            body.leaps.seconds(3., 2.).is_some(),
+            "the flat-floor measurement admits this leap"
+        );
+        assert!(open_ground(&flat).sweep_arc(&body, Vec3::ZERO, goal));
+        let angle = std::f32::consts::FRAC_PI_4;
+        let mut slope = bri_physics::new_world();
+        slope.insert_collider(
+            ColliderBuilder::cuboid(8., 0.2, 8.)
+                .rotation(Vector::new(0., 0., angle))
+                .translation(Vector::new(0., -0.2 / angle.cos(), 0.)),
+            None,
+        );
+        bri_physics::detect_collisions(&mut slope);
+        let ground = open_ground(&slope);
+        let (from, normal) = ground
+            .support_contact(&body, Vec3::ZERO, false, body.step + STEP_SLACK)
+            .unwrap();
+        assert!((normal.y - angle.cos()).abs() < 1e-4);
+        assert!(
+            !ground.sweep_arc(&body, from, from + goal),
+            "the same motor cannot supply flat-floor height from this slope"
+        );
+    }
+
+    #[test]
     fn a_wide_stair_route_prefers_a_supported_middle_over_an_exposed_edge() {
         let mut boxes = vec![floor()];
         for i in 0..8 {
@@ -3958,39 +4020,51 @@ mod tests {
         let physics = world(&boxes);
         let start = Vec3::new(0.0, 0.0, 2.3);
         let goal = Vec3::new(15.0, 4.8, 2.3);
-        let route = path(search(&physics, start, goal).0);
-        let middle: Vec<_> = route
-            .iter()
-            .filter(|w| w.feet.x >= 5.0 && w.feet.x <= 9.0)
-            .collect();
-        assert!(
-            !middle.is_empty(),
-            "route should climb the steps: {route:?}"
-        );
-        assert!(
-            middle.iter().all(|w| w.feet.z.abs() <= 1.8),
-            "a wide stair has a safer middle than its exposed edge: {route:?}"
-        );
-        let pulled = pull(
-            &open_ground(&physics),
-            &Nav::default(),
-            &body(),
-            start,
-            route,
-        );
-        let crossing = std::iter::once(start)
-            .chain(pulled.iter().map(|w| w.feet))
-            .collect::<Vec<_>>()
-            .windows(2)
-            .find_map(|p| {
-                (p[0].x <= 7.0 && p[1].x >= 7.0 && p[1].x > p[0].x)
-                    .then(|| p[0].lerp(p[1], (7.0 - p[0].x) / (p[1].x - p[0].x)))
-            })
-            .expect("pulled route crosses the stairs");
-        assert!(
-            crossing.z.abs() <= 1.8,
-            "pull must retain the safer lane: {pulled:?}"
-        );
+        for floor_hint in [false, true] {
+            let mut nav = Nav::default();
+            let mut search = Search::new(start, goal, 60.0);
+            if floor_hint {
+                search = search.prefer_goal_floor();
+            }
+            let route = path(loop {
+                nav.begin_tick();
+                if let Some(found) = search.step(&mut nav, &open_ground(&physics), &body()) {
+                    break found;
+                }
+            });
+            let middle: Vec<_> = route
+                .iter()
+                .filter(|w| w.feet.x >= 5.0 && w.feet.x <= 9.0)
+                .collect();
+            assert!(
+                !middle.is_empty(),
+                "route should climb the steps: {route:?}"
+            );
+            assert!(
+                middle.iter().all(|w| w.feet.z.abs() <= 1.8),
+                "a wide stair has a safer middle than its exposed edge: {route:?}"
+            );
+            let pulled = pull(
+                &open_ground(&physics),
+                &Nav::default(),
+                &body(),
+                start,
+                route,
+            );
+            let crossing = std::iter::once(start)
+                .chain(pulled.iter().map(|w| w.feet))
+                .collect::<Vec<_>>()
+                .windows(2)
+                .find_map(|p| {
+                    (p[0].x <= 7.0 && p[1].x >= 7.0 && p[1].x > p[0].x)
+                        .then(|| p[0].lerp(p[1], (7.0 - p[0].x) / (p[1].x - p[0].x)))
+                })
+                .expect("pulled route crosses the stairs");
+            assert!(
+                crossing.z.abs() <= 1.8,
+                "pull must retain the safer lane: {pulled:?}"
+            );
+        }
     }
 
     #[test]

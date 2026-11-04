@@ -114,6 +114,8 @@ pub struct BotThought {
     pub task: Option<BotTask>,
     pub goal: Option<[f32; 3]>,
     pub next: Option<[f32; 3]>,
+    /// The actual next traversal, including its measured takeoff and duration.
+    pub next_mode: Option<Mode>,
     /// Required jump and crouch at the next point, in that order.
     pub next_actions: Option<[bool; 2]>,
     pub path_steps: usize,
@@ -1724,12 +1726,14 @@ impl Session {
             },
         ));
     }
-    /// How many bot steps have failed since the session began, and the
-    /// first few failures as (bot, tick, error): a bot's step should not
-    /// fail in ordinary play, so tests read this to say none did.
-    #[doc(hidden)]
+    /// The current native route, borrowed for host diagnostics only.
+    pub fn bot_route(&self, bot: OwnerId) -> Option<&[Waypoint]> {
+        self.bots.brains.get(&bot).map(|b| b.plan.as_slice())
+    }
+
     /// Work counts for tests: (relation asks, relations derived from the
     /// live state, goof look-arounds) since the session began.
+    #[doc(hidden)]
     pub fn bot_work_counts(&self) -> (u64, u64, u64) {
         use std::sync::atomic::Ordering::Relaxed;
         (
@@ -1738,6 +1742,7 @@ impl Session {
             self.bots.goof_looks,
         )
     }
+    /// Failed steps and their first bounded diagnostic records.
     pub fn bot_step_failures(&self) -> (u64, &[(OwnerId, u64, String)]) {
         (self.bots.failed_steps, &self.bots.failures)
     }
@@ -2312,7 +2317,7 @@ impl Session {
                     && (point.y - feet.y).abs() > body.step
                 {
                     search
-                        .elevation_first()
+                        .prefer_goal_floor()
                         .limited(crate::nav::EXPANSIONS_PER_TICK)
                 } else {
                     search
@@ -2538,7 +2543,10 @@ impl Session {
                             && d.y.abs() < body.step + 0.5
                     }
                     Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
-                    Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. } => {
+                    Mode::Leap { .. } => {
+                        state.grounded && flat(d).length() < near && d.y.abs() < body.step
+                    }
+                    Mode::Jet { .. } | Mode::Climb { .. } => {
                         state.grounded && flat(d).length() < 2.0 && d.y.abs() < body.step + 0.5
                     }
                 };
@@ -3513,6 +3521,11 @@ impl Session {
             }
             _ => None,
         };
+        // A preferred combat band is not proof that a body attack can land.
+        // Continue ordinary navigation until its actual contact rule agrees.
+        let bite_contact = bite
+            .as_ref()
+            .and_then(|m| enemy.and_then(|seen| self.bot_bite_contact(bot, seen.owner, m)));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         brain.spot = spot;
 
@@ -3583,7 +3596,14 @@ impl Session {
                 brain.set_goal(brain.carry.and_then(|c| c.to.place()).map(Goal::Carry));
                 false
             }
-            Behaviour::Fight => brain.pursue(enemy, true, near, feet, body.width * 0.5, tick),
+            Behaviour::Fight => brain.pursue(
+                enemy,
+                bite.is_none() || bite_contact.is_some(),
+                near,
+                feet,
+                body.width * 0.5,
+                tick,
+            ),
             Behaviour::Chase | Behaviour::Search => {
                 // Straight at them, or wide round a side (`surprise`).
                 if let Some(seen) = enemy.filter(|_| behaviour == Behaviour::Chase) {
@@ -4102,13 +4122,18 @@ impl Session {
                     pitch: delta.map_or(0.0, pitch_to),
                 });
             }
-        } else if let Some(seen) = sight.target {
+        } else if let Some(seen) = sight
+            .target
+            .filter(|_| wanted.is_none() || gunning || behaviour == Behaviour::Fight && hold)
+        {
             // A blast hurts all around where it lands: a splash weapon
             // aims at the feet, so a near miss still lands within it.
             let mut at = if weapon.is_some_and(|w| !w.melee && w.splash > 0.0) {
                 seen.feet + Vec3::Y * FEET_AIM
             } else {
-                seen.eye - Vec3::Y * 0.5
+                bite_contact
+                    .as_ref()
+                    .map_or(seen.eye - Vec3::Y * 0.5, |c| c.point)
             };
             if let Some(w) = weapon.filter(|w| !w.melee && w.speed > 0.0) {
                 let time = at.distance(eye) / w.speed;
