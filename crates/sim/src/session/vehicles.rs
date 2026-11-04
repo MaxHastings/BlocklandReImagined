@@ -2999,9 +2999,7 @@ mod tests {
             },
         );
         let log = |s: &Session| -> Vec<String> {
-            s.package_state()
-                .packages["vehicle-light-watcher"]
-                .global["log"]
+            s.package_state().packages["vehicle-light-watcher"].global["log"]
                 .as_array()
                 .unwrap()
                 .iter()

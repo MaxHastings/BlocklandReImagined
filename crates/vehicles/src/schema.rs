@@ -1101,13 +1101,7 @@ pub enum LampActivation {
     ReverseOrBrake,
 }
 impl LampActivation {
-    pub fn enabled(
-        self,
-        switched: bool,
-        driver: bool,
-        jump_held: bool,
-        reversing: bool,
-    ) -> bool {
+    pub fn enabled(self, switched: bool, driver: bool, jump_held: bool, reversing: bool) -> bool {
         match self {
             Self::Switch => switched,
             Self::Driver => driver,
@@ -1639,9 +1633,7 @@ impl Pack {
                             && l.cone.is_none_or(|c| c.valid())
                             && l.ramp.is_none_or(|r| r.valid())
                             && l.lens_objects.iter().all(|n| {
-                                !n.is_empty()
-                                    && n.len() <= 64
-                                    && !n.chars().any(char::is_control)
+                                !n.is_empty() && n.len() <= 64 && !n.chars().any(char::is_control)
                             })
                             && l.effect.as_ref().is_none_or(|id| {
                                 !id.is_empty()
@@ -2123,14 +2115,27 @@ mod tests {
         use super::LampActivation::*;
         assert!(JumpHeld.enabled(false, true, true, false));
         assert!(!JumpHeld.enabled(true, true, false, false));
-        assert!(!JumpHeld.enabled(true, false, true, false), "nobody driving");
+        assert!(
+            !JumpHeld.enabled(true, false, true, false),
+            "nobody driving"
+        );
         // A reverse-or-brake lamp (tail lights) follows either input.
         assert!(ReverseOrBrake.enabled(false, true, true, false), "braking");
-        assert!(ReverseOrBrake.enabled(false, true, false, true), "reversing");
-        assert!(!ReverseOrBrake.enabled(true, true, false, false), "neither input");
-        assert!(!ReverseOrBrake.enabled(true, false, true, true), "nobody driving");
-        assert!(Switch.enabled(true, false, false, false)
-            && Always.enabled(false, false, false, false));
+        assert!(
+            ReverseOrBrake.enabled(false, true, false, true),
+            "reversing"
+        );
+        assert!(
+            !ReverseOrBrake.enabled(true, true, false, false),
+            "neither input"
+        );
+        assert!(
+            !ReverseOrBrake.enabled(true, false, true, true),
+            "nobody driving"
+        );
+        assert!(
+            Switch.enabled(true, false, false, false) && Always.enabled(false, false, false, false)
+        );
     }
 
     #[test]

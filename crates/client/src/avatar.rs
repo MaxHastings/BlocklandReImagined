@@ -1258,10 +1258,7 @@ impl HeldToolPose {
     /// A rider's seat hand holds ([`AvatarAnimationInput::hand_holds`]), with
     /// the hands this pose raises to hold a tool let go: they cannot grip
     /// and hold at once. Index 0 is the right hand.
-    pub fn release_seat_holds(
-        self,
-        holds: [Option<HandHold>; 2],
-    ) -> [Option<HandHold>; 2] {
+    pub fn release_seat_holds(self, holds: [Option<HandHold>; 2]) -> [Option<HandHold>; 2] {
         match self {
             Self::None => holds,
             Self::Right => [None, holds[1]],

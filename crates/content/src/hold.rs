@@ -55,9 +55,7 @@ pub fn turn_subtree(
     if root >= count || parents.len() != count || !by.is_finite() {
         return;
     }
-    let m = Mat4::from_translation(about)
-        * Mat4::from_quat(by)
-        * Mat4::from_translation(-about);
+    let m = Mat4::from_translation(about) * Mat4::from_quat(by) * Mat4::from_translation(-about);
     for i in (0..count).filter(|&i| i == root || ancestors(parents, i).contains(&root)) {
         nodes[i] = m * nodes[i];
     }
@@ -129,7 +127,13 @@ pub fn reach(
                 .find(|k| k.length_squared() > 1e-8)
                 .unwrap_or(Vec3::NEG_X)
                 .normalize();
-            turn_subtree(parents, nodes, mid, e, Quat::from_axis_angle(axis, want - current));
+            turn_subtree(
+                parents,
+                nodes,
+                mid,
+                e,
+                Quat::from_axis_angle(axis, want - current),
+            );
             root
         }
         None => match best.map(|(root, _, _)| root).or(arm.last().copied()) {
