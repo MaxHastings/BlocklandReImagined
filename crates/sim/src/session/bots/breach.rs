@@ -199,7 +199,7 @@ impl Session {
                 return None;
             }
         } else if tick < brain.breach.next
-            || !brain.partial_route
+            || brain.partial_route != Some(PartialRoute::Exhausted)
             || flat(goal - feet).length() < 3.0
         {
             return None;
