@@ -23,6 +23,7 @@ const FAR_A: Vec3 = Vec3::new(92.0, 0.05, 92.0);
 const FAR_B: Vec3 = Vec3::new(92.0, 0.05, 86.0);
 const GUN: &str = bri_weapons::testing::GUN_ITEM;
 const NO_JETS: &str = "v20.player.playernojet";
+const CAR: &str = bri_vehicles::testing::CAR;
 
 fn loadout(items: &[&str]) -> [Option<String>; 5] {
     let mut out: [Option<String>; 5] = Default::default();
@@ -1175,11 +1176,14 @@ fn bot_objectives(p) {
     })
 }
 
-#[test]
-fn checkpoint_race() {
+/// The Workshop's own race recipe, four bots of one builder racing three
+/// laps. With `jeep`, a jeep is parked behind the grid as well. Returns the
+/// report and the ticks any racer spent seated in a vehicle.
+fn checkpoint_race_run(jeep: bool) -> (Report, i64) {
     // The Workshop's own race recipe, built by the map's spawn point; four
     // bots of one builder start beside it.
-    let mut arena = Arena::new(&[]);
+    let vehicles: &[&str] = if jeep { &[CAR] } else { &[] };
+    let mut arena = Arena::new(vehicles);
     arena
         .s
         .set_spawn_points(vec![Vec3::new(-60.0, 0.05, 40.0)])
@@ -1187,10 +1191,12 @@ fn checkpoint_race() {
     // The builder plays too: it stands far away, out of the race.
     let owner = arena.join("Race builder", FAR_A);
     let starts = line(-66.0, 0.0, 40.0, 4);
-    arena.load(
-        owner,
-        starts.iter().map(|at| spawner(fixture::BOT, *at)).collect(),
-    );
+    let mut bricks: Vec<Brick> = starts.iter().map(|at| spawner(fixture::BOT, *at)).collect();
+    if jeep {
+        // Behind the grid, out of the start line.
+        bricks.push(spawner(CAR, Vec3::new(-74.0, 0.0, 40.0)));
+    }
+    arena.load(owner, bricks);
     arena.command(
         owner,
         bri_sim::session::Command::Package(bri_sim::session::PackageCommand {
@@ -1211,12 +1217,25 @@ fn checkpoint_race() {
     let bots = arena.bots();
     assert_eq!(bots.len(), 4, "every racer spawned");
     let sides: BTreeMap<OwnerId, u32> = bots.iter().map(|b| (*b, 0)).collect();
-    let mut scorer = Scorer::new("checkpoint_race", 0.0);
+    let name = if jeep {
+        "checkpoint_race_with_a_jeep"
+    } else {
+        "checkpoint_race"
+    };
+    let mut scorer = Scorer::new(name, 0.0);
     let mut won_at = None;
+    let mut mounted = 0i64;
     for tick in 0..90 * TICKS_PER_SECOND * rounds() {
         timed_step(&mut arena, &mut scorer.report);
         // Racing is the work: any strolling is idling.
         scorer.sample(&arena.s, &sides, |_| true);
+        if jeep {
+            let now = arena.s.vitals();
+            mounted += bots
+                .iter()
+                .filter(|b| now[*b].mounted.is_some())
+                .count() as i64;
+        }
         if won_at.is_none() && arena.s.round_results().next().is_some() {
             // Three laps won the round: the race is over.
             won_at = Some(tick as i64 / TICKS_PER_SECOND as i64);
@@ -1237,13 +1256,40 @@ fn checkpoint_race() {
         "racers_with_a_lap".into(),
         laps.iter().filter(|l| **l > 0).count() as i64,
     );
+    scorer
+        .report
+        .progress
+        .insert("mounted_ticks".into(), mounted);
     finish(&scorer.report);
-    let r = scorer.report;
+    (scorer.report, mounted)
+}
 
+#[test]
+fn checkpoint_race() {
+    let (r, _) = checkpoint_race_run(false);
     sane(&r);
     let won = r.progress["won_after_seconds"];
     assert!(won >= 0, "the race was won: {won}");
     assert!(r.progress["laps_total"] > 0, "laps run: {:?}", r.progress);
+}
+
+/// The same race with a jeep parked behind the grid. Known gaps, kept
+/// visible rather than asserted away: the planner routes bots on foot only
+/// (`objectives/project.rs`), and region inputs observe only bots
+/// (`session/events.rs`), so a checkpoint crossed in a jeep may not count.
+/// The race must still be won with laps run; `mounted_ticks` in the report
+/// says whether any racer boarded at all.
+#[test]
+fn checkpoint_race_with_a_jeep() {
+    let (r, _mounted) = checkpoint_race_run(true);
+    sane(&r);
+    let won = r.progress["won_after_seconds"];
+    assert!(won >= 0, "the race was won with a jeep present: {won}");
+    assert!(
+        r.progress["laps_total"] > 0,
+        "laps run with a jeep present: {:?}",
+        r.progress
+    );
 }
 
 /// Bot surprise, measured but not yet held to bands
