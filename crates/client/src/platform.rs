@@ -823,10 +823,16 @@ impl Runner {
     fn focused_text(&self) -> bool {
         self.config.app.ui().takes_text()
     }
-    fn console_clipboard(&mut self, key: Key, mods: Modifiers) -> bool {
-        if self.config.app.ui().top_id() != bri_ui::screens::ScreenId::Console {
-            return false;
-        }
+    /// Clipboard shortcuts for the entry lines. Ctrl/Cmd+V pastes into
+    /// whatever text box has focus, as v20's engine did in every field; we
+    /// read the OS text and type it in through the ordinary character path,
+    /// so no Enter can slip through and the field's length cap still applies.
+    /// Ctrl/Cmd+C copies that line's selection (Shift+arrows or a mouse drag)
+    /// when there is one, else the whole focused line (or the console's log
+    /// when its entry is empty). Ctrl/Cmd+X cuts: it copies exactly what
+    /// Ctrl/Cmd+C would and removes that text from the focused line.
+    fn clipboard(&mut self, key: Key, mods: Modifiers) -> bool {
+        let top = self.config.app.ui().top_id();
         if !(mods.ctrl || mods.cmd) || mods.alt {
             return false;
         }
@@ -834,7 +840,7 @@ impl Runner {
             Key::Letter('v') if self.focused_text() => {
                 match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
                     Ok(text) => {
-                        for ch in pasted_console_chars(&text) {
+                        for ch in pasted_entry_chars(&text) {
                             // The ordinary input path also records the actual pasted
                             // characters for deterministic input replays.
                             self.input(InputEvent::Char(ch));
@@ -844,16 +850,44 @@ impl Runner {
                 }
                 true
             }
-            Key::Letter('c') => {
-                if let Some(text) = self.config.app.ui().console_copy_text()
-                    && let Err(error) = arboard::Clipboard::new().and_then(|mut c| c.set_text(text))
-                {
-                    bri_console::warn(format!("Could not copy: {error}"));
+            Key::Letter('c') => match self.copy_text(top) {
+                Some(text) => {
+                    if let Err(error) = arboard::Clipboard::new().and_then(|mut c| c.set_text(text))
+                    {
+                        bri_console::warn(format!("Could not copy: {error}"));
+                    }
+                    true
                 }
+                None => false,
+            },
+            Key::Letter('x') if self.focused_text() => {
+                let Some(text) = self.copy_text(top) else {
+                    return false;
+                };
+                if let Err(error) = arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
+                    bri_console::warn(format!("Could not cut: {error}"));
+                }
+                self.config.app.ui_mut().cut_focused_edit();
                 true
             }
             _ => false,
         }
+    }
+    /// What Ctrl/Cmd+C copies (and Ctrl/Cmd+X copies before removing it):
+    /// the focused line's selection (Shift+arrows or a mouse drag) when there
+    /// is one, else the console's entry line (or its log when the entry is
+    /// empty), else the focused entry line of any screen, as in v20.
+    fn copy_text(&self, top: bri_ui::screens::ScreenId) -> Option<String> {
+        if let Some(selection) = self.config.app.ui().focused_edit_selection() {
+            return Some(selection);
+        }
+        if top == bri_ui::screens::ScreenId::Console {
+            return self.config.app.ui().console_copy_text();
+        }
+        if !self.focused_text() {
+            return None;
+        }
+        self.config.app.ui().focused_edit_text()
     }
     fn sync_cursor(&mut self) -> Result<()> {
         let _span = crate::frame_trace::span("cursor");
@@ -1749,7 +1783,7 @@ impl Runner {
                     if let PhysicalKey::Code(code) = event.physical_key
                         && let Some(key) =
                             translate_key(code, self.config.app.ui().config().platform)
-                        && !(down && !event.repeat && self.console_clipboard(key, self.mods))
+                        && !(down && !event.repeat && self.clipboard(key, self.mods))
                     {
                         self.input(if down {
                             InputEvent::KeyDown {
@@ -2294,7 +2328,10 @@ fn translate_button(button: winit::event::MouseButton) -> Option<MouseButton> {
         _ => return None,
     })
 }
-fn pasted_console_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+/// Characters a paste inserts into an entry line (console or chat): the
+/// fields are single-line, so newlines and tabs become spaces; control
+/// characters are dropped and the run is bounded.
+fn pasted_entry_chars(text: &str) -> impl Iterator<Item = char> + '_ {
     // Paste edits the line; it never synthesizes Enter or executes commands.
     text.chars().take(4096).filter_map(|c| match c {
         '\r' | '\n' | '\t' => Some(' '),
@@ -2339,13 +2376,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pasted_console_text_cannot_press_enter_and_is_bounded() {
+    fn pasted_entry_text_cannot_press_enter_and_is_bounded() {
         assert_eq!(
-            pasted_console_chars("where\r\nversion\t\0").collect::<String>(),
+            pasted_entry_chars("where\r\nversion\t\0").collect::<String>(),
             "where  version "
         );
-        assert_eq!(pasted_console_chars(&"x".repeat(10000)).count(), 4096);
-        assert_eq!(pasted_console_chars("é").collect::<String>(), "é");
+        assert_eq!(pasted_entry_chars(&"x".repeat(10000)).count(), 4096);
+        assert_eq!(pasted_entry_chars("é").collect::<String>(), "é");
     }
 
     /// A refused grab (X11 at launch) is retried shortly instead of ending

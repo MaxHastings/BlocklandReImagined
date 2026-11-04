@@ -1882,6 +1882,31 @@ impl Ui {
             entry
         })
     }
+    /// Copy of the top screen's focused entry line, if it has one; v20's
+    /// engine copied every text field. Native clipboard access stays with
+    /// the window host.
+    pub fn focused_edit_text(&self) -> Option<String> {
+        self.screen(self.top_id())?.view().focused_edit_text()
+    }
+    /// The selected text of the top screen's focused entry line, if any
+    /// (Shift+arrows or a mouse drag); Ctrl/Cmd+C copies this before falling
+    /// back to the whole line.
+    pub fn focused_edit_selection(&self) -> Option<String> {
+        self.screen(self.top_id())?.view().focused_edit_selection()
+    }
+
+    /// Ctrl/Cmd+X: cut the top screen's focused entry line — its selection
+    /// when there is one, else the whole line. Returns true when a text box
+    /// had focus.
+    pub fn cut_focused_edit(&mut self) -> bool {
+        let top = self.dialogs.len().checked_sub(1);
+        let mut out = Vec::new();
+        let cut = self.with_target(top, |s, _| s.view_mut().cut_focused_edit(&mut out));
+        if cut {
+            self.dispatch(top, out);
+        }
+        cut
+    }
     pub fn is_open(&self, id: ScreenId) -> bool {
         self.content.id() == id || self.dialogs.iter().any(|d| d.id() == id)
     }
@@ -3042,6 +3067,20 @@ impl Ui {
                 .iter()
                 .any(|d| d.captures_keyboard() || d.modal())
         {
+            // A capturing window (the console) swallows gameplay binds; when
+            // the player presses a chat key, say why in the log they can see.
+            if !repeat && self.top_id() == ScreenId::Console {
+                let chat = self.core.game_command_for_key(key, mods).is_some_and(|c| {
+                    c.eq_ignore_ascii_case("globalChat") || c.eq_ignore_ascii_case("teamChat")
+                });
+                if chat {
+                    const HINT: &str = "The console is open and captures all input; press Esc or ~ to close it before chatting.";
+                    let lines = bri_console::log::lines();
+                    if lines.last().is_none_or(|l| l.text != HINT) {
+                        bri_console::echo(HINT);
+                    }
+                }
+            }
             return;
         }
         let Some(cmd) = self

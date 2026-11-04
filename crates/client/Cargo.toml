@@ -53,13 +53,20 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 bri-weather = { path = "../weather" }
 
 bri-foliage = { path = "../foliage" }
-arboard = { version = "3", default-features = false }
 bri-client-sandbox = { path = "../client-sandbox" }
 
-# Checking the window and GPU libraries before they are needed
-# (system_libraries.rs).
+# Clipboard: on Linux, wayland-data-control reads/writes the native Wayland
+# clipboard (wl-clipboard-rs); arboard falls back to X11 otherwise. Without
+# it, paste fails on Wayland because the XWayland bridge does not serve text
+# copied by native apps. The feature stays off elsewhere so Windows and macOS
+# never compile the Wayland stack — they use arboard's Win32/NSPasteboard
+# backends directly.
 [target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 libloading = "0.8"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+arboard = { version = "3", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_ProcessStatus", "Win32_System_WindowsProgramming", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_SystemInformation"] }
