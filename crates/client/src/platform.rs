@@ -861,13 +861,25 @@ impl Runner {
                 None => false,
             },
             Key::Letter('x') if self.focused_text() => {
-                let Some(text) = self.copy_text(top) else {
+                // Cut takes only the focused field's own text, never the
+                // console log that Ctrl+C falls back to.
+                let text = {
+                    let ui = self.config.app.ui();
+                    ui.focused_edit_selection()
+                        .or_else(|| ui.focused_edit_text())
+                };
+                let Some(text) = text else {
                     return false;
                 };
-                if let Err(error) = arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
-                    bri_console::warn(format!("Could not cut: {error}"));
+                if !text.is_empty() {
+                    cut_into_clipboard(
+                        text,
+                        |text| arboard::Clipboard::new().and_then(|mut c| c.set_text(text)),
+                        || {
+                            self.config.app.ui_mut().cut_focused_edit();
+                        },
+                    );
                 }
-                self.config.app.ui_mut().cut_focused_edit();
                 true
             }
             _ => false,
@@ -2331,6 +2343,25 @@ fn translate_button(button: winit::event::MouseButton) -> Option<MouseButton> {
 /// Characters a paste inserts into an entry line (console or chat): the
 /// fields are single-line, so newlines and tabs become spaces; control
 /// characters are dropped and the run is bounded.
+/// Ctrl/Cmd+X: copy `text` first, and remove it from the field only once the
+/// copy has worked. A refused copy leaves the field as it was and says so in
+/// the console log, so no text is lost silently.
+fn cut_into_clipboard<E: std::fmt::Display>(
+    text: String,
+    copy: impl FnOnce(String) -> Result<(), E>,
+    remove: impl FnOnce(),
+) -> bool {
+    match copy(text) {
+        Ok(()) => {
+            remove();
+            true
+        }
+        Err(error) => {
+            bri_console::warn(format!("Could not cut, the text is still there: {error}"));
+            false
+        }
+    }
+}
 fn pasted_entry_chars(text: &str) -> impl Iterator<Item = char> + '_ {
     // Paste edits the line; it never synthesizes Enter or executes commands.
     text.chars().take(4096).filter_map(|c| match c {
@@ -2374,6 +2405,35 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_copy_keeps_the_text_in_the_field() {
+        let mut removed = false;
+        let ok = cut_into_clipboard(
+            "apples".into(),
+            |_| Err::<(), _>("clipboard unavailable"),
+            || removed = true,
+        );
+        assert!(!ok);
+        assert!(!removed, "the field must keep its text when the copy fails");
+    }
+
+    #[test]
+    fn a_copy_that_works_removes_the_text_once() {
+        let mut copied = String::new();
+        let mut removals = 0;
+        let ok = cut_into_clipboard(
+            "apples".into(),
+            |text| {
+                copied = text;
+                Ok::<(), &str>(())
+            },
+            || removals += 1,
+        );
+        assert!(ok);
+        assert_eq!(copied, "apples");
+        assert_eq!(removals, 1);
+    }
 
     #[test]
     fn pasted_entry_text_cannot_press_enter_and_is_bounded() {
