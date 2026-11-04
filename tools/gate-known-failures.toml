@@ -12,6 +12,24 @@
 
 # Tests the gate never runs: they need hardware or setup a gate run lacks.
 
+# Explicit private repros remain opt-in; their assertions are exercised with
+# the named inputs and evidence recorded in docs/progress/2026-11-04-*.md.
+[[skip]]
+test = "authored_vehicle_presentation_offscreen"
+reason = "Needs the author's external vehicle assets (BRI_REVIEW_VEHICLE_ASSETS) and BRI_REVIEW_OUTPUT; run the explicit vehicle_render case with --ignored."
+
+[[skip]]
+test = "watch_bots_play_a_real_save"
+reason = "Read-only private-save diagnostic tool; requires BRI_WATCH_SAVE, saved choices and BRI_WATCH_OUT, not a content-free gate fixture."
+
+[[skip]]
+test = "saved_tower_zombies_pursue_the_stationary_host"
+reason = "Requires Maxwell's private Beta16 tower save, generated content and saved Add-On choices; run the exact bot_watch case with --ignored and BRI_WATCH_* inputs."
+
+[[skip]]
+test = "saved_bedroom_zombies_navigate_and_kill_the_stationary_host"
+reason = "Requires Maxwell's private Bedroom traversal save, generated content and saved Add-On choices; run the exact bot_watch case with --ignored and BRI_WATCH_* inputs."
+
 [[skip]]
 test = "local_router_answers_upnp"
 reason = "Needs a real UPnP router on the LAN."
@@ -310,7 +328,12 @@ target = "bri-client/night_qa"
 # requests.
 [ci_quick]
 slow_packages = ["bri-client", "bri-render", "bri-chaos", "bri-net"]
-keep = ["bri-client/lib", "bri-net/lib"]
+keep = [
+    "bri-client/lib",
+    "bri-client/seat_fallback_anchor",
+    "bri-client/seat_pose_composition",
+    "bri-net/lib",
+]
 # Additional targets for explicit main/full tiers: Slayer's teams
 # and Capture the Flag, the ported tiers and the bundled add-ons played in
 # game, 6 minutes of a shard together. They guard add-on features no pull

@@ -86,6 +86,11 @@ bri-addon-import = { path = "../addon-import" }
 # CLI probes have no unit tests; keep building the actual executables,
 # without linking duplicate empty libtest harnesses.
 [[bin]]
+name = "map_load_probe"
+path = "src/bin/map_load_probe.rs"
+test = false
+
+[[bin]]
 name = "brick_load_bench"
 path = "src/bin/brick_load_bench.rs"
 test = false
