@@ -2643,6 +2643,7 @@ impl AvatarMesh {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_pose(
         &mut self,
         assets: &AvatarAssets,

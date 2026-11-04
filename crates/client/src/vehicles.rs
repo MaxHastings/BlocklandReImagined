@@ -532,16 +532,15 @@ impl VehicleAssets {
                 // at full left and full right.
                 let mut steer_clips = BTreeMap::new();
                 for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
-                    if let Some(seq) = d.steering_sequence.as_ref() {
-                        if let Some(clip) = shape
+                    if let Some(seq) = d.steering_sequence.as_ref()
+                        && let Some(clip) = shape
                             .animations
                             .iter()
                             .find(|a| a.name.eq_ignore_ascii_case(seq))
-                        {
-                            let mut clip = clip.clone();
-                            clip.looping = false;
-                            steer_clips.insert(seq.to_ascii_lowercase(), clip);
-                        }
+                    {
+                        let mut clip = clip.clone();
+                        clip.looping = false;
+                        steer_clips.insert(seq.to_ascii_lowercase(), clip);
                     }
                 }
                 // The objects on the nodes each channel's clips move, so the
@@ -629,16 +628,16 @@ impl VehicleAssets {
                         for m in shape.objects[*i].meshes.iter() {
                             if let Some(mesh) = shape.meshes.get(*m).and_then(Option::as_ref) {
                                 for p in &mesh.primitives {
-                                    if let Some(slot) = p.material {
-                                        if let Some(image) = images_off.get_mut(slot) {
-                                            *image = SceneImage {
-                                                label: "lamp lens off".into(),
-                                                width: 1,
-                                                height: 1,
-                                                rgba: [0, 0, 0, 255].to_vec(),
-                                                srgb: false,
-                                            };
-                                        }
+                                    if let Some(slot) = p.material
+                                        && let Some(image) = images_off.get_mut(slot)
+                                    {
+                                        *image = SceneImage {
+                                            label: "lamp lens off".into(),
+                                            width: 1,
+                                            height: 1,
+                                            rgba: [0, 0, 0, 255].to_vec(),
+                                            srgb: false,
+                                        };
                                     }
                                 }
                             }
@@ -1469,9 +1468,7 @@ impl ClientVehicles {
         let local_node = if let (Some(rig), Some(sequence)) =
             (assets.steers.get(model), d.steering_sequence.as_ref())
         {
-            let Some(clip) = rig.clips.get(&sequence.to_ascii_lowercase()) else {
-                return None;
-            };
+            let clip = rig.clips.get(&sequence.to_ascii_lowercase())?;
             let phase = ((1.0 - frame.steering.clamped(-1.0, 1.0)) / 2.0).clamped(0.0, 1.0);
             let pose =
                 bri_content::animation::sample(&rig.shape, Some(clip), phase * clip.duration)
@@ -1861,11 +1858,11 @@ impl ClientVehicles {
                     push(model, transform, tint);
                 }
             }
-            if let Some(rig) = steers.get(&d.model) {
-                if let Some(sequence) = &d.steering_sequence {
-                    for (model, transform) in steered(rig, sequence, frame.steering, drawn_body) {
-                        push(model, transform, tint);
-                    }
+            if let Some(rig) = steers.get(&d.model)
+                && let Some(sequence) = &d.steering_sequence
+            {
+                for (model, transform) in steered(rig, sequence, frame.steering, drawn_body) {
+                    push(model, transform, tint);
                 }
             }
             // The lens plates follow their beams: each plate is as authored
