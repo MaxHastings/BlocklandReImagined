@@ -476,8 +476,17 @@ impl VehicleAssets {
                 .flatten();
             let mut insert = |key: String,
                               pose: &bri_content::animation::Pose,
-                              textures: &[&SceneImage]| -> Result<()> {
-                let data = native_shape_scene(&key, &shape, textures, [1.0; 4], false, Mat4::IDENTITY, pose)?;
+                              textures: &[&SceneImage]|
+             -> Result<()> {
+                let data = native_shape_scene(
+                    &key,
+                    &shape,
+                    textures,
+                    [1.0; 4],
+                    false,
+                    Mat4::IDENTITY,
+                    pose,
+                )?;
                 let metal = metal_centre(&data);
                 models.insert(
                     key,
@@ -494,17 +503,6 @@ impl VehicleAssets {
             };
             let Some(look) = look else {
                 let rest = bri_content::animation::sample(&shape, None, 0.0)?;
-                // Every model's node rest transforms, for a seat's hand grip
-                // point on the vehicle's own model.
-                model_nodes.insert(
-                    asset.path.clone(),
-                    shape
-                        .nodes
-                        .iter()
-                        .enumerate()
-                        .map(|(i, node)| (node.name.to_ascii_lowercase(), rest.nodes[i]))
-                        .collect(),
-                );
                 // The sequences this model's definitions play by themselves.
                 let mut clips = BTreeMap::new();
                 for d in pack.definitions.iter().filter(|d| d.model == asset.path) {
@@ -1464,12 +1462,9 @@ impl ClientVehicles {
                 return None;
             };
             let phase = ((1.0 - frame.steering.clamped(-1.0, 1.0)) / 2.0).clamped(0.0, 1.0);
-            let pose = bri_content::animation::sample(
-                &rig.shape,
-                Some(clip),
-                phase * clip.duration,
-            )
-            .ok()?;
+            let pose =
+                bri_content::animation::sample(&rig.shape, Some(clip), phase * clip.duration)
+                    .ok()?;
             let index = rig
                 .shape
                 .nodes
@@ -1477,7 +1472,10 @@ impl ClientVehicles {
                 .position(|n| n.name.eq_ignore_ascii_case(node))?;
             pose.nodes[index]
         } else {
-            *assets.model_nodes.get(model)?.get(&node.to_ascii_lowercase())?
+            *assets
+                .model_nodes
+                .get(model)?
+                .get(&node.to_ascii_lowercase())?
         };
         Some(
             Mat4::from_scale_rotation_translation(
@@ -2674,13 +2672,14 @@ pub(crate) mod tests {
             .context("animated attachment node")?
             .w_axis
             .truncate();
-        let actual = vehicles
-            .hand_holds(&assets, &info, seat)[0]
+        let actual = vehicles.hand_holds(&assets, &info, seat)[0]
             .context("named hold")?
             .position;
         assert!(actual.abs_diff_eq(expected, 1e-5));
         info.scale = 1.;
-        let unscaled = vehicles.hand_holds(&assets, &info, seat)[0].unwrap().position;
+        let unscaled = vehicles.hand_holds(&assets, &info, seat)[0]
+            .unwrap()
+            .position;
         let origin = vehicles.frame(1).unwrap().position;
         assert!(
             (actual - origin).abs_diff_eq((unscaled - origin) * 2., 1e-5),
@@ -2694,8 +2693,7 @@ pub(crate) mod tests {
             .w_axis
             .truncate();
         assert!(
-            vehicles
-                .hand_holds(&assets, &info, seat)[0]
+            vehicles.hand_holds(&assets, &info, seat)[0]
                 .unwrap()
                 .position
                 .abs_diff_eq(expected, 1e-5)
@@ -3664,7 +3662,10 @@ pub(crate) mod tests {
         // Each plate exists and draws only its object: black when off, as
         // authored when on, with nothing else on the model changed.
         let base = assets.models.get(&model_key).context("base model")?;
-        assert!(!base.data.vertices.is_empty(), "the body stays in the base draw");
+        assert!(
+            !base.data.vertices.is_empty(),
+            "the body stays in the base draw"
+        );
         for (off_key, on_key) in [(&off_lens, &on_lens), (&off_tail, &on_tail)] {
             let off = assets.models.get(off_key).context("off variant")?;
             let on = assets.models.get(on_key).context("on variant")?;
@@ -3689,7 +3690,10 @@ pub(crate) mod tests {
                 "the on plate keeps its authored paint"
             );
         }
-        assert!(!black(&base.data.images), "nothing else on the model changes");
+        assert!(
+            !black(&base.data.images),
+            "nothing else on the model changes"
+        );
 
         // Each plate follows only the beams that name it: a lit headlight
         // leaves the tail dark, and braking lights the tail alone. The driver
@@ -3722,10 +3726,26 @@ pub(crate) mod tests {
             );
             client.prepare(&mut assets, &BTreeMap::from([(1, info)]));
             let pushed = |key: &String| !assets.models.get(key).unwrap().transforms.is_empty();
-            assert_eq!(pushed(&on_lens), lens_on, "lights={lights} reversing={reversing}");
-            assert_eq!(pushed(&off_lens), !lens_on, "lights={lights} reversing={reversing}");
-            assert_eq!(pushed(&on_tail), tail_on, "lights={lights} reversing={reversing}");
-            assert_eq!(pushed(&off_tail), !tail_on, "lights={lights} reversing={reversing}");
+            assert_eq!(
+                pushed(&on_lens),
+                lens_on,
+                "lights={lights} reversing={reversing}"
+            );
+            assert_eq!(
+                pushed(&off_lens),
+                !lens_on,
+                "lights={lights} reversing={reversing}"
+            );
+            assert_eq!(
+                pushed(&on_tail),
+                tail_on,
+                "lights={lights} reversing={reversing}"
+            );
+            assert_eq!(
+                pushed(&off_tail),
+                !tail_on,
+                "lights={lights} reversing={reversing}"
+            );
         }
         Ok(())
     }

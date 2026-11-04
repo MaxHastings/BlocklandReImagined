@@ -683,9 +683,7 @@ impl App {
                         // Store the seat's base facing (without the look turn)
                         // so the hand IK target stays stable when the rider
                         // looks around.
-                        self.mounts
-                            .rider_seat_facing
-                            .insert(*owner, rotation);
+                        self.mounts.rider_seat_facing.insert(*owner, rotation);
                         rotation *= glam::Quat::from_rotation_y(-turn);
                         yaw += turn;
                         self.mounts.rider_rotations.insert(*owner, rotation);
@@ -771,9 +769,7 @@ impl App {
                                 - std::f32::consts::PI
                         })
                     };
-                    self.mounts
-                        .rider_seat_facing
-                        .insert(*owner, rotation);
+                    self.mounts.rider_seat_facing.insert(*owner, rotation);
                     let rotation = rotation * glam::Quat::from_rotation_y(-turn);
                     self.mounts.rider_rotations.insert(*owner, rotation);
                     self.motion.override_presented(
@@ -1384,8 +1380,7 @@ impl App {
                         .filter(|_| !dead)
                         .unwrap_or_default(),
                     hand_holds: held_pose.release_seat_holds(
-                        self
-                            .mounts
+                        self.mounts
                             .rider_hands
                             .get(owner)
                             .copied()
