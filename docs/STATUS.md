@@ -1,20 +1,38 @@
 # Status
 
-Current release and engineering decisions. Reviewed 2026-10-30. Players should
+Current release and engineering decisions. Reviewed 2026-11-04. Players should
 start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 [known issues](KNOWN-ISSUES.md). Dated development receipts are in
 [progress/](progress/README.md); older history is in [progress.md](progress.md).
 
 ## Release state
 
-Published release: [v0.4.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.2),
+Published release: [v0.4.3 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.3),
+published November 1, 2026 at 09:45:42 UTC, from
+`d2643c62bb8a74d468255eb059da0af3b67e5d10`. Windows x86-64,
+Apple-silicon macOS and Linux x86-64 ZIPs and SHA256SUMS are public. See the
+[release notes](releases/v0.4.3.md) for scope and retained limitations.
+
+The next candidate is v0.4.4: clipboard and search corrections, reusable native
+vehicle presentation, zombie traversal corrections and revised cosmetic brick
+collapse. Its [release notes](releases/v0.4.4.md) describe the proposed shipped
+scope. Maxwell's approval of preview.3 is pending; #437 remains unmerged.
+Scoped checks and seven executed platform CI jobs pass on the integrated
+engine candidate `93a31023e`. Public-release preparation still requires the
+exact candidate's full release gate, current import receipts and verified
+Windows/macOS/Linux artifacts. The private preview's prior-import marker is
+not a release proof. See the [preparation receipt](progress/2026-11-04-v044-release-preparation.md).
+No v0.4.4 tag or public release has been created.
+
+Previous release: [v0.4.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.2),
 published October 30, 2026 at 04:22:56 AM America/Chicago, from
 `93c1439dacea2c6bce19ca735195bb0f6b944daa`. Windows x86-64,
 Apple-silicon macOS and Linux x86-64 ZIPs and SHA256SUMS are public. Every
 public download matches its tested artifact, the tag names the tested source,
-and the latest-release endpoint returns v0.4.2. Published assets stay immutable.
+and its published assets stay immutable. The latest-release endpoint now
+returns v0.4.3.
 
-This release integrates bot/navigation recovery, brick destruction contact,
+That release integrates bot/navigation recovery, brick destruction contact,
 approved indoor/outdoor map ambience and tool swings, the accepted small
 original-texture water glare change, and bounded Add-On/map import compatibility
 fixes. Maxwell approved the combined warm playtest and final ambience mix.

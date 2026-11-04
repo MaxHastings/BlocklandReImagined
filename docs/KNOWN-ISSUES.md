@@ -42,6 +42,10 @@ checks do not replace your playtest.
   collecting diagnostics. This does not establish the RX550 report's cause.
 - **Vehicles:** handling is rebuilt, not copied from v20's engine. Tell us
   where driving feels off.
+- **First map load:** initial scene-shader compilation can delay the first
+  playable frame. The November 4 DX12 measurements were 8–11 seconds for a
+  fresh process and under two seconds for repeated selections on the tested
+  PC. These timings do not establish every map, save or computer.
 - **Bots** find paths over bricks and map shapes, but moving obstacles and
   narrow routes can still stall them. Combat remains scoped to the bot's
   mini-game. Autonomous piloting
