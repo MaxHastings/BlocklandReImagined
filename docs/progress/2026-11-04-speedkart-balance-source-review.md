@@ -39,6 +39,11 @@ with five generated-content cases explicitly ignored. The client's targeted
 `a_tool_hand_lets_go_of_the_seat_grip` unit check passes. Maxwell confirmed he
 finished playtesting before these local checks started. Native-content, visual,
 consumer/clippy checks and driving acceptance remain pending.
+The subsequent run with `BRI_CONTENT` pointing at the isolated release inputs
+and `--include-ignored` passes all 11 flying-Jeep cases, including generated
+content. `cargo clippy --locked -p bri-vehicles --all-targets -- -D warnings`
+also passes. These are vehicle-mechanism checks, not rendered hand/head or
+interactive Speedkart acceptance.
 Raw disassembly remains outside Git under the release-preparation evidence
 directory's `speedkart-source-review`; the original executable was not run or
 modified. Raw/decompiled source is not part of the repository or package.

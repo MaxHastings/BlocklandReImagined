@@ -38,7 +38,11 @@ struct Hit {
 impl RubbleScene {
     pub(super) fn new(debris: &BrickDebris) -> Self {
         let mut shapes = Vec::new();
-        for (key, s) in &debris.sections {
+        for (key, s) in debris
+            .sections
+            .iter()
+            .filter(|(_, s)| s.finishing.is_none())
+        {
             for (i, c) in s.chunks.iter().enumerate().filter(|(_, c)| !c.released) {
                 if let Some(shape) = &c.proxy {
                     let (at, turn) = c.pose(&debris.world);

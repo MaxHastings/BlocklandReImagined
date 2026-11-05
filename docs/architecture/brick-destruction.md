@@ -44,6 +44,42 @@ toggle. Existing damage permissions and Physics Quality continue to apply.
 
 ## Cost and limits
 
+### Preview.3 follow-up: motion ownership
+
+Maxwell's November 4 playtest rejects the rigid vertical fall, intermittent
+delays and missed player-body reactions in Pirate World. Existing post-impact
+spin and fallback-debt checks did not cover that experience. NPC gameplay and
+basic Speedkart operation are accepted separately.
+
+Preview.3's intact section followed an analytical trajectory and queried static
+scenery; moving actors entered only the later chunk path. Partitioning was
+prepared during flight but could not publish chunks before first static contact.
+The correction permits exact collision clumps during flight. Preparation stays
+incremental; all prepared clumps publish together at the current shared pose,
+with the actual material center and rigid velocity field preserved. Rendering
+and attachment frames retain shared motion until that publication completes.
+Staged proxies are excluded from moving-rubble queries and actor admission.
+The redundant 64-section-body cap is removed: ordinary Physics Quality and the
+existing 2048 resident proxy-part budget own solver admission. Overflow still
+uses checked translation, so low quality retains a reduced angular response.
+Complete delivery and GPU readiness still gate visible shared flight; this
+correction does not claim to eliminate all onset latency.
+
+The correction must carry contact capability and causal motion through the whole
+visible lifecycle. Geometry readiness must not masquerade as simulation time;
+material must neither disappear during handoff nor jump to an unrelated pose.
+Player contact must operate on actual material, preserving sail/beam openings.
+Angular response must follow real impulses/contact and mass distribution, with
+collision work and visual material still bounded. A permanent base hinge,
+unrelated random spin or increasing an unexplained body cap is not acceptance.
+
+Use the two supplied rocket saves to inspect visible release, flight, first
+contact and breakup, plus an actor crossing intact material and an empty opening.
+Retain lifecycle/respawn/audio/resource checks and explicit low-budget behavior.
+Record onset/readiness/contact timing and actual poses; nonzero final spin alone
+does not establish natural motion. Maxwell's new gameplay acceptance remains
+required after the packaged correction.
+
 No continuous motion replication. Authoritative brick additions/removals and
 one-shot death cues still cost bandwidth proportional to affected bricks;
 this is not a constant-size message per explosion. A group ID rides those
@@ -191,11 +227,12 @@ connected landing groups of at most16 members and six world units per axis.
 These are initial gameplay tuning values, independent of Physics Quality and
 temporary body occupancy. A single authored member larger than that span stays
 whole; it is not welded to neighbors or silently remeshed. No general secondary
-material fracture is introduced. Complete sections separate into these groups
-at first contact, rather than becoming permanent hundred-brick bodies.
+material fracture is introduced. Complete sections can separate into these groups during flight as soon as
+bounded preparation finishes, rather than waiting for a whole-section contact.
+Until then, displayed shared motion remains collision checked.
 
-At most64 resident chunk bodies still share the ordinary debris body budget,
-with2048 resident proxy boxes globally. Exact rectangular face merging preserves
+Resident chunk bodies share the ordinary Physics Quality body budget,
+with2048 resident proxy boxes globally. There is no additional chunk-body cap. Exact rectangular face merging preserves
 gaps. Groups beyond that pool retain their compound shapes and use completed bounded
 translation sweeps against real map, terrain, bricks and other rubble, plus
 shape-based player/vehicle contacts. Physics Off uses this contact path without

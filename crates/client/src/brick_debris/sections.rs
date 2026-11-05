@@ -17,7 +17,6 @@ pub(super) mod shots;
 use partition::Partition;
 
 pub(super) const MAX_VISIBLE: usize = bri_sim::presentation::MAX_SECTION_MEMBERS;
-const MAX_CHUNKS: usize = 64;
 const WITNESSES: usize = 72;
 const MAX_PROXY_PARTS: usize = 2048;
 const MAX_CHUNK_MEMBERS: usize = 16;
@@ -86,6 +85,7 @@ pub(super) struct SectionPiece {
 }
 struct Chunk {
     local: Vec3,
+    mass_center: Vec3,
     half: Vec3,
     proxy: Option<SharedShape>,
     parts: usize,
@@ -172,14 +172,16 @@ impl Section {
         world: &PhysicsWorld,
     ) -> (Vec3, Quat) {
         let p = &self.pieces[i];
-        self.assignment[i].map_or(
-            (center + turn * p.offset + self.recoil, turn * p.turn),
-            |a| {
-                let c = &self.chunks[a];
-                let (cc, ct) = c.pose(world);
-                (cc + ct * (p.offset - c.local), ct * p.turn)
-            },
-        )
+        self.assignment[i]
+            .filter(|_| self.finishing.is_none())
+            .map_or(
+                (center + turn * p.offset + self.recoil, turn * p.turn),
+                |a| {
+                    let c = &self.chunks[a];
+                    let (cc, ct) = c.pose(world);
+                    (cc + ct * (p.offset - c.local), ct * p.turn)
+                },
+            )
     }
     pub(super) fn append_attachment_frames(
         &self,
@@ -537,9 +539,9 @@ impl Section {
             if !plan.step(work) {
                 return;
             }
-            if !self.landed {
-                return;
-            }
+            // Collision-aware clumps participate in flight, not only after a
+            // static witness has stopped the complete assembly. Otherwise a
+            // player can pass through falling material before first landing.
             self.finishing = Some(self.plan.take().unwrap().groups.into());
         }
         let (center, turn) = self.pose(self.shown);
@@ -588,6 +590,7 @@ impl Section {
             debug_assert!(proxy.is_some(), "bounded groups fit exact proxies");
             self.chunks.push(Chunk {
                 local,
+                mass_center,
                 half: (high - low) * 0.5,
                 proxy,
                 parts,
@@ -607,6 +610,18 @@ impl Section {
             .as_ref()
             .is_some_and(|groups| groups.is_empty())
         {
+            // Publish all prepared groups together at the current shared pose.
+            // Incremental proxy construction must not leave earlier groups at
+            // an older pose or start their clocks while later groups are built.
+            for c in &mut self.chunks {
+                c.center = center + turn * c.local + self.recoil;
+                c.turn = turn;
+                // Each exact proxy determines its own contact and angular
+                // response from here; no whole-section impact is required.
+                c.velocity = (velocity + motion.spin.cross(turn * (c.mass_center - motion.center)))
+                    .clamp_length_max(MAX_SPEED);
+                c.spin = motion.spin;
+            }
             self.finishing = None;
         }
     }
@@ -711,6 +726,7 @@ impl BrickDebris {
     ) -> impl Iterator<Item = rapier3d::parry::bounding_volume::Aabb> + '_ {
         self.sections
             .values()
+            .filter(|s| s.finishing.is_none())
             .flat_map(|s| &s.chunks)
             .filter(|c| c.handle.is_none() && !c.released)
             .filter_map(|c| {
@@ -1046,7 +1062,6 @@ impl BrickDebris {
         let mut available = self
             .limit
             .saturating_sub(self.bodies.len() + self.chunk_handles().count());
-        available = available.min(MAX_CHUNKS.saturating_sub(self.chunk_handles().count()));
         let used_parts = self.bodies.len()
             + self
                 .sections
@@ -1390,7 +1405,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn a_prepared_landing_waits_for_temporary_capacity_without_losing_its_plan() -> Result<()> {
+    fn prepared_airborne_clumps_keep_motion_while_waiting_for_capacity() -> Result<()> {
         let (b, _) = super::super::tests::building(&[]);
         let mut d = BrickDebris::new();
         d.set_limit(1);
@@ -1415,10 +1430,13 @@ mod tests {
             ],
             &b,
         )?;
+        d.set_limit(0);
         run(&mut d, &b, 1);
-        assert!(d.sections[&(0, 7)].plan.is_some());
-        // Capacity can be consumed after planning, before the landing commits
-        // dynamic bodies. An older piece still has two seconds left to live.
+        assert_eq!(d.sections[&(0, 7)].chunks.len(), 1);
+        assert!(!d.sections[&(0, 7)].landed);
+        // Preparation is independent of body capacity. Consume the newly
+        // available slot before the next frame can admit a prepared clump.
+        d.set_limit(1);
         d.cues(
             &[super::super::tests::kill(
                 20,
@@ -1477,7 +1495,7 @@ mod tests {
         assert!(maximum > 0 && maximum <= 8);
         assert_eq!(s.assignment.iter().filter(|a| a.is_some()).count(), 1500);
         assert!(
-            s.chunks.len() > MAX_CHUNKS,
+            s.chunks.len() > d.limit(),
             "breakup geometry remains independent of the resident body pool"
         );
         for chunk in 0..s.chunks.len() {
@@ -2148,7 +2166,7 @@ mod overload_regressions {
         );
         assert_eq!(section.chunks.len(), 100);
         assert_eq!(d.instances().count(), 100);
-        assert!(d.chunk_handles().count() <= MAX_CHUNKS);
+        assert!(d.len() <= d.limit());
         assert!(section.chunks.iter().all(|c| c.center.is_finite()));
         assert!(section.landed);
         assert!(
