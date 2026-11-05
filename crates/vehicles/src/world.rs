@@ -93,9 +93,15 @@ const SETTLE_TICKS: u8 = 120;
 /// Contacts whose normal is closer to level than this (|y| of the unit
 /// normal, about 45 degrees) are hits from the side.
 const SIDE_HIT: f32 = 0.7;
-fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
-    if f.max_forward_vel > 0. {
-        ((speed - f.stall_speed) / f.max_forward_vel).clamped(0., 1.)
+fn bite(f: Option<&WheeledFlightSettings>, speed: f32) -> f32 {
+    let (stall, full) = f.map_or((0., 0.), |f| (f.stall_speed, f.max_forward_vel));
+    if full > 0. {
+        ((speed - stall) / full).clamped(0., 1.)
+    } else if speed > stall {
+        // v20's zero-default maxForwardVel divides a positive speed by
+        // zero, then clamps infinity to one (0x575425..0x575459).
+        // Express the finite result without propagating NaN at rest.
+        1.
     } else {
         0.
     }
@@ -2095,9 +2101,21 @@ impl VehiclesWorld {
                     // only Blockland's flying forces move and turn them.
                     Family::Wheeled | Family::Skis => {
                         v.steering = steer * d.max_steering;
+                        let speed = speed.abs();
+                        let bite = bite(d.wheeled_flight.as_ref(), speed);
+                        // Pitch/yaw/roll are authored independently of wings
+                        // and thrust. Ordinary wheeled vehicles can declare
+                        // balance controls without becoming flying vehicles.
+                        let yaw = steer * steer.abs();
+                        let pitch = pitch * pitch.abs();
+                        b.add_torque(
+                            (-right * (pitch * d.pitch_force) - up * (yaw * d.yaw_force)
+                                + forward * (roll * d.roll_force))
+                                * bite,
+                            wake,
+                        );
                         if let Some(f) = &d.wheeled_flight {
                             // Speed along the nose, either way (0x575208).
-                            let speed = speed.abs();
                             let mut force = Vec3::ZERO;
                             // Stock Torque jets push along the nose; v20 never
                             // passes a rider's jet or crouch to a vehicle.
@@ -2113,17 +2131,6 @@ impl VehiclesWorld {
                             // Lift along the roof, truncated to a whole number
                             // and capped whatever the pitch or stall.
                             force += up * (d.lift * speed).trunc().clamped(0., WHEELED_LIFT_CAP);
-                            let bite = bite(f, speed);
-                            // Squared mouse steering over maxSteeringAngle;
-                            // a positive pitch (mouse up with v20's default
-                            // vehicle mouse invert) dips the nose.
-                            let (yaw, pitch) = (steer * steer.abs(), pitch * pitch.abs());
-                            b.add_torque(
-                                (-right * (pitch * d.pitch_force) - up * (yaw * d.yaw_force)
-                                    + forward * (roll * d.roll_force))
-                                    * bite,
-                                wake,
-                            );
                             // Wings: sideways and roof-wise air is resisted
                             // with the square of speed once above stall. A
                             // sled's (skis) grip only with wheel 0 down.

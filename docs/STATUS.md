@@ -16,12 +16,16 @@ Apple-silicon macOS and Linux x86-64 ZIPs and SHA256SUMS are public. See the
 The next candidate is v0.4.4: clipboard and search corrections, reusable native
 vehicle presentation, zombie traversal corrections and revised cosmetic brick
 collapse. Its [release notes](releases/v0.4.4.md) describe the proposed shipped
-scope. Maxwell's approval of preview.3 is pending; #437 remains unmerged.
+scope. Maxwell's playtest approval is pending; #437 remains unmerged.
 Scoped checks and seven executed platform CI jobs pass on the integrated
 engine candidate `93a31023e`. Public-release preparation still requires the
-exact candidate's full release gate, current import receipts and verified
-Windows/macOS/Linux artifacts. The private preview's prior-import marker is
-not a release proof. See the [preparation receipt](progress/2026-11-04-v044-release-preparation.md).
+exact candidate's full release gate and verified Windows/macOS/Linux artifacts.
+Current import receipts have now been regenerated for all 100 pinned originals;
+the release inputs do not use the private preview's prior-import exception.
+Maxwell accepted preview.3 NPC gameplay; additional NPC experiments are deferred.
+Destruction remains unaccepted after the same stiffness and missed body-contact
+reports, and a one-handed vehicle-grip regression is being corrected before the
+next candidate. See the [preparation receipt](progress/2026-11-04-v044-release-preparation.md).
 No v0.4.4 tag or public release has been created.
 
 Previous release: [v0.4.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.2),

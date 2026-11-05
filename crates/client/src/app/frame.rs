@@ -1379,7 +1379,6 @@ impl App {
                             .copied()
                             .filter(|_| !dead)
                             .unwrap_or_default(),
-                        support.is_some(),
                     ),
                     support,
                     held_tool_pose: held_pose,

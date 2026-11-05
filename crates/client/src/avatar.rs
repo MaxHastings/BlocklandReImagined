@@ -1258,14 +1258,7 @@ impl HeldToolPose {
     /// A rider's seat hand holds ([`AvatarAnimationInput::hand_holds`]), with
     /// the hands this pose raises to hold a tool let go: they cannot grip
     /// and hold at once. Index 0 is the right hand.
-    pub fn release_seat_holds(
-        self,
-        holds: [Option<HandHold>; 2],
-        supporting: bool,
-    ) -> [Option<HandHold>; 2] {
-        if supporting {
-            return [None; 2];
-        }
+    pub fn release_seat_holds(self, holds: [Option<HandHold>; 2]) -> [Option<HandHold>; 2] {
         match self {
             Self::None => holds,
             Self::Right => [None, holds[1]],
@@ -3290,23 +3283,16 @@ mod tests {
             Some(HandHold::position_only(Vec3::ONE)),
             Some(HandHold::position_only(-Vec3::ONE)),
         ];
-        assert_eq!(HeldToolPose::None.release_seat_holds(grip, false), grip);
+        assert_eq!(HeldToolPose::None.release_seat_holds(grip), grip);
         assert_eq!(
-            HeldToolPose::Right.release_seat_holds(grip, false),
+            HeldToolPose::Right.release_seat_holds(grip),
             [None, Some(HandHold::position_only(-Vec3::ONE))]
         );
         assert_eq!(
-            HeldToolPose::Left.release_seat_holds(grip, false),
+            HeldToolPose::Left.release_seat_holds(grip),
             [Some(HandHold::position_only(Vec3::ONE)), None]
         );
-        assert_eq!(
-            HeldToolPose::Both.release_seat_holds(grip, false),
-            [None; 2]
-        );
-        assert_eq!(
-            HeldToolPose::Right.release_seat_holds(grip, true),
-            [None; 2]
-        );
+        assert_eq!(HeldToolPose::Both.release_seat_holds(grip), [None; 2]);
     }
 
     /// UE2 links animation sets to a mesh: a body's archetype lists `animation_libraries` and the clips join the body's, keyed by
