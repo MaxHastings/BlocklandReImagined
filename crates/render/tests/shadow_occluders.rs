@@ -354,7 +354,11 @@ fn cascade_splits_do_not_cut_a_shadow() -> Result<()> {
     let (device, queue) = gpu()?;
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let (width, height) = (256u32, 512u32);
-    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::LOW));
+    let settings = ShadowSettings {
+        pcss: true,
+        ..ShadowSettings::LOW
+    };
+    let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
     let floor = renderer.upload(
         &device,
         &queue,

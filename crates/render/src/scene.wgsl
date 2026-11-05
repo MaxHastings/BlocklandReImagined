@@ -391,7 +391,13 @@ fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
         let band=CASCADE_BLEND*(shadows.splits[cascade]-start);
         out.far=cascade_coord(position,n,cascade+1);
         if inside_map(out.far) {
-            out.blend=clamp((view_depth-(shadows.splits[cascade]-band))/band,0.0,1.0);
+            let depth_blend=clamp((view_depth-(shadows.splits[cascade]-band))/band,0.0,1.0);
+            var edge_blend=0.0;
+            if shadows.params.z>0.0 {
+                let edge_texels=min(min(out.near.uv.x,out.near.uv.y),min(1.0-out.near.uv.x,1.0-out.near.uv.y))*shadows.params.y;
+                edge_blend=1.0-smoothstep(PCSS_MAX_TEXELS,2.0*PCSS_MAX_TEXELS,edge_texels);
+            }
+            out.blend=max(depth_blend,edge_blend);
         }
     }
     // Fade out over the last tenth of the shadow distance.
@@ -421,12 +427,8 @@ const PCSS_FILTER_TAPS:i32=16;
 // the ordinary 3x3 filter's softest edge.
 const PCSS_MAX_TEXELS:f32=10.0;
 const PCSS_MIN_TEXELS:f32=1.5;
-// The map layer's blocker search reaches this many texels, and its filter
-// disc grows this much wider per unit of blocker distance and may reach this
-// many times the cascades' own limit: terrain shadows fall on far surfaces.
-const PCSS_MAP_SEARCH_TEXELS:f32=4.0;
-const PCSS_MAP_WIDEN:f32=3.0;
-const PCSS_MAP_MAX_SCALE:f32=1.5;
+const PCSS_MAP_SEARCH_TAPS:i32=16;
+const PCSS_MAP_FILTER_TAPS:i32=32;
 
 // A pixel's own noise, so taps rotate differently from pixel to pixel.
 var<private> sun_pixel:vec2<f32>;
@@ -544,6 +546,9 @@ fn cascade_lit(c:CascadeCoord)->f32 {
 }
 fn shadow_lit(c:ShadowCoord)->f32 {
     if c.near.cascade<0 {return 1.0;}
+    // Faded out at the shadow edge: mix(1.0, lit, 0) == 1.0, so cascade
+    // PCSS is discarded. Skip its ~25-50 texture reads entirely.
+    if c.strength<=0.0 {return 1.0;}
     var lit=cascade_lit(c.near);
     // Only receivers in the blend band pay for the second cascade.
     if c.blend>0.0 {lit=mix(lit,cascade_lit(c.far),c.blend);}
@@ -561,7 +566,7 @@ fn map_pcss_lit(c:CascadeCoord)->f32 {
     let scale=shadows.depth_scale[c.cascade];
     let layer=c.cascade+2*i32(shadows.forward_count.w);
     let z=c.depth*shadows.map_scale[c.cascade]+shadows.map_offset[c.cascade];
-    let bias=0.5*texel*scale;
+    let bias=0.5*texel*scale*shadows.map_scale[c.cascade];
     let angle=6.2831853*pcss_noise();
     let last=i32(size)-1;
     let z_minus_bias=z-bias;
@@ -569,30 +574,42 @@ fn map_pcss_lit(c:CascadeCoord)->f32 {
     // The slope is per unit of cascade depth; the map layer's depth is
     // rescaled from it.
     let slope=c.slope*shadows.map_scale[c.cascade];
-    var blocker_sum=0.0;
-    var blockers=0.0;
-    let base_search_over_size=PCSS_MAP_SEARCH_TEXELS/size;
-    for (var i=0;i<PCSS_SEARCH_TAPS;i+=1) {
-        let offset=pcss_disc(i,PCSS_SEARCH_TAPS,angle)*base_search_over_size;
+    let core_base=clamp(floor(c.uv*size-vec2<f32>(0.5)),vec2<f32>(0.0),vec2<f32>(size-2.0));
+    let core=textureGather(shadow_map,shadow_point,(core_base+vec2<f32>(1.0))/size,layer);
+    let core_to_texel=(core_base+vec2<f32>(0.5))/size-c.uv;
+    let core_z=vec4<f32>(z_minus_bias)+vec4<f32>(
+        dot(slope,core_to_texel+vec2<f32>(0.0,1.0)/size),
+        dot(slope,core_to_texel+vec2<f32>(1.0,1.0)/size),
+        dot(slope,core_to_texel+vec2<f32>(1.0,0.0)/size),
+        dot(slope,core_to_texel),
+    );
+    let core_blocks=core<core_z;
+    var blocker_sum=pcss_sum4(select(vec4<f32>(0.0),core,core_blocks));
+    var blockers=pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),core_blocks));
+    let search_weight_scale=1.0/f32(PCSS_MAP_SEARCH_TAPS);
+    let max_texels_over_size=PCSS_MAX_TEXELS/size;
+    for (var i=0;i<PCSS_MAP_SEARCH_TAPS;i+=1) {
+        let offset=pcss_disc(i,PCSS_MAP_SEARCH_TAPS,angle)*max_texels_over_size;
         let uv=c.uv+offset;
         let tap_z=z_minus_bias+dot(slope,offset);
         let texel_at=clamp(vec2<i32>(floor(uv*size)),vec2<i32>(0),vec2<i32>(last));
         let d=textureLoad(shadow_map,texel_at,layer,0);
         if d<tap_z {
-            blocker_sum+=d;
-            blockers+=1.0;
+            let weight=1.0-(f32(i)+0.5)*search_weight_scale;
+            blocker_sum+=weight*d;
+            blockers+=weight;
         }
     }
     if blockers==0.0 {return 1.0;}
-    let blocker_distance=(z-blocker_sum/blockers)/scale;
+    let blocker_distance=(z-blocker_sum/blockers)/(scale*shadows.map_scale[c.cascade]);
 
-    let radius=clamp(blocker_distance*shadows.params.w/texel*PCSS_MAP_WIDEN,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS*PCSS_MAP_MAX_SCALE);
+    let radius=clamp(blocker_distance*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS);
 
     var lit=0.0;
     let radius_over_size=radius/size;
-    let filter_weight_scale=1.0/f32(PCSS_FILTER_TAPS);
-    for (var i=0;i<PCSS_FILTER_TAPS;i+=1) {
-        let offset=pcss_disc(i,PCSS_FILTER_TAPS,angle)*radius_over_size;
+    let filter_weight_scale=1.0/f32(PCSS_MAP_FILTER_TAPS);
+    for (var i=0;i<PCSS_MAP_FILTER_TAPS;i+=1) {
+        let offset=pcss_disc(i,PCSS_MAP_FILTER_TAPS,angle)*radius_over_size;
         let tap_z=z_minus_bias+dot(slope,offset);
         lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,c.uv+offset,layer,tap_z);
     }
@@ -623,12 +640,61 @@ fn map_cascade_lit(c:CascadeCoord)->f32 {
 // from the far map layer: coarse texels over the whole map, filtered as
 // the cascades' map layer is. 1 (unshadowed) outside it or while it is not
 // drawn. `fallback` stands in then, as it did before the layer existed.
+fn far_map_pcss_lit(uv:vec2<f32>,depth:f32,n:vec3<f32>,layer:i32)->f32 {
+    let size=shadows.params.y;
+    let texel=shadows.far_params.z;
+    let m=shadows.far_matrix;
+    let r0=vec3<f32>(m[0].x,m[1].x,m[2].x);
+    let r1=vec3<f32>(m[0].y,m[1].y,m[2].y);
+    let r2=vec3<f32>(m[0].z,m[1].z,m[2].z);
+    let g=(m[0].xyz*n.x+m[1].xyz*n.y+m[2].xyz*n.z)/vec3<f32>(dot(r0,r0),dot(r1,r1),dot(r2,r2));
+    let depth_scale=length(r2);
+    let edge=select(1.0,-1.0,g.z<0.0)*max(abs(g.z),1e-9);
+    let limit=10.0*depth_scale*texel*size*0.5;
+    let slope=clamp(-g.xy/edge,vec2<f32>(-limit),vec2<f32>(limit))*vec2<f32>(2.0,-2.0);
+    let bias=0.5*texel*depth_scale;
+    let angle=6.2831853*pcss_noise();
+    let core_base=clamp(floor(uv*size-vec2<f32>(0.5)),vec2<f32>(0.0),vec2<f32>(size-2.0));
+    let core=textureGather(shadow_map,shadow_point,(core_base+vec2<f32>(1.0))/size,layer);
+    let core_to_texel=(core_base+vec2<f32>(0.5))/size-uv;
+    let core_z=vec4<f32>(depth-bias)+vec4<f32>(
+        dot(slope,core_to_texel+vec2<f32>(0.0,1.0)/size),
+        dot(slope,core_to_texel+vec2<f32>(1.0,1.0)/size),
+        dot(slope,core_to_texel+vec2<f32>(1.0,0.0)/size),
+        dot(slope,core_to_texel),
+    );
+    let core_blocks=core<core_z;
+    var blocker_sum=pcss_sum4(select(vec4<f32>(0.0),core,core_blocks));
+    var blockers=pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),core_blocks));
+    let search_weight_scale=1.0/f32(PCSS_MAP_SEARCH_TAPS);
+    for (var i=0;i<PCSS_MAP_SEARCH_TAPS;i+=1) {
+        let offset=pcss_disc(i,PCSS_MAP_SEARCH_TAPS,angle)*(PCSS_MAX_TEXELS/size);
+        let tap_z=depth-bias+dot(slope,offset);
+        let texel_at=clamp(vec2<i32>(floor((uv+offset)*size)),vec2<i32>(0),vec2<i32>(i32(size)-1));
+        let d=textureLoad(shadow_map,texel_at,layer,0);
+        if d<tap_z {
+            let weight=1.0-(f32(i)+0.5)*search_weight_scale;
+            blocker_sum+=weight*d;
+            blockers+=weight;
+        }
+    }
+    if blockers==0.0 {return 1.0;}
+    let blocker_distance=(depth-blocker_sum/blockers)/depth_scale;
+    let radius=clamp(blocker_distance*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS);
+    var lit=0.0;
+    for (var i=0;i<PCSS_MAP_FILTER_TAPS;i+=1) {
+        let offset=pcss_disc(i,PCSS_MAP_FILTER_TAPS,angle)*(radius/size);
+        lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+offset,layer,depth-bias+dot(slope,offset));
+    }
+    return lit/f32(PCSS_MAP_FILTER_TAPS);
+}
 fn far_map_lit(position:vec3<f32>,n:vec3<f32>,fallback:f32)->f32 {
     if shadows.far_params.x<=0.0 {return fallback;}
     let clip=shadows.far_matrix*vec4<f32>(position+n*shadows.far_params.z*1.5,1.0);
     let uv=clip.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5);
     if any(uv<vec2<f32>(0.0)) || any(uv>vec2<f32>(1.0)) || clip.z<=0.0 || clip.z>=1.0 {return fallback;}
     let layer=i32(shadows.far_params.y);
+    if shadows.params.z>0.0 {return far_map_pcss_lit(uv,clip.z,n,layer);}
     let step=0.5*shadows.far_params.w;
     var lit=0.0;
     lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(-step,-step),layer,clip.z);
@@ -641,18 +707,32 @@ fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
     let c=shadow_coord(position,normal);
     if lighting_mode()==3 {return dynamic_sun(position,normal);}
     let n=normal/max(length(normal),0.0001);
+    // The receiver's dynamic (player/object) shadow wins over every map
+    // shadow: `min(map, dynamic)` is zero whatever the map layer says when
+    // the receiver is fully covered, so skip the map PCSS search/filter
+    // there instead of paying its ~49 texture reads for a shadow that is
+    // already solid. Exact-equivalent: min(map, 0) == 0. No tap counts or
+    // quality constants change, so the look is unchanged.
+    let dynamic=shadow_lit(c);
+    if dynamic<=0.0 {return 0.0;}
     var map=vis.low.x;
     if c.near.cascade>=0 && shadows.map_params.x>0.0 {
-        var lit=map_cascade_lit(c.near);
-        if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
-        // Only receivers fading out of the last cascade pay for the far map.
-        if c.strength<1.0 {map=far_map_lit(position,n,map);}
-        map=mix(map,lit,c.strength);
+        if c.strength>0.0 {
+            var lit=map_cascade_lit(c.near);
+            if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+            // Only receivers fading out of the last cascade pay for the far map.
+            if c.strength<1.0 {map=far_map_lit(position,n,map);}
+            map=mix(map,lit,c.strength);
+        } else {
+            // strength<=0: mix(map, lit, 0) == map, so cascade PCSS is
+            // discarded. far_map_lit's result becomes map directly.
+            map=far_map_lit(position,n,map);
+        }
     } else {
         map=far_map_lit(position,n,map);
     }
     if map<=0.0 {return 0.0;}
-    return min(map,shadow_lit(c));
+    return min(map,dynamic);
 }
 // Lamp slot `slot`'s light reaching a surface past the same casters: the
 // cube face the surface lies in, a 2x2 bilinear comparison per tap (so
