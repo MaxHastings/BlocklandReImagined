@@ -2012,9 +2012,9 @@ impl Search {
             prefer_goal_floor: false,
         }
     }
-    /// Prefer the goal's floor when cost estimates tie, and prefer floor
-    /// progress for a budget-limited partial endpoint. Traversal costs remain
-    /// primary: stable footing and a shorter walking detour still count.
+    /// Prefer the goal's floor when discovery cost estimates tie. Partial
+    /// endpoints retain geometric progress, including beneath an unreachable
+    /// floor; traversal costs and available footing remain authoritative.
     pub fn prefer_goal_floor(mut self) -> Self {
         self.prefer_goal_floor = true;
         self
@@ -2112,17 +2112,11 @@ impl Search {
         }
         self.came.insert(to, came);
         let h = self.h(to);
-        if self.best.is_none_or(|(old, best)| {
-            if self.prefer_goal_floor {
-                (to.feet().y - self.goal.y)
-                    .abs()
-                    .total_cmp(&(old.feet().y - self.goal.y).abs())
-                    .then_with(|| h.total_cmp(&best))
-                    .is_lt()
-            } else {
-                h < best
-            }
-        }) {
+        // A partial endpoint must make geometric progress even when the
+        // target's floor is unreachable. Height-first ranking can strand a
+        // body on a spawn plate a fraction higher than the useful walkable
+        // floor. Floor preference guides discovery, not the partial endpoint.
+        if self.best.is_none_or(|(_, best)| h < best) {
             self.best = Some((to, h));
         }
         self.open.push(Open {

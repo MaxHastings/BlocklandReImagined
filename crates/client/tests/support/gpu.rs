@@ -44,7 +44,9 @@ pub fn turn() -> Result<Turn> {
                 adapter_info: adapter.get_info(),
             }
         } else {
-            Headless::new()?
+            // Whole-client evidence uses the shipped backend order and the
+            // same compiler/device pixel probe, without a native window.
+            bri_client::platform::offscreen_gpu()?
         });
     }
     Ok(Turn(gpu))

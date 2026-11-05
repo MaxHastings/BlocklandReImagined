@@ -294,8 +294,9 @@ pub(super) struct Ground {
     /// On a leg of its route through the air (its jets, a leap), which
     /// flies its own way.
     pub air_leg: bool,
-    /// Nearby route waypoints deliberately climb or descend.
-    pub route_changes_height: bool,
+    /// Lowest nearby verified route floor; only the route's own movement
+    /// may use this to extend its ordinary safe-drop allowance.
+    pub route_floor: Option<f32>,
 }
 
 impl Session {
@@ -344,13 +345,16 @@ impl Session {
             && !ground.swimming
             && (state.grounded || off_route && !controls.jet && !state.jetting)
             && walk != Vec3::ZERO
-            && !ground.air_leg
+            // Only the route's own airborne movement owns its verified
+            // landing. A dodge/goof/detour during that leg still needs the
+            // ordinary off-route support check.
+            && (!ground.air_leg || off_route)
             && self.bot_fall_ahead(
                 bot,
                 feet,
                 body,
                 flat(walk).normalize_or_zero(),
-                off_route || (state.grounded && !ground.route_changes_height),
+                if off_route { None } else { ground.route_floor },
                 state.grounded,
             );
         if held_back {
@@ -556,7 +560,7 @@ mod tests {
             let feet = Vec3::from(state.feet);
             let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
             let ground = Ground {
-                route_changes_height: false,
+                route_floor: None,
                 driving: false,
                 swimming: false,
                 air_leg: false,
@@ -600,12 +604,12 @@ mod tests {
         let feet = Vec3::from(state.feet);
         let body = crate::nav::Body::of(s.peers[&bot].player.tuning(), 1.0);
         let ground = Ground {
-            route_changes_height: false,
+            route_floor: None,
             driving: false,
             swimming: false,
             air_leg: false,
         };
-        let walk = |proposal: Proposal, route_changes_height: bool| {
+        let walk = |proposal: Proposal, route_floor: Option<f32>| {
             let controls = resolve(&mut [proposal], Press::default());
             s.bot_safe_walk(
                 bot,
@@ -614,7 +618,7 @@ mod tests {
                 &state,
                 controls,
                 Ground {
-                    route_changes_height,
+                    route_floor,
                     ..ground
                 },
             )
@@ -625,15 +629,45 @@ mod tests {
             plan: Some(Vec3::X),
             ..Proposal::walk(Mover::Route, Vec3::Z)
         };
-        let (walked, held, _) = walk(bent, false);
+        let (walked, held, _) = walk(bent, None);
         assert!(held && walked == Vec3::ZERO, "held at the edge: {walked}");
-        let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z), false);
+        let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z), None);
         assert!(
             held && walked == Vec3::ZERO,
             "level route held at edge: {walked}"
         );
+        let (walked, held, _) = walk(
+            Proposal::walk(Mover::Route, Vec3::Z),
+            Some(-body.step * 0.5),
+        );
+        assert!(
+            held && walked == Vec3::ZERO,
+            "a small route step cannot license the whole drop"
+        );
+        let (walked, held, _) = walk(bent, Some(-6.0));
+        assert!(
+            held && walked == Vec3::ZERO,
+            "only the route owns its planned descent"
+        );
+        let controls = resolve(&mut [bent], Press::default());
+        let (walked, held, _) = s.bot_safe_walk(
+            bot,
+            &body,
+            feet,
+            &state,
+            controls,
+            Ground {
+                route_floor: Some(-6.0),
+                air_leg: true,
+                ..ground
+            },
+        );
+        assert!(
+            held && walked == Vec3::ZERO,
+            "off-route footwork has no air-leg exemption"
+        );
         // The route's own walk over the same edge is a drop it planned.
-        let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z), true);
+        let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z), Some(-6.0));
         assert!(!held && walked == Vec3::Z, "its own drop: {walked}");
     }
 }

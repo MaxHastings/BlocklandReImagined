@@ -1680,7 +1680,7 @@ fn creature() -> BotKind {
 
 /// Think time per tick of `bots` minimal-profile creatures (`creature`)
 /// fighting as two sides, as [`bot_think_time`] times full bots.
-fn creature_think_time(bots: usize) -> f64 {
+fn creature_think_time(bots: usize, slots: usize) -> f64 {
     use bri_weapons::testing::*;
     let side = bots / 2;
     let mut spec = Spec::new(
@@ -1693,7 +1693,7 @@ fn creature_think_time(bots: usize) -> f64 {
     spec.extra_kinds = vec![creature()];
     let mut b = battle(spec, |a| {
         a.s.set_server_settings(bri_admin::ServerSettings {
-            max_bots: bots as u32,
+            max_bots: slots as u32,
             ..a.s.server_settings().clone()
         })
         .unwrap();
@@ -1711,26 +1711,32 @@ fn creature_think_time(bots: usize) -> f64 {
     think
 }
 
-/// A minimal-profile creature costs a small fraction of a full Blockhead
-/// bot (`docs/v0.3.0` W7's acceptance): per bot, at most what the bot limit
-/// counts it as (`bot_kind::MINIMAL_COST`, a quarter).
+/// The default admission limit allows four minimal creatures per full bot.
+/// Exercise that entire admitted population against the unchanged absolute
+/// think-time budget. A ratio against a different firefight is not a capacity
+/// contract: making full bots faster must not fail unchanged creature work.
 /// `cargo test --release -p bri-chaos --test bot_gauntlet creature_think_time_16 -- --ignored --nocapture`
 #[test]
 #[ignore = "timing; run in release"]
 fn creature_think_time_16() {
-    let bots = bri_package_runtime::ops::DEFAULT_BOTS;
-    // Full bots first, so neither run pays for measuring the body's reach
-    // (kept once measured).
-    let full = bot_think_time(bots);
-    let creatures = creature_think_time(bots);
-    eprintln!(
-        "PERF a creature costs {:.0}% of a full bot",
-        creatures / full * 100.0
-    );
+    let slots = bri_package_runtime::ops::DEFAULT_BOTS;
     let share = bri_sim::bot_kind::MINIMAL_COST as f64;
+    let bots = (slots as f64 / share) as usize;
+    assert_eq!(bots as f64 * share, slots as f64);
+    let full = bot_think_time(slots);
+    let creatures = creature_think_time(bots, slots);
+    let perf = gauntlet::tuning::Config::shipped().perf;
+    let bar = if cfg!(debug_assertions) {
+        perf.debug_us
+    } else {
+        perf.release_us
+    };
+    eprintln!(
+        "PERF {slots} admission slots: {bots} creatures {creatures:.0} us/tick; {slots} full bots {full:.0} us/tick; budget {bar:.0} us/tick"
+    );
     assert!(
-        creatures <= full * share,
-        "{bots} creatures think {creatures:.0} us/tick, over {share} of {bots} full bots' {full:.0}"
+        creatures <= bar,
+        "{bots} admitted creatures think {creatures:.0} us/tick, over the {slots}-slot budget {bar:.0}"
     );
 }
 

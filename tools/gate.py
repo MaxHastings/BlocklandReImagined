@@ -989,6 +989,26 @@ def already_passed(root, sha, inputs, needs_corpus):
     return False
 
 
+def shader_compiler_commands(worktree, target, *, windows, archive=None):
+    """Provision the pinned runtime beside both Windows executable locations.
+
+    The packaged game carries DXC. Loose gate/client and libtest executables
+    must get the same pinned compiler, not accidentally exercise slow FXC
+    because only target/release was bootstrapped.
+    """
+    if not windows:
+        return []
+    commands = []
+    for name, directory in (("client", target / "debug"),
+                            ("tests", target / "debug" / "deps")):
+        command = [sys.executable, worktree / "tools" / "fetch_dxc.py",
+                   "--into", directory]
+        if archive is not None:
+            command.extend(["--archive", archive])
+        commands.append((f"shader-compiler-{name}", command))
+    return commands
+
+
 def full_gate(sha, root, changed=()):
     root.mkdir(parents=True, exist_ok=True)
     passed = root / "passed" / sha
@@ -1029,6 +1049,14 @@ def full_gate(sha, root, changed=()):
                 say(f"full log: {log}")
                 return False
             phases[name] = time.time() - step_started
+        pin = json.loads((worktree / "tools" / "shader-compiler.json").read_text(encoding="utf-8"))
+        archive = main_checkout() / "dist" / "shader-compiler" / pin["url"].rsplit("/", 1)[-1]
+        for name, command in shader_compiler_commands(
+                worktree, root / "target", windows=os.name == "nt",
+                archive=archive if archive.is_file() else None):
+            if not run_step(name, command, worktree, log, env):
+                print(tail(log, f"===== {name} ====="))
+                return False
         state = root / "check-state"
         shutil.rmtree(state, ignore_errors=True)
         exe = root / "target" / "debug" / ("bri-client.exe" if os.name == "nt" else "bri-client")

@@ -11,6 +11,23 @@ from types import SimpleNamespace
 import gate
 
 
+class ShaderCompilerRuntime(unittest.TestCase):
+    def test_windows_covers_both_client_and_libtest_executables(self):
+        worktree, target, archive = Path("source"), Path("output"), Path("pinned.zip")
+        commands = gate.shader_compiler_commands(worktree, target, windows=True, archive=archive)
+        self.assertEqual(len(commands), 2)
+        destinations = [command[command.index("--into") + 1] for _, command in commands]
+        self.assertEqual(destinations, [target / "debug", target / "debug" / "deps"])
+        for _, command in commands:
+            self.assertEqual(command[1], worktree / "tools" / "fetch_dxc.py")
+            self.assertEqual(command[command.index("--archive") + 1], archive)
+
+    def test_other_platforms_have_no_windows_runtime_and_a_cache_is_optional(self):
+        self.assertEqual(gate.shader_compiler_commands(Path("source"), Path("out"), windows=False), [])
+        for _, command in gate.shader_compiler_commands(Path("source"), Path("out"), windows=True):
+            self.assertNotIn("--archive", command)
+
+
 class GateScope(unittest.TestCase):
     def test_parent_push_proof_requires_exact_commit_base_and_live_lock(self):
         with tempfile.TemporaryDirectory() as folder:
