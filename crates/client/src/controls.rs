@@ -1105,6 +1105,10 @@ impl Controls {
             yaw,
             pitch,
             head_yaw: self.free_yaw,
+            action_look: self.ride.is_some().then(|| {
+                let (yaw, pitch) = self.action_angles();
+                bri_sim::session::ActionAim { yaw, pitch }
+            }),
             jump: self.held(HeldControl::Jump),
             crouch: self.held(HeldControl::Crouch),
             // A scope on the right mouse button may take jet for itself
@@ -1135,6 +1139,15 @@ impl Controls {
             Some((yaw, pitch)) => (wrap(yaw + self.free_yaw), pitch),
             None => (wrap(self.yaw + self.free_yaw), self.pitch),
         }
+    }
+    /// World aim captured with a gameplay action. Seated look follows the
+    /// composed seat/head frame; raw yaw/pitch may instead be vehicle steering
+    /// accumulators. Observer cameras and visual camera shake never aim actions.
+    /// On foot retain the body's aim, independent of third-person free look.
+    pub fn action_angles(&self) -> (f32, f32) {
+        self.ride_view().map_or((self.yaw, self.pitch), |view| {
+            angles(view * glam::Vec3::NEG_Z, view * glam::Vec3::Y)
+        })
     }
     /// The head's free-look turn while Free Look is held (`$mvFreeLook`).
     pub fn free_look(&self) -> Option<f32> {
@@ -2454,6 +2467,40 @@ mod tests {
         c.advance_head(1.0);
         assert!(c.driver_head_yaw().unwrap().abs() < 1e-3, "back ahead");
         assert!(c.body_pitch().abs() < 1e-3, "pitch too");
+    }
+    #[test]
+    fn seated_actions_follow_the_seat_while_raw_mouse_angles_keep_steering() {
+        use glam::{Quat, Vec3};
+        let seat = Quat::from_euler(glam::EulerRot::YXZ, 1.1, 0.25, -0.4);
+        let direction = |(yaw, pitch): (f32, f32)| {
+            Vec3::new(
+                yaw.sin() * pitch.cos(),
+                pitch.sin(),
+                -yaw.cos() * pitch.cos(),
+            )
+        };
+        let mut c = seated(SeatLook::MouseDriver);
+        c.set_ride(Some(Ride::Seat(seat, SeatLook::MouseDriver)));
+        c.set_vehicle_view(Some((-1.1, 0.25)));
+        c.set_invert_prefs(false, false);
+        mouse(&mut c, 2.1, 0.7);
+        let steering = c.movement();
+        assert!(steering.yaw.abs() > 1.0 && steering.pitch.abs() > 0.1);
+        assert!(
+            direction(c.action_angles()).abs_diff_eq(seat * Vec3::NEG_Z, 1e-5),
+            "steering accumulators cannot redirect a click away from the seat"
+        );
+        assert_eq!(
+            c.movement(),
+            steering,
+            "sampling action aim must not change steering"
+        );
+        held(&mut c, HeldControl::FreeLook, true);
+        mouse(&mut c, 0.3, 0.2);
+        let look = seat * Quat::from_rotation_y(-0.3) * Quat::from_rotation_x(0.2);
+        assert!(direction(c.action_angles()).abs_diff_eq(look * Vec3::NEG_Z, 1e-5));
+        assert_eq!(c.movement().yaw, steering.yaw);
+        assert_eq!(c.movement().pitch, steering.pitch);
     }
     /// Max, v0.1.7: pulling the Stunt Plane up in first person, the view
     /// looked up first and the plane caught up after; in third person the

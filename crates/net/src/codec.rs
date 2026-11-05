@@ -431,6 +431,10 @@ mod tests {
             yaw: -std::f32::consts::PI,
             pitch: std::f32::consts::FRAC_PI_2,
             head_yaw: 1.0,
+            action_look: Some(bri_sim::session::ActionAim {
+                yaw: std::f32::consts::PI,
+                pitch: -std::f32::consts::FRAC_PI_2,
+            }),
             jump: true,
             crouch: true,
             jet: true,

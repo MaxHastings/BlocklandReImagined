@@ -2807,6 +2807,7 @@ fn actor_step(
         yaw,
         pitch: 0.,
         head_yaw: 0.,
+        action_look: None,
         jump: driven && c.jump,
         crouch: false,
         jet: false,

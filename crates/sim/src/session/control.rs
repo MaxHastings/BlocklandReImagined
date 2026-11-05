@@ -1,7 +1,7 @@
 //! Control objects (`GameConnection::setControlObject`): a connection's moves
 //! drive exactly one thing at a time. The body walks, or drives its vehicle
 //! seat while mounted; an admin camera leaves the body standing still.
-use super::{MoveInput, Peer, Session};
+use super::{ActionAim, MoveInput, Peer, Session};
 use anyhow::{Context, Result, ensure};
 use bri_world::OwnerId;
 use glam::{Quat, Vec3};
@@ -176,6 +176,13 @@ impl CameraView {
 }
 
 impl Peer {
+    /// Latest ordinary action direction; control yaw/pitch can instead steer a
+    /// mounted vehicle. Explicit click aim still owns the click's first shot.
+    pub(super) fn action_direction(&self) -> Vec3 {
+        self.input
+            .action_look
+            .map_or_else(|| self.player.state().forward(), ActionAim::direction)
+    }
     /// The motor input for this tick: controls only while the body is in
     /// control. Otherwise it idles and keeps its own aim, so neither a corpse
     /// nor a camera operator turns the blockhead.

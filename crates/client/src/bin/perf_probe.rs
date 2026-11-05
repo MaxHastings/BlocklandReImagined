@@ -190,6 +190,7 @@ fn main() -> Result<()> {
                     yaw: rng.next() * std::f32::consts::TAU - std::f32::consts::PI,
                     pitch: 0.0,
                     head_yaw: 0.0,
+                    action_look: None,
                     jump: rng.next() < 0.2,
                     crouch: false,
                     jet: rng.next() < 0.3,

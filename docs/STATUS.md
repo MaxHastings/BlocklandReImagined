@@ -23,9 +23,9 @@ exact candidate's full release gate and verified Windows/macOS/Linux artifacts.
 Current import receipts have now been regenerated for all 100 pinned originals;
 the release inputs do not use the private preview's prior-import exception.
 Maxwell accepted preview.3 NPC gameplay; additional NPC experiments are deferred.
-Destruction remains unaccepted after the same stiffness and missed body-contact
-reports, and a one-handed vehicle-grip regression is being corrected before the
-next candidate. See the [preparation receipt](progress/2026-11-04-v044-release-preparation.md).
+Maxwell accepted preview.5 destruction and empty/one-/two-handed vehicle grips.
+He subsequently reported unreliable personal-weapon aim with mouse steering;
+that correction blocks the next candidate and final gameplay approval. See the [preparation receipt](progress/2026-11-04-v044-release-preparation.md).
 No v0.4.4 tag or public release has been created.
 
 Previous release: [v0.4.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.2),
