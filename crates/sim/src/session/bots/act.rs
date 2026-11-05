@@ -262,7 +262,13 @@ pub(super) fn resolve(proposals: &mut [Proposal], press: Press) -> Controls {
         if let Some(walk) = p.walk {
             out.walk = walk;
             out.by = Some(p.mover);
-            if p.mover == Mover::Route {
+            // A dedicated leg owns its steering too: braking in flight or
+            // leaning into a ladder need not point straight at the waypoint.
+            // Later diversions are still compared with that actual control.
+            if matches!(
+                p.mover,
+                Mover::Route | Mover::Jet | Mover::Leap | Mover::Climb
+            ) {
                 out.routed = p.plan.unwrap_or(walk);
             }
         }
@@ -291,11 +297,11 @@ pub(super) struct Ground {
     pub driving: bool,
     /// In water, where a fall is broken.
     pub swimming: bool,
-    /// On a leg of its route through the air (its jets, a leap), which
-    /// flies its own way.
+    /// The resolved mover is the admitted jet/leap/climb controller,
+    /// rather than another mover acting while such a leg is planned.
     pub air_leg: bool,
-    /// Lowest nearby verified route floor; only the route's own movement
-    /// may use this to extend its ordinary safe-drop allowance.
+    /// End floor of the current verified route leg; only its own movement
+    /// may use this to extend the ordinary safe-drop allowance.
     pub route_floor: Option<f32>,
 }
 
@@ -305,8 +311,8 @@ impl Session {
     /// through one, so footwork, a goof or a push never stumbles in; never
     /// into a live blast that would catch it, nor deeper into one it stands
     /// in; and never off an edge whose fall would hurt it. A level route
-    /// also avoids unplanned deep drops, while nearby planned height changes
-    /// retain their traversal. Off its route it does not step down
+    /// also avoids unplanned deep drops; a planned descent is bounded by
+    /// its current leg's floor. Off its route it does not step down
     /// where it could not walk back up, on its feet or in the air
     /// (footwork, a goof, a hop or a jump in place). Its
     /// route's own way through the air, and its jets, it keeps. A hop
@@ -665,6 +671,57 @@ mod tests {
         assert!(
             held && walked == Vec3::ZERO,
             "off-route footwork has no air-leg exemption"
+        );
+        // The flight controller owns a correction different from the raw
+        // waypoint bearing. Safety must not mistake its steering for a goof
+        // and cut its walk at takeoff or while braking for the landing.
+        let leap = Proposal {
+            jump: Some(true),
+            ..Proposal::walk(Mover::Leap, Vec3::Z)
+        };
+        let controls = resolve(
+            &mut [Proposal::walk(Mover::Route, Vec3::X), leap],
+            Press::default(),
+        );
+        let (walked, held, jump) = s.bot_safe_walk(
+            bot,
+            &body,
+            feet,
+            &state,
+            controls,
+            Ground {
+                route_floor: Some(-6.0),
+                air_leg: true,
+                ..ground
+            },
+        );
+        assert!(
+            !held && walked == Vec3::Z && jump,
+            "the admitted leg owns its correction"
+        );
+        // A subsequent diversion does not inherit that landing permission.
+        let controls = resolve(
+            &mut [
+                Proposal::walk(Mover::Leap, Vec3::X),
+                Proposal::walk(Mover::Goof, Vec3::Z),
+            ],
+            Press::default(),
+        );
+        let (walked, held, _) = s.bot_safe_walk(
+            bot,
+            &body,
+            feet,
+            &state,
+            controls,
+            Ground {
+                route_floor: Some(-6.0),
+                air_leg: true,
+                ..ground
+            },
+        );
+        assert!(
+            held && walked == Vec3::ZERO,
+            "a diversion owns no planned landing"
         );
         // The route's own walk over the same edge is a drop it planned.
         let (walked, held, _) = walk(Proposal::walk(Mover::Route, Vec3::Z), Some(-6.0));

@@ -1262,7 +1262,7 @@ impl Session {
         // Off-route footwork and level routes avoid unplanned deep drops.
         // In the air, measure from the supporting floor, not the feet:
         // otherwise any floor below a jump would appear safe. Only the
-        // actual nearby route floor can extend the ordinary drop budget.
+        // current route leg's floor can extend the ordinary drop budget.
         let depth = if let Some(floor) = planned_floor {
             // A small step in the route cannot authorize every non-harmful
             // drop nearby. Bound the probe by the actual planned floor,

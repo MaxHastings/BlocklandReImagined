@@ -4662,13 +4662,10 @@ impl Session {
             },
         );
         (input.crouch, input.jet) = (controls.crouch, controls.jet);
-        let route_floor = brain
-            .plan
-            .iter()
-            .take(6)
-            .filter(|way| flat(way.feet - feet).length() <= body.width * 3.0)
-            .map(|way| way.feet.y)
-            .reduce(f32::min);
+        // Safety follows the exact leg the controller is executing,
+        // including a verified bridge into the route. Later waypoints do
+        // not authorize this step's descent.
+        let route_floor = wanted.map(|way| way.feet.y);
         // The walk chosen, carried out: on foot, not pushing one, round a
         // vehicle in its way (the walk grid leaves vehicles out).
         let controls = act::Controls {
@@ -4689,12 +4686,10 @@ impl Session {
                 route_floor,
                 driving: driving.is_some(),
                 swimming: swim.is_some() || wet,
-                air_leg: wanted.is_some_and(|w| {
-                    matches!(
-                        w.mode,
-                        Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. }
-                    )
-                }),
+                air_leg: matches!(
+                    controls.by,
+                    Some(act::Mover::Jet | act::Mover::Leap | act::Mover::Climb)
+                ),
             },
         );
         // Facing the way it walks, it turns into a sharp bend (a stair's
