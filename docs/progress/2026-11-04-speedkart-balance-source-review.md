@@ -32,8 +32,13 @@ Host simulation and client prediction use this same vehicle implementation.
 
 A synthetic ordinary wheeled vehicle now challenges pitch, yaw and roll with
 both absent and explicitly zero flight settings, moving and at rest. Existing
-stall, flying-car, skis and steering checks remain required. Source is formatted
-and whitespace-checked; test execution and driving acceptance are pending.
+stall, flying-car, skis and steering checks remain required. The first fixture
+compile exposed a missing schema-type import; that import is corrected.
+`cargo test --locked -p bri-vehicles --test flying_jeep` then passes six cases,
+with five generated-content cases explicitly ignored. The client's targeted
+`a_tool_hand_lets_go_of_the_seat_grip` unit check passes. Maxwell confirmed he
+finished playtesting before these local checks started. Native-content, visual,
+consumer/clippy checks and driving acceptance remain pending.
 Raw disassembly remains outside Git under the release-preparation evidence
 directory's `speedkart-source-review`; the original executable was not run or
 modified. Raw/decompiled source is not part of the repository or package.

@@ -3,6 +3,7 @@
 //! surfaces that bite only above `stallSpeed`, and no jets.
 #[macro_use]
 mod common;
+use bri_vehicles::schema::WheeledFlightSettings;
 use bri_vehicles::*;
 use common::Fixture;
 use glam::{Quat, Vec3};
