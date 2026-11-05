@@ -333,3 +333,42 @@ fn falling_material_reacts_to_an_actor_before_static_landing() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn prepared_airborne_clumps_wait_for_visible_material_before_either_backend_moves() -> Result<()> {
+    let (b, _) = super::super::tests::building(&[]);
+    for limit in [0, 8] {
+        let mut d = BrickDebris::new();
+        d.set_limit(limit);
+        let p = landing_regressions::piece(1, Vec3::new(0., 12., 0.));
+        d.add_section((0, 1), vec![p], &b)?;
+        let s = d.sections.get_mut(&(0, 1)).unwrap();
+        s.sealed = true;
+        s.gpu_ready = false;
+        let original = centers(&d);
+        run(&mut d, &b, 60)?;
+        assert_eq!(
+            centers(&d),
+            original,
+            "pending upload must not reveal displaced material"
+        );
+        assert_eq!(
+            d.chunk_handles().count(),
+            0,
+            "pending upload must not admit dynamic bodies"
+        );
+        assert_eq!(
+            d.fallback_bounds().count(),
+            0,
+            "pending proxies must not admit actor contacts"
+        );
+        d.sections.get_mut(&(0, 1)).unwrap().gpu_ready = true;
+        run(&mut d, &b, 6)?;
+        assert_eq!(centers(&d).len(), original.len());
+        assert!(
+            centers(&d)[0].y < original[0].y,
+            "ready material must resume ordinary gravity (limit={limit})"
+        );
+    }
+    Ok(())
+}

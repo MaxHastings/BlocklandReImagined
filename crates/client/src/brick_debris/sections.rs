@@ -605,11 +605,15 @@ impl Section {
                 debt: 0.,
             });
         }
-        if self
-            .finishing
-            .as_ref()
-            .is_some_and(|groups| groups.is_empty())
+        if self.gpu_ready
+            && self
+                .finishing
+                .as_ref()
+                .is_some_and(|groups| groups.is_empty())
         {
+            // Keep completed proxies staged until their visible material is
+            // ready too. Neither backend may advance invisible clumps and
+            // reveal them later at a different point in the fall.
             // Publish all prepared groups together at the current shared pose.
             // Incremental proxy construction must not leave earlier groups at
             // an older pose or start their clocks while later groups are built.
