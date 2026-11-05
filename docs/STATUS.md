@@ -1,32 +1,29 @@
 # Status
 
-Current release and engineering decisions. Reviewed 2026-11-04. Players should
+Current release and engineering decisions. Reviewed 2026-11-05. Players should
 start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 [known issues](KNOWN-ISSUES.md). Dated development receipts are in
 [progress/](progress/README.md); older history is in [progress.md](progress.md).
 
 ## Release state
 
-Published release: [v0.4.3 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.3),
+Published release: [v0.4.4 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.4),
+published November 05, 2026 at 05:56:46 UTC, from
+`cef86341bb39add681eb406eba5bd4a5e1480a1b`. Windows x86-64, Apple-silicon macOS
+and Linux x86-64 ZIPs and SHA256SUMS are public and match the verified packages.
+
+The [release notes](releases/v0.4.4.md) cover brick collapse, zombie traversal,
+native vehicle presentation, mounted weapon aim, clipboard and Add-On search.
+Maxwell approved preview.6. The exact release source passed the extended gate,
+real-save corpus, performance budgets and native package checks. See the
+[publication receipt](progress/2026-11-05-v044-public-release.md) and the
+[controller correction](progress/2026-11-04-v044-route-controller-ownership.md).
+
+Previous release: [v0.4.3 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.3),
 published November 1, 2026 at 09:45:42 UTC, from
 `d2643c62bb8a74d468255eb059da0af3b67e5d10`. Windows x86-64,
 Apple-silicon macOS and Linux x86-64 ZIPs and SHA256SUMS are public. See the
 [release notes](releases/v0.4.3.md) for scope and retained limitations.
-
-The next candidate is v0.4.4: clipboard and search corrections, reusable native
-vehicle presentation, zombie traversal corrections and revised cosmetic brick
-collapse. Its [release notes](releases/v0.4.4.md) describe the proposed shipped
-scope. Maxwell approved preview.6, including the mounted shooting correction,
-and authorized publication when the remaining required checks pass. #437 and
-#441 are held for that validation.
-
-Extended checks exposed navigation safety and partial-progress regressions.
-The current corrections preserve planned stair and flight controls and bound
-unplanned drops. See the [gate findings](progress/2026-11-04-v044-release-gate-corrections.md)
-and [controller correction](progress/2026-11-04-v044-route-controller-ownership.md).
-Release preparation still requires exact-source CI, the complete release gate,
-current strict Add-On receipts and verified Windows/macOS/Linux artifacts.
-No v0.4.4 tag or public release has been created.
 
 Previous release: [v0.4.2 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.2),
 published October 30, 2026 at 04:22:56 AM America/Chicago, from
@@ -34,7 +31,7 @@ published October 30, 2026 at 04:22:56 AM America/Chicago, from
 Apple-silicon macOS and Linux x86-64 ZIPs and SHA256SUMS are public. Every
 public download matches its tested artifact, the tag names the tested source,
 and its published assets stay immutable. The latest-release endpoint now
-returns v0.4.3.
+returns v0.4.4.
 
 That release integrates bot/navigation recovery, brick destruction contact,
 approved indoor/outdoor map ambience and tool swings, the accepted small
