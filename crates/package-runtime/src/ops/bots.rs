@@ -7,13 +7,18 @@ use super::*;
 /// `game`, and `team` when given, and spawns as a member does; the
 /// rules hear it join as any member. It is this package's until
 /// `RemoveBot` or its game ends, and counts toward the server's bot
-/// limit.
+/// limit. When `muted`, it is born already exempt from NPC reaction
+/// Add-Ons (the flag those check before cueing a line or sound for it,
+/// as with `set_bot_voice_muted`) — so no spawn-time hook can queue one
+/// before its rules have run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AddBot {
     pub game: u64,
     pub team: Option<u64>,
     pub kind: String,
     pub name: String,
+    #[serde(default)]
+    pub muted: bool,
 }
 impl ScriptOp for AddBot {
     const CAPABILITY: &str = "bots";
@@ -118,6 +123,24 @@ impl ScriptOp for DazeBot {
     }
 }
 
+/// Mark a bot this package added, or one of a kind it provides, as muted
+/// for NPC reaction Add-Ons (`set_bot_voice_muted`): they check the flag
+/// before cueing a voice line or sound for it (the pop-culture lines,
+/// spawn and death cues). The body itself is not silenced: its own sounds
+/// and chat go on. `false` unmutes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetBotVoiceMute {
+    pub bot: u64,
+    pub muted: bool,
+}
+impl ScriptOp for SetBotVoiceMute {
+    const CAPABILITY: &str = "bots";
+    const NAME: &str = "set_bot_voice_muted";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
 /// Most points a patrol visits.
 pub const MAX_PATROL_POINTS: usize = 16;
 
@@ -167,5 +190,38 @@ impl ScriptOp for SetBotIntent {
     const NAME: &str = "bot_intent";
     fn bounded(&self) -> bool {
         self.intent.as_ref().is_none_or(BotIntent::bounded)
+    }
+}
+
+/// What a held-still bot keeps turning toward (`set_bot_facing`),
+/// re-resolved by the engine each tick.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FacingTarget {
+    /// A loose object to track as it moves: `"player:N"`, `"vehicle:N"`
+    /// or `"entity:N"`. When it is gone (destroyed, removed, left), the
+    /// facing goes with it and the bot keeps its last heading.
+    Object(ObjectRef),
+    /// A fixed point in the world.
+    Point([f32; 3]),
+}
+
+/// Hold a rested bot's facing (`set_bot_facing`): while the rules hold it
+/// still, it keeps turning toward `target`, re-resolved each tick for a
+/// moving object, instead of frozen where it stood when it rested. `None`
+/// releases the hold: it keeps its current heading. A free brain turns on
+/// its own; this only steers one held by `rest_bot`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetBotFacing {
+    pub bot: u64,
+    pub target: Option<FacingTarget>,
+}
+impl ScriptOp for SetBotFacing {
+    const CAPABILITY: &str = "bots";
+    const NAME: &str = "set_bot_facing";
+    fn bounded(&self) -> bool {
+        self.target.as_ref().is_none_or(|t| match t {
+            FacingTarget::Object(_) => true,
+            FacingTarget::Point(at) => finite(at),
+        })
     }
 }

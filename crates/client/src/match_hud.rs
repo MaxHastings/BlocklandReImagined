@@ -138,6 +138,7 @@ mod tests {
             camera_point: None,
             talking: false,
             sitting: false,
+            nametag_hidden: false,
             ghost: None,
             base_body: None,
             held: false,

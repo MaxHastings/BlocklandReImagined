@@ -157,6 +157,9 @@ pub(super) struct Combat {
     pub spawn_tick: u64,
     pub shot_once: bool,
     pub light: bool,
+    /// An Add-On's flicker for this body's worn image lights
+    /// (`set_image_light_flicker`), 0 to 1 (steady to fully unstable).
+    pub image_light_flicker: f32,
     /// Last direct damage type and tick (death messages prefer it).
     pub last_direct: Option<(String, u64)>,
     pub corpse_cleared: bool,
@@ -312,6 +315,10 @@ pub struct Vitals {
     pub team: Option<u32>,
     pub invite: Option<u64>,
     pub light: bool,
+    /// An Add-On's flicker for this body's worn image lights
+    /// (`set_image_light_flicker`), 0 to 1. Each client dims its own copy.
+    #[serde(default)]
+    pub image_light_flicker: f32,
     /// Vehicle id and seat while riding.
     pub mounted: Option<(u64, u8)>,
     /// What is left of the hull of the vehicle they ride, 1 to 0.
@@ -333,6 +340,10 @@ pub struct Vitals {
     pub talking: bool,
     /// Seated by the sit emote.
     pub sitting: bool,
+    /// An Add-On hides this body's name tag (`set_nametag_visible`): no tag
+    /// is drawn for it, though its name still shows in lists and chat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nametag_hidden: bool,
     /// The unplanted ghost brick others see.
     pub ghost: Option<super::GhostBrick>,
     /// The body the player is while archetypes are laid over it
@@ -532,6 +543,11 @@ pub enum Notice {
     },
     /// A full-screen overlay on a curve (rules' `screen_overlay`).
     Overlay(bri_content::screen_overlay::Overlay),
+    /// A full-screen still or animated image cycled client-side
+    /// (rules' `screen_image`): v20's death boards and similar beats. The
+    /// client holds it for its seconds, then fades it out; a `None` cue
+    /// clears the board showing early (fading from where it is).
+    ScreenImage(Option<bri_content::screen_image::ScreenImageCue>),
     /// The aim kicked by a rule (`view_shake`): out along `direction` to
     /// `max`, back to `min`, radians and radians a second.
     ViewShake {
@@ -709,6 +725,25 @@ pub enum Notice {
         seconds: f32,
         color: Option<[f32; 4]>,
         icon: Option<String>,
+    },
+    /// A rule is drawing this player's view toward a world point
+    /// (`steer_view`): their game eases it there at `rate` degrees a second
+    /// while active, recomputing the direction from its own eye each frame;
+    /// no point clears the pull, leaving the view exactly where it is. While
+    /// active, `grip` scales their look sensitivity (a heavy aim that makes
+    /// looking away a struggle) and `fov_delta` dollies their camera in or
+    /// out — both temporary: the clear restores them with the pull.
+    SteerView {
+        at: Option<[f32; 3]>,
+        rate: f32,
+        grip: f32,
+        fov_delta: f32,
+    },
+    /// `stop_sound`: cut every instance of this profile playing for this
+    /// player (a short fade on the client); other players and queued-but-
+    /// unstarted cues are untouched.
+    StopSound {
+        profile: String,
     },
 }
 
@@ -1109,6 +1144,7 @@ impl Session {
             spawn_tick: tick,
             shot_once: false,
             light: false,
+            image_light_flicker: 0.,
             last_direct: None,
             corpse_cleared: false,
             held: false,
@@ -1192,6 +1228,7 @@ impl Session {
                         team: state.and_then(|s| s.team).map(|t| t.0),
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
+                        image_light_flicker: peer.combat.image_light_flicker,
                         mounted: self.mounted(*owner),
                         vehicle_health: self.mounted_health(*owner),
                         ride: self.ride(*owner),
@@ -1207,6 +1244,7 @@ impl Session {
                             .filter(|_| peer.control == super::ControlObject::Point),
                         talking: peer.talking,
                         sitting: peer.sitting,
+                        nametag_hidden: peer.nametag_hidden,
                         ghost: self.ghost_brick(*owner),
                         base_body: peer.overlays.as_ref().map(|o| o.base),
                         held: peer.combat.held,
@@ -1844,11 +1882,19 @@ impl Session {
     /// `player.delete()` (Slayer's `/addLives` taking a living member's
     /// last life): the body goes without a death, so nobody scores, no
     /// death line is printed and no rules hear of a death. The member waits
-    /// as the dead do, and the corpse is cleared at once.
+    /// as the dead do, and the corpse is cleared at once. A body the rules
+    /// already count as dead (a fresh kill) is cleared the same way: its
+    /// death was the game's to process, so only the lie goes, at once and
+    /// without a poof.
     pub(super) fn remove_body(&mut self, owner: OwnerId) -> Result<()> {
         let Some(peer) = self.peers.get(&owner) else {
             return Ok(());
         };
+        if !peer.combat.alive && !peer.combat.corpse_cleared {
+            // Dead bodies have no life to remove; the corpse alone is ours.
+            self.clear_body(owner)?;
+            return Ok(());
+        }
         let player = peer.combat.player;
         let LifeState::Alive { life } = self
             .minigames
@@ -2846,10 +2892,15 @@ impl Session {
         self.package_spawn(owner);
         self.fire_bot_spawn(owner);
         // `GameConnection::spawnPlayer`: a spawnProjectile at the hack position.
-        let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
-        let _ = self
-            .weapons
-            .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
+        // A bot Add-On rules placed re-enters without that presentation, as
+        // it joined (its own script plays its poof).
+        if self.bots.rules_package(owner).is_none() {
+            let center =
+                feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
+            let _ = self
+                .weapons
+                .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
+        }
         Ok(())
     }
 
@@ -2896,7 +2947,9 @@ impl Session {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         self.apply_minigame_effects(effects)
     }
-    pub(super) fn enter_world(&mut self, owner: OwnerId) -> Result<()> {
+    /// `rules_placed`: a bot Add-On rules placed — it enters without the
+    /// player-join spawn poof (its own script plays one where it wants).
+    pub(super) fn enter_world(&mut self, owner: OwnerId, rules_placed: bool) -> Result<()> {
         let choice = self.spawn_choice(owner);
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
         let mut feet = Vec3::from(peer.player.state().feet);
@@ -2915,10 +2968,13 @@ impl Session {
                 Placement::Clear(_) => {}
             }
         }
-        let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
-        let _ = self
-            .weapons
-            .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
+        if !rules_placed {
+            let center =
+                feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
+            let _ = self
+                .weapons
+                .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
+        }
         // Joining starts with the default tools: Add-Ons hand out theirs.
         self.package_loadout(owner);
         self.package_spawn(owner);
@@ -3502,6 +3558,23 @@ mod tests {
             "past the longest timeout"
         );
         assert!(s.archetypes.resolve(stays).look.corpse_opacity(1.0e6) == Some(1.0));
+        Ok(())
+    }
+
+    #[test]
+    fn a_dead_body_goes_at_once_when_removed() -> Result<()> {
+        let mut s = session()?;
+        let who = s.join("Gone".into(), Vec3::new(0.0, 0.1, 0.0), false)?;
+        s.damage_player(who, 1000.0, DamageKind::Event, None)?;
+        assert!(!s.peers[&who].combat.corpse_cleared, "it lies until removed");
+        s.remove_body(who)?;
+        let peer = &s.peers[&who];
+        assert!(peer.combat.corpse_cleared && peer.combat.held);
+        // And it stays gone: the lie time has no corpse left to clear.
+        for _ in 0..bri_weapons::TICK_HZ as usize * 3 {
+            s.step()?;
+        }
+        assert!(s.peers[&who].combat.corpse_cleared);
         Ok(())
     }
 

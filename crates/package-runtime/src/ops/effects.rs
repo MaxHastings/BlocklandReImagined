@@ -92,6 +92,26 @@ impl ScriptOp for Sound {
     }
 }
 
+/// Stop every instance of the sound profile playing at `player`'s ears or
+/// in their world — the crackle under a kill sting, a looping cue an Add-On
+/// started and now wants gone. The client cuts what is playing with a short
+/// fade; nothing queued-but-unstarted is affected, and other players are
+/// untouched (world sounds every client hears need no stopping: they end).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StopSound {
+    pub player: u64,
+    pub profile: String,
+}
+impl ScriptOp for StopSound {
+    const CAPABILITY: &str = "effects";
+    const NAME: &str = "stop_sound";
+    fn bounded(&self) -> bool {
+        !self.profile.is_empty()
+            && self.profile.len() <= 128
+            && !self.profile.chars().any(char::is_control)
+    }
+}
+
 /// A see-through `color` (RGBA 0..1) drawn over a player's body, just
 /// outside it, fading over `seconds`: a shield taking a hit, a power-up's
 /// glow, a cloak shimmering. Every player sees it. Presentation only.

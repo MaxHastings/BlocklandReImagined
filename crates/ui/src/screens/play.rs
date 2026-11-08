@@ -564,6 +564,34 @@ fn hud(core: &Core) -> View {
     {
         fill(&mut v, Rect::new(0, 0, w, h), rgba);
     }
+    if let Some((cue, ran)) = &core.screen_image {
+        // The board holds through its seconds, then fades out over CLEAR_FADE.
+        let fade = 1.0 - ((*ran - cue.seconds) / bri_content::screen_image::CLEAR_FADE).clamp(0.0, 1.0);
+        // The black backdrop ramps in fast, holds while the frame plays, and
+        // fades with it.
+        fill(
+            &mut v,
+            Rect::new(0, 0, w, h),
+            [0, 0, 0, (((*ran / 0.15).min(1.0) * fade) * 255.0) as u8],
+        );
+        // Fit the frame to half the screen's smaller side, preserving aspect.
+        let max_side = w.min(h) as f32 * 0.5;
+        let (fw, fh) = if cue.aspect >= 1.0 {
+            (max_side, max_side / cue.aspect.max(0.1))
+        } else {
+            (max_side * cue.aspect, max_side)
+        };
+        // The frame tints out with the board; past its seconds it holds its
+        // last frame through the fade.
+        if let Some(key) = cue.frame_key_at(*ran) {
+            art(
+                &mut v,
+                Rect::new((w - fw as i32) / 2, (h - fh as i32) / 2, fw as i32, fh as i32),
+                &key,
+                [255, 255, 255, (fade * 255.0).round() as u8],
+            );
+        }
+    }
     for tint in &core.underwater {
         let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
         fill(

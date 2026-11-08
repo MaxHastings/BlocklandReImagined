@@ -473,6 +473,11 @@ pub struct Core {
     pub flashes: Vec<([f32; 4], f32, f32)>,
     /// Rules' screen overlays running, each with the seconds it has run.
     pub overlays: Vec<(bri_content::screen_overlay::Overlay, f32)>,
+    /// The rule's full-screen image (`screen_image`) and the seconds it has
+    /// run; a new cue replaces the one showing. It keeps drawing through its
+    /// fade-out past `seconds`, until `seconds + CLEAR_FADE`.
+    pub screen_image: Option<(bri_content::screen_image::ScreenImageCue, f32)>,
+
     /// `NetGraphGui` while it is on the canvas (`toggleNetGraph`).
     pub net_graph: Option<crate::models::perf::NetGraph>,
     /// The performance overlay (not in v20).
@@ -657,6 +662,7 @@ impl Core {
         self.whiteout = 0.0;
         self.flashes.clear();
         self.overlays.clear();
+        self.screen_image = None;
         self.underwater.clear();
         self.lagging = false;
         self.super_shift = false;
@@ -1721,6 +1727,7 @@ impl Ui {
             whiteout: 0.0,
             flashes: Vec::new(),
             overlays: Vec::new(),
+            screen_image: None,
             underwater: Vec::new(),
             net_graph: None,
             perf: Default::default(),
@@ -2384,6 +2391,18 @@ impl Ui {
                     }
                     c.overlays.push((overlay, 0.0));
                 }
+            }
+            UiUpdate::ScreenImage(cue) => match cue {
+                // One board at a time: the newest replaces any running.
+                Some(cue) if cue.bounded() => c.screen_image = Some((cue, 0.0)),
+                // An empty cue clears early: fade out from where it is.
+                None => {
+                    if let Some((mut running, ran)) = c.screen_image.take() {
+                        running.seconds = running.seconds.min(ran);
+                        c.screen_image = Some((running, ran));
+                    }
+                }
+                _ => {}
             }
             UiUpdate::DamageFlash(amount) => {
                 if amount.is_finite() {
@@ -3129,6 +3148,19 @@ impl Ui {
             *ran += dt_ms as f32 / 1000.0;
         }
         c.overlays.retain(|(overlay, ran)| *ran < overlay.seconds);
+        // The board holds through its seconds, then fades out over CLEAR_FADE.
+        if let Some((_, ran)) = &mut c.screen_image {
+            *ran += dt_ms as f32 / 1000.0;
+        }
+        if c
+            .screen_image
+            .as_ref()
+            .is_some_and(|(cue, ran)| {
+                *ran >= cue.seconds + bri_content::screen_image::CLEAR_FADE
+            })
+        {
+            c.screen_image = None;
+        }
         let now = c.time_ms;
         for cmd in c.repeater.due(now) {
             let (super_mode, base) = match cmd.strip_prefix("super:") {

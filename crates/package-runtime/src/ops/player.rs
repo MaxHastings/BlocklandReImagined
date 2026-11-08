@@ -87,7 +87,8 @@ impl ScriptOp for Respawn {
 
 /// Take a living player's body away without a death (`player.delete()`):
 /// nobody scores, no death line, no `on_death`. They wait to respawn as
-/// the dead do (held, if their respawn is held).
+/// the dead do (held, if their respawn is held). A body already dead goes
+/// at once too: its corpse clears now, with no poof.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoveBody {
     pub player: u64,
@@ -97,6 +98,65 @@ impl ScriptOp for RemoveBody {
     const NAME: &str = "remove_body";
     fn bounded(&self) -> bool {
         true
+    }
+}
+
+/// Show or hide a player's name tag (`set_nametag_visible`): while hidden,
+/// the client draws no tag for them, though their name still shows in the
+/// player list and chat. A bot is a player body without a connection, so
+/// it works for one too: a rule can keep its own unseen. `true` brings the
+/// tag back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetNametagVisible {
+    pub player: u64,
+    pub visible: bool,
+}
+impl ScriptOp for SetNametagVisible {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_nametag_visible";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
+/// Set a player's native light — the one the Light key toggles when no Add-On
+/// takes it (v20's `PlayerLight`, drawn at their off hand) — on or off, without
+/// asking them to press anything. An Add-On that owns the Light key for its own
+/// tool uses this so a stale native light (toggled before the package took over,
+/// or by a client on an older binary) cannot shine from one hand with the tool's
+/// own beam; as generic as the flag itself, any rule may give or take it. A bot
+/// has no connection and no native light, so this works for players only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetPlayerLight {
+    pub player: u64,
+    pub on: bool,
+}
+impl ScriptOp for SetPlayerLight {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_player_light";
+    fn bounded(&self) -> bool {
+        true
+    }
+}
+
+/// Set how hard a player's worn image lights flicker (`set_image_light_flicker`):
+/// 0 to 1, where 0 is steady and 1 fully unstable — the client dims every light
+/// their mounted images give off (a flashlight's beam and lens glow) with an
+/// irregular pulse. As generic as the flag itself: any rule can make a held or
+/// worn device stutter (an unstable tool, a dying generator). It rides in vitals,
+/// so each client flickers its own copy on its own clock; a bot has no connection
+/// and no image lights of its own, so this works for players only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetImageLightFlicker {
+    pub player: u64,
+    /// 0 to 1 (clamped on perform): how unstable the lights are.
+    pub amount: f32,
+}
+impl ScriptOp for SetImageLightFlicker {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_image_light_flicker";
+    fn bounded(&self) -> bool {
+        self.amount.is_finite()
     }
 }
 
@@ -765,6 +825,50 @@ impl ScriptOp for KickView {
     }
 }
 
+/// Ease a player's own view toward a world point and hold it there while
+/// active: an Add-On drawing their gaze at something (an entity that wants
+/// to be looked at), turning it at most `rate` degrees a second. The client
+/// recomputes the direction from its own eye each frame, so a moving target
+/// needs no re-aiming by the host; player input competes with the pull and
+/// wins while they look away on purpose. No point clears it, leaving the
+/// view exactly where it is. While active, `grip` scales their look
+/// sensitivity — a heavy aim that makes looking away a struggle — and
+/// `fov_delta` dollies their camera in or out; both are temporary, restored
+/// by the clear with the pull.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SteerView {
+    pub player: u64,
+    /// The world point to draw their gaze toward; `None` clears the pull.
+    pub at: Option<[f32; 3]>,
+    /// How fast the pull turns the view, degrees a second (0 to 180).
+    pub rate: f32,
+    /// The look-sensitivity share while the pull is active (0.1 to 1):
+    /// below 1 their aim feels heavy, so fighting it off is a struggle;
+    /// never less than one tenth of normal. Cleared with the pull.
+    #[serde(default = "steer_grip_default")]
+    pub grip: f32,
+    /// A temporary FOV offset in degrees (-30 to +10) that rides the pull —
+    /// negative dollies in for a close-up. Cleared with the pull.
+    #[serde(default)]
+    pub fov_delta: f32,
+}
+fn steer_grip_default() -> f32 {
+    1.0
+}
+impl ScriptOp for SteerView {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "steer_view";
+    fn bounded(&self) -> bool {
+        self.at.is_none_or(|p| finite(&p))
+            && self.rate.is_finite()
+            && (0.0..=180.0).contains(&self.rate)
+            && self.grip.is_finite()
+            && (0.1..=1.0).contains(&self.grip)
+            && self.fov_delta.is_finite()
+            && (-30.0..=10.0).contains(&self.fov_delta)
+    }
+}
+
 /// Put another image in a player's hand, keeping their tool slot
 /// (`mountImage`): a scope, a second fire mode. `None` puts back the
 /// selected tool's own image.
@@ -809,12 +913,15 @@ impl ScriptOp for Emote {
     }
 }
 
-/// Put an image in a worn slot (2 or 3) of a player, tinted with a
-/// palette colour (`mountImage(%image, 3)`: a flag on the back), or
-/// take it off with `None`. With `keep`, no other package replaces or
-/// takes off that image while it is worn (Slayer CTF's
-/// `Player::mountImage` and `unMountImage` overrides, which guard the
-/// flag).
+/// Put an image in a worn slot of a player — the off hand (`1`, beside the
+/// held tool: an akimbo gun's left, or a kept flashlight) or on the body
+/// (`2` or `3`, a flag on the back), tinted with a palette colour
+/// (`mountImage(%image, 3)`), or take it off with `None`. In slot 1, with
+/// `keep`, the image comes back after every tool switch that empties the
+/// hand (an off-hand flashlight stays mounted while they swap tools); in
+/// any slot, no other package replaces or takes off a kept image while it is
+/// worn (Slayer CTF's
+/// `Player::mountImage` and `unMountImage` overrides, which guard the flag).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WearImage {
     pub player: u64,
@@ -829,7 +936,7 @@ impl ScriptOp for WearImage {
     const NAME: &str = "mount_image";
     fn bounded(&self) -> bool {
         let WearImage { slot, image, .. } = self;
-        (2..=3).contains(slot)
+        (1..=3).contains(slot)
             && image
                 .as_deref()
                 .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image")))
@@ -1056,5 +1163,22 @@ mod speed_modifier_tests {
         let op = |key: &str, scale: f32| SetSpeedModifier { player: 1, key: key.into(), scale }.bounded();
         assert!(op("lock", 0.0) && op("lock", 4.0));
         assert!(!op("lock", 4.5) && !op("lock", -0.1) && !op("lock", f32::NAN) && !op("Lock", 1.0));
+    }
+}
+
+#[cfg(test)]
+mod steer_view_tests {
+    use super::*;
+    #[test]
+    fn rate_grip_and_fov_delta_are_bounded() {
+        let op = |rate: f32, grip: f32, fov: f32| {
+            SteerView { player: 1, at: Some([0.0; 3]), rate, grip, fov_delta: fov }.bounded()
+        };
+        assert!(op(45.0, 1.0, 0.0));
+        assert!(op(6.0, 0.35, -18.0));
+        assert!(op(45.0, 0.1, 0.0) && op(45.0, 0.24, 0.0));   // the floor is one tenth
+        assert!(!op(180.1, 1.0, 0.0) && !op(-0.1, 1.0, 0.0) && !op(f32::NAN, 1.0, 0.0));
+        assert!(!op(45.0, 0.09, 0.0) && !op(45.0, 1.01, 0.0) && !op(45.0, f32::NAN, 0.0));
+        assert!(!op(45.0, 1.0, -30.1) && !op(45.0, 1.0, 10.1) && !op(45.0, 1.0, f32::INFINITY));
     }
 }

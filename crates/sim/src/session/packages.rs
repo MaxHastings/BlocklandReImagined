@@ -1299,6 +1299,50 @@ impl Session {
             None => PlayerKey::session(owner),
         }
     }
+    /// Other Add-Ons' server-visible per-player state, for the `state_of`
+    /// query: by package id, then peer id, then key. Only keys the author
+    /// marked visible "server" appear — owner- and everyone-visible values
+    /// stay private to their own package's client sync, so a secret stays
+    /// one if its author marks it `visible: "owner"`.
+    fn peer_state_view(
+        &self,
+        host: Option<&PackageHost>,
+    ) -> BTreeMap<String, BTreeMap<u64, BTreeMap<String, serde_json::Value>>> {
+        let mut out = BTreeMap::new();
+        let Some(host) = host else { return out };
+        for (id, behaviour) in host.catalog.behaviours() {
+            let server_keys: Vec<&String> = behaviour
+                .state
+                .player
+                .iter()
+                .filter(|(_, k)| k.visible == Visible::Server)
+                .map(|(k, _)| k)
+                .collect();
+            if server_keys.is_empty() {
+                continue;
+            }
+            for (owner, _) in self.peers.iter() {
+                let key = self.player_key(*owner);
+                let Some(values) = host
+                    .store
+                    .namespace(id)
+                    .and_then(|ns| ns.players.get(&key))
+                else {
+                    continue;
+                };
+                let mut entry = BTreeMap::new();
+                for k in &server_keys {
+                    if let Some(v) = values.get(k.as_str()) {
+                        entry.insert((*k).clone(), v.clone());
+                    }
+                }
+                if !entry.is_empty() {
+                    out.entry(id.clone()).or_default().insert(*owner, entry);
+                }
+            }
+        }
+        out
+    }
     pub(super) fn package_vars(&self, package: &str) -> script::EntityVars {
         self.packages
             .as_ref()
@@ -1363,6 +1407,7 @@ impl Session {
                 .map(|g| g.0),
             eye: p.player.eye().to_array(),
             look: p.player.state().forward().to_array(),
+            true_look: p.player.state().forward_view().to_array(),
             camera: camera.eye,
             camera_yaw: camera.yaw,
             camera_pitch: camera.pitch,
@@ -1418,6 +1463,7 @@ impl Session {
             bot_brick: bot_spawn.map(|(id, _)| id),
             bot_spawn_team: bot_spawn.and_then(|(_, team)| team).map(u64::from),
             spawner: self.bots.rules_package(owner).map(str::to_owned),
+            voice_muted: p.voice_muted,
             riding: self.riding_seat(owner),
             magazine: self.weapons.ammo(bri_weapons::ActorId(owner)).map(|m| {
                 bri_package_runtime::script::MagazineView {
@@ -1513,6 +1559,15 @@ impl Session {
             holds: self.hold_views(),
             minigames: self.script_minigames(),
             tethers: self.tether_views(),
+            package_ids: host
+                .map(|h| {
+                    h.catalog
+                        .behaviours()
+                        .map(|(id, _)| id.clone())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            peer_state: self.peer_state_view(host.map(|v| &**v)),
         }
     }
     /// Initialize declared per-player state for an actual participant without
@@ -3618,6 +3673,17 @@ impl Session {
             owner,
             |b| b.on_drop_key,
             "on_drop_key",
+            vec![Dynamic::from_int(owner as i64)],
+        )
+    }
+    /// `on_light(player)` of every package that declares it, in load
+    /// order, until one takes the light key (returns `true`). Bots have no
+    /// light key to take.
+    pub(super) fn package_light(&mut self, owner: OwnerId) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_light,
+            "on_light",
             vec![Dynamic::from_int(owner as i64)],
         )
     }

@@ -167,6 +167,13 @@ impl App {
             .advance_body_camera(elapsed.as_secs_f32(), ground_speed, grounded);
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
+        // A rule's view pull (`steer_view`) runs from the eye drawn this
+        // frame: the posed one while riding or sitting, else the smoothed
+        // predicted eye.
+        self.controls.advance_view_steer(
+            elapsed.as_secs_f32(),
+            self.mounts.posed_eye.or(self.motion.local_eye()),
+        );
         let span = crate::frame_trace::span("local game");
         let advanced = self.advance_local_game(alive, game_elapsed);
         drop(span);
@@ -1351,13 +1358,60 @@ impl App {
                     view.weapons.images.get(owner).map(Vec::as_slice),
                 );
                 // A hand holding a tool lets go of the wheel grip it would
-                // otherwise hold; stowing the tool resumes the grip.
+                // otherwise hold; stowing the tool resumes the grip. An
+                // aim-locked image (a flashlight) re-poses its own hand
+                // toward the view instead, unless a seat control owns that
+                // hand already.
                 let held_pose = if dead {
                     self.combat.hugging.remove(owner);
                     crate::avatar::HeldToolPose::None
                 } else {
                     self.combat.hug_pose(*owner, held)
                 };
+                let mut seat_holds = self.mounts.rider_hands.get(owner).copied().filter(|_| !dead).unwrap_or_default();
+                if !dead {
+                    if let Some(images) = view.weapons.images.get(owner) {
+                        for mounted in images {
+                            let hand = usize::from(mounted.hand);
+                            if hand >= 2 || seat_holds[hand].is_some() {
+                                continue;
+                            }
+                            let Some(axis) = self
+                                .content
+                                .weapons
+                                .pack
+                                .images
+                                .get(&mounted.image)
+                                .and_then(|image| image.aim_lock_axis)
+                            else {
+                                continue;
+                            };
+                            let Some(barrel) =
+                                self.world_items.assets().aim_lock_barrel(&mounted.image, axis)
+                            else {
+                                continue;
+                            };
+                            // Where this holder aims: the body's aim without
+                            // held free-look, so Free Look never twists an
+                            // aim-locked hand through the arm.
+                            let look_dir = if *owner == view.owner {
+                                let (yaw, pitch) = self.controls.action_angles();
+                                glam::Quat::from_rotation_y(-yaw)
+                                    * glam::Quat::from_rotation_x(pitch)
+                                    * glam::Vec3::NEG_Z
+                            } else {
+                                glam::Quat::from_rotation_y(-(player.yaw + player.head_yaw))
+                                    * glam::Quat::from_rotation_x(player.pitch)
+                                    * glam::Vec3::NEG_Z
+                            };
+                            if let Some(hold) = self.avatar.avatars.get_mut(owner).unwrap().aim_lock_hold(
+                                &self.avatar.avatar_assets, hand, barrel, look_dir,
+                            ) {
+                                seat_holds[hand] = Some(hold);
+                            }
+                        }
+                    }
+                }
                 let input = crate::avatar::AvatarAnimationInput {
                     seat_ready,
                     seat_fallback_hip: mounted_seat
@@ -1372,14 +1426,7 @@ impl App {
                         .cloned()
                         .filter(|_| !dead)
                         .unwrap_or_default(),
-                    hand_holds: held_pose.release_seat_holds(
-                        self.mounts
-                            .rider_hands
-                            .get(owner)
-                            .copied()
-                            .filter(|_| !dead)
-                            .unwrap_or_default(),
-                    ),
+                    hand_holds: held_pose.release_seat_holds(seat_holds),
                     support,
                     held_tool_pose: held_pose,
                     action: self
@@ -1721,6 +1768,7 @@ impl App {
                 Some(building),
                 weapons,
                 game_elapsed.as_secs_f32(),
+                |owner| view.vitals.get(&owner).map(|v| v.image_light_flicker).unwrap_or(0.),
             );
             self.cosmetic_faults.absorb("weapon effects", parts);
             for (profile, point, seed) in self.fx.weapon_effects.take_contact_audio(|impact| {

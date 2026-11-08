@@ -1507,6 +1507,30 @@ impl ItemAssets {
             })
             .collect()
     }
+    /// The direction an image's `aim_lock_axis` points at in the frame of its
+    /// hand mount when the arm is at rest: the axis through the image's source
+    /// rotation and its model's `mountPoint`, undone, as [`bri_weapons::muzzle`]
+    /// undoes them for a muzzle. None for an unknown image or a degenerate axis.
+    pub fn aim_lock_barrel(&self, id: &str, axis: [f32; 3]) -> Option<Vec3> {
+        let image = self.presentation.images.get(id)?;
+        let shape = (!image.model.is_empty())
+            .then(|| self.shape(&image.model).ok())
+            .flatten();
+        let in_hand = source_euler(image.source_rotation_degrees);
+        let correction = shape
+            .and_then(|shape| {
+                shape
+                    .nodes
+                    .iter()
+                    .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
+                    .map(|i| bind_node(shape, i).inverse())
+            })
+            .unwrap_or(Mat4::IDENTITY);
+        let (_, correction_rotation, _) = correction.to_scale_rotation_translation();
+        let direction = (in_hand * correction_rotation) * Vec3::from(axis);
+        (direction.is_finite() && direction.length_squared() > 1e-6)
+            .then(|| direction.normalize())
+    }
     /// Where the off hand holds image `id` when it is held in both hands,
     /// in the frame of the hand holding it ([`bri_weapons::muzzle::support`]).
     pub fn image_support(&self, id: &str) -> Option<Vec3> {
@@ -2365,6 +2389,25 @@ fn euler_to_matrix_images(
 }
 pub(crate) fn source_euler(degrees: [f32; 3]) -> Quat {
     bri_weapons::rotation::native(degrees)
+}
+
+/// Node `i`'s rest transform in the shape's frame (its bind pose): its own
+/// transform over its ancestors', nearest first.
+fn bind_node(shape: &bri_content::shape::Shape, mut node: usize) -> Mat4 {
+    let count = shape.nodes.len();
+    let mut transform = Mat4::IDENTITY;
+    for _ in 0..count {
+        let n = &shape.nodes[node];
+        transform = Mat4::from_rotation_translation(
+            Quat::from_array(n.rotation).normalize(),
+            Vec3::from(n.translation),
+        ) * transform;
+        match n.parent {
+            Some(p) if p < count => node = p,
+            _ => break,
+        }
+    }
+    transform
 }
 
 #[cfg(test)]

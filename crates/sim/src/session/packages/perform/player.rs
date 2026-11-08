@@ -118,6 +118,34 @@ impl Perform for ops::RemoveBody {
         session.remove_body(player)
     }
 }
+impl Perform for ops::SetNametagVisible {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetNametagVisible { player, visible } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        peer.nametag_hidden = !visible;
+        Ok(())
+    }
+}
+impl Perform for ops::SetPlayerLight {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetPlayerLight { player, on } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        // The flag rides in vitals as `light` does for the Light key's own
+        // toggle; a rule may set it either way without asking them to press.
+        peer.combat.light = on;
+        Ok(())
+    }
+}
+impl Perform for ops::SetImageLightFlicker {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetImageLightFlicker { player, amount } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        // 0 to 1 (steady to fully unstable); it rides in vitals so each client
+        // flickers its own copy of the player's image lights on its own clock.
+        peer.combat.image_light_flicker = amount.clamp(0., 1.);
+        Ok(())
+    }
+}
 impl Perform for ops::Control {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
@@ -360,7 +388,7 @@ impl Perform for ops::WearImage {
             );
         }
         let kept = keep && image.is_some();
-        session.weapons.wear(actor, slot, image.as_deref(), paint)?;
+        session.weapons.wear(actor, slot, image.as_deref(), paint, keep)?;
         let host = session
             .packages
             .as_mut()
@@ -664,6 +692,14 @@ impl Perform for ops::KickView {
         let ops::KickView { player, pitch, yaw } = self;
         ensure!(session.peers.contains_key(&player), "No such player");
         session.notify(player, Notice::ViewKick { pitch, yaw });
+        Ok(())
+    }
+}
+impl Perform for ops::SteerView {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SteerView { player, at, rate, grip, fov_delta } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session.notify(player, Notice::SteerView { at, rate, grip, fov_delta });
         Ok(())
     }
 }

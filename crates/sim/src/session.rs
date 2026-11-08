@@ -923,6 +923,13 @@ struct Peer {
     /// Seated by the sit emote until they move, mount or die. Lasting state,
     /// so it replicates in vitals and late joiners see it.
     sitting: bool,
+    /// An Add-On hides this body's name tag (`set_nametag_visible`); the
+    /// flag rides in vitals, as `sitting` does.
+    nametag_hidden: bool,
+    /// An Add-On marks this body exempt from NPC reaction sounds
+    /// (`set_bot_voice_muted`): reaction Add-Ons read it through the player
+    /// views before cueing a line or sound for it. Server-side only.
+    voice_muted: bool,
     /// The unplanted ghost brick the client last reported (`tempBrick`).
     ghost: Option<GhostBrick>,
     /// `lastActivateTime` and `activateLevel` for the activate swing.
@@ -994,6 +1001,8 @@ impl Peer {
             fx_can: None,
             talking: false,
             sitting: false,
+            nametag_hidden: false,
+            voice_muted: false,
             ghost: None,
             input: MoveInput::default(),
             inputs: VecDeque::new(),
@@ -1510,7 +1519,7 @@ impl Session {
         trusted_host: bool,
         principal: Option<bri_admin::Principal>,
     ) -> Result<OwnerId> {
-        self.join_inner(name, spawn, trusted_host, false, principal)
+        self.join_inner(name, spawn, trusted_host, false, principal, false)
     }
     /// Replace the host's Server Settings (v20's `$Pref::Server::*`); the
     /// same as the host's Admin > Server Settings. Tests and tools that plant
@@ -1629,6 +1638,9 @@ impl Session {
         self.system_chat(format!("{old} is now known as {name}."));
         Ok(())
     }
+    /// `rules_placed`: a bot Add-On rules placed this tick — it enters
+    /// without a player-join presentation (no spawn poof; its own script
+    /// plays one where it wants).
     fn join_inner(
         &mut self,
         name: String,
@@ -1636,6 +1648,7 @@ impl Session {
         trusted_host: bool,
         is_bot: bool,
         principal: Option<bri_admin::Principal>,
+        rules_placed: bool,
     ) -> Result<OwnerId> {
         let admitted = self.admit(name, trusted_host, is_bot, principal)?;
         let owner = admitted.owner;
@@ -1654,6 +1667,7 @@ impl Session {
             is_bot,
             (player, combat),
             Greeting::Whole,
+            rules_placed,
         )?;
         Ok(owner)
     }
@@ -1752,6 +1766,7 @@ impl Session {
         is_bot: bool,
         (player, combat): (Player, combat::Combat),
         greeting: Greeting,
+        rules_placed: bool,
     ) -> Result<()> {
         let Admitted {
             owner,
@@ -1777,7 +1792,7 @@ impl Session {
         // A fresh join replaces the dropped connection it took the number from.
         self.departed.remove(&owner);
         self.abandoned_at.remove(&owner);
-        self.enter_world(owner)?;
+        self.enter_world(owner, rules_placed)?;
         if !is_bot {
             self.greet(owner, &name, role, trusted_host, greeting);
         }
@@ -1943,6 +1958,7 @@ impl Session {
             false,
             body,
             Greeting::Spawned,
+            false,
         )?;
         // What they said while loading still counts against their pace.
         if let Some(peer) = self.peers.get_mut(&owner) {
@@ -2244,7 +2260,7 @@ impl Session {
         );
         self.departed.remove(&owner);
         self.abandoned_at.remove(&owner);
-        self.enter_world(owner)?;
+        self.enter_world(owner, false)?;
         self.announce(owner, "connected.", "ClientJoinSound");
         self.refresh_trust();
         self.packages_joined(owner);
@@ -2719,6 +2735,12 @@ impl Session {
                     return Ok(Reply::Accepted);
                 }
                 if self.toggle_vehicle_lights(owner) {
+                    return Ok(Reply::Accepted);
+                }
+                // A rule may take the light key for its own (v20 Add-Ons
+                // packaged `serverCmdLight` this way, at the back of their
+                // package stack: an off-hand flashlight).
+                if self.package_light(owner) {
                     return Ok(Reply::Accepted);
                 }
                 self.package_policy("light", owner)?;

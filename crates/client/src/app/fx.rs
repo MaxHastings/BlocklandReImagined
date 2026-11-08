@@ -603,6 +603,7 @@ impl App {
             None,
             view,
             elapsed,
+            |_| 0.,
         )
     }
     pub(super) fn update_weapon_effect_parts(
@@ -612,18 +613,24 @@ impl App {
         building: Option<&crate::building::Building>,
         view: &bri_sim::session::WeaponView,
         elapsed: f32,
+        flicker: impl Fn(u64) -> f32,
     ) -> Result<()> {
         weapon_effects.sync(view)?;
-        weapon_effects.sync_image_lights(view, |owner, hand| {
-            world_items.mounted_transform(owner, hand).map(|m| {
-                let (_, rotation, position) = m.to_scale_rotation_translation();
-                bri_fx_runtime::SourceTransform {
-                    position,
-                    rotation,
-                    velocity: Vec3::ZERO,
-                }
-            })
-        })?;
+        weapon_effects.sync_image_lights(
+            view,
+            |owner, hand| {
+                world_items.mounted_transform(owner, hand).map(|m| {
+                    let (_, rotation, position) = m.to_scale_rotation_translation();
+                    bri_fx_runtime::SourceTransform {
+                        position,
+                        rotation,
+                        velocity: Vec3::ZERO,
+                    }
+                })
+            },
+            &flicker,
+            elapsed,
+        )?;
         let elapsed = elapsed.min(0.25);
         for (_, age) in weapon_cues.iter_mut() {
             *age += elapsed;

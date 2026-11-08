@@ -945,6 +945,9 @@ fn name_tags(
         let style = style.unwrap_or(&stock);
         if (*owner == view.owner && controlling_body)
             || !view.vitals.get(owner).is_some_and(|v| v.alive)
+            // An Add-On hides this body's tag (`set_nametag_visible`):
+            // its name still shows in lists and chat, just not overhead.
+            || view.vitals.get(owner).is_some_and(|v| v.nametag_hidden)
         {
             continue;
         }

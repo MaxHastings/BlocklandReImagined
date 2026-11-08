@@ -418,6 +418,117 @@ fn listening_to_an_add_on_not_depended_on_is_refused_at_load() {
 }
 
 #[test]
+fn a_rule_reads_another_add_ons_server_visible_state_and_loaded_flags() {
+    // `radio` keeps one server-visible and one owner-visible per-player key;
+    // `spy` reads them cross-package with package_loaded / state_of.
+    let root = temp_root();
+    let counter = json!({ "default": 0, "visible": "everyone" });
+    package(
+        &root,
+        "radio",
+        json!({}),
+        json!({
+            "commands": [{ "name": "switch" }],
+            "state": { "player": {
+                "on":     { "default": true, "visible": "server" },
+                "secret": { "default": "",   "visible": "owner"  }
+            } }
+        }),
+        r#"
+fn cmd_switch(p) { set_player(p, "on", !get_player(p, "on")); }
+"#,
+    );
+    package(
+        &root,
+        "spy",
+        json!({}),
+        json!({
+            "commands": [{ "name": "check" }],
+            "state": { "global": {
+                "loaded_radio": counter, "loaded_missing": counter,
+                "saw_on": counter, "saw_secret": counter
+            } }
+        }),
+        r#"
+fn cmd_check(p) {
+    set("loaded_radio", if package_loaded("radio") { 1 } else { 0 });
+    set("loaded_missing", if package_loaded("no_such_addon") { 1 } else { 0 });
+    let on = state_of("radio", p, "on");
+    set("saw_on", if on == true { 1 } else { 0 });
+    // Owner-visible values stay private to their own package's client sync.
+    let secret = state_of("radio", p, "secret");
+    set("saw_secret", if secret == () { 0 } else { 1 });
+}
+"#,
+    );
+    let catalog = Arc::new(load(&root, &["radio", "spy"]).unwrap_or_else(|e| panic!("{e:#?}")));
+    let mut s = Session::new(
+        Simulation::new(
+            World::new("Interop".into(), "interop".into(), vec![[1.0; 4]]),
+            Definitions::default(),
+            vec![
+                ColliderBuilder::cuboid(100.0, 0.5, 100.0)
+                    .translation(Vector::new(0.0, -0.5, 0.0))
+                    .user_data(u128::MAX),
+            ],
+        )
+        .unwrap(),
+    );
+    s.install_packages(catalog, None).unwrap();
+    let p = s.join("P".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
+
+    fn check(s: &mut Session, p: OwnerId, seq: &mut u64) {
+        *seq += 1;
+        s.command(
+            p,
+            *seq,
+            Command::Package(PackageCommand {
+                package: "spy".into(),
+                command: "check".into(),
+                // No declared args: the caller's own id is prepended to cmd_*.
+                args: vec![],
+            }),
+        )
+        .unwrap();
+    }
+    let mut seq = 0u64;
+
+    fn gstate(s: &Session, key: &str) -> Value {
+        s.package_state().packages["spy"]
+            .global
+            .get(key)
+            .cloned()
+            .unwrap_or(Value::Null)
+    }
+
+    // The default (true) is readable; the owner-visible key is not.
+    check(&mut s, p, &mut seq);
+    s.step().unwrap();
+    assert_eq!(gstate(&s, "loaded_radio"), json!(1));
+    assert_eq!(gstate(&s, "loaded_missing"), json!(0));
+    assert_eq!(gstate(&s, "saw_on"), json!(1), "server-visible key unreadable");
+    assert_eq!(gstate(&s, "saw_secret"), json!(0), "owner-visible key leaked");
+
+    // A flip is visible on the next tick; an unset value reads as ().
+    seq += 1;
+    s.command(
+        p,
+        seq,
+        Command::Package(PackageCommand {
+            package: "radio".into(),
+            command: "switch".into(),
+            // No declared args: the caller's own id is prepended to cmd_*.
+            args: vec![],
+        }),
+    )
+    .unwrap();
+    s.step().unwrap();
+    check(&mut s, p, &mut seq);
+    s.step().unwrap();
+    assert_eq!(gstate(&s, "saw_on"), json!(0), "stale value read across a flip");
+}
+
+#[test]
 fn an_export_without_its_function_is_refused_at_load() {
     let root = temp_root();
     package(
