@@ -1397,10 +1397,9 @@ impl App {
             _ => None,
         };
         // Administration requests never carry a gameplay aim.
-        let aim = (!matches!(command, Command::Admin(_))).then_some(bri_sim::session::ActionAim {
-            yaw: self.controls.yaw,
-            pitch: self.controls.pitch,
-        });
+        let (yaw, pitch) = self.controls.action_angles();
+        let aim = (!matches!(command, Command::Admin(_)))
+            .then_some(bri_sim::session::ActionAim { yaw, pitch });
         let dialog_request = inspection.is_some()
             || matches!(
                 action,

@@ -19,6 +19,23 @@ fn frame(app: &mut App, previous: &mut Instant) -> Result<()> {
     app.tick(elapsed)?;
     app.ui.update(elapsed.as_millis() as u64);
     ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+    // A LAN host's OS firewall question is unrelated to item motion. Decline
+    // it without invoking a native permission prompt; any other dialog is a
+    // real failure rather than a silently swallowed gameplay error.
+    if let Some(screen) = app.ui.screen(ScreenId::MessageBox) {
+        let view = screen.view();
+        ensure!(
+            view.walk()
+                .any(|n| view.text_of(n).contains("Windows Firewall would stop")),
+            "Unexpected dialog: {:?}",
+            view.nodes
+                .iter()
+                .filter_map(|n| n.state.text.as_ref())
+                .collect::<Vec<_>>()
+        );
+        app.ui.core.pop(ScreenId::MessageBox);
+        app.ui.update(0);
+    }
     if let ConnectionState::Failed { reason } = &app.ui.core.conn {
         anyhow::bail!("App connection failed: {reason}");
     }

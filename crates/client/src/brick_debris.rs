@@ -44,6 +44,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::f32::consts::FRAC_PI_2;
 mod foley;
 mod sections;
+pub use sections::{ChunkSnapshot, SectionSnapshot};
 use sections::{Section, SectionPiece};
 
 /// The limit a player who never chose gets: v20's default Physics Quality,
@@ -262,6 +263,9 @@ struct CosmeticBlast {
 
 #[derive(Clone, Debug, Default)]
 pub struct BrickDebrisDiagnostics {
+    pub section_preparation_work: u64,
+    pub section_motion_work: u64,
+    pub section_fallback_steps: u64,
     pub accepted: u64,
     pub duplicates: u64,
     /// Cues for bricks this client has no definition for.
@@ -297,8 +301,10 @@ pub struct BrickDebris {
     retired_sections: BTreeSet<(u64, u64)>,
     section_shots: sections::shots::Queries,
     section_turn: usize,
+    section_collision_turn: usize,
     body_turn: usize,
     surroundings: Surroundings,
+    collision_query_revision: u64,
     foley: foley::Foley,
     /// Bricks this client saw die that have not come back yet.
     dead: BTreeSet<BrickId>,
@@ -337,8 +343,10 @@ impl BrickDebris {
             retired_sections: BTreeSet::new(),
             section_shots: Default::default(),
             section_turn: 0,
+            section_collision_turn: 0,
             body_turn: 0,
             surroundings: Surroundings::default(),
+            collision_query_revision: 0,
             foley: Default::default(),
             dead: BTreeSet::new(),
             cursor: 0,
@@ -608,6 +616,7 @@ impl BrickDebris {
                 members,
                 half: section_half,
                 pivot,
+                impulse,
             } = death
             {
                 self.surroundings.forget_brick(&mut self.world, *brick);
@@ -615,6 +624,7 @@ impl BrickDebris {
                     .entry((*started, *group))
                     .or_default()
                     .push(SectionPiece {
+                        impulse: *impulse,
                         brick: *brick,
                         cue: cue.id,
                         look,

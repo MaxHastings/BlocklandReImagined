@@ -431,7 +431,7 @@ impl Session {
                 // with movement back, hold it again, as automatic fire was.
                 Some(Trigger {
                     down: true,
-                    direction: peer.player.state().forward(),
+                    direction: peer.action_direction(),
                     aimed: false,
                     repress: false,
                     ready_by: None,
@@ -473,7 +473,7 @@ impl Session {
             let direction = match (trigger, triggers.click_aim) {
                 (Some(t), _) => t.direction,
                 (None, Some((aim, _))) => aim,
-                (None, None) => state.forward(),
+                (None, None) => peer.action_direction(),
             };
             let eye = peer.player.eye();
             // Each hand's shots leave the muzzle of the image in it, as the

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "script": "main.rhai",
+  "on_vehicle_lights": true,
+  "state": {
+    "global": {
+      "log": { "default": [], "visible": "everyone" }
+    }
+  }
+}

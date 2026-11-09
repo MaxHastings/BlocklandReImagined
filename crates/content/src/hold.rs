@@ -42,6 +42,25 @@ fn at(nodes: &[Mat4], i: usize) -> Vec3 {
     nodes[i].w_axis.truncate()
 }
 
+/// Rotate every node in the subtree rooted at `root` about point `about` by
+/// `by`, model space: the root and everything below it turn; nothing above.
+pub fn turn_subtree(
+    parents: &[Option<usize>],
+    nodes: &mut [Mat4],
+    root: usize,
+    about: Vec3,
+    by: Quat,
+) {
+    let count = nodes.len();
+    if root >= count || parents.len() != count || !by.is_finite() {
+        return;
+    }
+    let m = Mat4::from_translation(about) * Mat4::from_quat(by) * Mat4::from_translation(-about);
+    for i in (0..count).filter(|&i| i == root || ancestors(parents, i).contains(&root)) {
+        nodes[i] = m * nodes[i];
+    }
+}
+
 /// Of the arm, the (shoulder, elbow) pair giving the most even upper and
 /// lower arm, with the shorter of the two.
 fn even_pair(nodes: &[Mat4], arm: &[usize], end: usize) -> Option<(usize, usize, f32)> {
@@ -83,21 +102,6 @@ pub fn reach(
         return;
     }
     let arm = arm(parents, end, landmark);
-    let under = |root: usize| -> Vec<usize> {
-        (0..count)
-            .filter(|&i| i == root || ancestors(parents, i).contains(&root))
-            .collect()
-    };
-    let turn = |nodes: &mut [Mat4], root: usize, about: Vec3, by: Quat| {
-        if !by.is_finite() {
-            return;
-        }
-        let m =
-            Mat4::from_translation(about) * Mat4::from_quat(by) * Mat4::from_translation(-about);
-        for i in under(root) {
-            nodes[i] = m * nodes[i];
-        }
-    };
     let end_at = at(nodes, end);
     let best = even_pair(nodes, &arm, end);
     let two_bone = best.filter(|&(root, mid, even)| {
@@ -117,13 +121,22 @@ pub fn reach(
                 .clamped(-1.0, 1.0)
                 .acos();
             let (u, v) = ((s - e).normalize(), (h - e).normalize());
-            let current = u.dot(v).clamped(-1.0, 1.0).acos();
-            let axis = [u.cross(v), u.cross(target - s), Vec3::NEG_X]
+            // atan2 keeps precision near a straight elbow. If the arm and
+            // target are collinear, bending must still use a perpendicular
+            // axis; a fixed world axis changes the solved reach length.
+            let current = u.cross(v).length().atan2(u.dot(v));
+            let axis = [u.cross(v), u.cross(target - s), u.any_orthonormal_vector()]
                 .into_iter()
                 .find(|k| k.length_squared() > 1e-8)
                 .unwrap_or(Vec3::NEG_X)
                 .normalize();
-            turn(nodes, mid, e, Quat::from_axis_angle(axis, want - current));
+            turn_subtree(
+                parents,
+                nodes,
+                mid,
+                e,
+                Quat::from_axis_angle(axis, want - current),
+            );
             root
         }
         None => match best.map(|(root, _, _)| root).or(arm.last().copied()) {
@@ -134,7 +147,8 @@ pub fn reach(
     let s = at(nodes, shoulder_node);
     let (from, to) = (at(nodes, end) - s, target - s);
     if from.length_squared() > 1e-8 && to.length_squared() > 1e-8 {
-        turn(
+        turn_subtree(
+            parents,
             nodes,
             shoulder_node,
             s,

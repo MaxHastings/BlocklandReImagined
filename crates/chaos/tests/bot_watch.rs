@@ -169,7 +169,35 @@ fn secs(t: u64, t0: u64) -> f32 {
 #[test]
 #[ignore = "watching tool: needs generated content and a real save"]
 fn watch_bots_play_a_real_save() -> Result<()> {
+    watch(Check::Trace)
+}
+
+#[test]
+#[ignore = "needs regenerated content, saved Add-On choices and the private Beta16 zombie tower save"]
+fn saved_tower_zombies_pursue_the_stationary_host() -> Result<()> {
+    watch(Check::Tower)
+}
+
+#[test]
+#[ignore = "needs regenerated content, saved choices and a private Bedroom zombie traversal save"]
+fn saved_bedroom_zombies_navigate_and_kill_the_stationary_host() -> Result<()> {
+    watch(Check::Pursuit)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Check {
+    Trace,
+    Tower,
+    Pursuit,
+}
+
+fn watch(check: Check) -> Result<()> {
+    let require_tower_pursuit = check == Check::Tower;
     let Some(save) = env("BRI_WATCH_SAVE") else {
+        anyhow::ensure!(
+            check == Check::Trace,
+            "set BRI_WATCH_SAVE to the required private zombie repro"
+        );
         eprintln!("skipped: needs BRI_WATCH_SAVE");
         return Ok(());
     };
@@ -439,6 +467,12 @@ fn watch_bots_play_a_real_save() -> Result<()> {
     );
 
     let t0 = s.simulation().state().tick;
+    let mut expected_bots: BTreeSet<_> = s.bot_thoughts().iter().map(|b| b.bot).collect();
+    let mut host_killed_by_bot = false;
+    let mut bot_uncredited_deaths = 0;
+    let mut observation_deadlines = BTreeMap::new();
+    let mut first_walk = BTreeMap::new();
+    let mut reacquired_on_host_floor = BTreeMap::new();
     let mut tracks: BTreeMap<OwnerId, Track> = BTreeMap::new();
     let mut moments: Vec<Moment> = vec![];
     let mut seen_shots = BTreeSet::new();
@@ -461,6 +495,8 @@ fn watch_bots_play_a_real_save() -> Result<()> {
     let mut tick_log = env("BRI_WATCH_TICKS")
         .map(|_| std::fs::File::create(out.join("ticks.jsonl")).map(std::io::BufWriter::new))
         .transpose()?;
+    let mut route_log = std::io::BufWriter::new(std::fs::File::create(out.join("routes.jsonl"))?);
+    let mut route_heads = BTreeMap::new();
     let floor = brick_points
         .iter()
         .map(|p| p[1])
@@ -485,6 +521,11 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             s.bot_thoughts().into_iter().map(|t| (t.bot, t)).collect();
         let view = s.weapon_view();
         let alive = |o: &OwnerId| vitals.get(o).is_some_and(|v| v.alive);
+        // Saved spawn events may admit their actors after the initial tick.
+        // Capture every pursuer during the host's first ordinary life.
+        if alive(&host) && !host_killed_by_bot {
+            expected_bots.extend(thoughts.keys().copied());
+        }
         let team = |o: &OwnerId| vitals.get(o).and_then(|v| v.team);
         let names = s.names();
         let name = |o: &OwnerId| names.get(o).cloned().unwrap_or_else(|| format!("#{o}"));
@@ -501,6 +542,34 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         for (bot, th) in &thoughts {
             let Some(st) = states.get(bot) else { continue };
             let feet = Vec3::from(st.feet);
+            let head = th.next.map(|p| p.map(f32::to_bits));
+            if route_heads.insert(*bot, head) != Some(head) {
+                let route: Vec<_> = s.bot_route(*bot).unwrap_or(&[]).iter().map(|w| {
+                    serde_json::json!({"feet":w.feet.to_array(), "mode":format!("{:?}",w.mode), "jump":w.jump, "crouch":w.crouch})
+                }).collect();
+                writeln!(
+                    route_log,
+                    "{}",
+                    serde_json::json!({"t":tick-t0,"bot":bot,"at":st.feet,"route":route})
+                )?;
+            }
+
+            if th.visible == Some(host) {
+                if let Some(evidence) = &th.remembered {
+                    observation_deadlines
+                        .entry(*bot)
+                        .or_insert(evidence.expires);
+                }
+                if alive(&host)
+                    && let (Some(target), Some(tuning)) = (states.get(&host), s.player_tuning(*bot))
+                    && (feet.y - target.feet[1]).abs() <= tuning.step_height
+                {
+                    reacquired_on_host_floor.entry(*bot).or_insert(tick);
+                }
+            }
+            if th.input.forward != 0.0 || th.input.right != 0.0 {
+                first_walk.entry(*bot).or_insert(tick);
+            }
             let item = held(&view.images, *bot);
             if tick.is_multiple_of(30) {
                 let line = json!({
@@ -524,6 +593,16 @@ fn watch_bots_play_a_real_save() -> Result<()> {
                     "in": [th.input.forward, th.input.right, th.input.yaw, th.input.jump as u8, th.input.crouch as u8],
                     "goal": th.goal, "next": th.next, "steps": th.path_steps, "vis": th.visible,
                     "search": th.search_phase,
+                    "searching": th.searching, "search_nodes": th.search_nodes,
+                    "route_end": th.route_end, "route_short": th.route_short,
+                    "next_actions": th.next_actions,
+                    "next_mode": th.next_mode.map(|m| format!("{m:?}")),
+                    "grounded": st.grounded, "jump_normal":st.jump.normal, "support_actor":th.support_actor,
+                    "host_alive": alive(&host), "host_health": vitals.get(&host).map(|v| v.health),
+                    "host_at": states.get(&host).map(|s| s.feet),
+                    "nav_work": s.nav_work_counts(),
+                    "remembered": th.remembered.as_ref().map(|e| format!("{e:?}")),
+                    "why": th.why(tick),
                     "planned": th.planned.as_ref().map(|p| format!("{p:?}")), "gate": th.gate,
                     "img": view.images.get(bot).and_then(|v| v.iter().find(|m| m.hand == 0)).map(|m| m.state.clone()),
                     "spot": th.surprise.decisions.iter().find(|d| d.domain == "spot").map(|d| format!("{} {} {}", d.tick, d.chosen, d.reason)),
@@ -841,6 +920,12 @@ fn watch_bots_play_a_real_save() -> Result<()> {
             .cloned()
             .collect();
         for d in new {
+            if d.victim == host && d.killer.is_some_and(|k| expected_bots.contains(&k)) {
+                host_killed_by_bot = true;
+            }
+            if d.killer.is_none() && s.is_bot(d.victim) {
+                bot_uncredited_deaths += 1;
+            }
             last_death = last_death.max(d.tick);
             *deaths.entry(d.victim).or_default() += 1;
             let at = states
@@ -953,6 +1038,7 @@ fn watch_bots_play_a_real_save() -> Result<()> {
     for m in &moments {
         *by_kind.entry(m.kind).or_default() += 1;
     }
+    route_log.flush()?;
     let summary = json!({
         "save": save.display().to_string(),
         "seconds": seconds,
@@ -975,6 +1061,8 @@ fn watch_bots_play_a_real_save() -> Result<()> {
         "chat_lines": chat_log.len(),
         "clunk": clunk_totals.json(),
         "clunk_per_bot": tracks.iter().map(|(b, t)| (name(b), t.clunk.per_minute())).collect::<BTreeMap<_, _>>(),
+        "pursuit": {"expected_bots":expected_bots, "host_killed_by_bot":host_killed_by_bot, "bot_uncredited_deaths":bot_uncredited_deaths, "first_walk_tick":first_walk,"first_observation_expiry":observation_deadlines,
+            "reacquired_on_host_floor_tick":reacquired_on_host_floor,"started_tick":t0},
     });
     std::fs::write(
         out.join("summary.json"),
@@ -995,5 +1083,38 @@ fn watch_bots_play_a_real_save() -> Result<()> {
     std::fs::write(out.join("chat.txt"), chat_log.join("\n"))?;
     std::fs::write(out.join("bricks.json"), serde_json::to_vec(&brick_points)?)?;
     eprintln!("WATCH {}", serde_json::to_string_pretty(&summary)?);
+    if check != Check::Trace {
+        anyhow::ensure!(!expected_bots.is_empty(), "the saved repro spawned no bots");
+        anyhow::ensure!(
+            host_killed_by_bot,
+            "no pursuing bot killed the ordinary stationary host"
+        );
+        anyhow::ensure!(
+            bot_uncredited_deaths == 0,
+            "a bot fell/died without a killer during the replay"
+        );
+        for bot in expected_bots {
+            let began = first_walk
+                .get(&bot)
+                .context("a zombie never began pursuit")?;
+            let deadline = observation_deadlines
+                .get(&bot)
+                .context("a zombie never saw the host")?;
+            anyhow::ensure!(
+                began < deadline,
+                "zombie {bot} waited beyond the lifetime of its first target observation"
+            );
+            if require_tower_pursuit {
+                anyhow::ensure!(
+                    reacquired_on_host_floor.contains_key(&bot),
+                    "zombie {bot} never reached the live host's floor and reacquired the target"
+                );
+            }
+        }
+        anyhow::ensure!(
+            s.bot_step_failures().0 == 0,
+            "bot steps failed during pursuit"
+        );
+    }
     Ok(())
 }

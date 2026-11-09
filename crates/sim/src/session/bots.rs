@@ -114,6 +114,8 @@ pub struct BotThought {
     pub task: Option<BotTask>,
     pub goal: Option<[f32; 3]>,
     pub next: Option<[f32; 3]>,
+    /// The actual next traversal, including its measured takeoff and duration.
+    pub next_mode: Option<Mode>,
     /// Required jump and crouch at the next point, in that order.
     pub next_actions: Option<[bool; 2]>,
     pub path_steps: usize,
@@ -552,7 +554,7 @@ struct Brain {
     /// moving support or fall can make a new approach possible without
     /// changing the goal or body.
     path_stop: Option<(Vec3, u64)>,
-    partial_route: bool,
+    partial_route: Option<PartialRoute>,
     breach: breach::State,
     /// Where the best route home ended short of home and the bot stood at its
     /// end: going home from there is no use until it has been moved
@@ -839,7 +841,7 @@ impl Brain {
             search: None,
             settled: false,
             path_stop: None,
-            partial_route: false,
+            partial_route: None,
             breach: breach::State::default(),
             home_given_up: None,
             out_of_reach: None,
@@ -972,7 +974,7 @@ impl Brain {
             self.plan.clear();
             self.search = None;
             self.bridge = None;
-            self.partial_route = false;
+            self.partial_route = None;
             self.settled = false;
             self.path_stop = None;
             self.progress.reset();
@@ -1001,7 +1003,7 @@ impl Brain {
             }
             self.settled = false;
             self.path_stop = None;
-            self.partial_route = false;
+            self.partial_route = None;
         }
     }
     /// Head for `goal`, unless it already heads for the same kind of goal
@@ -1428,15 +1430,30 @@ fn at_work(goal: Option<Goal>, feet: Vec3, body: &Body, routed: bool, feet_only:
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PartialRoute {
+    Limited,
+    Exhausted,
+}
+
 /// A long-distance partial route can get the body moving while it replans
 /// from the nearer position. Short or backwards detours need the retained
 /// frontier instead: repeatedly restarting them can never find the way round.
-fn useful_partial_progress(feet: Vec3, target: Vec3, end: Option<Vec3>, width: f32) -> bool {
+fn useful_partial_progress(
+    feet: Vec3,
+    target: Vec3,
+    end: Option<Vec3>,
+    width: f32,
+    height: f32,
+) -> bool {
     let threshold = width * 8.0;
     end.is_some_and(|end| {
         let before = flat(target - feet).length();
         let after = flat(target - end).length();
-        before >= threshold * 2.0 && after >= threshold && before - after >= threshold
+        (before >= threshold * 2.0 && after >= threshold && before - after >= threshold)
+            // A whole body's rise toward another floor is real progress,
+            // even when the target remains close in the horizontal plane.
+            || (target.y - feet.y).abs() - (target.y - end.y).abs() >= height
     })
 }
 
@@ -1696,7 +1713,7 @@ impl Session {
             feet.z,
             brain.goal,
             brain.plan.len(),
-            if brain.partial_route {
+            if brain.partial_route.is_some() {
                 " (partial route)"
             } else {
                 ""
@@ -1709,12 +1726,14 @@ impl Session {
             },
         ));
     }
-    /// How many bot steps have failed since the session began, and the
-    /// first few failures as (bot, tick, error): a bot's step should not
-    /// fail in ordinary play, so tests read this to say none did.
-    #[doc(hidden)]
+    /// The current native route, borrowed for host diagnostics only.
+    pub fn bot_route(&self, bot: OwnerId) -> Option<&[Waypoint]> {
+        self.bots.brains.get(&bot).map(|b| b.plan.as_slice())
+    }
+
     /// Work counts for tests: (relation asks, relations derived from the
     /// live state, goof look-arounds) since the session began.
+    #[doc(hidden)]
     pub fn bot_work_counts(&self) -> (u64, u64, u64) {
         use std::sync::atomic::Ordering::Relaxed;
         (
@@ -1723,6 +1742,7 @@ impl Session {
             self.bots.goof_looks,
         )
     }
+    /// Failed steps and their first bounded diagnostic records.
     pub fn bot_step_failures(&self) -> (u64, &[(OwnerId, u64, String)]) {
         (self.bots.failed_steps, &self.bots.failures)
     }
@@ -2256,7 +2276,7 @@ impl Session {
         {
             brain.settled = false;
             brain.path_stop = None;
-            brain.partial_route = false;
+            brain.partial_route = None;
             brain.out_of_reach = None;
             brain.progress.reset();
         }
@@ -2293,6 +2313,15 @@ impl Session {
                     costs.veer = (bot << 32) ^ life | 1;
                 }
                 let search = Search::with(feet, point, SEARCH_BOUND, costs);
+                let search = if matches!(goal, Goal::Chase(_) | Goal::Search(_))
+                    && (point.y - feet.y).abs() > body.step
+                {
+                    search
+                        .prefer_goal_floor()
+                        .limited(crate::nav::EXPANSIONS_PER_TICK)
+                } else {
+                    search
+                };
                 brain.search = Some(if matches!(goal, Goal::Stand(_)) {
                     search.limited(STAND_EXPANSIONS)
                 } else {
@@ -2367,7 +2396,7 @@ impl Session {
                         && matches!(goal, Goal::Chase(_) | Goal::Search(_) | Goal::Objective(_))
                         && matches!(&found, Found::Partial(path)
                             if !useful_partial_progress(feet, point,
-                                path.last().map(|way| way.feet), body.width));
+                                path.last().map(|way| way.feet), body.width, body.height));
                     if (no_headway || pursuit) && brain.search.as_mut().unwrap().resume() {
                         return None;
                     }
@@ -2396,8 +2425,16 @@ impl Session {
                             .map_or(tick, |(_, since, _)| since);
                         brain.confined = Some((feet, since, epoch));
                     }
+                    let partial = matches!(&found, Found::Partial(_)).then(|| {
+                        if brain.search.as_ref().unwrap().exhausted() {
+                            PartialRoute::Exhausted
+                        } else {
+                            PartialRoute::Limited
+                        }
+                    });
                     brain.search = None;
                     if let Found::Partial(path) = &found
+                        && partial == Some(PartialRoute::Exhausted)
                         && let Some(goal) = brain.goal
                         && self
                             .bots
@@ -2436,7 +2473,7 @@ impl Session {
                     }
                     match found {
                         Found::Path(path) if !path.is_empty() => {
-                            brain.partial_route = false;
+                            brain.partial_route = None;
                             if matches!(brain.goal, Some(Goal::Chase(_))) {
                                 brain.out_of_reach = None;
                             }
@@ -2445,7 +2482,9 @@ impl Session {
                         Found::Partial(path) if !path.is_empty() => {
                             // The best route to an enemy ends where it cannot
                             // hurt them: chasing them there is worth nothing.
-                            if let (Some(Goal::Chase(p)), Some(end)) = (brain.goal, path.last()) {
+                            if partial == Some(PartialRoute::Exhausted)
+                                && let (Some(Goal::Chase(p)), Some(end)) = (brain.goal, path.last())
+                            {
                                 let (across, up) = brain.reach;
                                 if let Some(at) = brain.chase_feet.filter(|_| !body.conservative)
                                     && (flat(at - end.feet).length() > across
@@ -2455,13 +2494,13 @@ impl Session {
                                     gave_up = Some((end.feet, at));
                                 }
                             }
-                            brain.partial_route = true;
+                            brain.partial_route = partial;
                             brain.segment_anchor = feet;
                             brain.plan = crate::nav::pull(&ground, nav, body, feet, path);
                         }
                         // Already as close as it gets, or nowhere to stand.
-                        other => {
-                            brain.partial_route = matches!(other, Found::Partial(_));
+                        _ => {
+                            brain.partial_route = partial;
                             brain.plan.clear();
                         }
                     }
@@ -2504,7 +2543,10 @@ impl Session {
                             && d.y.abs() < body.step + 0.5
                     }
                     Mode::Swim => next.through.is_none() && flat(d).length() < near.max(0.6),
-                    Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. } => {
+                    Mode::Leap { .. } => {
+                        state.grounded && flat(d).length() < near && d.y.abs() < body.step
+                    }
+                    Mode::Jet { .. } | Mode::Climb { .. } => {
                         state.grounded && flat(d).length() < 2.0 && d.y.abs() < body.step + 0.5
                     }
                 };
@@ -2520,14 +2562,16 @@ impl Session {
             if brain.plan.is_empty() && brain.search.is_none() {
                 // Walked the whole plan: arrived, or as near as it goes.
                 if (body.conservative && !matches!(brain.goal, Some(Goal::Wander(_)))
-                    || matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home)))
-                    && brain.partial_route
+                    || matches!(brain.goal, Some(Goal::Objective(_) | Goal::Home))
+                    || matches!(brain.goal, Some(Goal::Chase(_) | Goal::Search(_)))
+                        && brain.partial_route == Some(PartialRoute::Limited))
+                    && brain.partial_route.is_some()
                 {
                     // A search reaches only so far across and expands only so
                     // many nodes: a goal beyond that is gone for in segments,
                     // each from where the last ended. A segment that got
                     // nowhere is the end of the way.
-                    brain.partial_route = false;
+                    brain.partial_route = None;
                     if feet.distance(brain.segment_anchor) > 0.5 {
                         brain.settled = false;
                     } else {
@@ -3181,6 +3225,9 @@ impl Session {
         } else {
             weapon.map_or((2.0, 3.0), |w| w.band())
         };
+        let remembers = brain
+            .search_knowledge(tick)
+            .is_some_and(|m| brain.may_pursue(m.at) && !brain.evidence_search.exhausted_for(m));
         let situation = Situation {
             holding: holding && !objective_hold_control,
             interaction: opportunity.map_or(0.0, |o| o.utility),
@@ -3217,9 +3264,7 @@ impl Session {
             // gets on with something else rather than stand there until
             // the memory fades.
             hunted: threat.is_some() && sight.target.is_none(),
-            remembers: brain
-                .search_knowledge(tick)
-                .is_some_and(|m| brain.may_pursue(m.at) && !brain.evidence_search.exhausted_for(m)),
+            remembers,
             // Strayed past where it strolls; while it works a body or a
             // seat (an interaction, idle play's included) its leash is
             // the chase's, as for a fight.
@@ -3233,7 +3278,11 @@ impl Session {
             } else {
                 0.0
             },
-            pursuing: brain.objective.pursuing(),
+            // Returning home is idle work, not a competing reaction to a
+            // valid target or a dated search still being carried out.
+            pursuing: brain.objective.pursuing()
+                || enemy.is_some() && (kind.weight("chase") > 0.0 || kind.weight("fight") > 0.0)
+                || remembers && kind.weight("search") > 0.0,
             explore: explore_to.is_some(),
             flee: flee_from.is_some(),
             // Never a way out of a fight: not with an enemy in sight or
@@ -3472,6 +3521,11 @@ impl Session {
             }
             _ => None,
         };
+        // A preferred combat band is not proof that a body attack can land.
+        // Continue ordinary navigation until its actual contact rule agrees.
+        let bite_contact = bite
+            .as_ref()
+            .and_then(|m| enemy.and_then(|seen| self.bot_bite_contact(bot, seen.owner, m)));
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         brain.spot = spot;
 
@@ -3542,7 +3596,14 @@ impl Session {
                 brain.set_goal(brain.carry.and_then(|c| c.to.place()).map(Goal::Carry));
                 false
             }
-            Behaviour::Fight => brain.pursue(enemy, true, near, feet, body.width * 0.5, tick),
+            Behaviour::Fight => brain.pursue(
+                enemy,
+                bite.is_none() || bite_contact.is_some(),
+                near,
+                feet,
+                body.width * 0.5,
+                tick,
+            ),
             Behaviour::Chase | Behaviour::Search => {
                 // Straight at them, or wide round a side (`surprise`).
                 if let Some(seen) = enemy.filter(|_| behaviour == Behaviour::Chase) {
@@ -3690,7 +3751,7 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             brain.plan = vec![next];
             brain.search = None;
-            brain.partial_route = true;
+            brain.partial_route = Some(PartialRoute::Limited);
             brain.segment_anchor = feet;
             brain.settled = false;
             brain.path_stop = None;
@@ -4061,13 +4122,18 @@ impl Session {
                     pitch: delta.map_or(0.0, pitch_to),
                 });
             }
-        } else if let Some(seen) = sight.target {
+        } else if let Some(seen) = sight
+            .target
+            .filter(|_| wanted.is_none() || gunning || behaviour == Behaviour::Fight && hold)
+        {
             // A blast hurts all around where it lands: a splash weapon
             // aims at the feet, so a near miss still lands within it.
             let mut at = if weapon.is_some_and(|w| !w.melee && w.splash > 0.0) {
                 seen.feet + Vec3::Y * FEET_AIM
             } else {
-                seen.eye - Vec3::Y * 0.5
+                bite_contact
+                    .as_ref()
+                    .map_or(seen.eye - Vec3::Y * 0.5, |c| c.point)
             };
             if let Some(w) = weapon.filter(|w| !w.melee && w.speed > 0.0) {
                 let time = at.distance(eye) / w.speed;
@@ -4596,9 +4662,10 @@ impl Session {
             },
         );
         (input.crouch, input.jet) = (controls.crouch, controls.jet);
-        let route_changes_height = brain.plan.iter().take(6).any(|way| {
-            flat(way.feet - feet).length() <= body.width * 3.0 && (way.feet.y - feet.y).abs() > 0.2
-        });
+        // Safety follows the exact leg the controller is executing,
+        // including a verified bridge into the route. Later waypoints do
+        // not authorize this step's descent.
+        let route_floor = wanted.map(|way| way.feet.y);
         // The walk chosen, carried out: on foot, not pushing one, round a
         // vehicle in its way (the walk grid leaves vehicles out).
         let controls = act::Controls {
@@ -4616,15 +4683,13 @@ impl Session {
             &state,
             controls,
             act::Ground {
-                route_changes_height,
+                route_floor,
                 driving: driving.is_some(),
                 swimming: swim.is_some() || wet,
-                air_leg: wanted.is_some_and(|w| {
-                    matches!(
-                        w.mode,
-                        Mode::Jet { .. } | Mode::Leap { .. } | Mode::Climb { .. }
-                    )
-                }),
+                air_leg: matches!(
+                    controls.by,
+                    Some(act::Mover::Jet | act::Mover::Leap | act::Mover::Climb)
+                ),
             },
         );
         // Facing the way it walks, it turns into a sharp bend (a stair's
@@ -5399,21 +5464,52 @@ mod navigation_body_tests {
             start,
             goal,
             Some(Vec3::Z * 50.0),
-            1.25
+            1.25,
+            2.25
         ));
         assert!(!useful_partial_progress(
             start,
             goal,
             Some(Vec3::Z * 99.0),
-            1.25
+            1.25,
+            2.25
         ));
         assert!(!useful_partial_progress(
             start,
             goal,
             Some(Vec3::NEG_Z * 10.0),
-            1.25
+            1.25,
+            2.25
         ));
-        assert!(!useful_partial_progress(start, goal, None, 1.25));
+        assert!(!useful_partial_progress(start, goal, None, 1.25, 2.25));
+    }
+
+    #[test]
+    fn a_partial_stair_route_counts_rise_without_requiring_horizontal_distance() {
+        for sign in [-1.0, 1.0] {
+            let goal = Vec3::Y * sign * 30.0;
+            assert!(useful_partial_progress(
+                Vec3::ZERO,
+                goal,
+                Some(Vec3::new(8.0, sign * 4.0, 0.0)),
+                1.25,
+                2.25
+            ));
+            assert!(!useful_partial_progress(
+                Vec3::ZERO,
+                goal,
+                Some(Vec3::new(0.0, sign * 0.2, 0.0)),
+                1.25,
+                2.25
+            ));
+            assert!(!useful_partial_progress(
+                Vec3::ZERO,
+                goal,
+                Some(Vec3::new(8.0, -sign * 4.0, 0.0)),
+                1.25,
+                2.25
+            ));
+        }
     }
 
     #[test]
@@ -5638,7 +5734,7 @@ mod navigation_body_tests {
         let mut brain = Brain::new(None, BotKind::default(), Vec3::ZERO, bot, 0);
         brain.set_goal(Some(Goal::Wander(Vec3::X * 12.0)));
         brain.plan.push(Waypoint::walk(Vec3::X * 0.1));
-        brain.partial_route = true;
+        brain.partial_route = Some(PartialRoute::Exhausted);
         brain.segment_anchor = Vec3::NEG_X * 10.0;
         s.bots.brains.insert(bot, brain);
         let mut body = Body::of(s.peers[&bot].player.tuning(), 1.0);
@@ -5654,7 +5750,12 @@ mod navigation_body_tests {
 
     #[test]
     fn a_partial_drive_segment_is_not_arrival_or_a_reason_to_explore_elsewhere() {
-        for conservative in [false, true] {
+        for (conservative, extent) in [
+            (false, PartialRoute::Limited),
+            (false, PartialRoute::Exhausted),
+            (true, PartialRoute::Limited),
+            (true, PartialRoute::Exhausted),
+        ] {
             let sim = crate::simulation::Simulation::new(
                 bri_world::World::new("Segments".into(), "fixture".into(), vec![[1.0; 4]]),
                 crate::testing::definitions(),
@@ -5670,7 +5771,7 @@ mod navigation_body_tests {
             let goal = Goal::Search(Vec3::X * 100.0);
             brain.goal = Some(goal);
             brain.plan = vec![Waypoint::walk(Vec3::X * 0.1)];
-            brain.partial_route = true;
+            brain.partial_route = Some(extent);
             brain.segment_anchor = Vec3::NEG_X * 10.0;
             session.bots.brains.insert(bot, brain);
             let mut body = Body::of(session.peers[&bot].player.tuning(), 1.0);
@@ -5680,8 +5781,9 @@ mod navigation_body_tests {
             let brain = &session.bots.brains[&bot];
             assert_eq!(brain.goal, Some(goal));
             assert_eq!(
-                brain.settled, !conservative,
-                "only the pedestrian search treats its partial endpoint as settled"
+                brain.settled,
+                !conservative && extent == PartialRoute::Exhausted,
+                "an exhausted pedestrian route can end short; a planning window cannot declare arrival"
             );
         }
     }
@@ -5699,7 +5801,7 @@ mod navigation_body_tests {
         brain.bridge = Some(jump);
         brain.search = Some(Search::new(Vec3::ZERO, goal.point(Vec3::ZERO), 72.0));
         brain.settled = true;
-        brain.partial_route = true;
+        brain.partial_route = Some(PartialRoute::Exhausted);
         brain.navigate_as(&walker);
         assert_eq!(brain.plan.len(), 1, "the unchanged body retains its work");
         let mut chassis = walker.clone();
@@ -5709,7 +5811,7 @@ mod navigation_body_tests {
         brain.navigate_as(&chassis);
         assert_eq!(brain.goal, Some(goal));
         assert!(brain.plan.is_empty() && brain.bridge.is_none() && brain.search.is_none());
-        assert!(!brain.settled && !brain.partial_route);
+        assert!(!brain.settled && brain.partial_route.is_none());
         brain.plan.push(Waypoint::walk(Vec3::X * 10.0));
         brain.drive_departure = Some(Vec3::X * 3.0);
         brain.navigate_as(&walker);

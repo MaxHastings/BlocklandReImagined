@@ -212,7 +212,13 @@ fn board(apps: &mut [&mut App], rider: usize) -> Result<()> {
     }
     held(apps[rider], HeldControl::Forward, false)?;
     held(apps[rider], HeldControl::Jump, false)?;
-    ensure!(seat(apps[rider]).is_some(), "never boarded the Tank");
+    ensure!(
+        seat(apps[rider]).is_some(),
+        "never boarded the Tank: center={:?}, feet={:?}, vehicle={:?}",
+        apps[rider].ui.core.center_print,
+        apps[rider].local_motion().map(|(p, _)| p.feet),
+        apps[rider].network_view().map(|v| &v.vehicle_poses)
+    );
     Ok(())
 }
 /// The rider's `eye` node in the seat's pose, in its own shape space.
@@ -1082,5 +1088,219 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher(
         app.gpu_stopped();
     }
     let _ = std::fs::remove_dir_all(&state);
+    Ok(())
+}
+
+/// Reproduces mouse-steering angles being mistaken for a personal gun's aim.
+/// Ordinary App actions, loopback QUIC, real boarding and offscreen camera;
+/// the invented automatic gun isolates direction from spread/inherited motion.
+#[test]
+fn personal_gun_clicks_and_holds_follow_the_rendered_seat_for_host_and_guest() -> Result<()> {
+    use bri_weapons::testing::{BOW_IMAGE, GUN_IMAGE, GUN_ITEM, GUN_PROJECTILE};
+    let f = ContentRoot::synthetic()?;
+    let weapons = bri_package::packages::PackageSet::load_root(&f.root)?
+        .role_dir(&f.root, "weapons")?
+        .join("weapons.json");
+    let mut pack: bri_weapons::Pack = serde_json::from_slice(&std::fs::read(&weapons)?)?;
+    let automatic = pack.images[BOW_IMAGE].states.clone();
+    let gun = pack.images.get_mut(GUN_IMAGE).context("gun")?;
+    gun.states = automatic;
+    // Observe the requested ray directly, without muzzle-to-crosshair
+    // convergence changing the projectile's direction near the vehicle.
+    gun.correct_muzzle = false;
+    let projectile = pack
+        .projectiles
+        .get_mut(GUN_PROJECTILE)
+        .context("gun projectile")?;
+    projectile.inherit = 0.0;
+    projectile.speed = 50.0;
+    pack.validate()?;
+    let bytes = serde_json::to_vec(&pack)?;
+    std::fs::write(&weapons, &bytes)?;
+    // Model geometry/bounds are unchanged; refresh the presentation's binding
+    // to this deliberately authored trigger/projectile fixture.
+    let presentation_file = bri_package::packages::PackageSet::load_root(&f.root)?
+        .role_dir(&f.root, "item_presentation")?
+        .join("presentation.json");
+    let mut presentation: bri_client::items::Presentation =
+        serde_json::from_slice(&std::fs::read(&presentation_file)?)?;
+    presentation.weapons_sha256 = bri_client::testing::sha256(&bytes);
+    std::fs::write(presentation_file, serde_json::to_vec(&presentation)?)?;
+    // A server package supplies the test weapon through the ordinary loadout
+    // hook, without introducing mini-game respawn/ownership into an aim test.
+    let policy = f.root.join("mounted-aim");
+    std::fs::create_dir(&policy)?;
+    std::fs::write(policy.join("package.json"), serde_json::json!({"schema_version":1,"id":"mounted-aim","version":"1.0.0","api":1,"name":"Mounted aim fixture","license":"CC0-1.0","capabilities":["player"],"provides":[{"kind":"behaviour","id":"mounted-aim:behaviour/main","file":"behaviour.json"},{"kind":"script","id":"mounted-aim:script/main","file":"main.rhai"}]}).to_string())?;
+    std::fs::write(
+        policy.join("behaviour.json"),
+        serde_json::json!({"schema_version":1,"script":"main.rhai","on_loadout":true}).to_string(),
+    )?;
+    std::fs::write(
+        policy.join("main.rhai"),
+        format!("fn on_loadout(p) {{ require(give_item(p, \"{GUN_ITEM}\", false)); }}"),
+    )?;
+    let mut packages = bri_package::packages::PackageSet::load_root(&f.root)?;
+    packages.packages.push(bri_package::packages::PackageEntry {
+        id: "mounted-aim".into(),
+        version: "1.0.0".into(),
+        side: bri_package::packages::Side::Server,
+        dir: "mounted-aim".into(),
+        role: None,
+    });
+    std::fs::write(f.root.join("packages.json"), serde_json::to_vec(&packages)?)?;
+    let gpu = support::gpu::turn().context("offscreen mounted gun")?;
+    let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
+    for strafe in [false, true] {
+        for rider in [0usize, 1] {
+            let scratch = f.state()?;
+            let state = scratch.path();
+            let mut host = app(&f.root, state, "Host")?;
+            let mut guest = app(&f.root, state, "Guest")?;
+            for app in [&mut host, &mut guest] {
+                app.ui.core.prefs.set(
+                    "$pref::Input::UseStrafeSteering",
+                    if strafe { "1" } else { "0" },
+                );
+                app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
+            }
+            host.host_on_any_port();
+            request(
+                &mut host,
+                UiAction::HostGame {
+                    map: SLATE.into(),
+                    mode: ServerMode::Lan,
+                    game_mode: None,
+                    max_players: 4,
+                    server_name: "Mounted personal aim".into(),
+                    password: String::new(),
+                    admin_password: String::new(),
+                    super_admin_password: String::new(),
+                },
+            )?;
+            until(&mut [&mut host], "aim host", 180, |a| Ok(in_game(a[0])))?;
+            let port = host.hosted_port().context("hosted port")?;
+            request(
+                &mut guest,
+                UiAction::JoinServer {
+                    address: format!("127.0.0.1:{port}"),
+                    password: String::new(),
+                },
+            )?;
+            until(&mut [&mut host, &mut guest], "aim guest", 240, |a| {
+                Ok(in_game(a[1]))
+            })?;
+            until(&mut [&mut host, &mut guest], "aim loadout", 30, |a| {
+                Ok(a.iter().all(|app| {
+                    app.network_view().is_some_and(|v| {
+                        v.tools
+                            .get(&v.owner)
+                            .is_some_and(|t| t.slots[3].as_deref() == Some(GUN_ITEM))
+                    })
+                }))
+            })?;
+            run_for(&mut [&mut host, &mut guest], 2.0)?;
+            load_vehicle(
+                &f,
+                &mut host,
+                &state.join("Host"),
+                bri_vehicles::testing::CAR,
+            )?;
+            until(&mut [&mut host, &mut guest], "aim car", 60, |a| {
+                Ok(a.iter().all(|app| {
+                    app.network_view()
+                        .is_some_and(|v| !v.vehicle_poses.is_empty())
+                }))
+            })?;
+            run_for(&mut [&mut host, &mut guest], 1.0)?;
+            board(&mut [&mut host, &mut guest], rider)?;
+            let mut apps = [&mut *host, &mut *guest];
+            ensure!(
+                seat(apps[rider]).is_some_and(|(_, seat)| seat == 0),
+                "must test driver"
+            );
+            if apps[rider].controls.third_person_view() {
+                request(
+                    apps[rider],
+                    UiAction::Game(GameAction::ToggleFirstPerson { fast: true }),
+                )?;
+            }
+            request(apps[rider], UiAction::UseTool { slot: 3 })?;
+            let ready = |app: &App| {
+                app.network_view().is_some_and(|v| {
+                    v.weapons.images.get(&v.owner).is_some_and(|images| {
+                        images
+                            .iter()
+                            .any(|i| i.image == GUN_IMAGE && i.state == "Ready")
+                    })
+                })
+            };
+            until(&mut apps, "driver gun ready", 30, |a| Ok(ready(a[rider])))?;
+            render(apps[rider], &gpu, &mut renderer)?;
+            until(&mut apps, "host acknowledges steering mode", 10, |a| {
+                Ok(a[rider].controls.ride_context() == Some((true, !strafe)))
+            })?;
+            render(apps[rider], &gpu, &mut renderer)?;
+            let owner = apps[rider].network_view().context("driver view")?.owner;
+            for (yaw, pitch) in [(1.8, -0.6), (-2.4, 0.9), (0.7, -0.2)] {
+                request(apps[rider], UiAction::Game(GameAction::Look { yaw, pitch }))?;
+                render(apps[rider], &gpu, &mut renderer)?;
+                let (_, yaw, pitch) = apps[rider].rendered_camera().context("driver camera")?;
+                let expected = Vec3::new(
+                    yaw.sin() * pitch.cos(),
+                    pitch.sin(),
+                    -yaw.cos() * pitch.cos(),
+                );
+                let mut seen: BTreeSet<_> = apps[rider]
+                    .network_view()
+                    .context("driver view")?
+                    .weapons
+                    .projectiles
+                    .iter()
+                    .map(|p| p.id)
+                    .collect();
+                // The live vehicle settles while QUIC carries inputs and
+                // projectiles. Retain actual rendered rays at each frame;
+                // a held shot must match a sampled view, not the first
+                // frame's now-stale seat transform.
+                let mut rendered_rays = vec![expected];
+                let mut count = 0;
+                held(apps[rider], HeldControl::Fire, true)?;
+                until(&mut apps, "driver click and held shots", 10, |a| {
+                    render(a[rider], &gpu, &mut renderer)?;
+                    let (_, yaw, pitch) = a[rider].rendered_camera().context("firing camera")?;
+                    rendered_rays.push(Vec3::new(
+                        yaw.sin() * pitch.cos(),
+                        pitch.sin(),
+                        -yaw.cos() * pitch.cos(),
+                    ));
+                    for shot in a[rider]
+                        .network_view()
+                        .context("driver view")?
+                        .weapons
+                        .fired()
+                    {
+                        if shot.source.0 == owner && seen.insert(shot.id) {
+                            let actual = shot.velocity.normalize();
+                            ensure!(
+                                rendered_rays
+                                    .iter()
+                                    .any(|ray| actual.abs_diff_eq(*ray, 1e-4)),
+                                "strafe={strafe} rider={rider} shot={count}: {actual} versus drawn rays {rendered_rays:?}"
+                            );
+                            count += 1;
+                        }
+                    }
+                    Ok(count >= 2)
+                })?;
+                held(apps[rider], HeldControl::Fire, false)?;
+                until(&mut apps, "driver trigger release", 30, |a| {
+                    Ok(ready(a[rider]))
+                })?;
+                println!("Mounted gun: strafe={strafe}, rider={rider}, {count} matched shots");
+            }
+            request(&mut guest, UiAction::Disconnect)?;
+            request(&mut host, UiAction::Disconnect)?;
+        }
+    }
     Ok(())
 }

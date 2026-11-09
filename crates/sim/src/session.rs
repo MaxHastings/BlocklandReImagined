@@ -293,31 +293,9 @@ impl InputDrain {
     }
 }
 
-/// Aim captured with a reliable action. It affects that action's ray only;
-/// movement and the authoritative player position are never rewound by it.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ActionAim {
-    pub yaw: f32,
-    pub pitch: f32,
-}
-impl ActionAim {
-    pub fn validate(self) -> Result<()> {
-        MoveInput {
-            yaw: self.yaw,
-            pitch: self.pitch,
-            ..Default::default()
-        }
-        .validate()
-    }
-    pub fn direction(self) -> Vec3 {
-        Vec3::new(
-            self.yaw.sin() * self.pitch.cos(),
-            self.pitch.sin(),
-            -self.yaw.cos() * self.pitch.cos(),
-        )
-    }
-}
+/// Aim captured with a reliable action. Continuous actions use the same
+/// direction contract on MoveInput; neither changes authoritative position.
+pub use bri_motor::player::ActionLook as ActionAim;
 
 /// The keys a spectator presses: Torque's triggers 0 (fire), 2 (jump) and 4
 /// (jet), and the light key.
@@ -2597,7 +2575,7 @@ impl Session {
         if let Some(aim) = aim {
             aim.validate()?;
         }
-        let direction = aim.map_or_else(|| peer.player.state().forward(), ActionAim::direction);
+        let direction = aim.map_or_else(|| peer.action_direction(), ActionAim::direction);
         if tick.saturating_sub(self.bulk_window_tick) >= 120 {
             self.bulk_window_tick = tick;
             self.bulk_requests = 0;

@@ -135,6 +135,33 @@ pub fn moves_against(group: u8) -> InteractionGroups {
         )
     }
 }
+/// A gameplay action's world look, independent of movement or vehicle steering.
+/// Positions and permissions remain authoritative; this carries direction only.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionLook {
+    pub yaw: f32,
+    pub pitch: f32,
+}
+impl ActionLook {
+    pub fn validate(self) -> Result<()> {
+        ensure!(
+            self.yaw.is_finite()
+                && self.pitch.is_finite()
+                && self.yaw.abs() <= std::f32::consts::PI
+                && self.pitch.abs() <= std::f32::consts::FRAC_PI_2,
+            "Invalid look angles"
+        );
+        Ok(())
+    }
+    pub fn direction(self) -> Vec3 {
+        Vec3::new(
+            self.yaw.sin() * self.pitch.cos(),
+            self.pitch.sin(),
+            -self.yaw.cos() * self.pitch.cos(),
+        )
+    }
+}
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoveInput {
@@ -145,6 +172,11 @@ pub struct MoveInput {
     /// Free-look head turn relative to the body (`mHead.z`).
     #[serde(default)]
     pub head_yaw: f32,
+    /// Explicit world look for continuous actions when raw yaw/pitch carry a
+    /// control object's turn (for example, mouse steering). None uses the
+    /// authoritative body's ordinary facing, as non-view controllers do.
+    #[serde(default)]
+    pub action_look: Option<ActionLook>,
     pub jump: bool,
     pub crouch: bool,
     pub jet: bool,
@@ -168,13 +200,14 @@ impl MoveInput {
                 && self.right.abs() <= 1.0,
             "Invalid movement axes"
         );
-        ensure!(
-            self.yaw.is_finite()
-                && self.pitch.is_finite()
-                && self.yaw.abs() <= std::f32::consts::PI
-                && self.pitch.abs() <= std::f32::consts::FRAC_PI_2,
-            "Invalid look angles"
-        );
+        ActionLook {
+            yaw: self.yaw,
+            pitch: self.pitch,
+        }
+        .validate()?;
+        if let Some(look) = self.action_look {
+            look.validate()?;
+        }
         ensure!(
             self.head_yaw.is_finite() && self.head_yaw.abs() <= MAX_FREELOOK,
             "Invalid head turn"
@@ -3242,5 +3275,52 @@ mod fall_tests {
             max: None,
         };
         assert_eq!(plain.harm(14.0, 1.0), Some(8.0));
+    }
+}
+
+#[cfg(test)]
+mod action_look_tests {
+    use super::*;
+    #[test]
+    fn action_look_is_independent_bounded_direction_without_a_client_position() {
+        let look = ActionLook {
+            yaw: std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+        };
+        let input = MoveInput {
+            yaw: -2.0,
+            pitch: -0.8,
+            action_look: Some(look),
+            ..Default::default()
+        };
+        assert!(input.validate().is_ok());
+        assert!(look.direction().abs_diff_eq(Vec3::X, 1e-6));
+        for bad in [
+            ActionLook {
+                yaw: f32::NAN,
+                ..look
+            },
+            ActionLook {
+                pitch: f32::INFINITY,
+                ..look
+            },
+            ActionLook {
+                yaw: std::f32::consts::TAU,
+                ..look
+            },
+            ActionLook {
+                pitch: std::f32::consts::PI,
+                ..look
+            },
+        ] {
+            assert!(
+                MoveInput {
+                    action_look: Some(bad),
+                    ..input
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 }

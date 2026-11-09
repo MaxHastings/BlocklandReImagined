@@ -298,22 +298,25 @@ pub struct LightSnapshot {
     pub position: Vec3,
     pub color: Vec3,
     pub radius: f32,
+    pub cone: [f32; 4],
 }
 /// Distance at which v20 stops drawing fxLight flares.
 pub const FLARE_MAX_DISTANCE: f32 = 75.;
 
-/// Storage-buffer layout: 32 bytes, aligned vec4 fields. color is brightness-scaled.
+/// Storage-buffer layout: 48 bytes, aligned vec4 fields. color is brightness-scaled.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuLight {
     pub position_radius: [f32; 4],
     pub color: [f32; 4],
+    pub cone: [f32; 4],
 }
 impl From<LightSnapshot> for GpuLight {
     fn from(l: LightSnapshot) -> Self {
         Self {
             position_radius: l.position.extend(l.radius).to_array(),
             color: l.color.extend(0.).to_array(),
+            cone: l.cone,
         }
     }
 }
@@ -1770,6 +1773,9 @@ impl EffectsWorld {
                     position: s.transform.position,
                     color,
                     radius,
+                    cone: def.cone.map_or(bri_content::presentation::ALL_ROUND, |c| {
+                        c.words(s.transform.rotation)
+                    }),
                 });
             }
             if s.options.local_view.as_deref() != local_view {
@@ -2028,6 +2034,7 @@ mod tests {
                     color: [1., 0.5, 0.],
                     brightness: 2.,
                     radius: 5.,
+                    cone: None,
                     color_curves: None,
                     brightness_curve: None,
                     radius_curve: None,

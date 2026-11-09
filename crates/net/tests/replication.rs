@@ -1180,6 +1180,8 @@ fn malformed_passage_frames_are_rejected_after_codec_decode_in_both_pose_streams
             turret_aim: [0.; 2],
             jetting: false,
             driver_jump_held: false,
+            driver_reversing: false,
+            driver_braking: false,
             angular_velocity: [0.; 3],
             mouse_steering: [0.; 2],
             driver_input: 0,
@@ -1464,6 +1466,11 @@ fn cosmetic_backlog_keeps_section_recovery_seed_and_control_without_disconnect()
                         force: 0.,
                         radius: 0.,
                         death: BrickDeath::Section {
+                            impulse: Some(bri_sim::presentation::RadialImpulse {
+                                origin: [-2., 1., 0.],
+                                force: 30.,
+                                radius: 5.,
+                            }),
                             group: 1,
                             started: 10,
                             members: (MAX_CUES * 2) as u32,
@@ -1474,7 +1481,12 @@ fn cosmetic_backlog_keeps_section_recovery_seed_and_control_without_disconnect()
                 }
             })
             .collect();
-        replica.update(delta.clone()).unwrap();
+        let encoded = codec::encode(&Message::Update(delta.clone())).unwrap();
+        let Message::Update(decoded) = codec::decode(&encoded).unwrap() else {
+            panic!("expected section update");
+        };
+        assert_eq!(decoded.cues, delta.cues);
+        replica.update(decoded).unwrap();
     }
     delta.base = 2;
     delta.cursor = 3;

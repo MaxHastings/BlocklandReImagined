@@ -112,6 +112,7 @@ struct BlastJob {
 }
 struct Search {
     scope: Arc<Scope>,
+    impulse: Option<crate::presentation::RadialImpulse>,
     seeds: Arc<Vec<BrickId>>,
     tail: Option<SectionSeed>,
     tail_next: Option<BrickId>,
@@ -134,6 +135,7 @@ impl Search {
     fn new(scope: Arc<Scope>, seeds: Vec<BrickId>) -> Self {
         Self {
             scope,
+            impulse: None,
             seeds: Arc::new(seeds),
             tail: None,
             tail_next: None,
@@ -157,14 +159,17 @@ impl Search {
         scope: Arc<Scope>,
         ids: Arc<BTreeSet<BrickId>>,
         after: Option<BrickId>,
+        impulse: Option<crate::presentation::RadialImpulse>,
     ) -> Self {
         let mut search = Self::new(scope, Vec::new());
+        search.impulse = impulse;
         search.tail = Some(SectionSeed { ids, after });
         search.tail_next = after;
         search
     }
     fn restart(&mut self) {
         let mut fresh = Self::new(self.scope.clone(), Vec::new());
+        fresh.impulse = self.impulse;
         fresh.seeds = self.seeds.clone();
         fresh.tail = self.tail.clone();
         fresh.tail_next = fresh.tail.as_ref().and_then(|tail| tail.after);
@@ -278,6 +283,7 @@ struct SectionSeed {
 }
 struct Detached {
     scope: Arc<Scope>,
+    impulse: Option<crate::presentation::RadialImpulse>,
     ids: Arc<BTreeSet<BrickId>>,
     next: Option<BrickId>,
     group: u64,
@@ -783,6 +789,7 @@ impl Session {
                     detached.scope,
                     detached.ids,
                     detached.next,
+                    detached.impulse,
                 ));
             } else {
                 self.destruction.detach.push_back(detached);
@@ -882,9 +889,13 @@ impl Session {
                                 {
                                     Arc::make_mut(&mut search.seeds).extend(seeds);
                                 } else {
-                                    self.destruction
-                                        .searches
-                                        .push_back(Search::new(job.scope.clone(), seeds));
+                                    let mut search = Search::new(job.scope.clone(), seeds);
+                                    search.impulse = Some(crate::presentation::RadialImpulse {
+                                        origin: job.blast.origin.to_array(),
+                                        force: job.blast.force,
+                                        radius: job.blast.radius,
+                                    });
+                                    self.destruction.searches.push_back(search);
                                 }
                             }
                         }
@@ -925,6 +936,7 @@ impl Session {
                     detached.scope,
                     detached.ids,
                     detached.next,
+                    detached.impulse,
                 ));
             } else {
                 self.destruction.detach.push_back(detached);
@@ -1042,6 +1054,7 @@ impl Session {
                     );
                     self.destruction.detach.push_back(Detached {
                         scope: job.scope.clone(),
+                        impulse: job.impulse,
                         members: ids.len() as u32,
                         ids,
                         next: None,
@@ -1161,6 +1174,7 @@ impl Session {
                         detached.scope,
                         detached.ids,
                         detached.next,
+                        detached.impulse,
                     ));
                 }
                 continue;
@@ -1185,6 +1199,7 @@ impl Session {
                         members: detached.members,
                         half: detached.half.to_array(),
                         pivot: detached.pivot.to_array(),
+                        impulse: detached.impulse,
                     };
                     *origin = detached.origin.to_array();
                 }

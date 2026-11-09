@@ -2902,6 +2902,8 @@ mod tests {
                 turret_aim: s.turret_aim,
                 jetting: s.jetting,
                 driver_jump_held: s.driver_jump_held,
+                driver_reversing: s.driver_reversing,
+                driver_braking: s.driver_braking,
                 angular_velocity: s.angular_velocity,
                 mouse_steering: s.mouse_steering,
                 driver_input,

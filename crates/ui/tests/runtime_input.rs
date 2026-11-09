@@ -5,7 +5,7 @@ use bri_ui::{
     geom::Rect,
     input::*,
     pack::Pack,
-    schema::{Control, UiPack},
+    schema::{Control, Style, UiPack},
     screens::{ScreenId, ctrl},
     ui::{Ui, UiConfig},
 };
@@ -18,6 +18,17 @@ fn node(class: &str, name: &str, y: i32, command: &str) -> Control {
 }
 fn fixture() -> Rc<Pack> {
     let mut p = UiPack::default();
+    // A measurable 7px-per-character font so mouse hit-testing over entry
+    // lines is exact; its row height matches the fontless default (16).
+    p.fonts
+        .insert("test_font".into(), bri_ui::testing::font("Test", 12));
+    p.styles.insert(
+        "GuiDefaultProfile".into(),
+        Style {
+            font: Some("test_font".into()),
+            ..Style::default()
+        },
+    );
     for (name, children) in [
         (
             "MainMenuGui",
@@ -112,6 +123,10 @@ fn fixture() -> Rc<Pack> {
             vec![node("GuiTextEditCtrl", "NMH_Type", 10, "")],
         ),
         (
+            "wrenchDlg",
+            vec![node("GuiTextEditCtrl", "Wrench_Name", 10, "")],
+        ),
+        (
             "escapeMenu",
             vec![node("GuiButtonCtrl", "disconnect", 10, "escapeFromGame();")],
         ),
@@ -190,6 +205,26 @@ fn down(u: &mut Ui, key: Key) {
     u.handle_input(InputEvent::KeyDown {
         key,
         mods: Modifiers::NONE,
+        repeat: false,
+    });
+}
+fn shift_down(u: &mut Ui, key: Key) {
+    u.handle_input(InputEvent::KeyDown {
+        key,
+        mods: Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        },
+        repeat: false,
+    });
+}
+fn ctrl_down(u: &mut Ui, key: Key) {
+    u.handle_input(InputEvent::KeyDown {
+        key,
+        mods: Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
         repeat: false,
     });
 }
@@ -1297,6 +1332,291 @@ fn chat_opens_over_the_escape_menu_and_player_list_and_returns_to_them() {
     assert_eq!(u.top_id(), ScreenId::PlayerList);
     down(&mut u, Key::Letter('t'));
     assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+}
+
+/// Ctrl+V pastes into the chat line through the host's character path:
+/// the burst lands in NMH_Type, the field's length cap still bounds it,
+/// and nothing is sent until Enter.
+#[test]
+fn chat_paste_lands_in_the_field_and_waits_for_enter() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+    // The host reads the clipboard and types each character in.
+    for ch in "pasted".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    let text = |u: &Ui| {
+        let v = u
+            .screen(ScreenId::MessageInput(ChatChannel::Say))
+            .unwrap()
+            .view();
+        v.edit_text(v.id("NMH_Type").unwrap())
+    };
+    assert_eq!(text(&u), "pasted");
+    assert!(
+        actions(&mut u)
+            .iter()
+            .all(|a| !matches!(a, UiAction::Chat { .. })),
+        "pasted text must wait for Enter"
+    );
+    down(&mut u, Key::Return);
+    let a = actions(&mut u);
+    assert!(a.contains(&UiAction::Chat {
+        channel: ChatChannel::Say,
+        text: "pasted".into()
+    }));
+    // A long paste is bounded by the field's cap (255 without maxLength).
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+    for _ in 0..300 {
+        u.handle_input(InputEvent::Char('x'));
+    }
+    assert_eq!(text(&u).chars().count(), 255);
+}
+
+/// While the console is open it captures every key (v20's
+/// `sinkAllKeyEvents`): the chat bind opens nothing under it, and a line in
+/// the log says why instead of failing silently.
+#[test]
+fn chat_key_is_sunk_while_the_console_is_open() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::MessageInput(ChatChannel::Say));
+
+    let mut u = ui();
+    play(&mut u);
+    u.core.toggle_console();
+    u.update(16);
+    let before = bri_console::log::lines().len();
+    down(&mut u, Key::Letter('t'));
+    assert_eq!(u.top_id(), ScreenId::Console, "the console stays on top");
+    assert!(
+        !u.is_open(ScreenId::MessageInput(ChatChannel::Say)),
+        "chat must not open under a capturing console"
+    );
+    let fresh = bri_console::log::lines();
+    assert!(
+        fresh[before..]
+            .iter()
+            .any(|l| l.text.contains("captures all input")),
+        "the log explains why the chat key did nothing: {fresh:?}"
+    );
+}
+
+/// Paste reaches the wrench's name field too: after a click focuses it, the
+/// host's character path lands in Wrench_Name and nothing is sent until the
+/// player acts.
+#[test]
+fn wrench_name_field_takes_pasted_text() {
+    let mut u = ui();
+    play(&mut u);
+    u.apply(UiUpdate::OpenWrench {
+        brick: 10,
+        variant: WrenchVariant::Normal,
+        owner: "Owner".into(),
+        data: WrenchData::default(),
+        admin_override: false,
+        events_allowed: true,
+    });
+    let id = ScreenId::Wrench(WrenchVariant::Normal);
+    assert_eq!(u.top_id(), id);
+    click(&mut u, id, "Wrench_Name");
+    assert!(u.takes_text(), "the clicked name field takes text");
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    let v = u.screen(id).unwrap().view();
+    assert_eq!(v.edit_text(v.id("Wrench_Name").unwrap()), "apples");
+}
+
+/// Ctrl+C's source is whatever entry line has focus, wherever it lives;
+/// with no entry line focused there is nothing to copy.
+#[test]
+fn copy_reads_the_focused_entry_line() {
+    let mut u = ui();
+    play(&mut u);
+    assert_eq!(u.focused_edit_text(), None);
+    down(&mut u, Key::Letter('t'));
+    for ch in "copy me".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    assert_eq!(u.focused_edit_text().as_deref(), Some("copy me"));
+}
+
+/// Shift+arrows select text in the focused entry line (V21-style); typing
+/// replaces the selection.
+#[test]
+fn shift_arrows_select_and_typing_replaces_the_range() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left); // selection [3, 6) = "les"
+    assert_eq!(u.focused_edit_selection().as_deref(), Some("les"));
+    u.handle_input(InputEvent::Char('x'));
+    assert_eq!(u.focused_edit_text().as_deref(), Some("appx"));
+}
+
+/// Backspace with a Shift+arrow selection removes the whole range.
+#[test]
+fn backspace_deletes_the_selected_range() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left); // selection [3, 6) = "les"
+    down(&mut u, Key::Backspace);
+    assert_eq!(u.focused_edit_text().as_deref(), Some("app"));
+}
+
+/// A plain arrow collapses the selection to the edge it points at (without
+/// moving past it), then typing lands there.
+#[test]
+fn plain_arrows_collapse_the_selection_to_that_edge() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left); // selection [4, 6) = "es"
+    assert_eq!(u.focused_edit_selection().as_deref(), Some("es"));
+    down(&mut u, Key::Right); // collapse to the right edge (index 6)
+    assert_eq!(u.focused_edit_selection(), None);
+    u.handle_input(InputEvent::Char('y'));
+    assert_eq!(u.focused_edit_text().as_deref(), Some("applesy"));
+
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left); // selection [4, 6) = "es"
+    down(&mut u, Key::Left); // collapse to the left edge (index 4)
+    assert_eq!(u.focused_edit_selection(), None);
+    u.handle_input(InputEvent::Char('z'));
+    assert_eq!(u.focused_edit_text().as_deref(), Some("applzes"));
+}
+
+/// Ctrl/Cmd+A still selects the whole line, and typing over it replaces all.
+#[test]
+fn ctrl_a_selects_the_whole_line_and_typing_replaces_it() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "copy me".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    ctrl_down(&mut u, Key::Letter('a'));
+    assert_eq!(u.focused_edit_selection().as_deref(), Some("copy me"));
+    u.handle_input(InputEvent::Char('x'));
+    assert_eq!(u.focused_edit_text().as_deref(), Some("x"));
+}
+
+/// Ctrl/Cmd+X cuts the Shift+arrow selection: the range is removed, the
+/// anchor is cleared, and the caret lands where the cut range began.
+#[test]
+fn cut_replaces_the_selection_and_clears_the_anchor() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left);
+    shift_down(&mut u, Key::Left); // selection [3, 6) = "les"
+    assert!(u.cut_focused_edit());
+    assert_eq!(u.focused_edit_text().as_deref(), Some("app"));
+    assert_eq!(u.focused_edit_selection(), None);
+    u.handle_input(InputEvent::Char('x')); // caret was at index 3
+    assert_eq!(u.focused_edit_text().as_deref(), Some("appx"));
+}
+
+/// Ctrl/Cmd+X with nothing selected cuts the whole line, the same text
+/// Ctrl/Cmd+C would have copied.
+#[test]
+fn cut_with_no_selection_clears_the_whole_line() {
+    let mut u = ui();
+    play(&mut u);
+    down(&mut u, Key::Letter('t'));
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    assert!(u.cut_focused_edit());
+    assert_eq!(u.focused_edit_text().as_deref(), Some(""));
+    assert_eq!(u.focused_edit_selection(), None);
+}
+
+/// A mouse drag over an entry line selects from the pressed character to the
+/// released one (V21-style); a plain click keeps the old caret-at-end behavior.
+#[test]
+fn mouse_drag_selects_text_in_the_entry_line() {
+    let mut u = ui();
+    play(&mut u);
+    u.apply(UiUpdate::OpenWrench {
+        brick: 10,
+        variant: WrenchVariant::Normal,
+        owner: "Owner".into(),
+        data: WrenchData::default(),
+        admin_override: false,
+        events_allowed: true,
+    });
+    let id = ScreenId::Wrench(WrenchVariant::Normal);
+    click(&mut u, id, "Wrench_Name");
+    for ch in "apples".chars() {
+        u.handle_input(InputEvent::Char(ch));
+    }
+    let v = u.screen(id).unwrap().view();
+    let r = v.node(v.id("Wrench_Name").unwrap()).rect;
+    // Fixture font: 7 logical px per character; text starts at rect.x + 2.
+    let sc = u.scale();
+    let adv = 7f32 * sc;
+    let x0 = (r.x + 2) as f32 * sc;
+    let (_, cy) = u.control_center(id, "Wrench_Name").unwrap();
+    // Press in the left half of char 2 (caret index 2), release in the left
+    // half of char 5 (caret index 5): selects "ple".
+    let press_x = x0 + 2.25 * adv;
+    let move_x = x0 + 5.25 * adv;
+    u.handle_input(InputEvent::MouseDown {
+        button: MouseButton::Left,
+        x: press_x,
+        y: cy,
+    });
+    u.handle_input(InputEvent::MouseMove { x: move_x, y: cy });
+    assert_eq!(u.focused_edit_selection().as_deref(), Some("ple"));
+    u.handle_input(InputEvent::MouseUp {
+        button: MouseButton::Left,
+        x: move_x,
+        y: cy,
+    });
+    // The selection survives the release; typing replaces it.
+    assert_eq!(u.focused_edit_selection().as_deref(), Some("ple"));
+    u.handle_input(InputEvent::Char('x'));
+    let v = u.screen(id).unwrap().view();
+    assert_eq!(v.edit_text(v.id("Wrench_Name").unwrap()), "apxs");
+
+    // A plain click (no drag) keeps the old behavior: caret at end, no
+    // selection.
+    click(&mut u, id, "Wrench_Name");
+    let v = u.screen(id).unwrap().view();
+    let n = v.id("Wrench_Name").unwrap();
+    assert_eq!(v.selected_range(n), None);
+    assert_eq!(v.node(n).state.cursor, 4); // "apxs"
 }
 
 /// Other dialogs keep their old behavior: the chat key opens nothing over

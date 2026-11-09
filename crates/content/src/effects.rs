@@ -65,6 +65,8 @@ pub struct Light {
     pub color: [f32; 3],
     pub brightness: f32,
     pub radius: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cone: Option<crate::presentation::LightCone>,
     pub color_curves: Option<[Curve; 3]>,
     pub brightness_curve: Option<Curve>,
     pub radius_curve: Option<Curve>,
@@ -701,6 +703,7 @@ impl Library {
             );
         }
         for l in &self.lights {
+            ensure!(l.cone.is_none_or(|c| c.valid()), "Invalid light cone");
             ensure!(
                 ids.insert(&l.id)
                     && l.color

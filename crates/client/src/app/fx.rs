@@ -615,9 +615,14 @@ impl App {
     ) -> Result<()> {
         weapon_effects.sync(view)?;
         weapon_effects.sync_image_lights(view, |owner, hand| {
-            world_items
-                .mounted_transform(owner, hand)
-                .map(|m| m.w_axis.truncate())
+            world_items.mounted_transform(owner, hand).map(|m| {
+                let (_, rotation, position) = m.to_scale_rotation_translation();
+                bri_fx_runtime::SourceTransform {
+                    position,
+                    rotation,
+                    velocity: Vec3::ZERO,
+                }
+            })
         })?;
         let elapsed = elapsed.min(0.25);
         for (_, age) in weapon_cues.iter_mut() {

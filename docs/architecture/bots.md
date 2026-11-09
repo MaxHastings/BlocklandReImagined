@@ -123,16 +123,22 @@ bot does through the same code.
    [Routes](#routes-one-planner-for-every-way-of-getting-about)) over the
    walk grid (`crate::nav`, shared by every bot of a body size, updated as
    bricks change, portals included) finds the way a little each tick,
-   walking, jumping, swimming or jetting wherever that is the cheapest. Gaps only
+   walking, jumping, swimming or jetting from the body's admitted capabilities.
+   Traversal costs remain primary for every task, including pursuit: clearance,
+   stable footing and takeoff time are not discarded to gain height. A chase/
+   search across floors uses floor distance only to break cost-estimate ties
+   and choose useful partial progress; bounded route segments are offered early. Gaps only
    a crouched body fits (crawlspaces) are on the grid: crawling costs
    more than walking, and the bot crouches into them. A wheeled driver's body
    uses the chassis footprint and clearance, with no pedestrian jump, crawl or
    portal edges. Local execution checks the actual oriented hull and brakes for
    allied bodies. A nearby final interaction approach continues beyond the
    grid cell to the authored point; physical reach still decides success.
-4. **Aim and trigger.** The aim follows the enemy whatever the behaviour
-   (leading shots by the projectile's speed and drop, with the kind's aim
-   error shrinking as it tracks), the path when there is none, and Carry
+4. **Aim and trigger.** Ordinary pursuit faces its route. Fighting in place
+   and ranged run-and-gun track the enemy (leading shots by projectile speed
+   and drop, with aim error shrinking as it tracks). A body attacker uses
+   its actual eligible contact point and keeps navigating until that attack
+   can reach; a preferred distance band is not proof of contact. Carry
    steers its own. It fires once its reaction time has passed and the aim
    is on, its weapon can reach, and no body the plan did not price has
    stepped into what the shot sweeps (`harm::Shape`). Mounted
@@ -241,10 +247,18 @@ Edges are the ways the bot's body can actually move between them now:
 | walk, step | the motor steps it (`Body::step`) | distance |
 | jump | a ledge no higher than the body was measured to jump onto (`reach::Reach::ledge`) | distance + a jump |
 | crawl | only a crouched body fits; up into one (a window up a wall), no higher than the body was measured to jump into one, crouching once off the ground (`reach::Reach::crawl_ledge`) | distance + crawling (+ a jump) |
+| leap | measured standing-takeoff reach admits the landing and its full-body arc is clear; the actual support normal also bounds vertical impulse/apex | measured flight plus stopping for takeoff |
 | portal | the body's middle goes in through a linked brick's opening | one cell |
 | swim | the floor lies under liquid that would float the body (`swim_coverage`) | distance x walk speed / swim speed + entry |
 | jet | the body's jets lift it (measured), the kind's `fly` weight is above 0, the full-width column up from the launch cell, the crossing at the apex and the descent are clear, and its energy holds the leg's measured jetting | the leg's measured flight time (`reach::JetReach`), plus takeoff |
 | board, drive, leave | a free, permitted wheeled vehicle in sight whose drive beats the walk to where the bot is going (`route::drive_serves`: the enemy it knows, else, for a rules bot, the place it would explore, else, idle, the player it plays near; one that runs over an enemy on foot the rules let the bot hurt is costed at its top speed, since the drive is the blow), or an armed one; a seat an ally offers is seen as far as the bot sees, and taken while it moves; never while the bot has a grounded objective of its own (its objective plan decides what it drives) | walk to the seat + boarding + chassis distance / cruise speed |
+
+A leap reached on a different floor or outside its measured landing footprint
+is a miss. Starting a new leap while finishing the previous flight does not
+spend the grounded takeoff-approach timeout before landing. Native jump impulse
+is scaled by the support normal; flat-floor reach does not promise a full-height
+ramp launch. Body-attack planning and post-movement execution share one contact
+query, retaining range, damage permission, conversion and seated-hull semantics.
 
 **Measured reach** (`crate::reach`). What a body can jump onto and how
 long a jet leg takes, and how high a crawlspace it can jump into, are
@@ -381,6 +395,17 @@ band, or higher than a jump brings within it), the bot first executes the
 reachable partial route. Only after that route is exhausted is chasing or
 searching that same point worth nothing until the evidence or geometry changes.
 A pending route is progress to try, not evidence that no approach exists.
+  Partial routes distinguish an unfinished planning window from an exhausted
+  graph. A body-sized rise toward another floor is useful progress even when
+  the target is horizontally close. After walking such a limited segment,
+  pursuit continues from the observed endpoint. Unproductive detours retain
+  their frontier instead of repeatedly restarting. Work per tick is unchanged;
+  resumption uses the search's original expansion window. Neither a window nor
+  a retained-node ceiling proves an obstruction should be breached.
+  Returning to an idle home is ineligible while a valid enabled pursuit or
+  dated search still has work. Evidence expiry, target death, explicit anchored
+  intents and exhausted routes still end that pursuit. Add-On behavior weights
+  can disable pursuit as before.
 A bot standing on something the grid leaves out (a vehicle's roof) plans
 from the floor beneath.
 

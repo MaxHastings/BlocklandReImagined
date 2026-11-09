@@ -93,9 +93,15 @@ const SETTLE_TICKS: u8 = 120;
 /// Contacts whose normal is closer to level than this (|y| of the unit
 /// normal, about 45 degrees) are hits from the side.
 const SIDE_HIT: f32 = 0.7;
-fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
-    if f.max_forward_vel > 0. {
-        ((speed - f.stall_speed) / f.max_forward_vel).clamped(0., 1.)
+fn bite(f: Option<&WheeledFlightSettings>, speed: f32) -> f32 {
+    let (stall, full) = f.map_or((0., 0.), |f| (f.stall_speed, f.max_forward_vel));
+    if full > 0. {
+        ((speed - stall) / full).clamped(0., 1.)
+    } else if speed > stall {
+        // v20's zero-default maxForwardVel divides a positive speed by
+        // zero, then clamps infinity to one (0x575425..0x575459).
+        // Express the finite result without propagating NaN at rest.
+        1.
     } else {
         0.
     }
@@ -206,6 +212,11 @@ pub struct VehicleSnapshot {
     /// The driver is holding the jump input: what an input-lit lamp follows.
     #[serde(default)]
     pub driver_jump_held: bool,
+    /// The driver drives in reverse (throttle against forward): what a
+    /// presentation condition follows.
+    #[serde(default)]
+    pub driver_reversing: bool,
+    pub driver_braking: bool,
     pub turret_aim: [f32; 2],
     pub turret_damage: Option<f32>,
     pub turret_transform: Option<Transform>,
@@ -403,6 +414,8 @@ struct Instance {
     water: bool,
     previous_velocity: Vec3,
     jump_held: bool,
+    reversing: bool,
+    braking: bool,
     fire_held: bool,
     mounted_once: bool,
     water_coverage: f32,
@@ -997,6 +1010,8 @@ impl VehiclesWorld {
                 water: false,
                 previous_velocity: Vec3::ZERO,
                 jump_held: false,
+                reversing: false,
+                braking: false,
                 fire_held: false,
                 mounted_once: false,
                 water_coverage: 0.,
@@ -2005,7 +2020,10 @@ impl VehiclesWorld {
                     v.relocations += 1;
                     carried.push((*id, carry));
                 }
+                // Preserve each control independently for presentation.
                 v.jump_held = c.jump;
+                v.reversing = c.throttle < 0.;
+                v.braking = c.brake;
                 if alive {
                     weapon_step(self.tick, *id, v, d, world, &mut self.intents);
                 }
@@ -2028,7 +2046,10 @@ impl VehiclesWorld {
             }
             if resting {
                 self.resting_skips += 1;
+                // Preserve each control independently for presentation.
                 v.jump_held = c.jump;
+                v.reversing = c.throttle < 0.;
+                v.braking = c.brake;
                 if alive {
                     weapon_step(self.tick, *id, v, d, world, &mut self.intents);
                 }
@@ -2080,9 +2101,21 @@ impl VehiclesWorld {
                     // only Blockland's flying forces move and turn them.
                     Family::Wheeled | Family::Skis => {
                         v.steering = steer * d.max_steering;
+                        let speed = speed.abs();
+                        let bite = bite(d.wheeled_flight.as_ref(), speed);
+                        // Pitch/yaw/roll are authored independently of wings
+                        // and thrust. Ordinary wheeled vehicles can declare
+                        // balance controls without becoming flying vehicles.
+                        let yaw = steer * steer.abs();
+                        let pitch = pitch * pitch.abs();
+                        b.add_torque(
+                            (-right * (pitch * d.pitch_force) - up * (yaw * d.yaw_force)
+                                + forward * (roll * d.roll_force))
+                                * bite,
+                            wake,
+                        );
                         if let Some(f) = &d.wheeled_flight {
                             // Speed along the nose, either way (0x575208).
-                            let speed = speed.abs();
                             let mut force = Vec3::ZERO;
                             // Stock Torque jets push along the nose; v20 never
                             // passes a rider's jet or crouch to a vehicle.
@@ -2098,17 +2131,6 @@ impl VehiclesWorld {
                             // Lift along the roof, truncated to a whole number
                             // and capped whatever the pitch or stall.
                             force += up * (d.lift * speed).trunc().clamped(0., WHEELED_LIFT_CAP);
-                            let bite = bite(f, speed);
-                            // Squared mouse steering over maxSteeringAngle;
-                            // a positive pitch (mouse up with v20's default
-                            // vehicle mouse invert) dips the nose.
-                            let (yaw, pitch) = (steer * steer.abs(), pitch * pitch.abs());
-                            b.add_torque(
-                                (-right * (pitch * d.pitch_force) - up * (yaw * d.yaw_force)
-                                    + forward * (roll * d.roll_force))
-                                    * bite,
-                                wake,
-                            );
                             // Wings: sideways and roof-wise air is resisted
                             // with the square of speed once above stall. A
                             // sled's (skis) grip only with wheel 0 down.
@@ -2184,7 +2206,10 @@ impl VehiclesWorld {
                     }
                 }
             }
+            // Preserve each control independently for presentation.
             v.jump_held = c.jump;
+            v.reversing = c.throttle < 0.;
+            v.braking = c.brake;
             if !v.wheels.is_empty() {
                 self.wheel_rays += v.wheels.len() as u64;
                 let through = if passages.list.is_empty() {
@@ -2672,6 +2697,8 @@ impl VehiclesWorld {
             energy: v.energy,
             jetting: v.jetting,
             driver_jump_held: v.jump_held,
+            driver_reversing: v.reversing,
+            driver_braking: v.braking,
             turret_aim: [if d.is_actor() { 0. } else { barrel[0] }, barrel[1]],
             turret_damage: v.turret_damage,
             turret_transform: d
@@ -2780,6 +2807,7 @@ fn actor_step(
         yaw,
         pitch: 0.,
         head_yaw: 0.,
+        action_look: None,
         jump: driven && c.jump,
         crouch: false,
         jet: false,

@@ -353,7 +353,20 @@ fn deck_file_falls(layouts: &[(f32, f32, f32)]) -> u64 {
                     .s
                     .bot_thoughts()
                     .into_iter()
-                    .map(|t| (t.bot, t.goal, t.next, t.acted, t.input))
+                    .map(|t| {
+                        (
+                            t.bot,
+                            t.goal,
+                            t.next,
+                            t.next_mode,
+                            t.acted,
+                            t.input,
+                            arena
+                                .s
+                                .bot_route(t.bot)
+                                .map(|r| r.iter().take(3).cloned().collect::<Vec<_>>()),
+                        )
+                    })
                     .collect();
                 trace_frames.push_back(format!("tick {tick}: {states:?}; {thoughts:?}"));
                 if trace_frames.len() > 24 {

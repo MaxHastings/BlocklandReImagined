@@ -1253,7 +1253,7 @@ impl Session {
         feet: Vec3,
         body: &crate::nav::Body,
         toward: Vec3,
-        restrict_drop: bool,
+        planned_floor: Option<f32>,
         grounded: bool,
     ) -> bool {
         let Some(hurts) = self.bot_safe_drop(bot) else {
@@ -1261,9 +1261,15 @@ impl Session {
         };
         // Off-route footwork and level routes avoid unplanned deep drops.
         // In the air, measure from the supporting floor, not the feet:
-        // otherwise any floor below a jump would appear safe. Routes with
-        // a nearby planned height change keep their non-harmful traversal.
-        let depth = if restrict_drop {
+        // otherwise any floor below a jump would appear safe. Only the
+        // current route leg's floor can extend the ordinary drop budget.
+        let depth = if let Some(floor) = planned_floor {
+            // A small step in the route cannot authorize every non-harmful
+            // drop nearby. Bound the probe by the actual planned floor,
+            // allowing only the body's ordinary step tolerance beneath it.
+            ((feet.y - floor).max(0.0).max(body.drop) + body.step)
+                .min(hurts.max(body.drop + ROUTE_DROP_SLACK))
+        } else {
             // Standing, its feet are on that floor. In the air it is the
             // highest floor under any part of its body (its middle may be
             // out over a rim it jumped from).
@@ -1286,8 +1292,6 @@ impl Session {
                 .map_or(0.0, |d| (d - 0.5).max(0.0))
             };
             above + body.step + body.drop
-        } else {
-            hurts.max(body.drop + ROUTE_DROP_SLACK)
         };
         let across = Vec3::new(-toward.z, 0.0, toward.x) * (body.width * 0.4);
         [0.6, 1.2].into_iter().any(|ahead| {

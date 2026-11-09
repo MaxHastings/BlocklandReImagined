@@ -201,13 +201,30 @@ fn vehicle() -> Result<(
         scale: 2.3,
         lights: false,
     };
-    let pose: VehiclePose = serde_json::from_value(serde_json::json!({
-        "id":1,"tick":1,"position":[3.,4.,5.],
-        "rotation":Quat::from_rotation_z(0.3).to_array(),"velocity":[0.,0.,0.],
-        "steering":0.,"wheel_suspension":[],"wheel_rotation":[],"wheel_contact":[],
-        "wheel_tire":[],"turret_aim":[0.,0.],"jetting":false,"angular_velocity":[0.,0.,0.],
-        "mouse_steering":[0.,0.],"driver_input":0,"driver_steering":[false,false],"steering_quiet":0
-    }))?;
+    let pose = VehiclePose {
+        passage_frame: Default::default(),
+        id: 1,
+        tick: 1,
+        position: [3., 4., 5.],
+        rotation: Quat::from_rotation_z(0.3).to_array(),
+        velocity: [0.; 3],
+        steering: 0.,
+        wheel_suspension: vec![],
+        wheel_rotation: vec![],
+        wheel_contact: vec![],
+        wheel_tire: vec![],
+        turret_aim: [0.; 2],
+        jetting: false,
+        angular_velocity: [0.; 3],
+        mouse_steering: [0.; 2],
+        driver_input: 0,
+        driver_steering: (false, false),
+        driver_jump_held: false,
+        driver_reversing: false,
+        driver_braking: false,
+        steering_quiet: 0,
+        actor: None,
+    };
     let mut vehicles = ClientVehicles::default();
     vehicles.update(
         &BTreeMap::from([(1, info.clone())]),

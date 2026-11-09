@@ -184,6 +184,8 @@ fn vehicle_same(a: &VehiclePose, b: &VehiclePose) -> bool {
         && a.wheel_contact == b.wheel_contact
         && a.jetting == b.jetting
         && a.driver_jump_held == b.driver_jump_held
+        && a.driver_reversing == b.driver_reversing
+        && a.driver_braking == b.driver_braking
         && a.driver_steering == b.driver_steering
         && a.passage_frame == b.passage_frame
 }
@@ -1068,6 +1070,8 @@ mod tests {
             turret_aim: [0.0; 2],
             jetting: false,
             driver_jump_held: false,
+            driver_reversing: false,
+            driver_braking: false,
             angular_velocity: [0.0, 0.4, 0.0],
             mouse_steering: [0.2, 0.0],
             driver_input: 42,
@@ -1116,6 +1120,8 @@ mod tests {
                 turret_aim: [0.0; 2],
                 jetting: false,
                 driver_jump_held: false,
+                driver_reversing: false,
+                driver_braking: false,
                 angular_velocity: [0.0; 3],
                 mouse_steering: [0.0; 2],
                 driver_input: 0,

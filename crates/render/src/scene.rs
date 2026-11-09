@@ -2718,13 +2718,7 @@ const ALL_ROUND: [f32; 4] = [0.0, 0.0, 0.0, -1.0];
 /// A spot light's cone words: full light within `inner` degrees of
 /// `direction`, fading to none at `outer`.
 pub fn spot_words(direction: Vec3, inner: f32, outer: f32) -> [f32; 4] {
-    let direction = direction.normalize_or_zero();
-    let (inner, outer) = (inner.to_radians().cos(), outer.to_radians().cos());
-    if direction == Vec3::ZERO || !(inner.is_finite() && outer.is_finite()) {
-        return ALL_ROUND;
-    }
-    let k = 1.0 / (inner - outer).max(0.001);
-    [direction.x * k, direction.y * k, direction.z * k, outer * k]
+    bri_content::presentation::cone_words(direction, inner, outer)
 }
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
 const MAP_LIGHT_CUBES: usize =

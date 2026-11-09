@@ -2898,3 +2898,88 @@ fn a_loading_player_is_connected_chats_and_spawns_later() {
     assert!(s.arrivals().is_empty());
     s.command(bob, 1, Command::Suicide).unwrap();
 }
+
+#[test]
+fn continuous_fire_uses_action_look_after_the_reliable_click_and_follows_new_inputs() {
+    use bri_sim::session::ActionAim;
+    use bri_weapons::testing::{BOW_IMAGE, GUN_IMAGE, GUN_ITEM, GUN_PROJECTILE};
+    use std::collections::BTreeSet;
+    let mut pack = bri_weapons::testing::pack();
+    // An automatic trigger graph and a straight ray isolate the contract:
+    // clicks and continuous input share aim despite a different control turn.
+    let automatic = pack.images[BOW_IMAGE].states.clone();
+    pack.images.get_mut(GUN_IMAGE).unwrap().states = automatic;
+    pack.projectiles.get_mut(GUN_PROJECTILE).unwrap().inherit = 0.0;
+    let mut s = session();
+    s.set_weapon_pack(pack).unwrap();
+    let owner = s
+        .join("View aim".into(), Vec3::new(0., 0.05, 0.), false)
+        .unwrap();
+    let slot = s.give_item(owner, GUN_ITEM).unwrap();
+    s.command(owner, 1, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    let first = ActionAim {
+        yaw: std::f32::consts::FRAC_PI_2,
+        pitch: 0.0,
+    };
+    let mut sequence = 0;
+    let mut feed = |s: &mut Session, look: ActionAim| {
+        sequence += 1;
+        s.movement(
+            owner,
+            sequence,
+            MoveInput {
+                yaw: -2.0,
+                pitch: -0.8,
+                action_look: Some(look),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    };
+    for _ in 0..40 {
+        feed(&mut s, first);
+    }
+    s.command_with_aim(owner, 2, Command::WeaponTrigger { down: true }, Some(first))
+        .unwrap();
+    let mut seen = BTreeSet::new();
+    for _ in 0..100 {
+        feed(&mut s, first);
+        for shot in s.weapon_view().fired() {
+            if shot.source.0 == owner && seen.insert(shot.id) {
+                assert!(
+                    shot.velocity.normalize().abs_diff_eq(Vec3::X, 1e-5),
+                    "initial and held shots must agree despite raw control look: {:?}",
+                    shot.velocity
+                );
+            }
+        }
+    }
+    assert!(
+        seen.len() >= 2,
+        "must test held fire after click aim has been consumed"
+    );
+    let before = seen.len();
+    let next = ActionAim {
+        yaw: 0.0,
+        pitch: std::f32::consts::FRAC_PI_6,
+    };
+    for _ in 0..100 {
+        feed(&mut s, next);
+        for shot in s.weapon_view().fired() {
+            if shot.source.0 == owner && seen.insert(shot.id) {
+                assert!(
+                    shot.velocity
+                        .normalize()
+                        .abs_diff_eq(Vec3::new(0., 0.5, -3f32.sqrt() * 0.5), 1e-5),
+                    "held fire must use current action input, not latch the first click: {:?}",
+                    shot.velocity
+                );
+            }
+        }
+    }
+    assert!(seen.len() > before);
+    s.command(owner, 3, Command::WeaponTrigger { down: false })
+        .unwrap();
+}

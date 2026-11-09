@@ -3,6 +3,7 @@
 //! surfaces that bite only above `stallSpeed`, and no jets.
 #[macro_use]
 mod common;
+use bri_vehicles::schema::WheeledFlightSettings;
 use bri_vehicles::*;
 use common::Fixture;
 use glam::{Quat, Vec3};
@@ -85,6 +86,46 @@ fn top_speed(f: &Fixture) -> f32 {
         .as_ref()
         .expect("flies")
         .max_forward_vel
+}
+
+#[test]
+fn wheeled_balance_controls_do_not_require_wings_or_thrust() {
+    for flight in [None, Some(WheeledFlightSettings::default())] {
+        let mut fixture = Fixture::synthetic();
+        let definition = fixture
+            .pack
+            .definitions
+            .iter_mut()
+            .find(|d| d.id == fixture.flying_car)
+            .unwrap();
+        definition.wheeled_flight = flight;
+        definition.thrust = 0.;
+        definition.reverse_thrust = 0.;
+        definition.lift = 0.;
+        for speed in [0., 10.] {
+            let (mut vehicles, mut world) = flying_jeep(&fixture, 100., speed);
+            fly(
+                &mut vehicles,
+                &mut world,
+                1,
+                Controls {
+                    look_delta: [0.06, 0.06],
+                    strafe: 1.,
+                    ..zero()
+                },
+            );
+            let (_, _, _, spin) = state(&vehicles, &world);
+            assert!(spin.is_finite());
+            if speed == 0. {
+                assert!(spin.length() < 1e-5, "resting controls produced {spin}");
+            } else {
+                assert!(
+                    spin.x < 0. && spin.y < 0. && spin.z < 0.,
+                    "authored pitch, yaw and roll must all act: {spin}"
+                );
+            }
+        }
+    }
 }
 
 on_both! {

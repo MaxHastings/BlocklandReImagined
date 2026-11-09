@@ -44,6 +44,7 @@ pub(super) mod copy_hooks;
 mod item_hooks;
 mod object_hooks;
 mod panels;
+mod vehicle_hooks;
 mod volume_hooks;
 pub use panels::{PanelCommand, PanelShown};
 mod reports;

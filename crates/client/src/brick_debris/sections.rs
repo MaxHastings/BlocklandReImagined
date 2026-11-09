@@ -10,18 +10,66 @@ mod interaction_tests;
 mod motion;
 mod partition;
 mod proxy;
+mod release;
+#[cfg(test)]
+mod scheduling_tests;
 pub(super) mod shots;
 use partition::Partition;
 
 pub(super) const MAX_VISIBLE: usize = bri_sim::presentation::MAX_SECTION_MEMBERS;
-const MAX_CHUNKS: usize = 64;
 const WITNESSES: usize = 72;
 const MAX_PROXY_PARTS: usize = 2048;
 const MAX_CHUNK_MEMBERS: usize = 16;
 const MAX_CHUNK_SPAN: f32 = 6.;
+// Collision work follows fixed simulation steps, keeping the same per-second
+// allowance when a frame must advance several local physics steps.
+const COLLISION_QUERIES_PER_STEP: u32 = 256;
+const CONTACT_SKIN: f32 = 0.02;
+const RESTITUTION: f32 = 0.25;
+
+/// Read-only motion evidence for offscreen repros and diagnostics. Collecting
+/// this does not advance a clock, prepare collision or alter admission.
+#[derive(serde::Serialize)]
+pub struct SectionSnapshot {
+    pub impulse: Option<bri_sim::presentation::RadialImpulse>,
+    pub release_center: [f32; 3],
+    pub release_velocity: [f32; 3],
+    pub release_spin: [f32; 3],
+    pub impact_velocity: Option<[f32; 3]>,
+    pub impact_spin: Option<[f32; 3]>,
+    pub key: [u64; 2],
+    pub members: usize,
+    pub expected: usize,
+    pub sealed: bool,
+    pub gpu_ready: bool,
+    pub staging_age: f32,
+    pub age: f32,
+    pub shown: f32,
+    pub confirmed: f32,
+    pub impact_at: Option<f32>,
+    pub mode: &'static str,
+    pub pending_contacts: usize,
+    pub prepared_members: usize,
+    pub planning: bool,
+    pub pending_groups: usize,
+    pub center: [f32; 3],
+    pub rotation: [f32; 4],
+    pub chunks: Vec<ChunkSnapshot>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ChunkSnapshot {
+    pub center: [f32; 3],
+    pub rotation: [f32; 4],
+    pub velocity: [f32; 3],
+    pub resident: bool,
+    pub released: bool,
+    pub debt: f32,
+}
 
 #[derive(Clone)]
 pub(super) struct SectionPiece {
+    pub impulse: Option<bri_sim::presentation::RadialImpulse>,
     pub brick: BrickId,
     pub cue: u64,
     pub look: Look,
@@ -35,14 +83,9 @@ pub(super) struct SectionPiece {
     pub section_half: Vec3,
     pub pivot: Vec3,
 }
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Motion {
-    Topple,
-    Span,
-    Drop,
-}
 struct Chunk {
     local: Vec3,
+    mass_center: Vec3,
     half: Vec3,
     proxy: Option<SharedShape>,
     parts: usize,
@@ -53,10 +96,6 @@ struct Chunk {
     handle: Option<RigidBodyHandle>,
     collision: CollisionWindow,
     released: bool,
-    sweep: Option<crate::building::DebrisSweep>,
-    neighbors: Option<motion::Neighbors>,
-    sweep_dt: f32,
-    slide: u8,
     debt: f32,
 }
 impl Chunk {
@@ -78,12 +117,13 @@ impl Chunk {
             self.spin = Vec3::from_array(rb.angvel().to_array());
             world.remove_body_with_colliders(h, true);
         }
-        self.sweep = None;
-        self.neighbors = None;
         self.collision.reset();
     }
 }
 pub(super) struct Section {
+    impulse: Option<bri_sim::presentation::RadialImpulse>,
+    mass: release::Mass,
+    release: Option<release::Motion>,
     pub pieces: Vec<SectionPiece>,
     pub age: f32,
     pub(super) sealed: bool,
@@ -98,16 +138,17 @@ pub(super) struct Section {
     origin: Vec3,
     half: Vec3,
     pivot: Vec3,
-    motion: Motion,
-    axis: Vec3,
     shown: f32,
     confirmed: f32,
     impact_at: Option<f32>,
     probe_generation: u64,
     pub landed: bool,
     chunk_turn: usize,
+    preparation_turn: usize,
     pending: VecDeque<(SectionProbe, f32, Vec3, Vec3)>,
     contact_point: Option<Vec3>,
+    contact_normal: Vec3,
+    impact_motion: Option<release::Motion>,
     snap_told: bool,
     landing_told: bool,
     target: f32,
@@ -131,14 +172,16 @@ impl Section {
         world: &PhysicsWorld,
     ) -> (Vec3, Quat) {
         let p = &self.pieces[i];
-        self.assignment[i].map_or(
-            (center + turn * p.offset + self.recoil, turn * p.turn),
-            |a| {
-                let c = &self.chunks[a];
-                let (cc, ct) = c.pose(world);
-                (cc + ct * (p.offset - c.local), ct * p.turn)
-            },
-        )
+        self.assignment[i]
+            .filter(|_| self.finishing.is_none())
+            .map_or(
+                (center + turn * p.offset + self.recoil, turn * p.turn),
+                |a| {
+                    let c = &self.chunks[a];
+                    let (cc, ct) = c.pose(world);
+                    (cc + ct * (p.offset - c.local), ct * p.turn)
+                },
+            )
     }
     pub(super) fn append_attachment_frames(
         &self,
@@ -164,27 +207,11 @@ impl Section {
             );
         }
     }
-    fn new(p: &SectionPiece, group: u64) -> Self {
-        let width = p.section_half.x.max(p.section_half.z);
-        let motion = if p.section_half.y > width * 1.6 {
-            Motion::Topple
-        } else if width > p.section_half.x.min(p.section_half.z).max(p.section_half.y) * 2. {
-            Motion::Span
-        } else {
-            Motion::Drop
-        };
-        let mut rng = Seeded::new(group);
-        let lean = (p.origin - p.pivot) * Vec3::new(1., 0., 1.);
-        let lean = if motion == Motion::Span && lean.length_squared() < 0.01 {
-            if p.section_half.x > p.section_half.z {
-                Vec3::X
-            } else {
-                Vec3::Z
-            }
-        } else {
-            lean.normalize_or(Vec3::new(rng.signed(), 0., rng.signed()).normalize_or(Vec3::X))
-        };
+    fn new(p: &SectionPiece) -> Self {
         Self {
+            impulse: p.impulse,
+            mass: release::Mass::default(),
+            release: None,
             pieces: Vec::new(),
             age: 0.,
             sealed: false,
@@ -199,16 +226,17 @@ impl Section {
             origin: p.origin,
             half: p.section_half,
             pivot: p.pivot - p.origin,
-            motion,
-            axis: Vec3::Y.cross(lean).normalize_or(Vec3::X),
             shown: 0.,
             confirmed: 0.,
             impact_at: None,
             probe_generation: 0,
             landed: false,
             chunk_turn: 0,
+            preparation_turn: 0,
             pending: VecDeque::new(),
             contact_point: None,
+            contact_normal: Vec3::ZERO,
+            impact_motion: None,
             snap_told: false,
             landing_told: false,
             target: 0.,
@@ -225,26 +253,8 @@ impl Section {
         }
     }
     fn pose(&self, age: f32) -> (Vec3, Quat) {
-        if self.motion == Motion::Drop {
-            return (
-                self.origin - Vec3::Y * (0.5 * GRAVITY * age * age),
-                Quat::from_axis_angle(self.axis, 0.22 * age),
-            );
-        }
-        let length = if self.motion == Motion::Topple {
-            self.half.y * 2.
-        } else {
-            self.half.max_element() * 2.
-        };
-        let angle = (0.12 * age + GRAVITY / (2. * length.max(0.5)) * age * age).min(1.65);
-        let turn = Quat::from_axis_angle(self.axis, angle);
-        // The hinge only sells the beginning: a severed assembly then falls free.
-        let release = (2. * length / GRAVITY).sqrt();
-        let drop = 0.5 * GRAVITY * (age - release).max(0.).powi(2);
-        (
-            self.origin + self.pivot - turn * self.pivot - Vec3::Y * drop,
-            turn,
-        )
+        let motion = self.release.unwrap_or_else(|| self.mass.motion());
+        motion.pose(self.origin, age)
     }
     fn admit(&mut self, mut p: SectionPiece) {
         if self.ids.contains(&p.brick) {
@@ -258,6 +268,9 @@ impl Section {
         }
         self.ids.insert(p.brick);
         p.offset -= self.origin;
+        if p.active {
+            self.mass.add(&p, self.impulse, 1.);
+        }
         self.record_member(&p);
         self.pieces.push(p);
         self.assignment.push(None);
@@ -305,9 +318,6 @@ impl Section {
         }
     }
     fn record_point(&mut self, point: Vec3) {
-        if self.motion == Motion::Topple && point.y - self.pivot.y < self.half.y * 0.25 {
-            return;
-        }
         let q = point / self.half.max(Vec3::splat(0.1));
         for w in 0..8 {
             let direction = Vec3::new(
@@ -354,6 +364,7 @@ impl Section {
                 continue;
             };
             self.admit(SectionPiece {
+                impulse: self.impulse,
                 brick,
                 // Recovered from replicated section membership, not a death
                 // cue. A later matching cue supplies its real sequence.
@@ -387,13 +398,11 @@ impl Section {
         }
     }
     fn sample_axes(&self) -> [usize; 3] {
-        if self.motion == Motion::Drop {
-            [0, 2, 1]
-        } else if self.half.x >= self.half.z {
-            [0, 1, 2]
-        } else {
-            [2, 1, 0]
-        }
+        // Spend the witness grid on the broadest dimensions, independent of
+        // any assumed motion or content category.
+        let mut axes = [0, 1, 2];
+        axes.sort_by(|&a, &b| self.half[b].total_cmp(&self.half[a]));
+        axes
     }
     fn grid_point(&self, cells: [usize; 3]) -> Vec3 {
         let axes = self.sample_axes();
@@ -413,6 +422,7 @@ impl Section {
         if !self.sealed || !self.gpu_ready || self.landed || self.pieces.is_empty() {
             return Ok(());
         }
+        let motion = *self.release.get_or_insert_with(|| self.mass.motion());
         let (at, _) = self.pose(self.shown);
         let extent = Vec3::splat(self.half.length());
         if building.query_changed_since(self.probe_generation, at - extent, at + extent) {
@@ -427,13 +437,25 @@ impl Section {
                 return Ok(());
             }
             *work -= WITNESSES as u32;
-            self.target = self.age + 0.2;
+            // Limit each rotating witness chord by the existing contact skin.
+            // Fast small fragments must not sweep across a wide arc as a line.
+            let radius = self.half.length() + motion.center.length();
+            let angle = (2.
+                * (1. - f64::from(CONTACT_SKIN) / f64::from(radius.max(CONTACT_SKIN))).acos())
+                as f32;
+            let window = if motion.spin.length() > 0. {
+                (angle / motion.spin.length()).min(0.2)
+            } else {
+                0.2
+            };
+            self.target = (self.age + 0.2).min(self.confirmed + window);
             self.contact = None;
             self.contact_point = None;
+            self.contact_normal = Vec3::ZERO;
             let (old, ot) = self.pose(self.confirmed);
             let (next, nt) = self.pose(self.target);
             for point in self.witnesses.iter().flatten() {
-                let from = old + ot * *point + Vec3::Y * 0.02;
+                let from = old + ot * *point + Vec3::Y * CONTACT_SKIN;
                 let to = next + nt * *point;
                 if from.distance_squared(to) < 1e-6 {
                     continue;
@@ -451,12 +473,27 @@ impl Section {
             let Some(hit) = building.step_section_probe(p, work, |id| dead.contains(&id))? else {
                 break;
             };
-            if let Some(distance) = hit {
-                let f = ((distance - 0.02) / reach.max(0.001)).clamped(0., 1.);
-                if self.contact.is_none_or(|old| f < old) {
-                    self.contact = Some(f);
-                    self.contact_point = Some(*from + *direction * distance);
+            if let Some((distance, normal)) = hit {
+                let f = ((distance - CONTACT_SKIN) / reach.max(0.001)).clamped(0., 1.);
+                let point = *from + *direction * distance;
+                let age = self.confirmed + (self.target - self.confirmed) * f;
+                let (center, turn) = motion.pose(self.origin, age);
+                let com = center + turn * motion.center;
+                let closer_on_same_face = self.contact.is_some_and(|old| {
+                    (f - old).abs() * *reach <= CONTACT_SKIN
+                        && normal == self.contact_normal
+                        && self.contact_point.is_some_and(|old| {
+                            point.distance_squared(com) < old.distance_squared(com)
+                        })
+                });
+                if self.contact.is_none_or(|old| {
+                    f < old && ((old - f) * *reach > CONTACT_SKIN || normal != self.contact_normal)
+                }) || closer_on_same_face
+                {
+                    self.contact_point = Some(point);
+                    self.contact_normal = normal;
                 }
+                self.contact = Some(self.contact.map_or(f, |old| old.min(f)));
             }
             self.pending.pop_front();
         }
@@ -468,6 +505,19 @@ impl Section {
         }
         self.shown = self.age.min(self.impact_at.unwrap_or(self.confirmed));
         self.landed = self.impact_at.is_some_and(|at| self.age >= at);
+        if self.landed
+            && self.impact_motion.is_none()
+            && let Some(point) = self.contact_point
+        {
+            let (center, turn) = self.pose(self.shown);
+            let mut incoming = motion;
+            incoming.velocity -= Vec3::Y * GRAVITY * self.shown;
+            self.impact_motion =
+                Some(
+                    self.mass
+                        .impact(incoming, turn, point - center, self.contact_normal),
+                );
+        }
         Ok(())
     }
     fn partition(&mut self, work: &mut u32) {
@@ -489,15 +539,18 @@ impl Section {
             if !plan.step(work) {
                 return;
             }
-            if !self.landed {
-                return;
-            }
+            // Collision-aware clumps participate in flight, not only after a
+            // static witness has stopped the complete assembly. Otherwise a
+            // player can pass through falling material before first landing.
             self.finishing = Some(self.plan.take().unwrap().groups.into());
         }
         let (center, turn) = self.pose(self.shown);
-        let (before, bt) = self.pose((self.shown - 0.01).max(0.));
-        let velocity = ((center - before) / 0.01).clamp_length_max(12.);
-        let spin = (turn * bt.inverse()).to_scaled_axis() / 0.01;
+        let motion = self.impact_motion.unwrap_or_else(|| {
+            let mut motion = self.release.unwrap_or_else(|| self.mass.motion());
+            motion.velocity -= Vec3::Y * GRAVITY * self.shown;
+            motion
+        });
+        let velocity = motion.velocity;
         while self
             .finishing
             .as_ref()
@@ -517,8 +570,13 @@ impl Section {
             }
             let mut low = Vec3::splat(f32::INFINITY);
             let mut high = Vec3::splat(f32::NEG_INFINITY);
+            let mut weight = 0.;
+            let mut first = glam::DVec3::ZERO;
             for &i in &members {
                 let p = &self.pieces[i];
+                let mass = f64::from(p.half.x) * f64::from(p.half.y) * f64::from(p.half.z);
+                weight += mass;
+                first += p.offset.as_dvec3() * mass;
                 let h = (p.turn * Vec3::X).abs() * p.half.x
                     + (p.turn * Vec3::Y).abs() * p.half.y
                     + (p.turn * Vec3::Z).abs() * p.half.z;
@@ -527,37 +585,107 @@ impl Section {
                 self.assignment[i] = Some(self.chunks.len());
             }
             let local = (low + high) * 0.5;
+            let mass_center = (first / weight).as_vec3();
             let (proxy, parts) = proxy::shape(&self.pieces, &members, self.origin + local);
             debug_assert!(proxy.is_some(), "bounded groups fit exact proxies");
             self.chunks.push(Chunk {
                 local,
+                mass_center,
                 half: (high - low) * 0.5,
                 proxy,
                 parts,
-                center: center + turn * local,
+                center: center + turn * local + self.recoil,
                 turn,
-                velocity: (velocity + spin.cross(turn * local)).clamp_length_max(12.),
-                spin: spin.clamp_length_max(3.),
+                velocity: (velocity + motion.spin.cross(turn * (mass_center - motion.center)))
+                    .clamp_length_max(MAX_SPEED),
+                spin: motion.spin,
                 handle: None,
                 collision: Default::default(),
                 released: false,
-                sweep: None,
-                neighbors: None,
-                sweep_dt: 0.,
-                slide: 0,
                 debt: 0.,
             });
         }
-        if self
-            .finishing
-            .as_ref()
-            .is_some_and(|groups| groups.is_empty())
+        if self.gpu_ready
+            && self
+                .finishing
+                .as_ref()
+                .is_some_and(|groups| groups.is_empty())
         {
+            // Keep completed proxies staged until their visible material is
+            // ready too. Neither backend may advance invisible clumps and
+            // reveal them later at a different point in the fall.
+            // Publish all prepared groups together at the current shared pose.
+            // Incremental proxy construction must not leave earlier groups at
+            // an older pose or start their clocks while later groups are built.
+            for c in &mut self.chunks {
+                c.center = center + turn * c.local + self.recoil;
+                c.turn = turn;
+                // Each exact proxy determines its own contact and angular
+                // response from here; no whole-section impact is required.
+                c.velocity = (velocity + motion.spin.cross(turn * (c.mass_center - motion.center)))
+                    .clamp_length_max(MAX_SPEED);
+                c.spin = motion.spin;
+            }
             self.finishing = None;
         }
     }
 }
 impl BrickDebris {
+    pub fn section_snapshots(&self) -> impl Iterator<Item = SectionSnapshot> + '_ {
+        self.sections.iter().map(|(key, s)| {
+            let (center, turn) = s.pose(s.shown);
+            SectionSnapshot {
+                impulse: s.impulse,
+                release_center: s
+                    .release
+                    .unwrap_or_else(|| s.mass.motion())
+                    .center
+                    .to_array(),
+                release_velocity: s
+                    .release
+                    .unwrap_or_else(|| s.mass.motion())
+                    .velocity
+                    .to_array(),
+                release_spin: s.release.unwrap_or_else(|| s.mass.motion()).spin.to_array(),
+                impact_velocity: s.impact_motion.map(|m| m.velocity.to_array()),
+                impact_spin: s.impact_motion.map(|m| m.spin.to_array()),
+                key: [key.0, key.1],
+                members: s.pieces.len(),
+                expected: s.expected,
+                sealed: s.sealed,
+                gpu_ready: s.gpu_ready,
+                staging_age: s.staging_age,
+                age: s.age,
+                shown: s.shown,
+                confirmed: s.confirmed,
+                impact_at: s.impact_at,
+                mode: "freefall",
+                pending_contacts: s.pending.len(),
+                prepared_members: s.prepared,
+                planning: s.plan.is_some(),
+                pending_groups: s.finishing.as_ref().map_or(0, VecDeque::len),
+                center: center.to_array(),
+                rotation: turn.to_array(),
+                chunks: s
+                    .chunks
+                    .iter()
+                    .map(|c| {
+                        let (center, turn) = c.pose(&self.world);
+                        ChunkSnapshot {
+                            center: center.to_array(),
+                            rotation: turn.to_array(),
+                            velocity: c.handle.map_or(c.velocity.to_array(), |h| {
+                                self.world.bodies[h].linvel().to_array()
+                            }),
+                            resident: c.handle.is_some(),
+                            released: c.released,
+                            debt: c.debt,
+                        }
+                    })
+                    .collect(),
+            }
+        })
+    }
     pub(super) fn blast_fallback(
         &mut self,
         origin: Vec3,
@@ -595,8 +723,6 @@ impl BrickDebris {
                 kick.y = kick.y.max((speed * 0.45).min(8.));
             }
             c.velocity = (c.velocity + kick).clamp_length_max(12.);
-            c.sweep = None;
-            c.neighbors = None;
         }
     }
     pub(super) fn fallback_bounds(
@@ -604,6 +730,7 @@ impl BrickDebris {
     ) -> impl Iterator<Item = rapier3d::parry::bounding_volume::Aabb> + '_ {
         self.sections
             .values()
+            .filter(|s| s.finishing.is_none())
             .flat_map(|s| &s.chunks)
             .filter(|c| c.handle.is_none() && !c.released)
             .filter_map(|c| {
@@ -703,7 +830,7 @@ impl BrickDebris {
         let s = self
             .sections
             .entry(key)
-            .or_insert_with(|| Section::new(&pieces[0], key.1));
+            .or_insert_with(|| Section::new(&pieces[0]));
         if s.age >= SOLID_SECONDS + FADE_SECONDS {
             return Ok(());
         }
@@ -718,41 +845,20 @@ impl BrickDebris {
         Ok(())
     }
     pub(super) fn advance_sections(&mut self, dt: f32, building: &Building) -> Result<()> {
-        let scene = motion::RubbleScene::new(self);
-        let frame = motion::Frame {
-            dt,
-            building,
-            dead: &self.dead,
-            actors: &self.section_pushers,
-            scene: &scene,
-        };
         let mut contacts = 4096;
         let mut planning = 4096;
-        let mut collision = 512 * crate::local_physics::COLLISION_QUERY_COST;
-        let mut fallback = collision / 2;
-        collision -= fallback;
+        let steps = (((self.accumulator + dt) / STEP) as u32).clamp(1, MAX_STEPS);
+        let mut collision =
+            COLLISION_QUERIES_PER_STEP * steps * crate::local_physics::COLLISION_QUERY_COST;
         let mut material = 256;
         let mut recovery = 256;
-        let mut available = self
-            .limit
-            .saturating_sub(self.bodies.len() + self.chunk_handles().count());
-        available = available.min(MAX_CHUNKS.saturating_sub(self.chunk_handles().count()));
-        let used_parts = self.bodies.len()
-            + self
-                .sections
-                .values()
-                .flat_map(|s| &s.chunks)
-                .filter(|c| c.handle.is_some())
-                .map(|c| c.parts)
-                .sum::<usize>();
-        let mut part_slots = MAX_PROXY_PARTS.saturating_sub(used_parts);
         let mut keys: Vec<_> = self.sections.keys().copied().collect();
         if !keys.is_empty() {
             let offset = self.section_turn % keys.len();
             keys.rotate_left(offset);
             self.section_turn = self.section_turn.wrapping_add(1);
         }
-        for key in keys {
+        for &key in &keys {
             let s = self.sections.get_mut(&key).unwrap();
             s.recover(key, building, &mut recovery);
             s.prepare_members(&mut material);
@@ -767,6 +873,9 @@ impl BrickDebris {
                             [key.0, key.1],
                         )
                     {
+                        if s.release.is_none() {
+                            s.mass.add(piece, s.impulse, -1.);
+                        }
                         piece.active = false;
                         if let Some(chunk) = s.assignment[i]
                             && let std::collections::btree_map::Entry::Vacant(entry) =
@@ -859,25 +968,32 @@ impl BrickDebris {
             if s.finishing.is_some() {
                 continue;
             }
+        }
+        // Collision geometry is prepared once and shared by both backends.
+        // No bodyless chunk repeats the same brick scan for every tiny step.
+        keys.sort_unstable();
+        let collision_start = self.section_collision_turn % keys.len().max(1);
+        keys.rotate_left(collision_start);
+        let mut last_served = None;
+        let before_preparation = collision;
+        let mut ready_chunks = BTreeSet::new();
+        for (order, &key) in keys.iter().enumerate() {
+            let s = self.sections.get_mut(&key).unwrap();
+            if s.finishing.is_some() {
+                continue;
+            }
             let count = s.chunks.len();
-            let start = s.chunk_turn;
-            s.chunk_turn = s.chunk_turn.wrapping_add(1);
-            for i in 0..count {
-                let c = &mut s.chunks[(i + start) % count];
+            let start = s.preparation_turn;
+            for offset in 0..count {
+                let i = (start + offset) % count;
+                let c = &mut s.chunks[i];
                 if c.released {
                     continue;
                 }
-                if c.handle.is_none()
-                    && (available == 0 || c.parts > part_slots || c.proxy.is_none())
-                {
-                    c.advance_fallback(&frame, (key.0, key.1, (i + start) % count), &mut fallback)?;
-                    continue;
-                }
-                // Rapier already makes sleeping bodies cheap. Keep their hit
-                // targets so projectiles can wake the visible wreckage.
                 if c.handle.is_some_and(|h| self.world.bodies[h].is_sleeping())
                     && c.collision.unchanged(building)
                 {
+                    ready_chunks.insert((key.0, key.1, i));
                     continue;
                 }
                 let (center, turn) = c.pose(&self.world);
@@ -890,6 +1006,17 @@ impl BrickDebris {
                 let h = (turn * Vec3::X).abs() * c.half.x
                     + (turn * Vec3::Y).abs() * c.half.y
                     + (turn * Vec3::Z).abs() * c.half.z;
+                let (h, velocity) = if c.handle.is_none() {
+                    // Bound an ordinary collision response and actor separation,
+                    // not just the velocity before a player touches the chunk.
+                    (
+                        h + Vec3::splat(motion::MAX_SEPARATION),
+                        Vec3::splat(MAX_SPEED),
+                    )
+                } else {
+                    (h, velocity)
+                };
+                let before = collision;
                 let ready = c.collision.prepare(
                     &mut self.surroundings,
                     &mut self.world,
@@ -903,21 +1030,81 @@ impl BrickDebris {
                     &mut collision,
                     |id| self.dead.contains(&id),
                 )?;
-                if let Some(handle) = c.handle {
-                    if ready {
-                        self.world.bodies[handle].set_enabled(true);
-                        continue;
-                    }
-                    // Release the resident slot, preserving pose and velocity.
-                    // A collision-cache shortage must not disable visible art.
-                    c.freeze(&mut self.world);
-                    available += 1;
-                    part_slots += c.parts;
+                if collision < before {
+                    s.preparation_turn = (i + 1) % count;
+                    last_served = Some(order);
                 }
-                if !ready {
-                    c.advance_fallback(&frame, (key.0, key.1, (i + start) % count), &mut fallback)?;
+                if ready {
+                    ready_chunks.insert((key.0, key.1, i));
+                    if let Some(handle) = c.handle {
+                        self.world.bodies[handle].set_enabled(true);
+                    }
+                } else if c.handle.is_some() {
+                    c.freeze(&mut self.world);
+                }
+            }
+        }
+        self.diagnostics.section_preparation_work += u64::from(before_preparation - collision);
+        let bodyless = self
+            .sections
+            .values()
+            .any(|s| s.chunks.iter().any(|c| c.handle.is_none() && !c.released));
+        if bodyless && self.collision_query_revision != self.surroundings.revision() {
+            // Newly streamed colliders must be visible to queries now, not
+            // only after the next solver step. Use the island-safe adapter.
+            bri_physics::detect_collisions(&mut self.world);
+            self.collision_query_revision = self.surroundings.revision();
+        }
+        // Capture all newly partitioned groups together, after preparation.
+        // This snapshot is consumed within this frame and never retained.
+        let scene = motion::RubbleScene::new(self);
+        let frame = motion::Frame {
+            dt,
+            actors: &self.section_pushers,
+            scene: &scene,
+        };
+        let mut available = self
+            .limit
+            .saturating_sub(self.bodies.len() + self.chunk_handles().count());
+        let used_parts = self.bodies.len()
+            + self
+                .sections
+                .values()
+                .flat_map(|s| &s.chunks)
+                .filter(|c| c.handle.is_some())
+                .map(|c| c.parts)
+                .sum::<usize>();
+        let mut part_slots = MAX_PROXY_PARTS.saturating_sub(used_parts);
+        let before_motion = collision;
+        for (order, &key) in keys.iter().enumerate() {
+            let s = self.sections.get_mut(&key).unwrap();
+            if s.finishing.is_some() {
+                continue;
+            }
+            let count = s.chunks.len();
+            let start = s.chunk_turn;
+            for i in 0..count {
+                let index = (i + start) % count;
+                let c = &mut s.chunks[index];
+                if c.released || c.handle.is_some() {
                     continue;
                 }
+                let ready = ready_chunks.contains(&(key.0, key.1, index));
+                if !ready || available == 0 || c.parts > part_slots || c.proxy.is_none() {
+                    if c.advance_fallback(
+                        &frame,
+                        (key.0, key.1, index),
+                        &self.world,
+                        ready,
+                        &mut collision,
+                    )? {
+                        s.chunk_turn = (index + 1) % count;
+                        last_served = Some(order);
+                        self.diagnostics.section_fallback_steps += 1;
+                    }
+                    continue;
+                }
+                let (center, turn) = c.pose(&self.world);
                 let body = RigidBodyBuilder::dynamic()
                     .pose(Pose::from_parts(
                         Vector::from_array(center.to_array()),
@@ -934,7 +1121,7 @@ impl BrickDebris {
                 let collider = ColliderBuilder::new(c.proxy.as_ref().unwrap().clone())
                     .density(DENSITY)
                     .friction(PLASTIC_FRICTION)
-                    .restitution(0.25)
+                    .restitution(RESTITUTION)
                     .collision_groups(InteractionGroups::new(
                         Group::GROUP_2,
                         Group::GROUP_1 | Group::GROUP_2,
@@ -942,14 +1129,18 @@ impl BrickDebris {
                     ));
                 let (handle, _) = self.world.insert(body, collider);
                 c.handle = Some(handle);
-                c.sweep = None;
-                c.neighbors = None;
+                s.chunk_turn = (index + 1) % count;
+                last_served = Some(order);
                 c.debt = 0.;
                 super::foley::configure(&mut self.world, handle, self.foley.policy.as_deref());
                 self.foley.born(handle, 0.12);
                 available -= 1;
                 part_slots -= c.parts;
             }
+        }
+        self.diagnostics.section_motion_work += u64::from(before_motion - collision);
+        if let Some(order) = last_served {
+            self.section_collision_turn = (collision_start + order + 1) % keys.len();
         }
         self.sections
             .retain(|_, s| s.age < 30. && (s.sealed || s.staging_age < 30.));
@@ -995,6 +1186,7 @@ mod tests {
         let mut c = super::super::tests::kill(id, id, at, origin, 0., 0.);
         if let CueKind::BrickKill { death, .. } = &mut c.kind {
             *death = BrickDeath::Section {
+                impulse: None,
                 group: 7,
                 started: 0,
                 members: count,
@@ -1217,7 +1409,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn a_prepared_landing_waits_for_temporary_capacity_without_losing_its_plan() -> Result<()> {
+    fn prepared_airborne_clumps_keep_motion_while_waiting_for_capacity() -> Result<()> {
         let (b, _) = super::super::tests::building(&[]);
         let mut d = BrickDebris::new();
         d.set_limit(1);
@@ -1242,10 +1434,13 @@ mod tests {
             ],
             &b,
         )?;
+        d.set_limit(0);
         run(&mut d, &b, 1);
-        assert!(d.sections[&(0, 7)].plan.is_some());
-        // Capacity can be consumed after planning, before the landing commits
-        // dynamic bodies. An older piece still has two seconds left to live.
+        assert_eq!(d.sections[&(0, 7)].chunks.len(), 1);
+        assert!(!d.sections[&(0, 7)].landed);
+        // Preparation is independent of body capacity. Consume the newly
+        // available slot before the next frame can admit a prepared clump.
+        d.set_limit(1);
         d.cues(
             &[super::super::tests::kill(
                 20,
@@ -1304,7 +1499,7 @@ mod tests {
         assert!(maximum > 0 && maximum <= 8);
         assert_eq!(s.assignment.iter().filter(|a| a.is_some()).count(), 1500);
         assert!(
-            s.chunks.len() > MAX_CHUNKS,
+            s.chunks.len() > d.limit(),
             "breakup geometry remains independent of the resident body pool"
         );
         for chunk in 0..s.chunks.len() {
@@ -1349,16 +1544,16 @@ mod tests {
         let mut late = Vec::new();
         for (count, width) in [(40, 1), (1500, 20), (12000, 40)] {
             let height = count / width;
-            let origin = [(width - 1) as f32 * 0.5, height as f32 * 0.3, 0.];
+            let origin = [(width - 1) as f32 * 0.5, 10. + height as f32 * 0.3, 0.];
             let cues: Vec<_> = (0..count)
                 .map(|i| {
                     cue(
                         i + 1,
-                        [(i % width) as f32, 0.3 + (i / width) as f32 * 0.6, 0.],
+                        [(i % width) as f32, 10.3 + (i / width) as f32 * 0.6, 0.],
                         count as u32,
                         [width as f32 * 0.5, height as f32 * 0.3, 0.5],
                         origin,
-                        [origin[0], 0., 0.],
+                        [origin[0], 10., 0.],
                     )
                 })
                 .collect();
@@ -1407,51 +1602,24 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn tall_mast_leans_before_landing_and_floor_drops() -> Result<()> {
-        let (b, _) = super::super::tests::building(&[]);
-        let mut d = BrickDebris::new();
-        let cues: Vec<_> = (0..40)
-            .map(|i| {
-                cue(
-                    i + 1,
-                    [0., 0.3 + i as f32 * 0.6, 0.],
-                    40,
-                    [0.5, 12., 0.5],
-                    [0., 12., 0.],
-                    [0., 0., 0.],
-                )
-            })
-            .collect();
-        d.cues(&cues, &b)?;
-        run(&mut d, &b, 40);
-        let s = &d.sections[&(0, 7)];
-        assert_eq!(s.motion, Motion::Topple);
-        assert!(
-            !s.landed,
-            "a broken base touching the deck must not end the fall immediately"
-        );
-        let (_, turn) = s.pose(s.shown);
-        assert!(turn.to_scaled_axis().length() > 0.2);
-        let mut p = SectionPiece {
-            brick: 1,
-            cue: 1,
-            look: d.sections[&(0, 7)].pieces[0].look.clone(),
-            offset: Vec3::ZERO,
-            turn: Quat::IDENTITY,
-            half: Vec3::ONE,
-            origin: Vec3::new(0., 10., 0.),
-            tick: 0,
-            active: true,
-            members: 1,
-            section_half: Vec3::new(10., 0.3, 10.),
-            pivot: Vec3::new(0., 9.7, 0.),
-        };
-        let floor = Section::new(&p, 1);
-        assert_eq!(floor.motion, Motion::Drop);
-        assert!(floor.pose(0.5).0.y < 8.);
-        p.section_half = Vec3::new(12., 0.3, 0.5);
-        assert_eq!(Section::new(&p, 1).motion, Motion::Span);
-        Ok(())
+    fn detached_shapes_fall_without_a_size_or_seed_dependent_hinge() {
+        for half in [
+            Vec3::new(0.5, 12., 0.5),
+            Vec3::new(10., 0.3, 10.),
+            Vec3::new(12., 0.3, 0.5),
+        ] {
+            let mut p = landing_regressions::piece(1, Vec3::new(0., 20., 0.));
+            p.section_half = half;
+            p.pivot = Vec3::new(5., 0., 2.);
+            let s = Section::new(&p);
+            for age in [0., 0.1, 0.5] {
+                let (center, turn) = s.pose(age);
+                assert_eq!(turn, Quat::IDENTITY);
+                assert!(
+                    (center - (p.origin - Vec3::Y * (0.5 * GRAVITY * age * age))).length() < 1e-5
+                );
+            }
+        }
     }
 }
 
@@ -1460,6 +1628,7 @@ mod landing_regressions {
     use super::*;
     pub(super) fn piece(id: u64, at: Vec3) -> SectionPiece {
         SectionPiece {
+            impulse: None,
             cue: id,
             brick: id,
             look: Look {
@@ -1545,36 +1714,26 @@ mod landing_regressions {
     }
     #[test]
     fn broad_sail_hits_a_narrow_deck_before_its_middle_passes_through() -> Result<()> {
-        let deck: Vec<_> = (5..=14)
+        let deck: Vec<_> = (2..=4)
             .flat_map(|x| {
-                (-2..=2).map(move |z| (1000 + (x * 5 + z + 2) as u64, [x as f32, 6.7, z as f32]))
+                (-1..=1).map(move |z| (1000 + (x * 3 + z + 1) as u64, [x as f32, 6.7, z as f32]))
             })
             .collect();
         let (b, _) = super::super::tests::building(&deck);
-        let mut pieces: Vec<_> = (0..34)
-            .map(|i| piece(i + 1, Vec3::new(0., 4.3 + i as f32 * 0.6, 0.)))
+        let mut pieces: Vec<_> = (-10..=10)
+            .flat_map(|x| (-4..=4).map(move |z| (x, z)))
+            .enumerate()
+            .map(|(i, (x, z))| piece(i as u64 + 1, Vec3::new(x as f32, 10., z as f32)))
             .collect();
-        for x in -4..=4 {
-            for y in 7..=22 {
-                if x != 0 {
-                    pieces.push(piece(
-                        pieces.len() as u64 + 1,
-                        Vec3::new(0., 4.3 + y as f32 * 0.6, x as f32),
-                    ));
-                }
-            }
-        }
         for p in &mut pieces {
-            p.origin = Vec3::new(0., 14.2, 0.);
-            p.pivot = Vec3::new(0., 4., 0.);
-            p.section_half = Vec3::new(0.5, 10.2, 4.5);
+            p.origin = Vec3::new(0., 10., 0.);
+            p.pivot = Vec3::new(0., 9.7, 0.);
+            p.section_half = Vec3::new(10.5, 0.3, 4.5);
         }
-        let mut s = Section::new(&pieces[0], 1);
+        let mut s = Section::new(&pieces[0]);
         s.expected = pieces.len();
-        s.axis = Vec3::NEG_Z;
-        let mut old = Section::new(&pieces[0], 1);
+        let mut old = Section::new(&pieces[0]);
         old.expected = pieces.len();
-        old.axis = Vec3::NEG_Z;
         for p in pieces.iter().cloned() {
             old.admit(p);
         }
@@ -1611,11 +1770,8 @@ mod landing_regressions {
                         for z in [-1., 0., 1.] {
                             let local =
                                 p.offset + Vec3::new(x * p.half.x, y * p.half.y, z * p.half.z);
-                            if local.y - s.pivot.y < s.half.y * 0.25 {
-                                continue;
-                            }
                             let at = center + turn * local;
-                            if (4.5..=14.5).contains(&at.x) && at.z.abs() <= 2.5 {
+                            if (1.5..=4.5).contains(&at.x) && at.z.abs() <= 1.5 {
                                 lowest = lowest.min(at.y);
                             }
                         }
@@ -2014,7 +2170,7 @@ mod overload_regressions {
         );
         assert_eq!(section.chunks.len(), 100);
         assert_eq!(d.instances().count(), 100);
-        assert!(d.chunk_handles().count() <= MAX_CHUNKS);
+        assert!(d.len() <= d.limit());
         assert!(section.chunks.iter().all(|c| c.center.is_finite()));
         assert!(section.landed);
         assert!(

@@ -254,7 +254,29 @@ impl<'a> Ground<'a> {
     /// as straight legs that stray from the arc by no more than
     /// [`ARC_SAG`].
     pub fn sweep_arc(&self, body: &Body, from: Vec3, to: Vec3) -> bool {
-        let motion = body.motion;
+        // The motor scales the vertical jump impulse by its actual support
+        // normal. Flat-floor reach must not promise a full-height ramp jump.
+        let normal = self
+            .support_contact(body, from, false, body.step + STEP_SLACK)
+            .map(|(_, normal)| normal)
+            .or_else(|| {
+                self.ray(
+                    from + Vec3::Y * (body.step + STEP_SLACK),
+                    Vec3::NEG_Y,
+                    2.0 * body.step + STEP_SLACK,
+                )
+                .map(|(_, normal)| normal)
+            });
+        let Some(normal) = normal else {
+            return false;
+        };
+        let motion = crate::route::Motion {
+            jump_speed: body.motion.jump_speed * normal.y,
+            ..body.motion
+        };
+        if to.y - from.y > motion.apex() + body.step {
+            return false;
+        }
         let flight = motion.hop(0.0, to.y - from.y);
         let pieces = (flight * (motion.gravity / (8.0 * ARC_SAG)).sqrt())
             .ceil()
@@ -522,6 +544,16 @@ impl<'a> Ground<'a> {
     /// Support under any part of the motor footprint, including the last
     /// portion of a ledge after the centre ray has crossed its edge.
     fn support_below(&self, body: &Body, feet: Vec3, crouched: bool, down: f32) -> Option<Vec3> {
+        self.support_contact(body, feet, crouched, down)
+            .map(|(feet, _)| feet)
+    }
+    fn support_contact(
+        &self,
+        body: &Body,
+        feet: Vec3,
+        crouched: bool,
+        down: f32,
+    ) -> Option<(Vec3, Vec3)> {
         if body.conservative {
             return None;
         }
@@ -552,8 +584,10 @@ impl<'a> Ground<'a> {
                 ..Default::default()
             },
         )?;
-        (hit.normal1.y >= body.floor_cos)
-            .then_some(raised - Vec3::Y * hit.time_of_impact + Vec3::Y * SETTLE_GAP)
+        (hit.normal1.y >= body.floor_cos).then_some((
+            raised - Vec3::Y * hit.time_of_impact + Vec3::Y * SETTLE_GAP,
+            Vec3::from_array(hit.normal1.to_array()),
+        ))
     }
     /// Whether a body stands (or crouches) at `feet` without touching
     /// fixed collision at this exact position.
@@ -1862,7 +1896,9 @@ const SHALLOW_DROP: f32 = 4.0;
 
 #[derive(Clone, Copy, PartialEq)]
 struct Open {
+    rise: f32,
     f: f32,
+    cost: f32,
     node: Node,
 }
 impl Eq for Open {}
@@ -1871,6 +1907,7 @@ impl Ord for Open {
         other
             .f
             .total_cmp(&self.f)
+            .then_with(|| other.rise.total_cmp(&self.rise))
             .then_with(|| other.node.cmp(&self.node))
     }
 }
@@ -1928,6 +1965,7 @@ pub struct Search {
     /// Nodes it expands before it settles for the closest it reached
     /// ([`MAX_EXPANSIONS`] unless [`Search::limited`]).
     limit: u32,
+    continuation: u32,
     /// Nodes farther than this from the start (or from where an opening
     /// lets out), across, are not visited.
     bound: f32,
@@ -1944,6 +1982,7 @@ pub struct Search {
     jet_tests: u32,
     /// The body's walking speed, once known: the estimate's unit.
     walk_speed: f32,
+    prefer_goal_floor: bool,
 }
 impl Search {
     /// A search on foot and swimming, with no jets.
@@ -1961,6 +2000,7 @@ impl Search {
             best: None,
             expanded: 0,
             limit: MAX_EXPANSIONS,
+            continuation: MAX_EXPANSIONS,
             bound,
             links: Vec::new(),
             pending: None,
@@ -1969,7 +2009,15 @@ impl Search {
             launches: FxHashSet::default(),
             jet_tests: 0,
             walk_speed: 1.0,
+            prefer_goal_floor: false,
         }
+    }
+    /// Prefer the goal's floor when discovery cost estimates tie. Partial
+    /// endpoints retain geometric progress, including beneath an unreachable
+    /// floor; traversal costs and available footing remain authoritative.
+    pub fn prefer_goal_floor(mut self) -> Self {
+        self.prefer_goal_floor = true;
+        self
     }
     /// This search with no limit on its expansions, for tools that plan
     /// offline (a bot's own search settles for the closest it reached).
@@ -1978,9 +2026,11 @@ impl Search {
         self
     }
     /// This search settling for the closest it reached after `limit`
-    /// expansions instead of [`MAX_EXPANSIONS`].
+    /// expansions instead of [`MAX_EXPANSIONS`]. Each resumption permits
+    /// another window of that size, without restarting the frontier.
     pub fn limited(mut self, limit: u32) -> Self {
         self.limit = limit.min(MAX_EXPANSIONS);
+        self.continuation = limit.clamp(1, MAX_EXPANSIONS);
         self
     }
     /// Continue a budget-limited search from its retained frontier.
@@ -1988,17 +2038,23 @@ impl Search {
     /// per-tick work limits still apply, with the navigation cache's existing
     /// node bound as a hard ceiling for this exceptional detour investigation.
     pub fn resume(&mut self) -> bool {
-        if self.pending.is_none()
-            || self.came.len() >= MAX_SAMPLES
-            || self.limit >= MAX_SAMPLES as u32
-        {
+        if !self.can_resume() {
             return false;
         }
         self.limit = self
             .limit
-            .saturating_add(MAX_EXPANSIONS)
+            .saturating_add(self.continuation)
             .min(MAX_SAMPLES as u32);
         true
+    }
+    /// A retained frontier is unfinished work, not proof of disconnection.
+    pub fn can_resume(&self) -> bool {
+        self.pending.is_some() && self.came.len() < MAX_SAMPLES && self.limit < MAX_SAMPLES as u32
+    }
+    /// No unexamined frontier remains and the retained-node ceiling was not
+    /// reached. A resource ceiling is not evidence of disconnection.
+    pub fn exhausted(&self) -> bool {
+        self.pending.is_none() && self.open.is_empty() && self.came.len() < MAX_SAMPLES
     }
     /// Whether this search takes swim legs for `body`.
     fn swims(&self, body: &Body) -> bool {
@@ -2056,11 +2112,23 @@ impl Search {
         }
         self.came.insert(to, came);
         let h = self.h(to);
+        // A partial endpoint must make geometric progress even when the
+        // target's floor is unreachable. Height-first ranking can strand a
+        // body on a spawn plate a fraction higher than the useful walkable
+        // floor. Floor preference guides discovery, not the partial endpoint.
         if self.best.is_none_or(|(_, best)| h < best) {
             self.best = Some((to, h));
         }
         self.open.push(Open {
+            rise: if self.prefer_goal_floor {
+                (to.feet().y - self.goal.y).abs()
+            } else {
+                0.0
+            },
+            // Height can guide discovery without erasing traversal costs:
+            // clearance, stable footing and takeoff time still matter.
             f: came.cost + h,
+            cost: came.cost,
             node: to,
         });
     }
@@ -2345,7 +2413,13 @@ impl Search {
                     },
                 );
                 self.open.push(Open {
+                    rise: if self.prefer_goal_floor {
+                        (node.feet().y - self.goal.y).abs()
+                    } else {
+                        0.0
+                    },
                     f: self.h(node),
+                    cost: 0.0,
                     node,
                 });
                 self.best = Some((node, self.h(node)));
@@ -2361,7 +2435,7 @@ impl Search {
                     };
                     let g = self.came[&open.node].cost;
                     // A stale heap entry for a node since reached cheaper.
-                    if open.f > g + self.h(open.node) + 1e-4 {
+                    if open.cost > g + 1e-4 {
                         continue;
                     }
                     open.node
@@ -3833,6 +3907,100 @@ mod tests {
     }
 
     #[test]
+    fn elevation_order_keeps_directed_stairs_budgets_and_unreachable_floor_evidence() {
+        let mut boxes = vec![floor()];
+        for i in 0..8 {
+            let x = 3.0 + i as f32;
+            boxes.push((
+                Vec3::new(x, 0.0, -3.0),
+                Vec3::new(x + 1.0, 0.6 * (i + 1) as f32, 3.0),
+            ));
+        }
+        boxes.push((Vec3::new(11.0, 0.0, -3.0), Vec3::new(17.0, 4.8, 3.0)));
+        let stairs = world(&boxes);
+        let isolated = world(&[(Vec3::new(-4.0, -1.0, -4.0), Vec3::new(4.0, 0.0, 4.0))]);
+        let body = body();
+        for (physics, from, to, reachable) in [
+            (&stairs, Vec3::ZERO, Vec3::new(14.0, 4.8, 0.0), true),
+            (&stairs, Vec3::new(14.0, 4.8, 0.0), Vec3::ZERO, true),
+            (&isolated, Vec3::ZERO, Vec3::Y * 10.0, false),
+        ] {
+            let ground = Ground {
+                physics,
+                terrain: &no_terrain,
+                passages: &NO_PASSAGES,
+                waters: &[],
+                bodies: &[],
+                motions: &[],
+                solid: &all_solid,
+            };
+            let mut nav = Nav::default();
+            let mut search = Search::new(from, to, 40.0)
+                .prefer_goal_floor()
+                .limited(EXPANSIONS_PER_TICK);
+            let mut result = None;
+            for _ in 0..10_000 {
+                nav.begin_tick();
+                let samples = nav.sampled;
+                let arcs = nav.swept;
+                let found = search.step(&mut nav, &ground, &body);
+                assert!(nav.sampled - samples <= u64::from(SAMPLES_PER_TICK));
+                assert!(nav.swept - arcs <= u64::from(ARCS_PER_TICK));
+                if let Some(found) = found {
+                    if matches!(found, Found::Partial(_)) && search.resume() {
+                        continue;
+                    }
+                    result = Some(found);
+                    break;
+                }
+            }
+            let result = result.expect("a bounded graph must terminate");
+            assert_eq!(
+                matches!(result, Found::Path(_)),
+                reachable,
+                "{from:?} -> {to:?}: {result:?}"
+            );
+            if !reachable {
+                assert!(
+                    search.exhausted(),
+                    "a search window is not an unreachable floor proof"
+                );
+                assert!(!search.can_resume());
+            }
+        }
+    }
+
+    #[test]
+    fn slope_takeoffs_do_not_inherit_flat_floor_jump_height() {
+        let body = body();
+        let flat = world(&[floor()]);
+        let goal = Vec3::new(0., 3., -2.);
+        assert!(
+            body.leaps.seconds(3., 2.).is_some(),
+            "the flat-floor measurement admits this leap"
+        );
+        assert!(open_ground(&flat).sweep_arc(&body, Vec3::ZERO, goal));
+        let angle = std::f32::consts::FRAC_PI_4;
+        let mut slope = bri_physics::new_world();
+        slope.insert_collider(
+            ColliderBuilder::cuboid(8., 0.2, 8.)
+                .rotation(Vector::new(0., 0., angle))
+                .translation(Vector::new(0., -0.2 / angle.cos(), 0.)),
+            None,
+        );
+        bri_physics::detect_collisions(&mut slope);
+        let ground = open_ground(&slope);
+        let (from, normal) = ground
+            .support_contact(&body, Vec3::ZERO, false, body.step + STEP_SLACK)
+            .unwrap();
+        assert!((normal.y - angle.cos()).abs() < 1e-4);
+        assert!(
+            !ground.sweep_arc(&body, from, from + goal),
+            "the same motor cannot supply flat-floor height from this slope"
+        );
+    }
+
+    #[test]
     fn a_wide_stair_route_prefers_a_supported_middle_over_an_exposed_edge() {
         let mut boxes = vec![floor()];
         for i in 0..8 {
@@ -3846,39 +4014,51 @@ mod tests {
         let physics = world(&boxes);
         let start = Vec3::new(0.0, 0.0, 2.3);
         let goal = Vec3::new(15.0, 4.8, 2.3);
-        let route = path(search(&physics, start, goal).0);
-        let middle: Vec<_> = route
-            .iter()
-            .filter(|w| w.feet.x >= 5.0 && w.feet.x <= 9.0)
-            .collect();
-        assert!(
-            !middle.is_empty(),
-            "route should climb the steps: {route:?}"
-        );
-        assert!(
-            middle.iter().all(|w| w.feet.z.abs() <= 1.8),
-            "a wide stair has a safer middle than its exposed edge: {route:?}"
-        );
-        let pulled = pull(
-            &open_ground(&physics),
-            &Nav::default(),
-            &body(),
-            start,
-            route,
-        );
-        let crossing = std::iter::once(start)
-            .chain(pulled.iter().map(|w| w.feet))
-            .collect::<Vec<_>>()
-            .windows(2)
-            .find_map(|p| {
-                (p[0].x <= 7.0 && p[1].x >= 7.0 && p[1].x > p[0].x)
-                    .then(|| p[0].lerp(p[1], (7.0 - p[0].x) / (p[1].x - p[0].x)))
-            })
-            .expect("pulled route crosses the stairs");
-        assert!(
-            crossing.z.abs() <= 1.8,
-            "pull must retain the safer lane: {pulled:?}"
-        );
+        for floor_hint in [false, true] {
+            let mut nav = Nav::default();
+            let mut search = Search::new(start, goal, 60.0);
+            if floor_hint {
+                search = search.prefer_goal_floor();
+            }
+            let route = path(loop {
+                nav.begin_tick();
+                if let Some(found) = search.step(&mut nav, &open_ground(&physics), &body()) {
+                    break found;
+                }
+            });
+            let middle: Vec<_> = route
+                .iter()
+                .filter(|w| w.feet.x >= 5.0 && w.feet.x <= 9.0)
+                .collect();
+            assert!(
+                !middle.is_empty(),
+                "route should climb the steps: {route:?}"
+            );
+            assert!(
+                middle.iter().all(|w| w.feet.z.abs() <= 1.8),
+                "a wide stair has a safer middle than its exposed edge: {route:?}"
+            );
+            let pulled = pull(
+                &open_ground(&physics),
+                &Nav::default(),
+                &body(),
+                start,
+                route,
+            );
+            let crossing = std::iter::once(start)
+                .chain(pulled.iter().map(|w| w.feet))
+                .collect::<Vec<_>>()
+                .windows(2)
+                .find_map(|p| {
+                    (p[0].x <= 7.0 && p[1].x >= 7.0 && p[1].x > p[0].x)
+                        .then(|| p[0].lerp(p[1], (7.0 - p[0].x) / (p[1].x - p[0].x)))
+                })
+                .expect("pulled route crosses the stairs");
+            assert!(
+                crossing.z.abs() <= 1.8,
+                "pull must retain the safer lane: {pulled:?}"
+            );
+        }
     }
 
     #[test]

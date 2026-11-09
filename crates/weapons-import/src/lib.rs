@@ -540,6 +540,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 });
                 Some(bri_weapons::ImageLight {
                     radius: radius.min(bri_weapons::MAX_IMAGE_LIGHT_RADIUS),
+
+                    cone: None,
                     color: [r, g, b].map(|c| c.clamped(0.0, 1.0)),
                 })
             }
@@ -1255,6 +1257,8 @@ AddDamageType(\"Radius\", '<bitmap:base/client/ui/ci/bomb> %1', '%2 <bitmap:base
             light("glowImage"),
             Some(bri_weapons::ImageLight {
                 radius: 20.0,
+
+                cone: None,
                 color: [1.0, 0.5, 0.0]
             })
         );

@@ -109,8 +109,8 @@ not use scene depth directly: set `flare_visibility` from the host's line-of-sig
 query and `first_person_owner` appropriately. Leaving visibility at its default
 1 means the host has declared the flare unobstructed.
 
-`FrameEffects::lights` contains world position, brightness-scaled RGB and radius.
-`GpuLight::from(snapshot)` is a 32-byte POD storage-buffer record. A concrete
+`FrameEffects::lights` contains world position, brightness-scaled RGB, radius and a world-space cone.
+`GpuLight::from(snapshot)` is a 48-byte POD storage-buffer record. A concrete
 SceneRenderer helper is in `examples/scene_lights.wgsl`; a GPU test compiles that
 layout. The host binds its buffer, active range/count and call the helper in the
 scene material shader. The sample attenuation is explicitly native and

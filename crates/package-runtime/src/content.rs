@@ -640,6 +640,12 @@ pub struct Behaviour {
     /// (`drop`). Delivered at the start of the next tick.
     #[serde(default)]
     pub on_object: bool,
+    /// `on_vehicle_lights(driver, ref, lights)` as a driver turns its
+    /// vehicle's lamps on or off with the light key: `driver` is that player,
+    /// `ref` names the vehicle as `object` does (`"vehicle:N"`), and `lights`
+    /// whether they are now on. Called as it happens, so it must be quick.
+    #[serde(default)]
+    pub on_vehicle_lights: bool,
     /// `on_double_tap(player, direction)` when a living player presses a
     /// move key (`"forward"`, `"back"`, `"left"`, `"right"`) again within
     /// this many seconds (0.05 to 2) of its last press. Needs the hook.

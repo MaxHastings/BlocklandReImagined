@@ -45,6 +45,7 @@ fn effects() -> Arc<EffectsPack> {
                 color: [1.; 3],
                 brightness: 5.,
                 radius: 10.,
+                cone: None,
                 color_curves: None,
                 brightness_curve: None,
                 radius_curve: None,
@@ -858,6 +859,7 @@ fn a_vehicle_gun_throws_casings_and_flashes_its_explosion_light() -> Result<()> 
         color: [1., 0.9, 0.5],
         brightness: 1.,
         radius: 8.,
+        cone: None,
         color_curves: None,
         brightness_curve: None,
         radius_curve: None,
@@ -975,6 +977,8 @@ fn ground_trails_require_their_own_wheel_and_ignore_vertical_speed() {
         wheel_contact: vec![false; 4],
         turret_aim: [0.; 2],
         driver_jump_held: false,
+        driver_reversing: false,
+        driver_braking: false,
     };
     assert_eq!(
         vehicle_trails(1, &d, &frame)

@@ -38,6 +38,7 @@ const JET: MoveInput = MoveInput {
     yaw: 0.0,
     pitch: 0.0,
     head_yaw: 0.0,
+    action_look: None,
     jump: false,
     crouch: false,
     jet: true,

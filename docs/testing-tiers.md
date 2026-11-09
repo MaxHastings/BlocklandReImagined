@@ -73,3 +73,14 @@ Use the warm worktree and `--profile playtest` for previews. Finish the requeste
 build before starting expensive validation. Never run local GPU suites, full
 gates, soaks or benchmarks while Maxwell plays: contention invalidates his
 performance observations. Maxwell owns every interactive playtest.
+
+## Bot admission capacity
+
+`bot_gauntlet::creature_think_time_16` names the default 16 admission slots,
+not 16 creatures. It must actually admit and measure the complete weighted
+population (currently 64 minimal creatures) against the existing per-profile
+absolute think-time budget. Full-bot timing retains its own absolute check;
+the comparative ratio is diagnostic. Different fights and improvements to
+full-bot work must not redefine the creature capacity contract. Use the release
+profile for release performance evidence; debug measurements have their separate
+existing budget. Behavior and pursuit checks remain independent of timings.

@@ -939,6 +939,8 @@ fn slayer_ports_apply_with_their_rules() {
         image.light,
         Some(bri_weapons::ImageLight {
             radius: 12.0,
+
+            cone: None,
             color: [1.0; 3]
         })
     );

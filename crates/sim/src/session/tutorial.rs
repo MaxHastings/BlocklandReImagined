@@ -1471,6 +1471,7 @@ mod tests {
             crouch: true,
             jet: true,
             head_yaw: 0.0,
+            action_look: None,
         };
         let still = Abilities::NO_MOVE.apply(input);
         assert_eq!(

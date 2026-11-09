@@ -26,6 +26,7 @@ pub fn library() -> Library {
             color: [1., 0.5, 0.],
             brightness: 2.,
             radius: 5.,
+            cone: None,
             color_curves: None,
             brightness_curve: None,
             radius_curve: None,
@@ -220,6 +221,7 @@ pub fn showcase_pack() -> Arc<EffectsPack> {
         color: [0.2, 0.4, 1.],
         brightness: 1.,
         radius: 8.,
+        cone: None,
         color_curves: None,
         brightness_curve: Some(Curve {
             period: 0.5,

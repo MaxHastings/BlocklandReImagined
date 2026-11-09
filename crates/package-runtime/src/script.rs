@@ -4931,6 +4931,9 @@ impl Runtime {
             if behaviour.on_object {
                 need("on_object".into(), 1, "on_object");
             }
+            if behaviour.on_vehicle_lights {
+                need("on_vehicle_lights".into(), 3, "on_vehicle_lights");
+            }
             if behaviour.double_tap_seconds.is_some() {
                 need("on_double_tap".into(), 2, "double_tap_seconds");
             }

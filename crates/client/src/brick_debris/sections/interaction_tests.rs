@@ -305,3 +305,70 @@ fn later_blasts_move_pressure_debris_without_allocating_more_bodies() -> Result<
     assert_eq!(d.chunk_handles().count(), 0);
     Ok(())
 }
+
+/// Exercise ordinary release, without the old fixture's forced landed state.
+#[test]
+fn falling_material_reacts_to_an_actor_before_static_landing() -> Result<()> {
+    let (b, _) = super::super::tests::building(&[]);
+    for limit in [0, 8] {
+        let mut d = BrickDebris::new();
+        d.set_limit(limit);
+        let p = landing_regressions::piece(1, Vec3::new(0., 12., 0.));
+        d.add_section((0, 1), vec![p], &b)?;
+        d.sections.get_mut(&(0, 1)).unwrap().sealed = true;
+        // Prepare ordinary release while the material is still far from ground.
+        run(&mut d, &b, 5)?;
+        assert!(!d.sections[&(0, 1)].landed);
+        let before = centers(&d)[0];
+        for frame in 0..12 {
+            d.push(&[actor(before + Vec3::new(-1.5 + frame as f32 * 0.2, 0., 0.))]);
+            d.advance(1. / 60., &b)?;
+        }
+        let after = centers(&d)[0];
+        assert!(after.y > 5., "test must exercise airborne contact: {after}");
+        assert!(
+            after.x > before.x + 0.1,
+            "airborne material must react before ground contact (limit={limit}): {before} -> {after}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn prepared_airborne_clumps_wait_for_visible_material_before_either_backend_moves() -> Result<()> {
+    let (b, _) = super::super::tests::building(&[]);
+    for limit in [0, 8] {
+        let mut d = BrickDebris::new();
+        d.set_limit(limit);
+        let p = landing_regressions::piece(1, Vec3::new(0., 12., 0.));
+        d.add_section((0, 1), vec![p], &b)?;
+        let s = d.sections.get_mut(&(0, 1)).unwrap();
+        s.sealed = true;
+        s.gpu_ready = false;
+        let original = centers(&d);
+        run(&mut d, &b, 60)?;
+        assert_eq!(
+            centers(&d),
+            original,
+            "pending upload must not reveal displaced material"
+        );
+        assert_eq!(
+            d.chunk_handles().count(),
+            0,
+            "pending upload must not admit dynamic bodies"
+        );
+        assert_eq!(
+            d.fallback_bounds().count(),
+            0,
+            "pending proxies must not admit actor contacts"
+        );
+        d.sections.get_mut(&(0, 1)).unwrap().gpu_ready = true;
+        run(&mut d, &b, 6)?;
+        assert_eq!(centers(&d).len(), original.len());
+        assert!(
+            centers(&d)[0].y < original[0].y,
+            "ready material must resume ordinary gravity (limit={limit})"
+        );
+    }
+    Ok(())
+}

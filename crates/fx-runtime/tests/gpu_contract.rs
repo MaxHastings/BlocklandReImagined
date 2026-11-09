@@ -500,6 +500,16 @@ fn billboard_blends_and_depth_match_the_host_pass() {
                 6,
             ),
             (
+                (0, grey, BlendMode::Alpha, false, clear, [0, 0, 0]),
+                true,
+                7,
+            ),
+            (
+                (0, grey, BlendMode::Alpha, false, clear, [0, 0, 130]),
+                true,
+                8,
+            ),
+            (
                 (0, grey, BlendMode::Alpha, false, clear, [255, 255, 255]),
                 false,
                 1,
@@ -520,9 +530,15 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             } else {
                 Vec3::ZERO
             };
-            let lamps = if matches!(light_case, 5 | 6) {
+            let lamps = if matches!(light_case, 5..=8) {
                 vec![GpuLight {
-                    position_radius: [0., 0., 2.5, if light_case == 5 { 10. } else { 1. }],
+                    position_radius: [0., 0., 2.5, if light_case == 6 { 1. } else { 10. }],
+
+                    cone: match light_case {
+                        7 => bri_content::presentation::cone_words(Vec3::Z, 60., 80.),
+                        8 => bri_content::presentation::cone_words(Vec3::NEG_Z, 60., 80.),
+                        _ => bri_content::presentation::ALL_ROUND,
+                    },
                     color: [0., 0., 1., 0.],
                 }]
             } else {
@@ -647,6 +663,8 @@ fn billboard_blends_and_depth_match_the_host_pass() {
                     Vec3::ZERO,
                     &[GpuLight {
                         position_radius: [0., 0., 0., -1.],
+
+                        cone: bri_content::presentation::ALL_ROUND,
                         color: [1.; 4]
                     }]
                 )
@@ -657,6 +675,6 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             label: Some("scene effects light integration contract"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../examples/scene_lights.wgsl").into()),
         });
-        assert_eq!(std::mem::size_of::<GpuLight>(), 32);
+        assert_eq!(std::mem::size_of::<GpuLight>(), 48);
     });
 }

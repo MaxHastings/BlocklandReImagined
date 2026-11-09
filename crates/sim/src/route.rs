@@ -511,6 +511,8 @@ pub struct LeapLeg {
     /// the takeoff and stopping there.
     pub since: u64,
     approach: f32,
+    approach_started: Option<u64>,
+    landing_half: f32,
     /// The tick it jumped.
     pub jumped: Option<u64>,
     /// It has left the ground on the jump.
@@ -527,6 +529,8 @@ impl LeapLeg {
             since: tick,
             // Walking there, then braking from a walk to a stop.
             approach: flat(from - feet).length() / speed + Motion::of(tuning).stop(),
+            approach_started: None,
+            landing_half: (tuning.width + crate::nav::CELL) * 0.5,
             jumped: None,
             flown: false,
         }
@@ -534,13 +538,19 @@ impl LeapLeg {
     /// Whether what really happened says to give the leg up at `tick`: it
     /// took longer than the walk to the takeoff or the measured leap
     /// (`seconds`) allow, or it came down after the jump anywhere but on
-    /// the landing's height.
+    /// the measured landing footprint and height.
     pub fn failed(&self, feet: Vec3, grounded: bool, step: f32, seconds: f32, tick: u64) -> bool {
         let late = match self.jumped {
             Some(at) => tick.saturating_sub(at) > patience(seconds),
-            None => tick.saturating_sub(self.since) > patience(self.approach),
+            None => self
+                .approach_started
+                .is_some_and(|at| tick.saturating_sub(at) > patience(self.approach)),
         };
-        late || grounded && self.flown && (feet.y - self.to.y).abs() > step + 0.5
+        let offset = feet - self.to;
+        let on_landing = offset.y.abs() < step
+            && offset.x.abs() <= self.landing_half
+            && offset.z.abs() <= self.landing_half;
+        late || grounded && self.flown && !on_landing
     }
 }
 
@@ -564,6 +574,9 @@ pub fn leap(
                 ..JetControl::default()
             };
         }
+        // A route may begin this leg while finishing the previous jump.
+        // Only observed ground contact starts its takeoff-approach clock.
+        leg.approach_started.get_or_insert(tick);
         let off = flat(leg.from - feet);
         if off.length() > TAKEOFF_TOLERANCE || flat(velocity).length() > STILL {
             // To the takeoff, as fast as it can still stop there.
@@ -1066,6 +1079,35 @@ mod tests {
         assert!(!c.jet && !c.jump && c.direction.z < 0.0, "{c:?}");
         let c = jet(&mut leg, Vec3::ZERO, Vec3::ZERO, true, to, 9.0, &G);
         assert!(c.jet && c.jump, "{c:?}");
+    }
+
+    #[test]
+    fn a_leap_approach_waits_for_the_previous_landing_before_its_clock_starts() {
+        let to = Vec3::new(0., 2., -3.);
+        let mut leg = LeapLeg::start(to, Vec3::ZERO, Vec3::Y * 3., &G, 0);
+        let _ = leap(&mut leg, Vec3::Y, Vec3::NEG_Y, false, &G, 120);
+        assert!(!leg.failed(Vec3::Y, false, G.step_height, 1., 120));
+        let control = leap(&mut leg, Vec3::ZERO, Vec3::ZERO, true, &G, 121);
+        assert!(control.jump);
+        assert!(!leg.failed(Vec3::ZERO, true, G.step_height, 1., 121));
+        assert!(leg.failed(Vec3::ZERO, false, G.step_height, 1., 121 + patience(1.) + 1));
+    }
+
+    #[test]
+    fn a_leap_must_land_on_the_measured_footprint_and_floor() {
+        let to = Vec3::new(3., 2., 0.);
+        let mut leg = LeapLeg::start(to, Vec3::ZERO, Vec3::ZERO, &G, 0);
+        leg.jumped = Some(0);
+        leg.flown = true;
+        assert!(!leg.failed(to, true, G.step_height, 2., 120));
+        assert!(leg.failed(to + Vec3::X * 2., true, G.step_height, 2., 120));
+        assert!(leg.failed(
+            to + Vec3::Y * (G.step_height + 0.1),
+            true,
+            G.step_height,
+            2.,
+            120
+        ));
     }
 
     #[test]

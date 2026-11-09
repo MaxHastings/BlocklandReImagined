@@ -101,8 +101,8 @@ pub(crate) struct Situation {
     /// How far past the edge of its stroll it is, 0 inside it to 1 a few
     /// units out (always 0 for a rules bot).
     pub strayed: f32,
-    /// A step of an objective the game still offers failed and is cooling
-    /// down: it does not walk home meanwhile.
+    /// A valid pursuit, dated search, or objective still has work: idle
+    /// return-to-home is ineligible until that work ends.
     pub pursuing: bool,
     /// It knows of no fight, enemies play in its game, and it has a place
     /// to look (`explore`).

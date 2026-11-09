@@ -44,6 +44,42 @@ toggle. Existing damage permissions and Physics Quality continue to apply.
 
 ## Cost and limits
 
+### Preview.3 follow-up: motion ownership
+
+Maxwell's November 4 playtest rejects the rigid vertical fall, intermittent
+delays and missed player-body reactions in Pirate World. Existing post-impact
+spin and fallback-debt checks did not cover that experience. NPC gameplay and
+basic Speedkart operation are accepted separately.
+
+Preview.3's intact section followed an analytical trajectory and queried static
+scenery; moving actors entered only the later chunk path. Partitioning was
+prepared during flight but could not publish chunks before first static contact.
+The correction permits exact collision clumps during flight. Preparation stays
+incremental; all prepared clumps publish together at the current shared pose,
+with the actual material center and rigid velocity field preserved. Rendering
+and attachment frames retain shared motion until that publication completes.
+Staged proxies are excluded from moving-rubble queries and actor admission.
+The redundant 64-section-body cap is removed: ordinary Physics Quality and the
+existing 2048 resident proxy-part budget own solver admission. Overflow still
+uses checked translation, so low quality retains a reduced angular response.
+Complete delivery and GPU readiness still gate visible shared flight; this
+correction does not claim to eliminate all onset latency.
+
+The correction must carry contact capability and causal motion through the whole
+visible lifecycle. Geometry readiness must not masquerade as simulation time;
+material must neither disappear during handoff nor jump to an unrelated pose.
+Player contact must operate on actual material, preserving sail/beam openings.
+Angular response must follow real impulses/contact and mass distribution, with
+collision work and visual material still bounded. A permanent base hinge,
+unrelated random spin or increasing an unexplained body cap is not acceptance.
+
+Use the two supplied rocket saves to inspect visible release, flight, first
+contact and breakup, plus an actor crossing intact material and an empty opening.
+Retain lifecycle/respawn/audio/resource checks and explicit low-budget behavior.
+Record onset/readiness/contact timing and actual poses; nonzero final spin alone
+does not establish natural motion. Maxwell's new gameplay acceptance remains
+required after the packaged correction.
+
 No continuous motion replication. Authoritative brick additions/removals and
 one-shot death cues still cost bandwidth proportional to affected bricks;
 this is not a constant-size message per explosion. A group ID rides those
@@ -169,10 +205,20 @@ separate resources. Every admitted member keeps its original mesh, color,
 print and shape. The landing index prepares256 members and models upload at
 most four new appearances per frame. All received material remains visible.
 Complete delivery and GPU readiness permit the shared fall; landing-index work
-continues during flight. Tall
-sections lean around a lowest footprint near the severed support; wide slabs
-drop and tilt; long spans rotate. Corners and 64 distributed material witnesses
-probe a 0.2-second contact horizon under a 4096-unit budget. The displayed clock
+continues during flight. A detached section keeps its causal radial impulse
+through the support proof and member delivery. Actual member-box mass, center
+of mass and inertia determine release translation and rotation; empty bounds
+do not receive force. Gravity contributes no invented hinge or random lean.
+The first observed fixed-world contact retains its normal and transfers a
+normal reaction into the clumps' linear and angular velocities, using their
+actual mass centers. Coplanar witness ties prefer contact nearest the material
+center, rather than arbitrarily selecting an outer corner. This remains a
+representative contact approximation, not a multi-contact structural solver.
+Corners and 64 distributed material witnesses, including
+the base,
+probe at most a 0.2-second contact horizon under a 4096-unit budget. Rotating
+witness chords shorten that horizon to keep curvature within the existing
+contact margin. The displayed clock
 advances through checked time rather than accumulating a delayed jump.
 Contact remains a cosmetic approximation, not a structural collision solver.
 
@@ -181,12 +227,13 @@ connected landing groups of at most16 members and six world units per axis.
 These are initial gameplay tuning values, independent of Physics Quality and
 temporary body occupancy. A single authored member larger than that span stays
 whole; it is not welded to neighbors or silently remeshed. No general secondary
-material fracture is introduced. Complete sections separate into these groups
-at first contact, rather than becoming permanent hundred-brick bodies.
+material fracture is introduced. Complete sections can separate into these groups during flight as soon as
+bounded preparation finishes, rather than waiting for a whole-section contact.
+Until then, displayed shared motion remains collision checked.
 
-At most64 resident chunk bodies still share the ordinary debris body budget,
-with2048 resident proxy boxes globally. Exact rectangular face merging preserves
-gaps. Groups beyond that pool retain their compound shapes and use resumable
+Resident chunk bodies share the ordinary Physics Quality body budget,
+with2048 resident proxy boxes globally. There is no additional chunk-body cap. Exact rectangular face merging preserves
+gaps. Groups beyond that pool retain their compound shapes and use completed bounded
 translation sweeps against real map, terrain, bricks and other rubble, plus
 shape-based player/vehicle contacts. Physics Off uses this contact path without
 allocating dynamic bodies. The cheaper path holds angular orientation rather
@@ -200,11 +247,20 @@ distance is measured once per actor before selection; sorting does not rescan
 every chunk per comparison. Extent-aware admission covers the ends of long
 members, and farther low-ID actors do not displace a closer actor's contact.
 
-The existing512-query-equivalent section collision budget is split between
-resident window preparation and overflow contacts. Metadata cursor visits cost
-one unit; real shape casts cost16. Both work paths remain resumable and chunks
-take turns. Overflow contact snapshots share source shapes and use a spatial
-index; no rigid body is allocated per visual group. Extreme demand can still
+Section collision work uses256 query equivalents per existing fixed physics
+step:512 for an ordinary60-Hz frame, up to the local world's existing maximum
+catch-up steps. A frame without a physics step may prepare one quantum of
+background collision work. Preparation and overflow contacts share this pool;
+lower frame rate does not halve the work available per simulated second.
+Group, preparation and motion cursors resume after actual serviced work,
+rather than sliding their starting index by one while repeatedly serving the
+same prefix. Preparation/motion work and completed fallback steps are observable.
+Metadata cursor visits
+cost one unit; real shape casts cost16. Preparation is resumable; overflow
+reserves enough work to complete a bounded motion step, with chunks taking turns.
+Every chunk reuses the same prepared static query world. Moving rubble shares
+source shapes and a current-frame spatial index, never a snapshot retained over
+paused frames; no rigid body is allocated per visual group. Extreme demand can still
 reduce update frequency; these bounds do not promise instantaneous simulation
 of arbitrary skyscrapers. The ordinary visual lifetime remains unchanged.
 

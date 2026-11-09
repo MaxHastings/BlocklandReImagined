@@ -400,6 +400,34 @@ struct Graphics {
     display: winit::event_loop::OwnedDisplayHandle,
 }
 
+/// Open an offscreen device with the game's backend order and compiler probe.
+/// No native window or surface is created.
+pub fn offscreen_gpu() -> Result<bri_ui::gpu::Headless> {
+    let mut failures = Vec::new();
+    for (backends, software) in backend_order() {
+        let descriptor = || {
+            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+            descriptor.backends = backends;
+            descriptor
+        };
+        match open_device(&descriptor, None, software) {
+            Ok(gpu) => {
+                log_adapter(&gpu.adapter, &failures, gpu.compiler);
+                return Ok(bri_ui::gpu::Headless {
+                    adapter_info: gpu.adapter.get_info(),
+                    device: gpu.device,
+                    queue: gpu.queue,
+                });
+            }
+            Err(error) => failures.push(format!(
+                "{backends:?}{}: {error:#}",
+                if software { " (software)" } else { "" }
+            )),
+        }
+    }
+    Err(anyhow::anyhow!("No usable GPU backend: {}", failures.join("; ")).context(NO_GPU_HELP))
+}
+
 /// Open the discrete GPU on the first backend that works. A broken or missing
 /// driver for one API (a common DX12 or Vulkan failure on older machines)
 /// falls through to the next instead of ending the game; software rendering
@@ -823,10 +851,16 @@ impl Runner {
     fn focused_text(&self) -> bool {
         self.config.app.ui().takes_text()
     }
-    fn console_clipboard(&mut self, key: Key, mods: Modifiers) -> bool {
-        if self.config.app.ui().top_id() != bri_ui::screens::ScreenId::Console {
-            return false;
-        }
+    /// Clipboard shortcuts for the entry lines. Ctrl/Cmd+V pastes into
+    /// whatever text box has focus, as v20's engine did in every field; we
+    /// read the OS text and type it in through the ordinary character path,
+    /// so no Enter can slip through and the field's length cap still applies.
+    /// Ctrl/Cmd+C copies that line's selection (Shift+arrows or a mouse drag)
+    /// when there is one, else the whole focused line (or the console's log
+    /// when its entry is empty). Ctrl/Cmd+X cuts: it copies exactly what
+    /// Ctrl/Cmd+C would and removes that text from the focused line.
+    fn clipboard(&mut self, key: Key, mods: Modifiers) -> bool {
+        let top = self.config.app.ui().top_id();
         if !(mods.ctrl || mods.cmd) || mods.alt {
             return false;
         }
@@ -834,7 +868,7 @@ impl Runner {
             Key::Letter('v') if self.focused_text() => {
                 match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
                     Ok(text) => {
-                        for ch in pasted_console_chars(&text) {
+                        for ch in pasted_entry_chars(&text) {
                             // The ordinary input path also records the actual pasted
                             // characters for deterministic input replays.
                             self.input(InputEvent::Char(ch));
@@ -844,16 +878,56 @@ impl Runner {
                 }
                 true
             }
-            Key::Letter('c') => {
-                if let Some(text) = self.config.app.ui().console_copy_text()
-                    && let Err(error) = arboard::Clipboard::new().and_then(|mut c| c.set_text(text))
-                {
-                    bri_console::warn(format!("Could not copy: {error}"));
+            Key::Letter('c') => match self.copy_text(top) {
+                Some(text) => {
+                    if let Err(error) = arboard::Clipboard::new().and_then(|mut c| c.set_text(text))
+                    {
+                        bri_console::warn(format!("Could not copy: {error}"));
+                    }
+                    true
+                }
+                None => false,
+            },
+            Key::Letter('x') if self.focused_text() => {
+                // Cut takes only the focused field's own text, never the
+                // console log that Ctrl+C falls back to.
+                let text = {
+                    let ui = self.config.app.ui();
+                    ui.focused_edit_selection()
+                        .or_else(|| ui.focused_edit_text())
+                };
+                let Some(text) = text else {
+                    return false;
+                };
+                if !text.is_empty() {
+                    cut_into_clipboard(
+                        text,
+                        |text| arboard::Clipboard::new().and_then(|mut c| c.set_text(text)),
+                        || {
+                            self.config.app.ui_mut().cut_focused_edit();
+                        },
+                    );
                 }
                 true
             }
             _ => false,
         }
+    }
+    /// What Ctrl/Cmd+C copies (and Ctrl/Cmd+X copies before removing it):
+    /// the focused line's selection (Shift+arrows or a mouse drag) when there
+    /// is one, else the console's entry line (or its log when the entry is
+    /// empty), else the focused entry line of any screen, as in v20.
+    fn copy_text(&self, top: bri_ui::screens::ScreenId) -> Option<String> {
+        if let Some(selection) = self.config.app.ui().focused_edit_selection() {
+            return Some(selection);
+        }
+        if top == bri_ui::screens::ScreenId::Console {
+            return self.config.app.ui().console_copy_text();
+        }
+        if !self.focused_text() {
+            return None;
+        }
+        self.config.app.ui().focused_edit_text()
     }
     fn sync_cursor(&mut self) -> Result<()> {
         let _span = crate::frame_trace::span("cursor");
@@ -1749,7 +1823,7 @@ impl Runner {
                     if let PhysicalKey::Code(code) = event.physical_key
                         && let Some(key) =
                             translate_key(code, self.config.app.ui().config().platform)
-                        && !(down && !event.repeat && self.console_clipboard(key, self.mods))
+                        && !(down && !event.repeat && self.clipboard(key, self.mods))
                     {
                         self.input(if down {
                             InputEvent::KeyDown {
@@ -2294,7 +2368,29 @@ fn translate_button(button: winit::event::MouseButton) -> Option<MouseButton> {
         _ => return None,
     })
 }
-fn pasted_console_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+/// Characters a paste inserts into an entry line (console or chat): the
+/// fields are single-line, so newlines and tabs become spaces; control
+/// characters are dropped and the run is bounded.
+/// Ctrl/Cmd+X: copy `text` first, and remove it from the field only once the
+/// copy has worked. A refused copy leaves the field as it was and says so in
+/// the console log, so no text is lost silently.
+fn cut_into_clipboard<E: std::fmt::Display>(
+    text: String,
+    copy: impl FnOnce(String) -> Result<(), E>,
+    remove: impl FnOnce(),
+) -> bool {
+    match copy(text) {
+        Ok(()) => {
+            remove();
+            true
+        }
+        Err(error) => {
+            bri_console::warn(format!("Could not cut, the text is still there: {error}"));
+            false
+        }
+    }
+}
+fn pasted_entry_chars(text: &str) -> impl Iterator<Item = char> + '_ {
     // Paste edits the line; it never synthesizes Enter or executes commands.
     text.chars().take(4096).filter_map(|c| match c {
         '\r' | '\n' | '\t' => Some(' '),
@@ -2339,13 +2435,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pasted_console_text_cannot_press_enter_and_is_bounded() {
+    fn a_refused_copy_keeps_the_text_in_the_field() {
+        let mut removed = false;
+        let ok = cut_into_clipboard(
+            "apples".into(),
+            |_| Err::<(), _>("clipboard unavailable"),
+            || removed = true,
+        );
+        assert!(!ok);
+        assert!(!removed, "the field must keep its text when the copy fails");
+    }
+
+    #[test]
+    fn a_copy_that_works_removes_the_text_once() {
+        let mut copied = String::new();
+        let mut removals = 0;
+        let ok = cut_into_clipboard(
+            "apples".into(),
+            |text| {
+                copied = text;
+                Ok::<(), &str>(())
+            },
+            || removals += 1,
+        );
+        assert!(ok);
+        assert_eq!(copied, "apples");
+        assert_eq!(removals, 1);
+    }
+
+    #[test]
+    fn pasted_entry_text_cannot_press_enter_and_is_bounded() {
         assert_eq!(
-            pasted_console_chars("where\r\nversion\t\0").collect::<String>(),
+            pasted_entry_chars("where\r\nversion\t\0").collect::<String>(),
             "where  version "
         );
-        assert_eq!(pasted_console_chars(&"x".repeat(10000)).count(), 4096);
-        assert_eq!(pasted_console_chars("é").collect::<String>(), "é");
+        assert_eq!(pasted_entry_chars(&"x".repeat(10000)).count(), 4096);
+        assert_eq!(pasted_entry_chars("é").collect::<String>(), "é");
     }
 
     /// A refused grab (X11 at launch) is retried shortly instead of ending
