@@ -34,6 +34,11 @@ pub struct Appearance {
     pub colors: BTreeMap<String, [f32; 4]>,
     pub face: String,
     pub decal: String,
+    /// Avatar materials this body draws unlit — full brightness regardless of
+    /// light (`set_avatar_unlit`), so they read as glowing in the dark (a bot's
+    /// face, a mask). Host-set; never taken from a client. Kept across respawns.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub unlit: BTreeSet<String>,
     /// How the host dresses an Add-On's own body (`set_body_dress`); never
     /// taken from a client.
     #[serde(default, skip_serializing_if = "Dress::is_empty")]
@@ -108,7 +113,12 @@ impl Appearance {
                     k.len() <= 32 && !v.is_empty() && v.len() <= 64 && v.is_ascii()
                 })
                 && self.colors.iter().all(|(k, c)| k.len() <= 32
-                    && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))),
+                    && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)))
+                && self.unlit.len() <= 8
+                && self
+                    .unlit
+                    .iter()
+                    .all(|n| !n.is_empty() && n.len() <= 32 && n.is_ascii()),
             "Invalid avatar appearance bounds"
         );
         ensure!(self.dress.valid(), "Invalid avatar dress");
@@ -204,6 +214,7 @@ impl TryFrom<PackageFile> for Package {
                 colors: file.defaults.colors,
                 face: file.defaults.face,
                 decal: file.defaults.decal,
+                unlit: BTreeSet::new(),
                 dress: Default::default(),
             },
         })
@@ -348,6 +359,7 @@ impl Package {
             colors: BTreeMap::new(),
             face: appearance.face.clone(),
             decal: appearance.decal.clone(),
+            unlit: BTreeSet::new(),
             dress: Dress::default(),
         };
         let known = |slot: &str, name: &str| {
@@ -660,6 +672,7 @@ mod tests {
                 colors,
                 face: "smiley".into(),
                 decal: "AAA-None".into(),
+                unlit: Default::default(),
                 dress: Default::default(),
             },
         }
@@ -669,6 +682,7 @@ mod tests {
     fn unknown_avatar_choices_fall_back_to_defaults_and_keep_the_rest() {
         let package = package();
         let wanted = Appearance {
+            unlit: Default::default(),
             parts: BTreeMap::from([
                 ("hat".into(), "Helmet".into()),
                 ("pack".into(), "AddOnJetpack".into()),

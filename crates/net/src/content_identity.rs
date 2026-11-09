@@ -1639,6 +1639,7 @@ mod tests {
                     on_fire: None,
                     sport: None,
                     riding_image: None,
+                    aim_lock_axis: None,
                 },
             );
             items.insert(

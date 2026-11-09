@@ -3947,6 +3947,14 @@ fn register_presentation(engine: &mut Engine) {
             decal,
         }))
     });
+    // One avatar material drawn unlit (full brightness regardless of light):
+    // set_avatar_unlit(player, "face") — a bot's face glowing in the dark.
+    engine.register_fn("set_avatar_unlit", |player: Dynamic, material: &str| {
+        push(Op::SetAvatarUnlit(ops::SetAvatarUnlit {
+            player: id(&player)?,
+            material: material.to_owned(),
+        }))
+    });
     // A body's dress: #{ skins: #{ face: "face_3.png", shirt: "shirt_1.png" },
     // scale: 1.12 }, or () for the body's own again.
     engine.register_fn("set_body_dress", |player: Dynamic, look: Dynamic| {

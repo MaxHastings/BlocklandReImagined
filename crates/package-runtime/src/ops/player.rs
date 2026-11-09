@@ -54,6 +54,24 @@ impl ScriptOp for SetAvatarParts {
     }
 }
 
+/// Draw one of a player's avatar materials unlit (`set_avatar_unlit`): full
+/// brightness regardless of light, so it reads as glowing in the dark (a bot's
+/// face, a mask). `material` is the rig's material name ("face", "decal" or a
+/// surface); one the body lacks does nothing. Additive — every other material
+/// stays lit — and kept across respawns like parts and colours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetAvatarUnlit {
+    pub player: u64,
+    pub material: String,
+}
+impl ScriptOp for SetAvatarUnlit {
+    const CAPABILITY: &str = "player";
+    const NAME: &str = "set_avatar_unlit";
+    fn bounded(&self) -> bool {
+        !self.material.is_empty() && self.material.len() <= 32 && self.material.is_ascii()
+    }
+}
+
 /// Move a living player, keeping their facing unless a `yaw` (radians, as
 /// the player's own, 0 facing -Z) turns them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -102,6 +102,7 @@ mod tests {
             colors: Default::default(),
             face: "face0".into(),
             decal: "decal0".into(),
+            unlit: Default::default(),
             dress: Default::default(),
         };
         for slot in [

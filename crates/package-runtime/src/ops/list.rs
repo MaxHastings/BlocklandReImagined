@@ -47,6 +47,7 @@ macro_rules! for_each_op {
             PlaceVoxel = world_edit,
             SetAvatarColors = player,
             SetAvatarParts = player,
+            SetAvatarUnlit = player,
             Explode = damage,
             Damage = damage,
             Teleport = player,

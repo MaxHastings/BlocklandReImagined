@@ -895,6 +895,9 @@ struct Peer {
     /// Parts, face and decal an Add-On dresses the avatar in over the
     /// player's own (`set_avatar_parts`): a team's full uniform.
     uniform_parts: Option<UniformParts>,
+    /// Avatar materials an Add-On draws unlit (`set_avatar_unlit`) — they glow
+    /// at full brightness regardless of light (a bot's face in the dark).
+    unlit_materials: BTreeSet<String>,
     /// What an Add-On puts on the player's own body model (`set_body_dress`):
     /// other skins and a drawn size.
     dress: bri_content::avatar::Dress,
@@ -996,6 +999,7 @@ impl Peer {
             temp_look: None,
             uniform: BTreeMap::new(),
             uniform_parts: None,
+            unlit_materials: BTreeSet::new(),
             dress: Default::default(),
             current_color: 0,
             fx_can: None,
@@ -1439,6 +1443,7 @@ impl Session {
                 if let Some(uniform) = &p.uniform_parts {
                     uniform.dress(&mut avatar, self.avatar_catalog.as_ref());
                 }
+                avatar.unlit = p.unlit_materials.clone();
                 for (slot, color) in &p.uniform {
                     avatar.colors.insert(slot.clone(), *color);
                 }

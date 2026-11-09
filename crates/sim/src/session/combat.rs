@@ -279,6 +279,16 @@ impl Combat {
     }
 }
 
+/// `image_light_flicker` leaves the wire while it is 0 (the client reads an
+/// absent field as 0 through `serde(default)`), so a steady player costs no
+/// bytes for it — the same pattern as `nametag_hidden`. The predicate must be
+/// true exactly when the value is ABSENT: skipping the nonzero values would
+/// drop precisely the destabilized lights (round 53 playtest: "the spotlight
+/// isn't even flickering").
+fn flicker_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
 /// Replicated per-player status. Health drives the damage flash; the rest
 /// drives the death camera, respawn prompt, player list and lights.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -317,7 +327,8 @@ pub struct Vitals {
     pub light: bool,
     /// An Add-On's flicker for this body's worn image lights
     /// (`set_image_light_flicker`), 0 to 1. Each client dims its own copy.
-    #[serde(default)]
+    /// Off the wire while 0 (see `flicker_zero`).
+    #[serde(default, skip_serializing_if = "flicker_zero")]
     pub image_light_flicker: f32,
     /// Vehicle id and seat while riding.
     pub mounted: Option<(u64, u8)>,

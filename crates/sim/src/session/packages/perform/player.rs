@@ -24,6 +24,14 @@ impl Perform for ops::SetAvatarParts {
         Ok(())
     }
 }
+impl Perform for ops::SetAvatarUnlit {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetAvatarUnlit { player, material } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        peer.unlit_materials.insert(material.to_ascii_lowercase());
+        Ok(())
+    }
+}
 impl Perform for ops::SetBodyDress {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetBodyDress { player, dress } = self;
@@ -813,8 +821,7 @@ impl Perform for ops::ViewShake {
     }
 }
 impl Perform for ops::CameraShake {
-    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall { package, .. } = cx;
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::CameraShake {
             player,
             translation,
@@ -822,7 +829,10 @@ impl Perform for ops::CameraShake {
             seconds,
             hold,
         } = self;
-        session.take_cue(package)?;
+        // A control, not a cue: it reaches one client and decays on its own,
+        // so it spends none of the package's print-and-sound budget (like
+        // `steer_view` or `stop_sound`). One victim's screen effects must not
+        // starve another's out of the shared pool.
         ensure!(session.peers.contains_key(&player), "No such player");
         session.notify(
             player,

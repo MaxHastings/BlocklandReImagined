@@ -872,6 +872,23 @@ impl AvatarAssets {
                     kept
                 })
             })?;
+            // A rule marked this material unlit (`set_avatar_unlit`): it glows at
+            // full brightness in its own texture colours, regardless of light or
+            // the wearer's paint — a bot's face in the dark. `untinted` keeps the
+            // art out of the vertex-paint multiply (the model path's convention
+            // for opaque surfaces), so one object can carry a lit painted body
+            // and an unlit glowing part at once; an authored-opaque surface also
+            // keeps its coverage through the flip — Unlit would otherwise let the
+            // texture alpha become real transparency, and a mostly-transparent
+            // picture (art over clear pixels) reads as glass;
+            // `ignore_texture_alpha` draws those texels at their colour instead.
+            if appearance.unlit.iter().any(|u| u.eq_ignore_ascii_case(&name)) {
+                material.kind = bri_render::scene::MaterialKind::Unlit;
+                material.untinted = true;
+                if source.blend == "opaque" {
+                    material.ignore_texture_alpha = true;
+                }
+            }
             materials.push(data.materials.len());
             data.materials.push(material);
         }
@@ -5017,6 +5034,7 @@ mod tests {
             team: None,
             invite: None,
             light: false,
+            image_light_flicker: 0.0,
             mounted: None,
             vehicle_health: None,
             ride: None,

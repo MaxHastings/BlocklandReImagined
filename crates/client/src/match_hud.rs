@@ -129,6 +129,7 @@ mod tests {
             team,
             invite: None,
             light: false,
+            image_light_flicker: 0.0,
             mounted: None,
             vehicle_health: None,
             ride: None,

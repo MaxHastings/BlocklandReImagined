@@ -1261,6 +1261,7 @@ impl WorldItems {
                         parts: BTreeMap::new(),
                         face: String::new(),
                         decal: String::new(),
+                        unlit: BTreeSet::new(),
                         dress: Default::default(),
                     }));
                 }

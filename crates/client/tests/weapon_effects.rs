@@ -1154,13 +1154,18 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         };
         let at = Vec3::new(2., 1., 0.);
         let rotation = glam::Quat::from_rotation_y(0.7);
-        fx.sync_image_lights(&worn(Some(1)), |owner, hand| {
-            (owner == 7 && hand == 3).then_some(bri_fx_runtime::SourceTransform {
-                position: at,
-                rotation,
-                ..Default::default()
-            })
-        })?;
+        fx.sync_image_lights(
+            &worn(Some(1)),
+            |owner, hand| {
+                (owner == 7 && hand == 3).then_some(bri_fx_runtime::SourceTransform {
+                    position: at,
+                    rotation,
+                    ..Default::default()
+                })
+            },
+            |_| 0.0,
+            0.01,
+        )?;
         fx.advance(0.01, Vec3::ZERO, pose)?;
         let lights = fx.world().snapshot(&camera()).lights;
         let [light] = &lights[..] else {
@@ -1173,13 +1178,18 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         );
         assert_eq!(light.radius, 20.);
         assert_eq!(light.color, Vec3::new(0., 0., 1.), "blue, as it is worn");
-        fx.sync_image_lights(&WeaponView::default(), |_, _| {
-            Some(bri_fx_runtime::SourceTransform {
-                position: at,
-                rotation,
-                ..Default::default()
-            })
-        })?;
+        fx.sync_image_lights(
+            &WeaponView::default(),
+            |_, _| {
+                Some(bri_fx_runtime::SourceTransform {
+                    position: at,
+                    rotation,
+                    ..Default::default()
+                })
+            },
+            |_| 0.0,
+            0.01,
+        )?;
         fx.advance(0.01, Vec3::ZERO, pose)?;
         assert!(fx.world().snapshot(&camera()).lights.is_empty());
     }
@@ -1218,13 +1228,18 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         };
         let at = Vec3::new(2., 1., 0.);
         let rotation = glam::Quat::from_rotation_y(0.7);
-        fx.sync_image_lights(&held, |owner, hand| {
-            (owner == 7 && hand == 1).then_some(bri_fx_runtime::SourceTransform {
-                position: at,
-                rotation,
-                ..Default::default()
-            })
-        })?;
+        fx.sync_image_lights(
+            &held,
+            |owner, hand| {
+                (owner == 7 && hand == 1).then_some(bri_fx_runtime::SourceTransform {
+                    position: at,
+                    rotation,
+                    ..Default::default()
+                })
+            },
+            |_| 0.0,
+            0.01,
+        )?;
         fx.advance(0.01, Vec3::ZERO, pose)?;
         let lights = fx.world().snapshot(&camera()).lights;
         let [light] = &lights[..] else {
@@ -1284,13 +1299,18 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         };
         let at = Vec3::new(2., 1., 0.);
         let rotation = glam::Quat::from_rotation_y(0.7);
-        fx.sync_image_lights(&held, |owner, hand| {
-            (owner == 7 && hand == 1).then_some(bri_fx_runtime::SourceTransform {
-                position: at,
-                rotation,
-                ..Default::default()
-            })
-        })?;
+        fx.sync_image_lights(
+            &held,
+            |owner, hand| {
+                (owner == 7 && hand == 1).then_some(bri_fx_runtime::SourceTransform {
+                    position: at,
+                    rotation,
+                    ..Default::default()
+                })
+            },
+            |_| 0.0,
+            0.01,
+        )?;
         fx.advance(0.01, Vec3::ZERO, pose)?;
         let lights = fx.world().snapshot(&camera()).lights;
         assert_eq!(lights.len(), 2, "beam and glow: {lights:?}");
@@ -1315,13 +1335,18 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         assert_eq!(beam.color, Vec3::new(0.9, 0.87, 0.8));
         assert_eq!(glow.radius, 8., "the glow's own radius");
         assert_eq!(glow.color, Vec3::new(1.0, 0.6, 0.2), "the glow's own colour");
-        fx.sync_image_lights(&WeaponView::default(), |_, _| {
-            Some(bri_fx_runtime::SourceTransform {
-                position: at,
-                rotation,
-                ..Default::default()
-            })
-        })?;
+        fx.sync_image_lights(
+            &WeaponView::default(),
+            |_, _| {
+                Some(bri_fx_runtime::SourceTransform {
+                    position: at,
+                    rotation,
+                    ..Default::default()
+                })
+            },
+            |_| 0.0,
+            0.01,
+        )?;
         fx.advance(0.01, Vec3::ZERO, pose)?;
         assert!(
             fx.world().snapshot(&camera()).lights.is_empty(),

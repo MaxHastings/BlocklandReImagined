@@ -1,0 +1,1 @@
+`Vitals.image_light_flicker` (the 0..=1 amount of a rule's `set_image_light_flicker`, so each client flickers its own copy of the lights that player's mounted images give off) in `Checkpoint::vitals` and `Delta::vitals`; omitted from the wire while it is 0.
