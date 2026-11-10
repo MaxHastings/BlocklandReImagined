@@ -443,10 +443,10 @@ fn wear(
     keep: bool,
 ) -> Fallible<INT> {
     let slot = match slot.as_int() {
-        Ok(s @ 2..=3) => s as u8,
+        Ok(s @ 1..=3) => s as u8,
         _ => {
             return fail(
-                "worn image slots are 2 and 3 (0 is the hand: mount_image(player, image))",
+                "worn image slots are 1, 2 and 3 (0 is the hand: mount_image(player, image))",
             );
         }
     };

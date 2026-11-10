@@ -482,6 +482,9 @@ pub struct ClientAudio {
     /// The ambient beds Add-On rules play, by key
     /// ([`ClientAudio::play_ambient`]).
     rule_ambient: BTreeMap<String, RuleMusic>,
+    /// One-shot sounds an Add-On rule started for this client, by the profile
+    /// as issued; `stop_sound` cuts every handle under a name.
+    rule_sounds: BTreeMap<String, Vec<SoundHandle>>,
     /// The world turned down by a rule ([`ClientAudio::set_world_volume`]).
     world_volume: Option<WorldVolume>,
     /// The looping positional sources a game mode asked for, by key ([`ClientAudio::sync_positional_sources`]).
@@ -632,6 +635,7 @@ impl ClientAudio {
             music_bricks: MusicBricks::default(),
             rule_music: None,
             rule_ambient: BTreeMap::new(),
+            rule_sounds: BTreeMap::new(),
             world_volume: None,
             positional: BTreeMap::new(),
             fresh_world: Vec::new(),
@@ -764,6 +768,19 @@ impl ClientAudio {
     /// `profile` as an Add-On asked for it.
     pub fn profile_shaped(&mut self, profile: &str, placement: Placement, voice: Voice) {
         self.enqueue(profile.into(), placement, profile, voice);
+    }
+    /// `stop_sound`: cut every instance of a rule-started profile playing
+    /// here, with a short fade so the cut doesn't click; queued cues and
+    /// other profiles are untouched.
+    pub fn stop_profile(&mut self, profile: &str) {
+        let Some(handles) = self.rule_sounds.remove(profile) else {
+            return;
+        };
+        for handle in handles {
+            // 50 ms: imperceptible as "still playing", no click on the cut.
+            let result = self.runtime.stop_with_fade(handle, 0.05);
+            self.record(result);
+        }
     }
     /// Bounded local cosmetic starts. No backlog survives a tick or session reset.
     /// Unknown profiles are silent; this path never guesses a bank fallback.
@@ -1671,6 +1688,7 @@ impl ClientAudio {
         self.music_bricks = MusicBricks::default();
         self.rule_music = None;
         self.rule_ambient.clear();
+        self.rule_sounds.clear();
         self.acoustic_voices.clear();
         self.enclosure_probe = Default::default();
         self.exposure = Default::default();
@@ -1730,8 +1748,16 @@ impl ClientAudio {
             }
         }
         while let Some((id, placement, voice)) = self.pending.pop_front() {
-            let result = self.start(&id, placement, voice).map(|_| ());
-            self.record(result);
+            match self.start(&id, placement, voice) {
+                Ok(handle) => {
+                    // A rule's sound: `stop_sound` may cut it by the profile
+                    // as issued. Bounded like the other handle maps.
+                    if self.rule_sounds.len() < 128 || self.rule_sounds.contains_key(&id) {
+                        self.rule_sounds.entry(id.clone()).or_default().push(handle);
+                    }
+                }
+                Err(error) => self.record(Err(error)),
+            }
         }
         while let Some((id, point, seed, voice)) = self.contact_pending.pop_front() {
             let asset = self
@@ -1805,6 +1831,10 @@ impl ClientAudio {
                 self.acoustic_voices.remove(&handle);
                 self.held.retain(|_, v| v.handle != handle);
                 self.speech.retain(|_, speech| speech.handle != handle);
+                for handles in self.rule_sounds.values_mut() {
+                    handles.retain(|h| *h != handle);
+                }
+                self.rule_sounds.retain(|_, handles| !handles.is_empty());
             }
         }
     }

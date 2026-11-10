@@ -1461,6 +1461,20 @@ pub struct Image {
     /// The light it gives off while mounted on a player (`hasLight`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub light: Option<ImageLight>,
+    /// While mounted on a player, lock this image's barrel — an axis in its
+    /// own model frame (a flashlight beam is `[0, 1, 0]`) — to where the
+    /// holder looks: each frame the holder's hand re-poses, its wrist turned
+    /// by just what lines that axis up with their view and clamped to a
+    /// wrist's range (`bri_content::hold::AIM_LOCK_MAX_TURN`), so a tool
+    /// whose grip sits tilted on the hand still aims straight ahead and free-
+    /// look never twists it through the arm. The model rides rigidly on the
+    /// hand in every view; nothing of it travels over the wire (the holder's
+    /// look already does). None leaves the image as authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim_lock_axis: Option<[f32; 3]>,
+}
+fn light_anchor_is_default(offset: &[f32; 3]) -> bool {
+    *offset == [0.; 3]
 }
 /// A mounted image's light ([`Image::light`]): v20's `ConstantLight`
 /// image light, a point light at the image (Capture the Flag's flag glows
@@ -1476,6 +1490,29 @@ pub struct ImageLight {
     pub cone: Option<bri_content::presentation::LightCone>,
     /// RGB from 0 to 1 (`lightColor`). Worn in a paint colour (a
     /// `paint_tint` image), the light takes that colour too.
+    pub color: [f32; 3],
+    /// Where inside the mounted image's local frame the light sits, so a
+    /// beam can leave from its lens instead of its grip. `[0, 0, 0]` keeps
+    /// the old behaviour (at the mount point).
+    #[serde(default, skip_serializing_if = "light_anchor_is_default")]
+    pub offset: [f32; 3],
+    /// A small all-round point light at the same anchor as the main one
+    /// (`glow`): where a beam leaves from its lens, a little of it spills on
+    /// the holder and what is near them (a flashlight's own `ConstantLight`
+    /// spill). No cone of its own; radius and colour are validated like the
+    /// main light's. None leaves the image with only its main light.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glow: Option<ImageGlow>,
+}
+/// [`ImageLight`]'s `glow`: the small all-round point at the same anchor as
+/// the main light (its lens), so a beam also lights its holder a little.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageGlow {
+    /// Units, above 0 and at most [`MAX_IMAGE_LIGHT_RADIUS`].
+    pub radius: f32,
+    /// RGB from 0 to 1. Worn in a paint colour (a `paint_tint` image), the
+    /// glow takes that colour too.
     pub color: [f32; 3],
 }
 /// Largest radius an image's light may have, units.
@@ -4550,8 +4587,15 @@ impl Pack {
                         && l.radius <= MAX_IMAGE_LIGHT_RADIUS
                         && l.cone.is_none_or(|c| c.valid())
                         && l.color.iter().all(|c| (0.0..=1.0).contains(c))
+                        && l.offset.iter().all(|v| v.is_finite())
+                        && l.glow.is_none_or(|g| {
+                            g.radius > 0.0
+                                && g.radius <= MAX_IMAGE_LIGHT_RADIUS
+                                && g.color.iter().all(|c| (0.0..=1.0).contains(c))
+                        })
                 }),
-                "Invalid image light {id}: radius above 0 to {MAX_IMAGE_LIGHT_RADIUS}, colour 0 to 1"
+                "Invalid image light {id}: radius above 0 to {MAX_IMAGE_LIGHT_RADIUS}, colour 0 to 1, \
+                 finite local anchor"
             );
             ensure!(
                 image.rope.as_ref().is_none_or(|r| {
@@ -4559,6 +4603,13 @@ impl Pack {
                         && (1.0..=1000.0).contains(&r.speed)
                 }),
                 "Invalid image rope {id}: a projectile of the pack, speed 1 to 1000"
+            );
+            ensure!(
+                image.aim_lock_axis.is_none_or(|a| {
+                    a.iter().all(|v| v.is_finite())
+                        && (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]) > 1e-6
+                }),
+                "Invalid aim lock axis of image {id}: finite and not zero"
             );
             ensure!(
                 image.shot.as_ref().is_none_or(shot_ok),

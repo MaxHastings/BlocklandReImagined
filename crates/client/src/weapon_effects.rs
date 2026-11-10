@@ -145,14 +145,26 @@ pub enum HostRequest {
     Animation(Cue),
 }
 
+/// [`WeaponEffects::image_lights`] value: what a mounted image's light was
+/// started for and its sources. The main light is always present; `glow` is
+/// the image's lens glow (`bri_weapons::ImageLight::glow`) when it declares
+/// one, started at the same transform — `None` until the world has room for
+/// it (retried each frame), so a full scene never strands either source.
+struct ImageLightSources {
+    image: String,
+    paint: Option<u8>,
+    main: EffectHandle,
+    glow: Option<EffectHandle>,
+}
 pub struct WeaponEffects {
     world: EffectsWorld,
     weapons: Arc<bri_weapons::Pack>,
     bindings: BTreeMap<String, Binding>,
     trails: BTreeMap<(u64, bool), Attached>,
-    /// Mounted images' lights by holder and slot: the image and paint each
-    /// was started for.
-    image_lights: BTreeMap<(u64, u8), (String, Option<u8>, EffectHandle)>,
+    /// Mounted images' lights by holder and slot: what each was started for
+    /// and its sources (the main light, plus the image's lens glow when it
+    /// declares one).
+    image_lights: BTreeMap<(u64, u8), ImageLightSources>,
     attached_lights: BTreeMap<(u64, u16), (String, EffectHandle)>,
     /// The ribbons projectiles leave ([`bri_weapons::ProjectileDef::contrail`]).
     contrails: crate::contrails::Contrails,
@@ -166,6 +178,10 @@ pub struct WeaponEffects {
     /// The world's portals: a trail carried through one goes on from the
     /// far side instead of streaking across between them.
     passages: Passages,
+    /// Accumulated frame time seeding the image-light flicker pulse
+    /// (`set_image_light_flicker`); each holder offsets it by its id so two
+    /// holders never stutter in step.
+    flicker_clock: f64,
     pub diagnostics: Diagnostics,
 }
 
@@ -222,6 +238,23 @@ impl WeaponEffects {
                 radius_curve: None,
                 flare: None,
             });
+            // The lens glow is its own all-round point at the same anchor:
+            // one image, two lights (a flashlight's beam and its spill).
+            if let Some(glow) = light.glow {
+                library.lights.push(bri_content::effects::Light {
+                    id: image_glow_light(&i.id),
+                    name: String::new(),
+                    enabled: true,
+                    color: glow.color,
+                    brightness: 1.,
+                    radius: glow.radius,
+                    cone: None,
+                    color_curves: None,
+                    brightness_curve: None,
+                    radius_curve: None,
+                    flare: None,
+                });
+            }
         }
         let mut manifest = pack.manifest.clone();
         let mut notes = Vec::new();
@@ -357,6 +390,7 @@ impl WeaponEffects {
             limits,
             palette: Vec::new(),
             passages: Passages::default(),
+            flicker_clock: 0.,
             diagnostics: Diagnostics {
                 messages: notes.into_iter().take(MAX_MESSAGES).collect(),
                 ..Default::default()
@@ -664,43 +698,106 @@ impl WeaponEffects {
         Ok(())
     }
 
+    /// The brightness of an image light flickering now: 1 steady, dipping
+    /// irregularly the deeper `amount` is. A per-holder phase offset keeps two
+    /// holders from stuttering in step; a few incommensurate sines (~3.7,
+    /// ~6.4 and ~15.5 Hz) buzz rather than pulse cleanly.
+    fn flicker_intensity(clock: f64, owner: u64, amount: f32) -> f32 {
+        let a = (amount as f64).clamp(0., 1.);
+        if a <= 0. {
+            return 1.;
+        }
+        // A stable offset in [0, 1) derived from the id.
+        let seed = (owner.wrapping_mul(0x9E37_79B9) >> 11) as f64 / (1u64 << 53) as f64;
+        let t = clock + seed;
+        let n = ((t * 23.).sin() * 0.5 + (t * 40.).sin() * 0.3 + (t * 97.).sin() * 0.2) * 0.5 + 0.5;
+        // At full amount the light dips to ~5% of its brightness and recovers.
+        (1. - a * (0.35 + 0.6 * n)).max(0.05) as f32
+    }
+
     /// Light up the images players wear or hold that give off light
     /// (`Image::light`), each at the image as drawn (`at(holder, slot)`),
-    /// in the colour it is worn in when painted. One gone or changed goes
-    /// out at once, as v20's image light does with its image.
+    /// in the colour it is worn in when painted: its main light and, when it
+    /// declares one, its lens glow at the same anchor. One gone or changed
+    /// goes out at once, as v20's image light does with its image.
+    /// `flicker(holder)` gives each holder's unstable amount (a rule's
+    /// `set_image_light_flicker`); their lights dim on an irregular pulse for
+    /// the frame `elapsed` seconds long.
     pub fn sync_image_lights(
         &mut self,
         view: &WeaponView,
         at: impl Fn(u64, u8) -> Option<SourceTransform>,
+        flicker: impl Fn(u64) -> f32,
+        elapsed: f32,
     ) -> Result<()> {
+        // Advance the shared flicker clock once per frame.
+        self.flicker_clock += elapsed.min(0.25) as f64;
         let mut desired = BTreeMap::new();
         for (owner, images) in &view.images {
             for m in images {
-                if self
+                if let Some(image) = self
                     .weapons
                     .images
                     .get(&m.image)
-                    .is_some_and(|i| i.light.is_some())
-                    && let Some(transform) = at(*owner, m.hand).filter(|t| valid_transform(*t))
+                    .filter(|i| i.light.is_some())
+                    && let Some(mut transform) = at(*owner, m.hand).filter(|t| valid_transform(*t))
                 {
+                    // A light anchored inside the model (a flashlight's lens)
+                    // leaves from there instead of the grip; its glow rides
+                    // along at the same anchor.
+                    if let Some(light) = image.light.as_ref()
+                        && light.offset != [0.; 3]
+                    {
+                        transform.position += transform.rotation * Vec3::from(light.offset);
+                    }
                     desired.insert((*owner, m.hand), (m.image.clone(), m.paint, transform));
                 }
             }
         }
         let world = &mut self.world;
-        self.image_lights.retain(|key, (image, paint, handle)| {
+        self.image_lights.retain(|key, sources| {
             let keep = desired
                 .get(key)
-                .is_some_and(|(i, p, _)| i == image && p == paint)
-                && world.is_active(*handle);
+                .is_some_and(|(i, p, _)| i == &sources.image && p == &sources.paint)
+                && world.is_active(sources.main);
             if !keep {
-                world.stop(*handle, StopMode::Immediate);
+                world.stop(sources.main, StopMode::Immediate);
+                if let Some(glow) = sources.glow {
+                    world.stop(glow, StopMode::Immediate);
+                }
             }
             keep
         });
         for (key, (image, paint, transform)) in desired {
-            if let Some((_, _, handle)) = self.image_lights.get(&key) {
-                self.world.update_source(*handle, transform)?;
+            let glow_wanted = self
+                .weapons
+                .images
+                .get(&image)
+                .and_then(|i| i.light.as_ref())
+                .is_some_and(|l| l.glow.is_some());
+            if let Some(sources) = self.image_lights.get_mut(&key) {
+                // The main source moves with the hand; its glow, once it has
+                // room in the world, follows at the same anchor.
+                world.update_source(sources.main, transform)?;
+                match sources.glow {
+                    Some(glow_handle) => world.update_source(glow_handle, transform)?,
+                    None if glow_wanted => {
+                        let options = SourceOptions {
+                            paint: paint
+                                .and_then(|p| self.palette.get(usize::from(p)))
+                                .map(|c| [c[0], c[1], c[2]].map(|v| v.clamped(0., 1.))),
+                            ..Default::default()
+                        };
+                        match world.start_light(&image_glow_light(&image), transform, options) {
+                            Ok(handle) => sources.glow = Some(handle),
+                            Err(_) => {
+                                self.diagnostics.capacity_rejections =
+                                    self.diagnostics.capacity_rejections.saturating_add(1);
+                            }
+                        }
+                    }
+                    None => {}
+                }
                 continue;
             }
             let options = SourceOptions {
@@ -709,17 +806,43 @@ impl WeaponEffects {
                     .map(|c| [c[0], c[1], c[2]].map(|v| v.clamped(0., 1.))),
                 ..Default::default()
             };
-            match self
-                .world
-                .start_light(&image_light(&image), transform, options)
-            {
-                Ok(handle) => {
-                    self.image_lights.insert(key, (image, paint, handle));
+            match world.start_light(&image_light(&image), transform, options.clone()) {
+                Ok(main_handle) => {
+                    let glow = if glow_wanted {
+                        match world.start_light(&image_glow_light(&image), transform, options) {
+                            Ok(handle) => Some(handle),
+                            Err(_) => {
+                                self.diagnostics.capacity_rejections =
+                                    self.diagnostics.capacity_rejections.saturating_add(1);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    self.image_lights.insert(
+                        key,
+                        ImageLightSources {
+                            image,
+                            paint,
+                            main: main_handle,
+                            glow,
+                        },
+                    );
                 }
                 Err(_) => {
                     self.diagnostics.capacity_rejections =
                         self.diagnostics.capacity_rejections.saturating_add(1);
                 }
+            }
+        }
+        // Dim the lights of holders a rule has made unstable: each client
+        // pulses its own copy on its own clock (steady where the amount is 0).
+        for ((owner, _), sources) in self.image_lights.iter_mut() {
+            let m = Self::flicker_intensity(self.flicker_clock, *owner, flicker(*owner));
+            world.set_source_intensity(sources.main, m)?;
+            if let Some(glow) = sources.glow {
+                world.set_source_intensity(glow, m)?;
             }
         }
         Ok(())
@@ -1165,6 +1288,12 @@ fn projectile_light(id: &str) -> String {
 }
 fn image_light(id: &str) -> String {
     format!("weapon/image-light/{id}")
+}
+/// The library id of an image's lens glow ([`bri_weapons::ImageLight::glow`]):
+/// the all-round point at its light's anchor, as a second source beside the
+/// main one.
+fn image_glow_light(id: &str) -> String {
+    format!("weapon/image-glow-light/{id}")
 }
 fn valid_transform(t: SourceTransform) -> bool {
     t.position.is_finite()

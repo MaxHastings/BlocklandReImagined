@@ -1645,6 +1645,13 @@ override SURFACE_GROUP:u32=0u;
     var pigment=display_color(albedo.rgb)*base_color;
     // A model texture with no translucent texel: texture times light alone.
     if (flags&4u)!=0u {pigment=display_color(albedo.rgb);}
+    // Emissive plate (a rule-unlit material that ignores texture alpha — only
+    // set_avatar_unlit makes this pair): covered texels are the art, unlit in
+    // their own colours; uncovered texels fall through to normal lighting as an
+    // unmarked dark surface, so they shade like the body around them in any light
+    // instead of reading as a glowing panel (round 54d).
+    let plate_lit=((flags&6u)==6u && albedo.a<0.5);
+    if plate_lit {pigment=vec3<f32>(0.05,0.05,0.06);}
     if (flags&32u)!=0u {pigment=display_color(albedo.rgb)*base_color;}
     let decal=overlay;
     if decal {
@@ -1683,7 +1690,7 @@ override SURFACE_GROUP:u32=0u;
         let lit=min(display_color(textureSample(layer0,tiled,v.uv).rgb)*v.color.rgb*2.0,vec3<f32>(1.0));
         return vec4<f32>(fogged(lit,v.world_position),alpha);
     }
-    if material[0].x==7.0 || material[0].x==8.0 {
+    if (material[0].x==7.0 || material[0].x==8.0) && !plate_lit {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
     }
     if (u32(material[0].w)&256u)!=0u {
@@ -1698,7 +1705,7 @@ override SURFACE_GROUP:u32=0u;
     var illumination=baked_light.rgb;
     var specular=vec3<f32>(0.0);
     let sun_toward=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
-    if material[0].x==2.0 || material[0].x==3.0 || surfaces {
+    if material[0].x==2.0 || material[0].x==3.0 || surfaces || plate_lit {
         var normal=v.normal/max(length(v.normal),0.0001);
         var live_normal=v.normal;
         if (decal || surfaces) && material[4].x>0.0 {

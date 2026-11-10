@@ -192,6 +192,24 @@ impl ScriptOp for ScreenOverlay {
     }
 }
 
+/// A full-screen image for one player, or everyone with no player: still or
+/// animated frames cycled client-side (`bri_content::screen_image`). The rules'
+/// tick is too slow to drive animation by re-issuing, so the client advances
+/// the frames itself; v20's death boards are built this way. `None` clears
+/// the board showing (the client fades it out from where it is).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScreenImage {
+    pub player: Option<u64>,
+    pub cue: Option<bri_content::screen_image::ScreenImageCue>,
+}
+impl ScriptOp for ScreenImage {
+    const CAPABILITY: &str = "chat";
+    const NAME: &str = "screen_image";
+    fn bounded(&self) -> bool {
+        self.cue.as_ref().is_none_or(|cue| cue.bounded())
+    }
+}
+
 /// One player's plant-error icon and sound, as v20's
 /// `messageClient(%client, 'MsgPlantError_…')`: one of
 /// [`PLANT_ERRORS`]. `flood` (planting too soon) shows what the

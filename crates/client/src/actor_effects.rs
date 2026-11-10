@@ -1642,6 +1642,7 @@ fn teleport_image() -> bri_weapons::Image {
         light: None,
         paint_picker: false,
         scripts: Default::default(),
+        aim_lock_axis: None,
     }
 }
 

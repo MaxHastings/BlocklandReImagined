@@ -24,6 +24,14 @@ impl Perform for ops::SetAvatarParts {
         Ok(())
     }
 }
+impl Perform for ops::SetAvatarUnlit {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetAvatarUnlit { player, material } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        peer.unlit_materials.insert(material.to_ascii_lowercase());
+        Ok(())
+    }
+}
 impl Perform for ops::SetBodyDress {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::SetBodyDress { player, dress } = self;
@@ -116,6 +124,34 @@ impl Perform for ops::RemoveBody {
         let ops::RemoveBody { player } = self;
         ensure!(session.peers.contains_key(&player), "No such player");
         session.remove_body(player)
+    }
+}
+impl Perform for ops::SetNametagVisible {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetNametagVisible { player, visible } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        peer.nametag_hidden = !visible;
+        Ok(())
+    }
+}
+impl Perform for ops::SetPlayerLight {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetPlayerLight { player, on } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        // The flag rides in vitals as `light` does for the Light key's own
+        // toggle; a rule may set it either way without asking them to press.
+        peer.combat.light = on;
+        Ok(())
+    }
+}
+impl Perform for ops::SetImageLightFlicker {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetImageLightFlicker { player, amount } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        // 0 to 1 (steady to fully unstable); it rides in vitals so each client
+        // flickers its own copy of the player's image lights on its own clock.
+        peer.combat.image_light_flicker = amount.clamp(0., 1.);
+        Ok(())
     }
 }
 impl Perform for ops::Control {
@@ -360,7 +396,9 @@ impl Perform for ops::WearImage {
             );
         }
         let kept = keep && image.is_some();
-        session.weapons.wear(actor, slot, image.as_deref(), paint)?;
+        session
+            .weapons
+            .wear(actor, slot, image.as_deref(), paint, keep)?;
         let host = session
             .packages
             .as_mut()
@@ -667,6 +705,28 @@ impl Perform for ops::KickView {
         Ok(())
     }
 }
+impl Perform for ops::SteerView {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SteerView {
+            player,
+            at,
+            rate,
+            grip,
+            fov_delta,
+        } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        session.notify(
+            player,
+            Notice::SteerView {
+                at,
+                rate,
+                grip,
+                fov_delta,
+            },
+        );
+        Ok(())
+    }
+}
 impl Perform for ops::MountImage {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
@@ -777,8 +837,7 @@ impl Perform for ops::ViewShake {
     }
 }
 impl Perform for ops::CameraShake {
-    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall { package, .. } = cx;
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
         let ops::CameraShake {
             player,
             translation,
@@ -786,7 +845,10 @@ impl Perform for ops::CameraShake {
             seconds,
             hold,
         } = self;
-        session.take_cue(package)?;
+        // A control, not a cue: it reaches one client and decays on its own,
+        // so it spends none of the package's print-and-sound budget (like
+        // `steer_view` or `stop_sound`). One victim's screen effects must not
+        // starve another's out of the shared pool.
         ensure!(session.peers.contains_key(&player), "No such player");
         session.notify(
             player,

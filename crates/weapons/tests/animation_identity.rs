@@ -151,7 +151,7 @@ fn drop_pickup_and_explicit_equal_id_loadout_replacement_get_fresh_custody() -> 
 fn worn_image_does_not_borrow_the_selected_hand_item() -> Result<()> {
     let mut world = world()?;
     world.step(&mut Empty);
-    world.wear(A, 2, Some(IMAGE), None)?;
+    world.wear(A, 2, Some(IMAGE), None, false)?;
     let event = world
         .step(&mut Empty)
         .into_iter()

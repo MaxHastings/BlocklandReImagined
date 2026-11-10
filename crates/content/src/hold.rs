@@ -279,6 +279,32 @@ pub fn sit_hip(shape: &crate::shape::Shape, sit: Option<&crate::shape::Animation
     at.is_finite().then_some(at)
 }
 
+/// How far an aim-locked hand may swing from its natural pose (radians):
+/// free-look and flailing animations must never twist it through the arm.
+pub const AIM_LOCK_MAX_TURN: f32 = std::f32::consts::FRAC_PI_3;
+
+/// The wrist turn that keeps an aim-locked image's axis on its holder's
+/// view: the shortest arc from where the axis points at rest (`natural`,
+/// world) to where they look (`look`), clamped so it never turns the hand
+/// more than [`AIM_LOCK_MAX_TURN`] from natural. A degenerate direction
+/// gives identity, leaving the hand exactly as posed.
+pub fn aim_lock_turn(natural: Vec3, look: Vec3) -> Quat {
+    if !natural.is_finite()
+        || natural.length_squared() < 1e-6
+        || !look.is_finite()
+        || look.length_squared() < 1e-6
+    {
+        return Quat::IDENTITY;
+    }
+    let turn = Quat::from_rotation_arc(natural.normalize(), look.normalize());
+    // Clamp the swing at the wrist's range, along its own axis.
+    let (axis, angle) = turn.to_axis_angle();
+    if angle > AIM_LOCK_MAX_TURN {
+        return Quat::from_axis_angle(axis, AIM_LOCK_MAX_TURN).normalize();
+    }
+    turn
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +377,30 @@ mod tests {
         ]
         .map(Mat4::from_translation);
         assert_eq!(hip(&parents, &nodes), Some(0));
+    }
+
+    #[test]
+    fn an_aim_lock_turns_the_barrel_to_the_view_and_no_further() {
+        // Aligned: no turn.
+        assert!(aim_lock_turn(Vec3::NEG_Z, Vec3::NEG_Z).abs_diff_eq(Quat::IDENTITY, 1e-6));
+        // A swing inside the wrist's range is the exact shortest arc.
+        let look = Quat::from_rotation_y(0.4) * Vec3::NEG_Z;
+        let turn = aim_lock_turn(Vec3::NEG_Z, look);
+        assert!((turn.to_axis_angle().1 - 0.4).abs() < 1e-5);
+        assert!(((turn * Vec3::NEG_Z) - look.normalize()).length() < 1e-5);
+        // A swing past the range is clamped along the same axis, part way
+        // between natural and the view.
+        let far = Quat::from_rotation_y(2.0) * Vec3::NEG_Z;
+        let turn = aim_lock_turn(Vec3::NEG_Z, far);
+        let (axis, angle) = turn.to_axis_angle();
+        assert!((angle - AIM_LOCK_MAX_TURN).abs() < 1e-5);
+        assert!(axis.dot(Vec3::Y) > 0.99);
+        // Part way between natural and the view: closer to it than natural was.
+        let barrel = (turn * Vec3::NEG_Z).normalize();
+        assert!(barrel.dot(far.normalize()) > Vec3::NEG_Z.dot(far.normalize()));
+        // Degenerate input leaves the hand as posed.
+        assert_eq!(aim_lock_turn(Vec3::ZERO, Vec3::NEG_Z), Quat::IDENTITY);
+        assert_eq!(aim_lock_turn(Vec3::NAN, Vec3::NEG_Z), Quat::IDENTITY);
     }
 
     #[test]

@@ -225,6 +225,15 @@ impl Perform for ops::Sound {
         Ok(())
     }
 }
+impl Perform for ops::StopSound {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::StopSound { player, profile } = self;
+        ensure!(session.peers.contains_key(&player), "No such player");
+        // A control, not a cue: it consumes no budget (like `steer_view`).
+        session.notify(player, Notice::StopSound { profile });
+        Ok(())
+    }
+}
 impl Perform for ops::WorldVolume {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;

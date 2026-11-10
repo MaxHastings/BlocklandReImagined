@@ -13,8 +13,9 @@ impl Perform for ops::AddBot {
             team,
             kind,
             name,
+            muted,
         } = self;
-        session.add_rules_bot(package, game, team, &kind, &name)
+        session.add_rules_bot(package, game, team, &kind, &name, muted)
     }
 }
 impl Perform for ops::RemoveBot {
@@ -35,6 +36,27 @@ impl Perform for ops::RestBot {
         let OpCall { package, .. } = cx;
         let ops::RestBot { bot, rest } = self;
         session.rest_rules_bot(package, bot, rest)
+    }
+}
+impl Perform for ops::SetBotVoiceMute {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.check_rest_rules_bot(cx.package, self.bot)
+    }
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetBotVoiceMute { bot, muted } = self;
+        let peer = session.peers.get_mut(&bot).context("No such player")?;
+        peer.voice_muted = muted;
+        Ok(())
+    }
+}
+impl Perform for ops::SetBotFacing {
+    fn check(&self, session: &Session, cx: OpCall<'_>) -> Result<()> {
+        session.check_rest_rules_bot(cx.package, self.bot)
+    }
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::SetBotFacing { bot, target } = self;
+        session.rules_bot_facing(package, bot, target)
     }
 }
 impl Perform for ops::Obscure {

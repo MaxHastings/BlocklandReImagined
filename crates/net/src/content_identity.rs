@@ -628,6 +628,15 @@ pub fn print_providers(
 ) -> Result<Vec<(String, PathBuf)>> {
     kind_providers(content_root, packages, "prints.json")
 }
+/// Each enabled Add-On's full-screen image pack (`assets/ui-images.json`),
+/// as (content-root-relative dir, absolute dir) like [`kind_providers`]. The
+/// frames a rule's `screen_image` names by UI-pack key load from here.
+pub fn ui_image_providers(
+    content_root: &Path,
+    packages: &bri_package::packages::PackageSet,
+) -> Result<Vec<(String, PathBuf)>> {
+    kind_providers(content_root, packages, "ui-images.json")
+}
 /// The base game's brick materials (`brick-materials.json` in
 /// `materials_dir`) with every print pack in `extras` after its prints
 /// ([`bri_content::brick_materials::Bundle::with_print_packs`]), and what
@@ -1630,6 +1639,7 @@ mod tests {
                     on_fire: None,
                     sport: None,
                     riding_image: None,
+                    aim_lock_axis: None,
                 },
             );
             items.insert(

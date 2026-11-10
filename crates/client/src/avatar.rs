@@ -872,6 +872,27 @@ impl AvatarAssets {
                     kept
                 })
             })?;
+            // A rule marked this material unlit (`set_avatar_unlit`): it glows at
+            // full brightness in its own texture colours, regardless of light or
+            // the wearer's paint — a bot's face in the dark. `untinted` keeps the
+            // art out of the vertex-paint multiply (the model path's convention
+            // for opaque surfaces), so one object can carry a lit painted body
+            // and an unlit glowing part at once; an authored-opaque surface also
+            // keeps its coverage through the flip — Unlit would otherwise let the
+            // texture alpha become real transparency, and a mostly-transparent
+            // picture (art over clear pixels) reads as glass;
+            // `ignore_texture_alpha` draws those texels at their colour instead.
+            if appearance
+                .unlit
+                .iter()
+                .any(|u| u.eq_ignore_ascii_case(&name))
+            {
+                material.kind = bri_render::scene::MaterialKind::Unlit;
+                material.untinted = true;
+                if source.blend == "opaque" {
+                    material.ignore_texture_alpha = true;
+                }
+            }
             materials.push(data.materials.len());
             data.materials.push(material);
         }
@@ -936,6 +957,7 @@ impl AvatarAssets {
             hidden_nodes: Vec::new(),
             posed_nodes: Vec::new(),
             animated_nodes: Vec::new(),
+            aim_turns: [None; 2],
             node_bounds: None,
             unacted_nodes: Vec::new(),
             tool_only_actions: [None; 2],
@@ -979,6 +1001,12 @@ pub struct AvatarMesh {
     /// animation gave it; empty otherwise. Gameplay-facing nodes (the eye)
     /// come from here, so a pose only ever changes what is drawn.
     animated_nodes: Vec<Mat4>,
+    /// The wrist turn last applied to each hand by a seat hold (an aim
+    /// lock's own previous frame, or a seat grip), in the world: undone
+    /// before an aim lock measures its barrel, so it corrects from the
+    /// animation rather than feeding its own output back. Cleared when no
+    /// turn goes into a pose or Add-On code re-poses the body.
+    aim_turns: [Option<Quat>; 2],
     /// Each node's drawn geometry, for Add-On code (`skeleton`); built
     /// the first time it is asked for.
     node_bounds: Option<Arc<Vec<Option<Bounds>>>>,
@@ -1310,7 +1338,8 @@ pub struct AvatarAnimationInput {
     /// pose ([`reach_hands`]). A hand holding a tool lets go of its grip
     /// (`HeldToolPose::release_seat_holds`). A seat target on the vehicle's
     /// own model also carries how far it has turned since rest, so the hand
-    /// follows its wheel.
+    /// follows its wheel. An aim-locked image's hand re-pose rides here too
+    /// ([`AvatarMesh::aim_lock_hold`]).
     pub hand_holds: [Option<HandHold>; 2],
     /// Where the off hand holds what the right hand holds in both hands,
     /// in the right hand's frame (`ItemAssets::image_support`). A fitted
@@ -1805,6 +1834,9 @@ impl AvatarMesh {
         if placed.iter().all(Option::is_none) {
             return;
         }
+        // The body is about to be posed from outside: whatever wrist turns
+        // it last drew with are no longer known.
+        self.aim_turns = [None, None];
         // Parents before children, however the rig orders its nodes.
         let depth = |mut i: usize| {
             let mut d = 0;
@@ -2029,6 +2061,49 @@ impl AvatarMesh {
             }
             _ => self.mount_node(assets, n),
         }
+    }
+    /// The seat-style hold that keeps an aim-locked image (a flashlight) on
+    /// its holder's view: a turn-only wrist re-pose, turned by just what
+    /// lines the image's barrel (`barrel_in_hand`, in the mount node's
+    /// frame), as last posed, up with `look_dir` (world), clamped so
+    /// free-look never twists it through the arm
+    /// ([`bri_content::hold::AIM_LOCK_MAX_TURN`]). No reach target: pinning
+    /// the hand to where it sat last frame would freeze it in the world while
+    /// the body walks, dragging the arm behind; with only a wrist turn the
+    /// hand keeps its animation and the model rides rigidly on it in every
+    /// view. `None` before the body's first pose or when it has no such mount
+    /// node.
+    pub fn aim_lock_hold(
+        &mut self,
+        assets: &AvatarAssets,
+        n: usize,
+        barrel_in_hand: Vec3,
+        look_dir: Vec3,
+    ) -> Option<HandHold> {
+        if self.posed_nodes.is_empty() || !barrel_in_hand.is_finite() || !look_dir.is_finite() {
+            return None;
+        }
+        let index = self.mount_index(assets, n)?;
+        // Where the barrel points as last posed: the body's frame over the
+        // mount node's actual (animated) rotation, then the image's own on
+        // top. Measured from the pose rather than the bind rest so an idle or
+        // walk clip that turns the hand never leaves a constant aim offset —
+        // with this hand's last wrist turn undone first: correcting from the
+        // turned pose feeds our own output back in and oscillates the wrist
+        // every frame, while the un-turned animation is a stable base.
+        let (_, r_mount, _) = self.posed_nodes[index].to_scale_rotation_translation();
+        let (_, body_rotation, _) = self.model_transform.to_scale_rotation_translation();
+        let turned = body_rotation * r_mount * barrel_in_hand;
+        let natural = match self.aim_turns.get(n).copied().flatten() {
+            Some(prev) => prev.conjugate() * turned,
+            None => turned,
+        };
+        if !natural.is_finite() || natural.length_squared() < 1e-6 {
+            return None;
+        }
+        Some(HandHold::turn_only(bri_content::hold::aim_lock_turn(
+            natural, look_dir,
+        )))
     }
     /// How the playing thread-2/3 actions (a brick shift, plant, recoil,
     /// swing) move `Mount<n>`, in that mount's own frame: the rest of the
@@ -2681,6 +2756,12 @@ impl AvatarMesh {
         self.model_transform = model_transform;
         self.posed_feet = Some(Vec3::from(player.feet));
         self.held = (holds.raised, holds.pitch);
+        // Remember which wrist turns went into this pose so the next
+        // frame's aim lock measures from the animation, not its own output.
+        for n in 0..2 {
+            self.aim_turns[n] = holds.seat[n]
+                .and_then(|h| (!h.turn.abs_diff_eq(Quat::IDENTITY, 1e-6)).then_some(h.turn));
+        }
         // Stock and authored-hand poses without seat holds need no IK inputs.
         if self
             .fits
@@ -3660,6 +3741,9 @@ mod tests {
         mount_action_is_only_the_playing_actions_motion,
         seated_body_takes_the_mount_rotation,
         a_seated_rider_reaches_the_seats_hand_holds,
+        an_aim_lock_hold_turns_the_wrist_toward_the_view,
+        an_aim_lock_wrist_settles_on_the_view,
+        an_aim_lock_hand_keeps_up_with_the_walking_body,
         getting_up_eases_out_of_the_sit_over_one_transition,
         a_rule_started_thread_blends_in_over_the_bodys_action_blend,
         jet_release_keeps_the_root_pose_until_landing,
@@ -4955,6 +5039,7 @@ mod tests {
             team: None,
             invite: None,
             light: false,
+            image_light_flicker: 0.0,
             mounted: None,
             vehicle_health: None,
             ride: None,
@@ -4964,6 +5049,7 @@ mod tests {
             camera_point: None,
             talking: false,
             sitting: false,
+            nametag_hidden: false,
             ghost: None,
             base_body: None,
             held: false,
@@ -5824,6 +5910,117 @@ mod tests {
         }
         Ok(())
     }
+    fn an_aim_lock_hold_turns_the_wrist_toward_the_view(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        mesh.pose_with_animation(assets, &player(), 0.0, &AvatarAnimationInput::default())?;
+        let n = 1usize; // the left hand
+        let index = mesh.mount_index(assets, n).context("left mount")?;
+        let barrel = Vec3::NEG_Z;
+        let world_barrel = |mesh: &AvatarMesh| {
+            (mesh.model_transform.to_scale_rotation_translation().1
+                * mesh.posed_nodes[index].to_scale_rotation_translation().1
+                * barrel)
+                .normalize()
+        };
+        // Look a third of the way to the wrist's limit off where it points.
+        let look = Quat::from_rotation_y(0.4) * world_barrel(&mesh);
+        let hold = mesh
+            .aim_lock_hold(assets, n, barrel, look)
+            .context("hold")?;
+        assert!(!hold.position.is_finite(), "the aim lock must not reach");
+        let rest = mesh
+            .mount_node(assets, n)
+            .context("left mount")?
+            .w_axis
+            .truncate();
+        let input = AvatarAnimationInput {
+            hand_holds: [None, Some(hold)],
+            ..Default::default()
+        };
+        mesh.pose_with_animation(assets, &player(), 0.0, &input)?;
+        // The hand stays where the animation put it...
+        let held = mesh
+            .mount_node(assets, n)
+            .context("left mount")?
+            .w_axis
+            .truncate();
+        assert!(held.distance(rest) < 1e-3, "turn-only hold moved the hand");
+        // ...and the barrel now points where they look.
+        assert!(world_barrel(&mesh).dot(look.normalize()) > 0.999);
+        Ok(())
+    }
+
+    fn an_aim_lock_wrist_settles_on_the_view(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        mesh.pose_with_animation(assets, &player(), 0.0, &AvatarAnimationInput::default())?;
+        let n = 1usize; // the left hand
+        let index = mesh.mount_index(assets, n).context("left mount")?;
+        let barrel = Vec3::NEG_Z;
+        let world_barrel = |mesh: &AvatarMesh| {
+            (mesh.model_transform.to_scale_rotation_translation().1
+                * mesh.posed_nodes[index].to_scale_rotation_translation().1
+                * barrel)
+                .normalize()
+        };
+        // Look a third of the way to the wrist's limit off where it points.
+        let look = Quat::from_rotation_y(0.4) * world_barrel(&mesh);
+        // Re-pose several frames with the hold: measuring from last frame's
+        // turned pose would feed back and never settle, so a barrel that sits
+        // on the view every frame proves the turn is open-loop on the
+        // animation. Time advances so no frame can be skipped as unchanged.
+        for frame in 1..=8 {
+            let hold = mesh
+                .aim_lock_hold(assets, n, barrel, look)
+                .context("hold")?;
+            let input = AvatarAnimationInput {
+                hand_holds: [None, Some(hold)],
+                ..Default::default()
+            };
+            mesh.pose_with_animation(assets, &player(), frame as f64 / 60.0, &input)?;
+            assert!(
+                world_barrel(&mesh).dot(look) > 1.0 - 1e-3,
+                "frame {frame}: the wrist must sit on the view"
+            );
+        }
+        Ok(())
+    }
+    fn an_aim_lock_hand_keeps_up_with_the_walking_body(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
+        let mut mesh = assets.mesh(assets.package.defaults.clone())?;
+        mesh.pose_with_animation(assets, &player(), 0.0, &AvatarAnimationInput::default())?;
+        let n = 1usize; // the left hand
+        let index = mesh.mount_index(assets, n).context("left mount")?;
+        // The hold the next frame would compute from this pose.
+        let hold = mesh
+            .aim_lock_hold(assets, n, Vec3::NEG_Z, Vec3::NEG_Z)
+            .context("hold")?;
+        let before = mesh.posed_nodes[index].w_axis.truncate(); // model space
+        let frame_before = mesh.model_transform;
+        let mut walked = player();
+        walked.feet = [0.0, 0.0, -6.0];
+        let input = AvatarAnimationInput {
+            hand_holds: [None, Some(hold)],
+            ..Default::default()
+        };
+        mesh.pose_with_animation(assets, &walked, 0.0, &input)?;
+        // The hand rides the body: unchanged in model space...
+        let after = mesh.posed_nodes[index].w_axis.truncate();
+        assert!(
+            before.abs_diff_eq(after, 1e-3),
+            "hand {before:?} vs {after:?}"
+        );
+        // ...so it moved with the feet in the world instead of dragging behind.
+        let world_before = frame_before.transform_point3(before);
+        let world_after = mesh.model_transform.transform_point3(after);
+        assert!(
+            world_after.distance(world_before) > 5.9,
+            "hand dragged behind"
+        );
+        Ok(())
+    }
+
     fn jet_history_survives_skipped_poses_and_first_remote_observation(fx: &Avatar) -> Result<()> {
         use bri_sim::player::{MoveInput, Player, PlayerTuning};
         use rapier3d::prelude::{ColliderBuilder, Vector};

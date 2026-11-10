@@ -421,6 +421,16 @@ pub struct Behaviour {
     /// it is asked, in load order, until one takes it.
     #[serde(default)]
     pub on_drop_key: bool,
+    /// `on_light(player)` as a living player presses the light key (v20's
+    /// `serverCmdLight`, the built-in Light button), after the held image's
+    /// own light command, a magazine reload and vehicle lights have had
+    /// their chance. Return `true` to take it; every package that declares
+    /// it is asked, in load order, until one does — v20 Add-Ons packaged
+    /// `serverCmdLight` this way at the back of their stack (an off-hand
+    /// flashlight). A press nobody takes falls through to the engine's own
+    /// player light. Called as it happens, so it must be quick.
+    #[serde(default)]
+    pub on_light: bool,
     /// `on_bot_ability(bot, kind, ability, target)` as a bot whose kind
     /// has an `ability` (`bots.json`) finishes winding it up: what the
     /// ability does (a blast, a spit, a heal) is this hook's, the brain

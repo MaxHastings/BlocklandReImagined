@@ -364,6 +364,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         colors: Default::default(),
         face: "face".into(),
         decal: "decal".into(),
+        unlit: Default::default(),
         dress: Default::default(),
     };
     let mut delta = Delta {

@@ -2014,6 +2014,11 @@ pub enum UiUpdate {
     /// A full-screen overlay on a curve of seconds: a rule's
     /// `screen_overlay`.
     Overlay(bri_content::screen_overlay::Overlay),
+    /// A full-screen image a rule shows (`screen_image`): still or animated
+    /// frames cycled client-side at the cue's fps, held for its seconds then
+    /// faded out; `None` clears the board showing early (fading from where it
+    /// is).
+    ScreenImage(Option<bri_content::screen_image::ScreenImageCue>),
     /// Jet energy fraction for `HUD_EnergyBar`; `None` hides it
     /// (`clientCmdShowEnergyBar`, from the datablock's `showEnergyBar`).
     Energy(Option<f32>),

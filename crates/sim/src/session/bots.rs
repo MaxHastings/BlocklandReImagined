@@ -31,7 +31,7 @@ use crate::bot_kind::{BotKind, Moves};
 use crate::nav::{Body, Found, Ground, Mode, Nav, Search, Waypoint};
 use behaviour::{Behaviour, Situation};
 use bri_content::passage::{Way, carried_yaw};
-use bri_package_runtime::ops::ObjectRef;
+use bri_package_runtime::ops::{BotIntent, FacingTarget, ObjectRef};
 use bri_weapons::ActorId;
 
 mod ability;
@@ -525,6 +525,9 @@ struct Brain {
     crossed: u64,
     /// The rules hold its brain still (`rest_bot`).
     resting: bool,
+    /// A rule holds its facing too (`set_bot_facing`): what a held-still
+    /// bot keeps turning toward; re-resolved each tick for a moving object.
+    rules_facing: Option<FacingTarget>,
     /// A rules bot came back to life: where it stands next is its home.
     rehome: bool,
     sequence: u64,
@@ -828,6 +831,7 @@ impl Brain {
             idle_seek_active: false,
             crossed,
             resting: false,
+            rules_facing: None,
             rehome: brick.is_none(),
             sequence: 0,
             rng: 0x2545_F491_4F6C_DD1D ^ bot.wrapping_mul(0x9E37_79B9),
@@ -1867,13 +1871,86 @@ impl Session {
         }
         Ok(())
     }
+    /// The turn a rule holds a held-still bot to (`set_bot_facing`), as
+    /// yaw and pitch from its feet: the same look math as its aim, with no
+    /// error. `None` when it has no facing hold, or its target sits at its
+    /// own feet (nothing to turn toward; its heading stays). A tracked
+    /// object that is gone releases the hold.
+    fn held_gaze(&mut self, bot: OwnerId) -> Option<(f32, f32)> {
+        let Some(target) = self.bots.brains.get(&bot)?.rules_facing.clone() else {
+            return None;
+        };
+        // Where the target is now; a gone object takes the hold with it.
+        let at = match &target {
+            FacingTarget::Point(at) => Vec3::from(*at),
+            FacingTarget::Object(o) => match self.object_centre(*o) {
+                Some(at) => at,
+                None => {
+                    let brain = self.bots.brains.get_mut(&bot).unwrap();
+                    brain.rules_facing = None;
+                    return None;
+                }
+            },
+        };
+        let feet = Vec3::from(self.peers.get(&bot)?.player.state().feet);
+        let d = at - feet;
+        if d.length() < 1e-3 {
+            return None;
+        }
+        Some((yaw_to(d), d.y.atan2(flat(d).length()).clamp(-1.5, 1.5)))
+    }
     /// A bot the rules hold still, or one a player rides or carries: it
-    /// stands (or is moved), holding its fire, and thinks no further.
+    /// stands (or is moved), holding its fire, and thinks no further — an
+    /// anchored intent excepted, which it walks out as pure locomotion.
     /// Whether it was held.
     fn step_held_bot(&mut self, bot: OwnerId, tick: u64) -> Result<bool> {
-        // Held still by the rules: it stands, holding its fire.
+        // Held still by the rules: it stands, holding its fire — unless an
+        // anchored intent has it walking to its anchor first.
         if self.bots.brains.get(&bot).is_some_and(|b| b.resting) {
+            // The normal path below is skipped for a held bot, so its anchor
+            // moves here: a follow's leader feet, a guard's post, the patrol
+            // point it heads for; a flee that has run its time and a leader
+            // gone for good are let go. A fleeing intent keeps a held bot in
+            // place — it does not run while held.
+            self.bot_follow_intent(bot, tick);
+            // A rule holds its facing too: turn toward where its target is
+            // now, so a moving one stays in view and a gone one is let go.
+            let gaze = self.held_gaze(bot);
+            let feet = Vec3::from(self.peers[&bot].player.state().feet);
             let brain = self.bots.brains.get_mut(&bot).unwrap();
+            // Where it walks now, if anywhere: its anchor once it has strayed
+            // past the leash that intent keeps (a follow's distance, a guard's
+            // radius), or the next patrol point. Walking owns the turn while
+            // it lasts; standing resumes the held gaze.
+            let intent = brain.intent.as_ref().map(|h| h.intent.clone());
+            let walk_to = match intent {
+                Some(BotIntent::Follow { distance, .. })
+                    if flat(brain.home - feet).length() > distance =>
+                {
+                    Some(brain.home)
+                }
+                Some(BotIntent::Guard { radius, .. })
+                    if flat(brain.home - feet).length() > radius =>
+                {
+                    Some(brain.home)
+                }
+                Some(BotIntent::Patrol { .. }) => brain.patrol_point(feet),
+                _ => None,
+            };
+            match (walk_to, gaze) {
+                // Walking owns the turn: it faces where it is going.
+                (Some(at), _) => {
+                    brain.yaw = yaw_to(at - feet);
+                    brain.pitch = 0.0;
+                }
+                (None, Some((yaw, pitch))) => {
+                    // The stored heading keeps step with the turn: waking or
+                    // releasing the facing starts from its last gaze.
+                    brain.yaw = yaw;
+                    brain.pitch = pitch;
+                }
+                _ => {}
+            }
             brain.confined = None;
             brain.objective.suspend(tick);
             brain.native_combat_tick = None;
@@ -1884,6 +1961,7 @@ impl Session {
                 yaw: brain.yaw,
                 pitch: brain.pitch.clamp(-1.5, 1.5),
                 jump: self.vehicles.is_mounted(bot),
+                forward: f32::from(walk_to.is_some()),
                 ..Default::default()
             };
             let release = std::mem::take(&mut brain.fire_down);
