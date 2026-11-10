@@ -846,13 +846,10 @@ impl Controls {
     }
     /// Run the pull for `seconds`, turning the real look toward its point as
     /// seen from `eye`; no eye (no body yet) leaves it alone. The turn is
-    /// capped at the pull's rate each frame, while ordinary look input stays active; a corpse camera that holds still, a spectator's orbit and
-    /// a rider's seat look are not the holder's aim and stay as they are.
-    /// Yaw and pitch share one budget in proportion to what each has left;
-    /// under a wide sweep — the target off to the side or behind — a modest
-    /// vertical correction is held back until the turn closes, so the pan
-    /// stays level instead of reading as "looking up first". A target well
-    /// above or below eye level still gets its full proportional share.
+    /// capped at the pull's rate each frame while ordinary look input stays
+    /// active. Corpse cameras, spectator orbits and rider seat look retain
+    /// control. Yaw and pitch share one proportional turn budget. The lease
+    /// continues to expire even when no eye or eligible camera is available.
     pub fn advance_view_steer(&mut self, seconds: f32, eye: Option<glam::Vec3>) {
         if !seconds.is_finite() || seconds <= 0.0 {
             return;

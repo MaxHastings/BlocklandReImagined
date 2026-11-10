@@ -80,3 +80,15 @@ Cone comparisons now use a 0.00001 absolute tolerance while retaining the
 exact expected direction/angle, positions, radius and paint checks; the
 corrected test passed. Full per-crate formatting and history checks passed.
 Public review is PR 443; publication and merging are still pending CI/gate.
+
+Release input recovery verified all 100 original archive hashes against the
+unchanged default catalog. Sources include the existing parent Games/.research
+Tier+Tactical archive and primary content/Add-Ons drop folder; different
+editions found by default search were refused. Copies and per-source hashes
+are recorded in external pinned-originals.json. The four immutable v0.4.2
+ambience OGG baselines and the approved outdoor WAV also match their registry
+hashes. Bundle generation uses both recovered core scripts explicitly and
+current importer sources, without previous-import or missing-content flags.
+Final package unit 68, co-located integration two and interop 13 rechecks pass.
+The isolated content upload packs exactly the 19 effective base packs; an
+additional ui-pack-004 is retained only for old content test fixtures.
