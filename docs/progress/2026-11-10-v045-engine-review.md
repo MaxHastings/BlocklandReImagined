@@ -92,3 +92,20 @@ current importer sources, without previous-import or missing-content flags.
 Final package unit 68, co-located integration two and interop 13 rechecks pass.
 The isolated content upload packs exactly the 19 effective base packs; an
 additional ui-pack-004 is retained only for old content test fixtures.
+
+All 100 originals completed current conversion; NPC generation produced 118
+recordings. The ambience builder initially lacked installed preview-reference
+images in isolated content. Staging the freshly converted packages supplied
+those inputs; it then built four approved clips for 21 maps. The standard
+release-layout reader validated all current receipts and assembled 102
+original/generated entries, without prior-import allowances. The resulting
+96,667,472-byte ZIP was uploaded to the private draft; base-content upload is
+also complete. This is current staged output, not extraction of an old release.
+
+Candidate 82649a391 passed extended workspace build, tooling tests, startup
+content check and whole-workspace warning-free clippy. Its 532 test binaries
+are running. Build-only run 42834566845 rejected its macOS job before any
+steps: `macos-14-arm64-us-default` is unsupported. GitHub's official
+actions/runner-images README confirms macOS 14 retired November 2, 2026 and
+macos-15 is an arm64 replacement. Update the pinned runner to macos-15 and
+repeat the exact-candidate gates/builds; no engine or content recipe changed.
