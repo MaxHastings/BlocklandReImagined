@@ -1375,52 +1375,52 @@ impl App {
                     .copied()
                     .filter(|_| !dead)
                     .unwrap_or_default();
-                if !dead {
-                    if let Some(images) = view.weapons.images.get(owner) {
-                        for mounted in images {
-                            let hand = usize::from(mounted.hand);
-                            if hand >= 2 || seat_holds[hand].is_some() {
-                                continue;
-                            }
-                            let Some(axis) = self
-                                .content
-                                .weapons
-                                .pack
-                                .images
-                                .get(&mounted.image)
-                                .and_then(|image| image.aim_lock_axis)
-                            else {
-                                continue;
-                            };
-                            let Some(barrel) = self
-                                .world_items
-                                .assets()
-                                .aim_lock_barrel(&mounted.image, axis)
-                            else {
-                                continue;
-                            };
-                            // Where this holder aims: the body's aim without
-                            // held free-look, so Free Look never twists an
-                            // aim-locked hand through the arm.
-                            let look_dir = if *owner == view.owner {
-                                let (yaw, pitch) = self.controls.action_angles();
-                                glam::Quat::from_rotation_y(-yaw)
-                                    * glam::Quat::from_rotation_x(pitch)
-                                    * glam::Vec3::NEG_Z
-                            } else {
-                                glam::Quat::from_rotation_y(-(player.yaw + player.head_yaw))
-                                    * glam::Quat::from_rotation_x(player.pitch)
-                                    * glam::Vec3::NEG_Z
-                            };
-                            if let Some(hold) = self
-                                .avatar
-                                .avatars
-                                .get_mut(owner)
-                                .unwrap()
-                                .aim_lock_hold(&self.avatar.avatar_assets, hand, barrel, look_dir)
-                            {
-                                seat_holds[hand] = Some(hold);
-                            }
+                if !dead && let Some(images) = view.weapons.images.get(owner) {
+                    for mounted in images {
+                        let hand = usize::from(mounted.hand);
+                        if hand >= 2 || seat_holds[hand].is_some() {
+                            continue;
+                        }
+                        let Some(lock) = self
+                            .content
+                            .weapons
+                            .pack
+                            .images
+                            .get(&mounted.image)
+                            .and_then(|image| image.aim_lock)
+                        else {
+                            continue;
+                        };
+                        let Some(barrel) = self
+                            .world_items
+                            .assets()
+                            .aim_lock_barrel(&mounted.image, lock.axis)
+                        else {
+                            continue;
+                        };
+                        // Where this holder aims: the body's aim without
+                        // held free-look, so Free Look never twists an
+                        // aim-locked hand through the arm.
+                        let look_dir = if *owner == view.owner {
+                            let (yaw, pitch) = self.controls.action_angles();
+                            glam::Quat::from_rotation_y(-yaw)
+                                * glam::Quat::from_rotation_x(pitch)
+                                * glam::Vec3::NEG_Z
+                        } else {
+                            glam::Quat::from_rotation_y(-player.yaw)
+                                * glam::Quat::from_rotation_x(player.pitch)
+                                * glam::Vec3::NEG_Z
+                        };
+                        if let Some(hold) =
+                            self.avatar.avatars.get_mut(owner).unwrap().aim_lock_hold(
+                                &self.avatar.avatar_assets,
+                                hand,
+                                barrel,
+                                look_dir,
+                                lock.max_degrees.to_radians(),
+                            )
+                        {
+                            seat_holds[hand] = Some(hold);
                         }
                     }
                 }

@@ -30,6 +30,7 @@ use super::*;
 use crate::bot_kind::{BotKind, Moves};
 use crate::nav::{Body, Found, Ground, Mode, Nav, Search, Waypoint};
 use behaviour::{Behaviour, Situation};
+use bri_console::Clamp;
 use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::{BotIntent, FacingTarget, ObjectRef};
 use bri_weapons::ActorId;
@@ -525,6 +526,7 @@ struct Brain {
     crossed: u64,
     /// The rules hold its brain still (`rest_bot`).
     resting: bool,
+    rules_locomotion: bool,
     /// A rule holds its facing too (`set_bot_facing`): what a held-still
     /// bot keeps turning toward; re-resolved each tick for a moving object.
     rules_facing: Option<FacingTarget>,
@@ -831,6 +833,7 @@ impl Brain {
             idle_seek_active: false,
             crossed,
             resting: false,
+            rules_locomotion: false,
             rules_facing: None,
             rehome: brick.is_none(),
             sequence: 0,
@@ -1877,9 +1880,7 @@ impl Session {
     /// own feet (nothing to turn toward; its heading stays). A tracked
     /// object that is gone releases the hold.
     fn held_gaze(&mut self, bot: OwnerId) -> Option<(f32, f32)> {
-        let Some(target) = self.bots.brains.get(&bot)?.rules_facing.clone() else {
-            return None;
-        };
+        let target = self.bots.brains.get(&bot)?.rules_facing.clone()?;
         // Where the target is now; a gone object takes the hold with it.
         let at = match &target {
             FacingTarget::Point(at) => Vec3::from(*at),
@@ -1897,7 +1898,7 @@ impl Session {
         if d.length() < 1e-3 {
             return None;
         }
-        Some((yaw_to(d), d.y.atan2(flat(d).length()).clamp(-1.5, 1.5)))
+        Some((yaw_to(d), d.y.atan2(flat(d).length()).clamped(-1.5, 1.5)))
     }
     /// A bot the rules hold still, or one a player rides or carries: it
     /// stands (or is moved), holding its fire, and thinks no further — an
@@ -1922,7 +1923,11 @@ impl Session {
             // past the leash that intent keeps (a follow's distance, a guard's
             // radius), or the next patrol point. Walking owns the turn while
             // it lasts; standing resumes the held gaze.
-            let intent = brain.intent.as_ref().map(|h| h.intent.clone());
+            let intent = brain
+                .intent
+                .as_ref()
+                .filter(|_| brain.rules_locomotion)
+                .map(|h| h.intent.clone());
             let walk_to = match intent {
                 Some(BotIntent::Follow { distance, .. })
                     if flat(brain.home - feet).length() > distance =>

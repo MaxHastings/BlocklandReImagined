@@ -241,16 +241,10 @@ impl Perform for ops::ScreenFlash {
             color,
             seconds,
         } = self;
-        session.take_cue(package)?;
         let notice = Notice::Flash { color, seconds };
         match player {
             Some(player) => {
-                // A control in its single-target form: it reaches one client,
-                // where concurrent flashes are capped (8), so it spends none of
-                // the package's budget — one victim's screen effects must not
-                // starve another's out of the shared pool. The broadcast form
-                // below is a world cue and keeps its share.
-                ensure!(session.peers.contains_key(&player), "No such player");
+                session.take_presentation(package, player)?;
                 session.notify(player, notice);
             }
             None => {
@@ -268,16 +262,10 @@ impl Perform for ops::ScreenOverlay {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::ScreenOverlay { player, overlay } = self;
-        session.take_cue(package)?;
         let notice = Notice::Overlay(overlay);
         match player {
             Some(player) => {
-                // A control in its single-target form: up to 16 run at once on
-                // the one client it reaches, so it spends none of the package's
-                // budget — one victim's screen effects must not starve another's
-                // out of the shared pool. The broadcast form below is a world
-                // cue and keeps its share.
-                ensure!(session.peers.contains_key(&player), "No such player");
+                session.take_presentation(package, player)?;
                 session.notify(player, notice);
             }
             None => {
@@ -295,14 +283,14 @@ impl Perform for ops::ScreenImage {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::ScreenImage { player, cue } = self;
-        session.take_cue(package)?;
         let notice = Notice::ScreenImage(cue);
         match player {
             Some(player) => {
-                ensure!(session.peers.contains_key(&player), "No such player");
+                session.take_presentation(package, player)?;
                 session.notify(player, notice);
             }
             None => {
+                session.take_cue(package)?;
                 let everyone: Vec<OwnerId> = session.peers.keys().copied().collect();
                 for owner in everyone {
                     session.notify(owner, notice.clone());

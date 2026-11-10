@@ -531,6 +531,8 @@ struct Shares {
     replies: Allowance<(String, PlayerKey)>,
     /// Prints and sounds, per package.
     cues: Allowance<String>,
+    /// Targeted presentation traffic has an independent share per recipient.
+    presentation: Allowance<(String, OwnerId)>,
     /// Log lines and warnings, per package.
     logs: Allowance<String>,
     /// Projectiles, per package.
@@ -548,6 +550,7 @@ impl Shares {
             chat: Allowance::new(PACKAGE_CHAT_BURST, PACKAGE_CHAT_LINES, SECOND),
             replies: Allowance::new(PACKAGE_REPLY_LINES, PACKAGE_REPLY_LINES, SECOND),
             cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
+            presentation: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
             logs: Allowance::new(PACKAGE_LOG_LINES, PACKAGE_LOG_LINES, SECOND),
             shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
             environment: Allowance::new(
@@ -1299,11 +1302,8 @@ impl Session {
             None => PlayerKey::session(owner),
         }
     }
-    /// Other Add-Ons' server-visible per-player state, for the `state_of`
-    /// query: by package id, then peer id, then key. Only keys the author
-    /// marked visible "server" appear — owner- and everyone-visible values
-    /// stay private to their own package's client sync, so a secret stays
-    /// one if its author marks it `visible: "owner"`.
+    /// Explicitly exported per-player state of other Add-Ons, indexed by
+    /// package, player and key. Client visibility never grants export access.
     fn peer_state_view(
         &self,
         host: Option<&PackageHost>,
@@ -1311,14 +1311,14 @@ impl Session {
         let mut out = BTreeMap::new();
         let Some(host) = host else { return out };
         for (id, behaviour) in host.catalog.behaviours() {
-            let server_keys: Vec<&String> = behaviour
+            let exported_keys: Vec<&String> = behaviour
                 .state
                 .player
                 .iter()
-                .filter(|(_, k)| k.visible == Visible::Server)
+                .filter(|(_, k)| k.exported)
                 .map(|(k, _)| k)
                 .collect();
-            if server_keys.is_empty() {
+            if exported_keys.is_empty() {
                 continue;
             }
             for (owner, _) in self.peers.iter() {
@@ -1328,7 +1328,7 @@ impl Session {
                     continue;
                 };
                 let mut entry = BTreeMap::new();
-                for k in &server_keys {
+                for k in &exported_keys {
                     if let Some(v) = values.get(k.as_str()) {
                         entry.insert((*k).clone(), v.clone());
                     }
@@ -1557,7 +1557,7 @@ impl Session {
             minigames: self.script_minigames(),
             tethers: self.tether_views(),
             package_ids: host
-                .map(|h| h.catalog.behaviours().map(|(id, _)| id.clone()).collect())
+                .map(|h| h.catalog.packages.keys().cloned().collect())
                 .unwrap_or_default(),
             peer_state: self.peer_state_view(host.map(|v| &**v)),
         }
@@ -2040,6 +2040,20 @@ impl Session {
             "Dropped: more than {PACKAGE_CUES} prints and sounds a second"
         );
         host.shares.cues.spend(&origin, tick, 1);
+        Ok(())
+    }
+    /// Targeted screen/camera/audio controls cannot consume another player's
+    /// share, and cannot flood their reliable queue without a bound.
+    fn take_presentation(&mut self, package: &str, player: OwnerId) -> Result<()> {
+        ensure!(self.peers.contains_key(&player), "No such player");
+        let tick = self.simulation.state().tick;
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let origin = (package.to_owned(), player);
+        ensure!(
+            host.shares.presentation.available(&origin, tick) >= 1,
+            "Dropped: more than {PACKAGE_CUES} presentation controls per player a second"
+        );
+        host.shares.presentation.spend(&origin, tick, 1);
         Ok(())
     }
     /// One log line or warning from `package`, within its share.
@@ -3779,10 +3793,16 @@ impl Session {
     }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {
-        if !self.package_participant(owner) {
-            return;
+        if self.package_participant(owner) {
+            self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
         }
-        self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
+        if let Some(host) = &mut self.packages {
+            host.kept_worn.retain(|(player, _), _| *player != owner);
+            host.shares
+                .presentation
+                .levels
+                .retain(|(_, player), _| *player != owner);
+        }
     }
     /// `on_damage(victim, attacker, amount, info)` from every package that
     /// declares it, in order, each seeing the amount the one before

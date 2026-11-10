@@ -224,6 +224,9 @@ struct Game {
 }
 impl Game {
     fn new() -> Self {
+        Self::with_catalog(catalog())
+    }
+    fn with_catalog(catalog: Arc<Catalog>) -> Self {
         let mut s = Session::new(
             Simulation::new(
                 World::new("Interop".into(), "interop".into(), vec![[1.0; 4]]),
@@ -236,7 +239,14 @@ impl Game {
             )
             .unwrap(),
         );
-        s.install_packages(catalog(), None).unwrap();
+        let avatar = bri_content::testing::ScratchDir::new("interop-avatar").unwrap();
+        bri_content::testing::avatar::write(avatar.path()).unwrap();
+        s.set_avatar_catalog(
+            serde_json::from_slice(&std::fs::read(avatar.path().join("avatar.json")).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        s.install_packages(catalog, None).unwrap();
         let p = s.join("P".into(), Vec3::new(0.0, 0.05, 0.0), true).unwrap();
         let mut g = Self { s, seq: 0, p };
         g.steps(2);
@@ -418,7 +428,7 @@ fn listening_to_an_add_on_not_depended_on_is_refused_at_load() {
 }
 
 #[test]
-fn a_rule_reads_another_add_ons_server_visible_state_and_loaded_flags() {
+fn a_rule_reads_only_explicitly_exported_state_and_loaded_flags() {
     // `radio` keeps one server-visible and one owner-visible per-player key;
     // `spy` reads them cross-package with package_loaded / state_of.
     let root = temp_root();
@@ -430,7 +440,9 @@ fn a_rule_reads_another_add_ons_server_visible_state_and_loaded_flags() {
         json!({
             "commands": [{ "name": "switch" }],
             "state": { "player": {
-                "on":     { "default": true, "visible": "server" },
+                "on":     { "default": true, "visible": "server", "exported": true },
+                "private": { "default": "server-secret", "visible": "server" },
+                "public": { "default": true, "visible": "everyone", "exported": true },
                 "secret": { "default": "",   "visible": "owner"  }
             } }
         }),
@@ -446,7 +458,7 @@ fn cmd_switch(p) { set_player(p, "on", !get_player(p, "on")); }
             "commands": [{ "name": "check" }],
             "state": { "global": {
                 "loaded_radio": counter, "loaded_missing": counter,
-                "saw_on": counter, "saw_secret": counter
+                "saw_on": counter, "saw_secret": counter, "saw_private": counter, "saw_public": counter
             } }
         }),
         r#"
@@ -456,6 +468,8 @@ fn cmd_check(p) {
     let on = state_of("radio", p, "on");
     set("saw_on", if on == true { 1 } else { 0 });
     // Owner-visible values stay private to their own package's client sync.
+    set("saw_private", if state_of("radio", p, "private") == () { 0 } else { 1 });
+    set("saw_public", if state_of("radio", p, "public") == true { 1 } else { 0 });
     let secret = state_of("radio", p, "secret");
     set("saw_secret", if secret == () { 0 } else { 1 });
 }
@@ -517,6 +531,17 @@ fn cmd_check(p) {
         "owner-visible key leaked"
     );
 
+    assert_eq!(
+        gstate(&s, "saw_private"),
+        json!(0),
+        "unexported server state leaked"
+    );
+    assert_eq!(
+        gstate(&s, "saw_public"),
+        json!(1),
+        "export independent of client visibility"
+    );
+
     // A flip is visible on the next tick; an unset value reads as ().
     seq += 1;
     s.command(
@@ -560,4 +585,74 @@ fn an_export_without_its_function_is_refused_at_load() {
             .any(|d| d.message.contains("api_charge") && d.message.contains("3 parameter")),
         "{problems:#?}"
     );
+}
+
+#[test]
+fn presentation_shares_bound_one_recipient_without_starving_another_or_double_charging_broadcasts()
+{
+    use bri_sim::session::Notice;
+    let root = temp_root();
+    package(
+        &root,
+        "presentation",
+        json!({"capabilities":["chat", "player"]}),
+        json!({"commands":[{"name":"pulse","args":["int","bool"]},{"name":"materials"}]}),
+        r#"
+fn cmd_pulse(p, count, broadcast) {
+    for i in 0..count { screen_flash(if broadcast { () } else { p }, [1.0,1.0,1.0,1.0], 1.0); }
+}
+fn cmd_materials(p) {
+    for i in 0..12 { set_avatar_unlit(p, `material${i}`); }
+    set_avatar_unlit(p, "material0", false);
+    set_avatar_unlit(p, "replacement", true);
+}
+"#,
+    );
+    let mut game = Game::with_catalog(Arc::new(load(&root, &["presentation"]).unwrap()));
+    let other = game
+        .s
+        .join("Other".into(), Vec3::new(3.0, 0.05, 0.0), false)
+        .unwrap();
+    game.s.take_private_notices();
+    let owner = game.p;
+    let pulse = |g: &mut Game, owner, sequence, n, broadcast| {
+        g.s.command(
+            owner,
+            sequence,
+            Command::Package(PackageCommand {
+                package: "presentation".into(),
+                command: "pulse".into(),
+                args: vec![PackageArg::Int(n), PackageArg::Bool(broadcast)],
+            }),
+        )
+        .unwrap();
+    };
+    pulse(&mut game, owner, 1, 64, false);
+    pulse(&mut game, owner, 2, 1, false);
+    pulse(&mut game, other, 1, 1, false);
+    let flashes: Vec<_> = game
+        .s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(_, n)| matches!(n, Notice::Flash { .. }))
+        .collect();
+    assert_eq!(flashes.iter().filter(|(p, _)| *p == game.p).count(), 64);
+    assert_eq!(flashes.iter().filter(|(p, _)| *p == other).count(), 1);
+    pulse(&mut game, owner, 3, 64, true);
+    pulse(&mut game, owner, 4, 1, true);
+    assert_eq!(
+        game.s
+            .take_private_notices()
+            .into_iter()
+            .filter(|(_, n)| matches!(n, Notice::Flash { .. }))
+            .count(),
+        128
+    );
+    game.seq = 4;
+    game.send("presentation", "materials", vec![]).unwrap();
+    let appearance = game.s.avatars()[&game.p].clone();
+    appearance.validate_bounds().unwrap();
+    assert_eq!(appearance.unlit.len(), 8);
+    assert!(!appearance.unlit.contains("material0"));
+    assert!(appearance.unlit.contains("replacement"));
 }

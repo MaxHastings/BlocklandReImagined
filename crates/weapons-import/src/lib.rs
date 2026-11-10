@@ -613,7 +613,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 scripts: Default::default(),
                 light,
                 // No v20 equivalent; a port writes it into weapons.json.
-                aim_lock_axis: None,
+                aim_lock: None,
             },
         );
     }

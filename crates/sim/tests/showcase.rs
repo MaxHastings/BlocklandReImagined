@@ -1862,7 +1862,7 @@ fn add_launcher(
         aim_assist: None,
         movement: None,
         both_arms: false,
-        aim_lock_axis: None,
+        aim_lock: None,
         states,
     };
     let item = bri_weapons::Item {

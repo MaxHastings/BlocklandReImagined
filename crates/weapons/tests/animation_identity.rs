@@ -170,6 +170,51 @@ fn worn_image_does_not_borrow_the_selected_hand_item() -> Result<()> {
 }
 
 #[test]
+fn kept_offhand_survives_switches_and_checkpoints_but_not_a_new_body() -> Result<()> {
+    let mut world = world()?;
+    let mut pack = (*world.pack).clone();
+    let mut light = pack.images[IMAGE].clone();
+    light.id = "identity:image/light".into();
+    pack.images.insert(light.id.clone(), light);
+    let mut dual = pack.images[IMAGE].clone();
+    dual.id = "identity:image/dual".into();
+    dual.left_image = Some(IMAGE.into());
+    pack.images.insert(dual.id.clone(), dual);
+    world.pack = std::sync::Arc::new(pack);
+    world.wear(A, 1, Some("identity:image/light"), Some(3), true)?;
+    world.equip(A, None)?;
+    assert_eq!(world.image_id(A, 1), Some("identity:image/light"));
+    world.swap_image(A, Some("identity:image/dual"))?;
+    assert_eq!(
+        world.image_id(A, 1),
+        Some(IMAGE),
+        "dual tool owns its offhand while held"
+    );
+    let bytes = serde_json::to_vec(&world.save())?;
+    let mut restored = WeaponsWorld::restore((*world.pack).clone(), &bytes)?;
+    for state in [&mut world, &mut restored] {
+        state.swap_image(A, None)?;
+        assert_eq!(
+            state.image_id(A, 1),
+            Some("identity:image/light"),
+            "hidden kept intent must survive restoration"
+        );
+        state.clear_worn(A);
+        state.respawned(A)?;
+        state.equip(A, Some(0))?;
+        assert_eq!(
+            state.image_id(A, 1),
+            None,
+            "a new body must not restore the previous life's offhand"
+        );
+    }
+    let mut forged: serde_json::Value = serde_json::from_slice(&bytes)?;
+    forged["actors"][0][1]["kept_left"]["image"] = serde_json::json!("missing:image/unknown");
+    assert!(WeaponsWorld::restore((*world.pack).clone(), &serde_json::to_vec(&forged)?).is_err());
+    Ok(())
+}
+
+#[test]
 fn checkpoint_preserves_deferred_provenance_and_allocator_after_removed_instances() -> Result<()> {
     let mut original = world()?;
     let first = start(original.step(&mut Empty), "native_clip")?;

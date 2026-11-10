@@ -652,7 +652,7 @@ impl EffectsWorld {
     /// bad script cannot black out the whole scene. Emitters ignore this.
     pub fn set_source_intensity(&mut self, handle: EffectHandle, value: f32) -> Result<()> {
         let v = if value.is_finite() {
-            value.clamp(0., 8.)
+            value.clamped(0., 8.)
         } else {
             1.
         };

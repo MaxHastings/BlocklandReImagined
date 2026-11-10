@@ -1,6 +1,7 @@
 //! What the engine does for the `player` operations
 //! (`bri_package_runtime::ops::player`).
 use super::*;
+use bri_console::Clamp;
 
 impl Perform for ops::SetAvatarColors {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
@@ -26,9 +27,22 @@ impl Perform for ops::SetAvatarParts {
 }
 impl Perform for ops::SetAvatarUnlit {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
-        let ops::SetAvatarUnlit { player, material } = self;
+        let ops::SetAvatarUnlit {
+            player,
+            material,
+            enabled,
+        } = self;
         let peer = session.peers.get_mut(&player).context("No such player")?;
-        peer.unlit_materials.insert(material.to_ascii_lowercase());
+        let material = material.to_ascii_lowercase();
+        if enabled {
+            ensure!(
+                peer.unlit_materials.contains(&material) || peer.unlit_materials.len() < 8,
+                "At most 8 unlit avatar materials"
+            );
+            peer.unlit_materials.insert(material);
+        } else {
+            peer.unlit_materials.remove(&material);
+        }
         Ok(())
     }
 }
@@ -150,7 +164,7 @@ impl Perform for ops::SetImageLightFlicker {
         let peer = session.peers.get_mut(&player).context("No such player")?;
         // 0 to 1 (steady to fully unstable); it rides in vitals so each client
         // flickers its own copy of the player's image lights on its own clock.
-        peer.combat.image_light_flicker = amount.clamp(0., 1.);
+        peer.combat.image_light_flicker = amount.clamped(0., 1.);
         Ok(())
     }
 }
@@ -706,18 +720,20 @@ impl Perform for ops::KickView {
     }
 }
 impl Perform for ops::SteerView {
-    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let ops::SteerView {
             player,
+            seconds,
             at,
             rate,
             grip,
             fov_delta,
         } = self;
-        ensure!(session.peers.contains_key(&player), "No such player");
+        session.take_presentation(cx.package, player)?;
         session.notify(
             player,
             Notice::SteerView {
+                seconds,
                 at,
                 rate,
                 grip,
@@ -837,7 +853,7 @@ impl Perform for ops::ViewShake {
     }
 }
 impl Perform for ops::CameraShake {
-    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let ops::CameraShake {
             player,
             translation,
@@ -845,11 +861,7 @@ impl Perform for ops::CameraShake {
             seconds,
             hold,
         } = self;
-        // A control, not a cue: it reaches one client and decays on its own,
-        // so it spends none of the package's print-and-sound budget (like
-        // `steer_view` or `stop_sound`). One victim's screen effects must not
-        // starve another's out of the shared pool.
-        ensure!(session.peers.contains_key(&player), "No such player");
+        session.take_presentation(cx.package, player)?;
         session.notify(
             player,
             Notice::CameraShake {

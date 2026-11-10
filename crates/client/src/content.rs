@@ -738,8 +738,9 @@ impl ClientContent {
         for (dir, assets) in &paths.print_extras {
             install_print_icons(&mut schema, dir, assets);
         }
+        let mut ui_pixels_left = bri_content::screen_image::ImagePack::MAX_SET_PIXELS;
         for (dir, assets) in &paths.ui_image_extras {
-            install_ui_images(&mut schema, dir, assets);
+            install_ui_images(&mut schema, dir, assets, &mut ui_pixels_left);
         }
         // Add-On bricks are named, printed and wrenched like base ones.
         bri_sim::definitions::extend_catalog(&mut catalog, &paths.brick_extras)?;
@@ -1280,24 +1281,9 @@ pub(crate) fn print_icon_key(icon: &bri_content::brick_materials::Image) -> Opti
 /// for bitmaps the package stores on disk, so a rule's `screen_image` can name
 /// them. A frame that does not load leaves its key missing (the board shows
 /// what loaded); each failure is reported once (`crate::cosmetic`).
-#[derive(Deserialize)]
-struct UiImagePack {
-    #[allow(dead_code)]
-    schema_version: u32,
-    images: Vec<UiImageEntry>,
-}
+use bri_content::screen_image::ImagePack as UiImagePack;
 
-#[derive(Deserialize)]
-struct UiImageEntry {
-    key: String,
-    /// Relative to the Add-On's assets folder.
-    file: String,
-    sha256: String,
-    width: u32,
-    height: u32,
-}
-
-fn install_ui_images(schema: &mut UiPack, dir: &str, assets: &Path) {
+fn install_ui_images(schema: &mut UiPack, dir: &str, assets: &Path, pixels_left: &mut u64) {
     let pack = file(assets, "ui-images.json", INDEX_LIMIT)
         .and_then(|path| read_json::<UiImagePack>(&path, INDEX_LIMIT));
     let pack = match pack {
@@ -1308,21 +1294,37 @@ fn install_ui_images(schema: &mut UiPack, dir: &str, assets: &Path) {
             return;
         }
     };
+    let owner = assets
+        .parent()
+        .and_then(|p| fs::read(p.join("package.json")).ok())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["id"].as_str().map(str::to_owned));
+    let Some(owner) = owner.filter(|id| bri_package::id::namespace_problem(id).is_none()) else {
+        crate::cosmetic::add_on_fault(dir, "ui-images.json", "Missing package identity");
+        return;
+    };
+    if let Err(error) = pack.validate(&owner) {
+        crate::cosmetic::add_on_fault(dir, "ui-images.json", error);
+        return;
+    }
+    if pack.pixels() > *pixels_left {
+        crate::cosmetic::add_on_fault(
+            dir,
+            "ui-images.json",
+            "Enabled UI image indexes exceed 64 million pixels",
+        );
+        return;
+    }
+    *pixels_left -= pack.pixels();
     for entry in &pack.images {
         let loaded = file(assets, &entry.file, INDEX_LIMIT).and_then(|path| {
-            let bytes = fs::read(&path)?;
             ensure!(
-                format!("{:x}", sha2::Sha256::digest(&bytes)) == entry.sha256,
-                "UI image checksum mismatch: {}",
+                !schema.images.contains_key(&entry.key),
+                "Duplicate UI image key {}",
                 entry.key
             );
-            ensure!(
-                (1..=1024).contains(&entry.width) && (1..=1024).contains(&entry.height),
-                "UI image over the bitmap cap: {} is {}x{}",
-                entry.key,
-                entry.width,
-                entry.height
-            );
+            let bytes = fs::read(&path)?;
+            entry.verify(&bytes)?;
             Ok(path)
         });
         match loaded {

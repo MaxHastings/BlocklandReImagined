@@ -7,15 +7,7 @@ impl Perform for ops::AddBot {
         session.check_rules_bot(self.game, self.team, &self.kind)
     }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall { package, .. } = cx;
-        let ops::AddBot {
-            game,
-            team,
-            kind,
-            name,
-            muted,
-        } = self;
-        session.add_rules_bot(package, game, team, &kind, &name, muted)
+        session.add_rules_bot(cx.package, &self)
     }
 }
 impl Perform for ops::RemoveBot {
@@ -34,8 +26,12 @@ impl Perform for ops::RestBot {
     }
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
-        let ops::RestBot { bot, rest } = self;
-        session.rest_rules_bot(package, bot, rest)
+        let ops::RestBot {
+            bot,
+            rest,
+            locomotion,
+        } = self;
+        session.rest_rules_bot(package, bot, rest, locomotion)
     }
 }
 impl Perform for ops::SetBotVoiceMute {

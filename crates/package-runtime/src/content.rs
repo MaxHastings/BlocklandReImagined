@@ -1194,6 +1194,10 @@ pub struct StateSchema {
 #[serde(deny_unknown_fields)]
 pub struct StateKey {
     pub default: serde_json::Value,
+    /// Explicit read-only export to other server Add-Ons through `state_of`.
+    /// Independent of which clients receive this value; private by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exported: bool,
     /// Which clients receive the value. HUD panels may bind only visible
     /// keys.
     #[serde(default)]

@@ -31,9 +31,9 @@ fn kind_map(k: &BotKindView) -> Dynamic {
 
 fn add_bot(game: Dynamic, options: Map) -> Fallible<INT> {
     for key in options.keys() {
-        if !["kind", "team", "name", "muted"].contains(&key.as_str()) {
+        if !["kind", "team", "name", "muted", "quiet"].contains(&key.as_str()) {
             return fail(format!(
-                "add_bot options are kind, team, name and muted, not `{key}`"
+                "add_bot options are kind, team, name, muted and quiet, not `{key}`"
             ));
         }
     }
@@ -67,12 +67,16 @@ fn add_bot(game: Dynamic, options: Map) -> Fallible<INT> {
             .as_bool()
             .map_err(|_| "add_bot `muted` is true or false")?,
     };
+    let quiet = options.get("quiet").map_or(Ok(false), |v| {
+        v.as_bool().map_err(|_| "add_bot `quiet` is true or false")
+    })?;
     push(Op::AddBot(ops::AddBot {
         game: id(&game)?,
         team,
         kind,
         name,
         muted,
+        quiet,
     }))
 }
 
@@ -222,6 +226,14 @@ pub(super) fn register(engine: &mut Engine) {
         push(Op::RestBot(ops::RestBot {
             bot: id(&bot)?,
             rest,
+            locomotion: false,
+        }))
+    });
+    engine.register_fn("rest_bot", |bot: Dynamic, rest: bool, locomotion: bool| {
+        push(Op::RestBot(ops::RestBot {
+            bot: id(&bot)?,
+            rest,
+            locomotion,
         }))
     });
     // `obscure(x, y, z, radius, seconds)`: smoke bots cannot see through.

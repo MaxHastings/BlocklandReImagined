@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "version": "1.0.0",
+  "api": 1,
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "id": "sample-co-located",
+  "name": "Co-located Add-On",
+  "companions": [
+    "sample-co-located-rules"
+  ],
+  "provides": [
+    {
+      "kind": "model",
+      "id": "sample-co-located:model/marker",
+      "file": "marker.json"
+    }
+  ]
+}

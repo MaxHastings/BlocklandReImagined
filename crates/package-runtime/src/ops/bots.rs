@@ -19,6 +19,9 @@ pub struct AddBot {
     pub name: String,
     #[serde(default)]
     pub muted: bool,
+    /// Suppress stock join/spawn presentation for this spawn only.
+    #[serde(default)]
+    pub quiet: bool,
 }
 impl ScriptOp for AddBot {
     const CAPABILITY: &str = "bots";
@@ -57,6 +60,9 @@ impl ScriptOp for RemoveBot {
 pub struct RestBot {
     pub bot: u64,
     pub rest: bool,
+    /// Explicitly execute anchored intents while native thinking is suspended.
+    #[serde(default)]
+    pub locomotion: bool,
 }
 impl ScriptOp for RestBot {
     const CAPABILITY: &str = "bots";

@@ -872,16 +872,7 @@ impl AvatarAssets {
                     kept
                 })
             })?;
-            // A rule marked this material unlit (`set_avatar_unlit`): it glows at
-            // full brightness in its own texture colours, regardless of light or
-            // the wearer's paint — a bot's face in the dark. `untinted` keeps the
-            // art out of the vertex-paint multiply (the model path's convention
-            // for opaque surfaces), so one object can carry a lit painted body
-            // and an unlit glowing part at once; an authored-opaque surface also
-            // keeps its coverage through the flip — Unlit would otherwise let the
-            // texture alpha become real transparency, and a mostly-transparent
-            // picture (art over clear pixels) reads as glass;
-            // `ignore_texture_alpha` draws those texels at their colour instead.
+            // Opaque overlay art emits over the original painted surface.
             if appearance
                 .unlit
                 .iter()
@@ -891,6 +882,7 @@ impl AvatarAssets {
                 material.untinted = true;
                 if source.blend == "opaque" {
                     material.ignore_texture_alpha = true;
+                    material.emissive_overlay = true;
                 }
             }
             materials.push(data.materials.len());
@@ -2067,7 +2059,7 @@ impl AvatarMesh {
     /// lines the image's barrel (`barrel_in_hand`, in the mount node's
     /// frame), as last posed, up with `look_dir` (world), clamped so
     /// free-look never twists it through the arm
-    /// ([`bri_content::hold::AIM_LOCK_MAX_TURN`]). No reach target: pinning
+    /// (authored in the image). No reach target: pinning
     /// the hand to where it sat last frame would freeze it in the world while
     /// the body walks, dragging the arm behind; with only a wrist turn the
     /// hand keeps its animation and the model rides rigidly on it in every
@@ -2079,6 +2071,7 @@ impl AvatarMesh {
         n: usize,
         barrel_in_hand: Vec3,
         look_dir: Vec3,
+        max_turn: f32,
     ) -> Option<HandHold> {
         if self.posed_nodes.is_empty() || !barrel_in_hand.is_finite() || !look_dir.is_finite() {
             return None;
@@ -2102,7 +2095,7 @@ impl AvatarMesh {
             return None;
         }
         Some(HandHold::turn_only(bri_content::hold::aim_lock_turn(
-            natural, look_dir,
+            natural, look_dir, max_turn,
         )))
     }
     /// How the playing thread-2/3 actions (a brick shift, plant, recoil,
@@ -4299,7 +4292,7 @@ mod tests {
                 assert!(frame.abs_diff_eq(body.model_transform, 1e-6));
                 input.hand_holds = [
                     Some(HandHold {
-                        position: Vec3::NAN,
+                        position: Some(Vec3::NAN),
                         ..Default::default()
                     }),
                     None,
@@ -5926,9 +5919,9 @@ mod tests {
         // Look a third of the way to the wrist's limit off where it points.
         let look = Quat::from_rotation_y(0.4) * world_barrel(&mesh);
         let hold = mesh
-            .aim_lock_hold(assets, n, barrel, look)
+            .aim_lock_hold(assets, n, barrel, look, std::f32::consts::FRAC_PI_3)
             .context("hold")?;
-        assert!(!hold.position.is_finite(), "the aim lock must not reach");
+        assert!(hold.position.is_none(), "the aim lock must not reach");
         let rest = mesh
             .mount_node(assets, n)
             .context("left mount")?
@@ -5972,7 +5965,7 @@ mod tests {
         // animation. Time advances so no frame can be skipped as unchanged.
         for frame in 1..=8 {
             let hold = mesh
-                .aim_lock_hold(assets, n, barrel, look)
+                .aim_lock_hold(assets, n, barrel, look, std::f32::consts::FRAC_PI_3)
                 .context("hold")?;
             let input = AvatarAnimationInput {
                 hand_holds: [None, Some(hold)],
@@ -5994,7 +5987,13 @@ mod tests {
         let index = mesh.mount_index(assets, n).context("left mount")?;
         // The hold the next frame would compute from this pose.
         let hold = mesh
-            .aim_lock_hold(assets, n, Vec3::NEG_Z, Vec3::NEG_Z)
+            .aim_lock_hold(
+                assets,
+                n,
+                Vec3::NEG_Z,
+                Vec3::NEG_Z,
+                std::f32::consts::FRAC_PI_3,
+            )
             .context("hold")?;
         let before = mesh.posed_nodes[index].w_axis.truncate(); // model space
         let frame_before = mesh.model_transform;

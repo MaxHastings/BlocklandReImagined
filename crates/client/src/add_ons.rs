@@ -302,7 +302,7 @@ pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
         l.imported_as.is_none() && l.included.is_none() && state.installed_as(l, library).is_none()
     }) {
         let failed = state.failed(l);
-        let native = classic::is_native_zip(&l.path);
+        let native = classic::is_native(&l.path);
         out.push(AddOnRow {
             id: format!("{LEGACY}{}", l.name),
             name: l.name.clone(),
@@ -500,7 +500,10 @@ pub fn outside_a_game(library: &Library, steps: Vec<Step>) -> (Vec<Step>, Vec<St
 fn run_importer(importer: &Path, input: &Path, out: &Path, reference: &Path) -> Result<()> {
     // A zip already in this game's own format (a ported Add-On, from
     // `tools/port_addon.py` or another player) is unpacked, not converted.
-    if classic::is_native_zip(input) {
+    if input.is_dir() && input.join(bri_package::addon::FILE).is_file() {
+        return bri_package::addon::stage(input, out);
+    }
+    if classic::is_native(input) {
         return classic::unpack_native_zip(input, out);
     }
     let output = legacy_import_command(importer, input, out, reference)
@@ -630,7 +633,7 @@ fn sync(
                 stamp,
                 replaces,
             } => {
-                let native = classic::is_native_zip(&path);
+                let native = classic::is_native(&path);
                 let _ = send.send(SyncNote {
                     notice: format!(
                         "{} {name}...",

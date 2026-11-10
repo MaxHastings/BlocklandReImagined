@@ -703,12 +703,12 @@ impl WeaponEffects {
     /// holders from stuttering in step; a few incommensurate sines (~3.7,
     /// ~6.4 and ~15.5 Hz) buzz rather than pulse cleanly.
     fn flicker_intensity(clock: f64, owner: u64, amount: f32) -> f32 {
-        let a = (amount as f64).clamp(0., 1.);
+        let a = (amount as f64).clamped(0., 1.);
         if a <= 0. {
             return 1.;
         }
         // A stable offset in [0, 1) derived from the id.
-        let seed = (owner.wrapping_mul(0x9E37_79B9) >> 11) as f64 / (1u64 << 53) as f64;
+        let seed = (owner.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11) as f64 / (1u64 << 53) as f64;
         let t = clock + seed;
         let n = ((t * 23.).sin() * 0.5 + (t * 40.).sin() * 0.3 + (t * 97.).sin() * 0.2) * 0.5 + 0.5;
         // At full amount the light dips to ~5% of its brightness and recovers.
@@ -726,31 +726,33 @@ impl WeaponEffects {
     pub fn sync_image_lights(
         &mut self,
         view: &WeaponView,
-        at: impl Fn(u64, u8) -> Option<SourceTransform>,
+        at: impl Fn(u64, u8) -> Option<glam::Mat4>,
         flicker: impl Fn(u64) -> f32,
         elapsed: f32,
     ) -> Result<()> {
         // Advance the shared flicker clock once per frame.
-        self.flicker_clock += elapsed.min(0.25) as f64;
+        if elapsed.is_finite() && elapsed > 0.0 {
+            self.flicker_clock += elapsed.min(0.25) as f64;
+        }
         let mut desired = BTreeMap::new();
         for (owner, images) in &view.images {
             for m in images {
-                if let Some(image) = self
+                if let Some(light) = self
                     .weapons
                     .images
                     .get(&m.image)
-                    .filter(|i| i.light.is_some())
-                    && let Some(mut transform) = at(*owner, m.hand).filter(|t| valid_transform(*t))
+                    .and_then(|i| i.light.as_ref())
+                    && let Some(frame) = at(*owner, m.hand).filter(|m| m.is_finite())
                 {
-                    // A light anchored inside the model (a flashlight's lens)
-                    // leaves from there instead of the grip; its glow rides
-                    // along at the same anchor.
-                    if let Some(light) = image.light.as_ref()
-                        && light.offset != [0.; 3]
-                    {
-                        transform.position += transform.rotation * Vec3::from(light.offset);
+                    let (_, rotation, _) = frame.to_scale_rotation_translation();
+                    let transform = SourceTransform {
+                        position: frame.transform_point3(Vec3::from(light.offset)),
+                        rotation,
+                        velocity: Vec3::ZERO,
+                    };
+                    if valid_transform(transform) {
+                        desired.insert((*owner, m.hand), (m.image.clone(), m.paint, transform));
                     }
-                    desired.insert((*owner, m.hand), (m.image.clone(), m.paint, transform));
                 }
             }
         }
@@ -1643,6 +1645,22 @@ fn fault(notes: &mut Vec<String>, problem: Problem) {
 #[cfg(test)]
 mod observation_tests {
     use super::*;
+    #[test]
+    fn adjacent_holders_do_not_flicker_in_lockstep_and_zero_remains_steady() {
+        let mut difference = 0.0_f32;
+        for frame in 0..60 {
+            let time = f64::from(frame) / 60.0;
+            let a = WeaponEffects::flicker_intensity(time, 1, 1.0);
+            let b = WeaponEffects::flicker_intensity(time, 2, 1.0);
+            assert!((0.05..=1.0).contains(&a) && (0.05..=1.0).contains(&b));
+            assert_eq!(WeaponEffects::flicker_intensity(time, 1, 0.0), 1.0);
+            difference = difference.max((a - b).abs());
+        }
+        assert!(
+            difference > 0.1,
+            "distinct bodies need distinct cosmetic phases"
+        );
+    }
     #[test]
     fn timed_observation_keeps_actual_cue_transform_and_cursor_without_history() -> Result<()> {
         let mut fx = WeaponEffects::new(

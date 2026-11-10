@@ -312,19 +312,24 @@ impl Session {
     pub(in crate::session) fn add_rules_bot(
         &mut self,
         package: &str,
-        game: u64,
-        team: Option<u64>,
-        kind: &str,
-        name: &str,
-        muted: bool,
+        request: &bri_package_runtime::ops::AddBot,
     ) -> Result<()> {
+        let bri_package_runtime::ops::AddBot {
+            game,
+            team,
+            kind,
+            name,
+            muted,
+            quiet,
+        } = request;
+        let (game, team, muted, quiet) = (*game, *team, *muted, *quiet);
         self.check_rules_bot(game, team, kind)?;
         let kind = self.bots.kind(kind).expect("checked").clone();
         let game = bri_minigames::GameId(game);
         let team = team.map(|t| bri_minigames::TeamId(t as u32));
         let drop = self.spawn_points.first().copied().unwrap_or(Vec3::Y);
         // Quiet entry: the rules' own script plays where this bot appears.
-        let bot = self.join_inner(name.to_owned(), drop, false, true, None, true)?;
+        let bot = self.join_inner(name.clone(), drop, false, true, None, quiet)?;
         if let Err(e) = self.embody_bot(bot, &kind) {
             self.drop_bot(bot)?;
             return Err(e);
@@ -492,9 +497,16 @@ impl Session {
         package: &str,
         bot: OwnerId,
         rest: bool,
+        locomotion: bool,
     ) -> Result<()> {
         self.check_rest_rules_bot(package, bot)?;
-        self.set_bot_resting(bot, rest)
+        self.set_bot_resting(bot, rest)?;
+        self.bots
+            .brains
+            .get_mut(&bot)
+            .context("No such bot")?
+            .rules_locomotion = rest && locomotion;
+        Ok(())
     }
     /// What a rule holds this bot's facing to (`set_bot_facing`): the
     /// target `step_held_bot` keeps it turning toward while resting, or
@@ -520,6 +532,7 @@ impl Session {
             brain.evidence_search.clear();
         }
         brain.resting = rest;
+        brain.rules_locomotion = false;
         if rest {
             self.bots.claims.release_owner(bot);
             if self.seated(bot) {
@@ -1082,7 +1095,17 @@ mod spawn_tests {
         )?;
         let game = s.game_of(host).unwrap();
         const PKG: &str = "test:facing";
-        s.add_rules_bot(PKG, game.0, None, "fixture:bot/melee", "Render", false)?;
+        s.add_rules_bot(
+            PKG,
+            &bri_package_runtime::ops::AddBot {
+                game: game.0,
+                team: None,
+                kind: "fixture:bot/melee".into(),
+                name: "Fixture".into(),
+                muted: false,
+                quiet: false,
+            },
+        )?;
         let bot = *s
             .bots
             .by_rules
@@ -1092,7 +1115,7 @@ mod spawn_tests {
             .0;
 
         // Rested without a facing hold, it stands where it stood...
-        s.rest_rules_bot(PKG, bot, true)?;
+        s.rest_rules_bot(PKG, bot, true, false)?;
         for _ in 0..16 {
             s.step()?;
         }
@@ -1167,7 +1190,17 @@ mod spawn_tests {
         )?;
         let game = s.game_of(host).unwrap();
         const PKG: &str = "test:walking";
-        s.add_rules_bot(PKG, game.0, None, "fixture:bot/melee", "Render", false)?;
+        s.add_rules_bot(
+            PKG,
+            &bri_package_runtime::ops::AddBot {
+                game: game.0,
+                team: None,
+                kind: "fixture:bot/melee".into(),
+                name: "Fixture".into(),
+                muted: false,
+                quiet: false,
+            },
+        )?;
         let bot = *s
             .bots
             .by_rules
@@ -1175,7 +1208,7 @@ mod spawn_tests {
             .find(|(_, (p, _))| p == PKG)
             .unwrap()
             .0;
-        s.rest_rules_bot(PKG, bot, true)?;
+        s.rest_rules_bot(PKG, bot, true, false)?;
 
         // It drops at the map drop point and stands there...
         for _ in 0..16 {
@@ -1205,6 +1238,14 @@ mod spawn_tests {
                 distance: 25.0,
             }),
         )?;
+        for _ in 0..16 {
+            s.step()?;
+        }
+        assert!(
+            (Vec3::from(s.peers[&bot].player.state().feet) - start).length() < 0.05,
+            "rest must suppress prior intents by default"
+        );
+        s.rest_rules_bot(PKG, bot, true, true)?;
         let mut last = start;
         let mut still = 0u32;
         let mut faced = false;

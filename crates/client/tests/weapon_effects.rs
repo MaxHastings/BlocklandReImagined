@@ -1157,11 +1157,11 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         fx.sync_image_lights(
             &worn(Some(1)),
             |owner, hand| {
-                (owner == 7 && hand == 3).then_some(bri_fx_runtime::SourceTransform {
-                    position: at,
+                (owner == 7 && hand == 3).then_some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
                     rotation,
-                    ..Default::default()
-                })
+                    at,
+                ))
             },
             |_| 0.0,
             0.01,
@@ -1181,11 +1181,11 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         fx.sync_image_lights(
             &WeaponView::default(),
             |_, _| {
-                Some(bri_fx_runtime::SourceTransform {
-                    position: at,
+                Some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
                     rotation,
-                    ..Default::default()
-                })
+                    at,
+                ))
             },
             |_| 0.0,
             0.01,
@@ -1234,11 +1234,11 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         fx.sync_image_lights(
             &held,
             |owner, hand| {
-                (owner == 7 && hand == 1).then_some(bri_fx_runtime::SourceTransform {
-                    position: at,
+                (owner == 7 && hand == 1).then_some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
                     rotation,
-                    ..Default::default()
-                })
+                    at,
+                ))
             },
             |_| 0.0,
             0.01,
@@ -1250,7 +1250,7 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         };
         assert_eq!(
             light.position,
-            at + rotation * Vec3::new(0., 1.5, 0.),
+            at + rotation * Vec3::new(0., 3.0, 0.),
             "anchored at the lens"
         );
         assert_eq!(
@@ -1308,11 +1308,11 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         fx.sync_image_lights(
             &held,
             |owner, hand| {
-                (owner == 7 && hand == 1).then_some(bri_fx_runtime::SourceTransform {
-                    position: at,
+                (owner == 7 && hand == 1).then_some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
                     rotation,
-                    ..Default::default()
-                })
+                    at,
+                ))
             },
             |_| 0.0,
             0.01,
@@ -1320,7 +1320,7 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         fx.advance(0.01, Vec3::ZERO, pose)?;
         let lights = fx.world().snapshot(&camera()).lights;
         assert_eq!(lights.len(), 2, "beam and glow: {lights:?}");
-        let lens = at + rotation * Vec3::new(0., 1.5, 0.);
+        let lens = at + rotation * Vec3::new(0., 3.0, 0.);
         let beam = lights
             .iter()
             .find(|l| {
@@ -1350,11 +1350,11 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         fx.sync_image_lights(
             &WeaponView::default(),
             |_, _| {
-                Some(bri_fx_runtime::SourceTransform {
-                    position: at,
+                Some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
                     rotation,
-                    ..Default::default()
-                })
+                    at,
+                ))
             },
             |_| 0.0,
             0.01,

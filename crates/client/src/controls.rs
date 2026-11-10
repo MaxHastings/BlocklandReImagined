@@ -8,7 +8,7 @@ use bri_ui::api::{GameAction, HeldControl};
 use bri_world::OwnerId;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    f32::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_6, PI},
+    f32::consts::{FRAC_PI_2, PI},
 };
 
 /// `HumanController::ViewShake`: the look moves along a direction at `rate`
@@ -81,6 +81,7 @@ pub struct CameraJolt {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ViewSteer {
     at: glam::Vec3,
+    left: f32,
     rate: f32,
     grip: f32,
     fov_delta: f32,
@@ -797,11 +798,21 @@ impl Controls {
     /// both temporary: the clear restores them with the pull. The advance
     /// skips a corpse camera that holds still, a spectator's orbit and a
     /// rider's seat look: those are not the holder's aim.
-    pub fn steer_view(&mut self, at: Option<glam::Vec3>, rate: f32, grip: f32, fov_delta: f32) {
+    pub fn steer_view(
+        &mut self,
+        at: Option<glam::Vec3>,
+        rate: f32,
+        grip: f32,
+        fov_delta: f32,
+        seconds: f32,
+    ) {
         match at {
-            Some(at) if at.is_finite() && rate.is_finite() => {
+            Some(at)
+                if at.is_finite() && rate.is_finite() && seconds.is_finite() && seconds > 0.0 =>
+            {
                 self.view_steer = Some(ViewSteer {
                     at,
+                    left: seconds.clamped(0.1, 60.0),
                     rate: rate.clamped(0.0, 180.0),
                     grip: if grip.is_finite() {
                         grip.clamped(STEER_GRIP_RANGE.0, STEER_GRIP_RANGE.1)
@@ -835,8 +846,7 @@ impl Controls {
     }
     /// Run the pull for `seconds`, turning the real look toward its point as
     /// seen from `eye`; no eye (no body yet) leaves it alone. The turn is
-    /// capped at the pull's rate each frame, so looking away on purpose always
-    /// outpaces it; a corpse camera that holds still, a spectator's orbit and
+    /// capped at the pull's rate each frame, while ordinary look input stays active; a corpse camera that holds still, a spectator's orbit and
     /// a rider's seat look are not the holder's aim and stay as they are.
     /// Yaw and pitch share one budget in proportion to what each has left;
     /// under a wide sweep — the target off to the side or behind — a modest
@@ -844,6 +854,16 @@ impl Controls {
     /// stays level instead of reading as "looking up first". A target well
     /// above or below eye level still gets its full proportional share.
     pub fn advance_view_steer(&mut self, seconds: f32, eye: Option<glam::Vec3>) {
+        if !seconds.is_finite() || seconds <= 0.0 {
+            return;
+        }
+        if let Some(steer) = &mut self.view_steer {
+            steer.left -= seconds;
+            if steer.left < -1e-5 || self.death_view {
+                self.view_steer = None;
+                return;
+            }
+        }
         let Some(steer) = self.view_steer else {
             return;
         };
@@ -867,19 +887,7 @@ impl Controls {
         let (want_yaw, want_pitch) = angles(to.normalize(), glam::Vec3::Y);
         let dyaw = wrap(want_yaw - self.yaw);
         let dpitch = want_pitch - self.pitch;
-        // While sweeping a wide yaw — the target off to the side or behind —
-        // hold the view level: a long horizontal pan that also drifts up or
-        // down reads as turning away ("it looked up first"). The vertical
-        // correction is held back over the wide part of the turn and ramps in
-        // over the last quarter; only a modest correction is suppressed — a
-        // target well above or below eye level still gets its full share.
-        let around = ((dyaw.abs() - FRAC_PI_4) / FRAC_PI_4).clamp(0.0, 1.0);
-        let modest = (FRAC_PI_6 - dpitch.abs()).max(0.0) / FRAC_PI_6;
-        let gain = 1.0 - around * modest;
-        let dpitch_eff = dpitch * gain;
-        // Turn the look as one direction: both axes share the frame's budget
-        // in proportion to what each has left. At these magnitudes the 2D
-        // norm of the deltas approximates the true angular distance.
+        let dpitch_eff = dpitch;
         let total = (dyaw * dyaw + dpitch_eff * dpitch_eff).sqrt();
         let step = steer.rate.to_radians() * seconds.min(0.25);
         if total <= step {
@@ -1802,7 +1810,12 @@ impl Controls {
         };
         // A rule's temporary dolly (`steer_view`'s `fov_delta`) rides the
         // pull: it clears with it, and the shown FOV ramps back on its own.
-        let Some(steer) = self.view_steer.as_ref().filter(|s| s.fov_delta != 0.0) else {
+        let Some(steer) = self.view_steer.as_ref().filter(|s| {
+            s.fov_delta != 0.0
+                && !self.death_view
+                && self.observer.is_none()
+                && self.seat_look().is_none()
+        }) else {
             return base;
         };
         (base + steer.fov_delta).clamped(ZOOM_FOV_RANGE.0, 140.0)
@@ -1997,7 +2010,7 @@ mod tests {
         // From the origin toward +X: yaw 90 degrees, level. A quarter turn a
         // second takes two seconds to get there; frames stay under the long-
         // frame clamp so each counts in full.
-        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 45.0, 1.0, 0.0);
+        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 45.0, 1.0, 0.0, 60.0);
         for _ in 0..10 {
             c.advance_view_steer(0.1, Some(glam::Vec3::ZERO));
         }
@@ -2016,7 +2029,7 @@ mod tests {
         );
         // The pitch climbs toward a point straight up at its own rate.
         let mut c = Controls::default();
-        c.steer_view(Some(glam::Vec3::new(0.0, 10.0, 0.0)), 90.0, 1.0, 0.0);
+        c.steer_view(Some(glam::Vec3::new(0.0, 10.0, 0.0)), 90.0, 1.0, 0.0, 60.0);
         for _ in 0..5 {
             c.advance_view_steer(0.1, Some(glam::Vec3::ZERO));
         }
@@ -2035,7 +2048,13 @@ mod tests {
         let mut c = Controls::default();
         // 30 degrees of yaw to go, only ~1 of pitch. A per-axis cap would
         // finish the pitch in one frame and leave the yaw sweeping alone.
-        c.steer_view(Some(glam::Vec3::new(5.0, 0.175, -8.660254)), 45.0, 1.0, 0.0);
+        c.steer_view(
+            Some(glam::Vec3::new(5.0, 0.175, -8.660254)),
+            45.0,
+            1.0,
+            0.0,
+            60.0,
+        );
         let want_pitch =
             (0.175_f32 / (5.0_f32 * 5.0 + 0.175 * 0.175 + 8.660254 * 8.660254).sqrt()).asin();
         c.advance_view_steer(0.1, Some(glam::Vec3::ZERO));
@@ -2056,31 +2075,23 @@ mod tests {
     /// sweep closes, so the pull never reads as "looking up first". The pan
     /// runs at (nearly) full rate and settles dead on the target.
     #[test]
-    fn steer_view_holds_level_while_sweeping_around() {
+    fn steer_view_expires_without_a_clear_and_restores_grip_and_fov() {
         let mut c = Controls::default();
-        c.pitch = -0.1; // looking a little down at the ground
-        // Dead behind, at eye level: ~180 degrees of yaw to sweep and only
-        // 5.7 of pitch to correct.
-        c.steer_view(Some(glam::Vec3::new(0.0, 0.0, 10.0)), 45.0, 1.0, 0.0);
-        let step = (45.0_f32).to_radians() * 0.1;
+        c.steer_view(Some(glam::Vec3::X), 45.0, 0.1, -20.0, 0.2);
         c.advance_view_steer(0.1, Some(glam::Vec3::ZERO));
-        // The sweep runs at the full rate...
-        assert!((c.yaw + step).abs() < 1e-4, "{}", c.yaw);
-        // ...while the vertical correction is held back to a fraction of what
-        // the plain proportional turn would spend on it in that frame.
-        let plain = 0.1 * step / (PI * PI + 0.1 * 0.1).sqrt();
-        assert!(c.pitch - (-0.1) < 0.25 * plain, "{}", c.pitch);
-        // ...and it settles once the sweep closes: dead on him at eye level.
-        for _ in 0..60 {
-            c.advance_view_steer(0.1, Some(glam::Vec3::ZERO));
-        }
-        assert!(wrap(c.yaw - PI).abs() < 1e-4, "{}", c.yaw);
-        assert!(c.pitch.abs() < 1e-4, "{}", c.pitch);
+        assert!(c.view_steer.is_some());
+        c.advance_view_steer(0.2, None); // Expiry also advances without a body/eye.
+        assert!(c.view_steer.is_none());
+        assert_eq!(c.steer_grip(), 1.0);
+        let yaw = c.yaw;
+        c.advance_view_steer(0.1, Some(glam::Vec3::ZERO));
+        assert_eq!(c.yaw, yaw);
     }
+
     #[test]
     fn steer_view_clamps_long_frames_and_clears_cleanly() {
         let mut c = Controls::default();
-        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 90.0, 1.0, 0.0);
+        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 90.0, 1.0, 0.0, 60.0);
         // A long frame counts at most a quarter second of turn (22.5 degrees
         // here), so a stall never yanks the look.
         c.advance_view_steer(5.0, Some(glam::Vec3::ZERO));
@@ -2090,18 +2101,20 @@ mod tests {
             c.yaw
         );
         // A clear leaves the look exactly where it is.
-        c.steer_view(None, 0.0, 1.0, 0.0);
+        c.steer_view(None, 0.0, 1.0, 0.0, 60.0);
         let (yaw, pitch) = (c.yaw, c.pitch);
         c.advance_view_steer(1.0, Some(glam::Vec3::ZERO));
         assert_eq!((c.yaw, c.pitch), (yaw, pitch));
     }
     #[test]
     fn steer_view_leaves_a_held_corpse_camera_alone() {
-        let mut c = Controls::default();
-        c.yaw = 0.3;
-        c.pitch = -0.2;
-        c.death_view = true;
-        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 90.0, 1.0, 0.0);
+        let mut c = Controls {
+            yaw: 0.3,
+            pitch: -0.2,
+            death_view: true,
+            ..Default::default()
+        };
+        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 90.0, 1.0, 0.0, 60.0);
         c.advance_view_steer(1.0, Some(glam::Vec3::ZERO));
         assert_eq!((c.yaw, c.pitch), (0.3, -0.2));
     }
@@ -2119,7 +2132,7 @@ mod tests {
         });
         assert!((c.yaw - 0.2).abs() < 1e-6, "{}", c.yaw);
         // Pulled at half grip: the same look turns it only halfway...
-        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 45.0, 0.5, 0.0);
+        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 45.0, 0.5, 0.0, 60.0);
         let y = c.yaw;
         c.action(&GameAction::Look {
             yaw: 0.2,
@@ -2127,7 +2140,7 @@ mod tests {
         });
         assert!((c.yaw - (y + 0.1)).abs() < 1e-6, "{}", c.yaw);
         // ...and a clear restores the full turn.
-        c.steer_view(None, 0.0, 1.0, 0.0);
+        c.steer_view(None, 0.0, 1.0, 0.0, 60.0);
         let y = c.yaw;
         c.action(&GameAction::Look {
             yaw: 0.2,
@@ -2142,7 +2155,7 @@ mod tests {
         c.set_fov_prefs(90.0, 45.0);
         // A stale or hostile notice asking for zero grip gets the floor:
         // looking away must always stay possible.
-        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 45.0, 0.0, 0.0);
+        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 45.0, 0.0, 0.0, 60.0);
         let y = c.yaw;
         c.action(&GameAction::Look {
             yaw: 0.2,
@@ -2161,20 +2174,32 @@ mod tests {
         let base = c.target_fov();
         // A stale notice asking for a far dolly gets clamped to its range
         // floor (-30 degrees)...
-        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 45.0, 1.0, -90.0);
+        c.steer_view(
+            Some(glam::Vec3::new(10.0, 0.0, 0.0)),
+            45.0,
+            1.0,
+            -90.0,
+            60.0,
+        );
         assert!(
             (c.target_fov() - (base - 30.0)).abs() < 1e-6,
             "{}",
             c.target_fov()
         );
         // ...and a normal one applies exactly, reverting on the clear.
-        c.steer_view(Some(glam::Vec3::new(10.0, 0.0, 0.0)), 45.0, 1.0, -20.0);
+        c.steer_view(
+            Some(glam::Vec3::new(10.0, 0.0, 0.0)),
+            45.0,
+            1.0,
+            -20.0,
+            60.0,
+        );
         assert!(
             (c.target_fov() - (base - 20.0)).abs() < 1e-6,
             "{}",
             c.target_fov()
         );
-        c.steer_view(None, 0.0, 1.0, 0.0);
+        c.steer_view(None, 0.0, 1.0, 0.0, 60.0);
         assert_eq!(c.target_fov(), base);
     }
     fn shooter_camera() -> bri_content::camera::CameraProfile {

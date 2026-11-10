@@ -745,6 +745,7 @@ pub enum Notice {
     /// looking away a struggle) and `fov_delta` dollies their camera in or
     /// out — both temporary: the clear restores them with the pull.
     SteerView {
+        seconds: f32,
         at: Option<[f32; 3]>,
         rate: f32,
         grip: f32,

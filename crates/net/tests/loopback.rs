@@ -192,7 +192,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 on_fire: Some(bri_weapons::OnFire::Tool(tool)),
                 sport: None,
                 riding_image: None,
-                aim_lock_axis: None,
+                aim_lock: None,
             },
         );
         items.insert(

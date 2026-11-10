@@ -442,7 +442,9 @@ fn authored_vehicle_presentation_offscreen() -> Result<()> {
             for (hand, hold) in holds.iter().enumerate() {
                 if definition.hands.node(hand).is_some() {
                     ensure!(
-                        hold.is_some_and(|h| h.position.is_finite() && h.turn.is_finite()),
+                        hold.is_some_and(
+                            |h| h.position.is_some_and(|p| p.is_finite()) && h.turn.is_finite()
+                        ),
                         "missing authored grip"
                     );
                 }

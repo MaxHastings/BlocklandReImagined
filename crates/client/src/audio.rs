@@ -770,9 +770,10 @@ impl ClientAudio {
         self.enqueue(profile.into(), placement, profile, voice);
     }
     /// `stop_sound`: cut every instance of a rule-started profile playing
-    /// here, with a short fade so the cut doesn't click; queued cues and
+    /// here, with a short fade so the cut doesn't click; matching queued cues are cancelled and
     /// other profiles are untouched.
     pub fn stop_profile(&mut self, profile: &str) {
+        self.pending.retain(|(id, _, _)| id != profile);
         let Some(handles) = self.rule_sounds.remove(profile) else {
             return;
         };
@@ -1910,6 +1911,33 @@ impl WorldVolume {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stopping_a_profile_cancels_queued_and_active_instances_but_keeps_other_profiles()
+    -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let profile = crate::testing::audio::EVENT_SOUND;
+        audio.profile(profile, Placement::Listener);
+        audio.stop_profile(profile); // Same-frame play then stop must not start later.
+        audio.tick(0.01, Listener::default());
+        assert_eq!(audio.stats().started, 0);
+        audio.profile(profile, Placement::Listener);
+        audio.profile(crate::testing::audio::MUSIC_SOUND, Placement::Listener);
+        audio.tick(0.01, Listener::default());
+        assert!(audio.rule_sounds.contains_key(profile));
+        let before = audio.stats().started;
+        audio.stop_profile(profile);
+        audio.tick(0.1, Listener::default());
+        assert!(!audio.rule_sounds.contains_key(profile));
+        assert!(
+            audio
+                .rule_sounds
+                .contains_key(crate::testing::audio::MUSIC_SOUND)
+        );
+        assert_eq!(audio.stats().started, before);
+        Ok(())
+    }
 
     #[test]
     fn authored_speech_ends_on_completion_replacement_mute_and_session_exit() -> Result<()> {

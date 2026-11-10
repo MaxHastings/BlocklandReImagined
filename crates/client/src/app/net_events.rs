@@ -1008,6 +1008,7 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::SteerView {
+                            seconds,
                             at,
                             rate,
                             grip,
@@ -1018,6 +1019,7 @@ impl App {
                                 rate,
                                 grip,
                                 fov_delta,
+                                seconds,
                             );
                             continue;
                         }

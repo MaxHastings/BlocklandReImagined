@@ -1507,7 +1507,7 @@ impl ItemAssets {
             })
             .collect()
     }
-    /// The direction an image's `aim_lock_axis` points at in the frame of its
+    /// The direction an image's `aim_lock` points at in the frame of its
     /// hand mount when the arm is at rest: the axis through the image's source
     /// rotation and its model's `mountPoint`, undone, as [`bri_weapons::muzzle`]
     /// undoes them for a muzzle. None for an unknown image or a degenerate axis.

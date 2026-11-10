@@ -3,6 +3,7 @@ use bri_addon_import::{Options, import, porting};
 use std::path::PathBuf;
 
 const USAGE: &str = "Usage:
+  bri-import-addon native CO_LOCATED_FOLDER_OR_NATIVE_ZIP FRESH_OUTPUT_DIR
   bri-import-addon ADDON(.zip|folder) FRESH_OUTPUT_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--installed CONTENT_ROOT] [--version 1.0.0] [--json]
   bri-import-addon port ADDON(.zip|folder) FRESH_WORK_DIR [--reference V20_ROOT] [--core RECOVERED_SCRIPT.cs]... [--installed CONTENT_ROOT]
   bri-import-addon check-port WORK_DIR
@@ -39,6 +40,31 @@ lightmaps, through the converter that makes v20's own maps. `--v20` names a
 Blockland v20 folder for the textures and models the map borrows from it.";
 
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("native") {
+        let args: Vec<_> = std::env::args_os().skip(2).collect();
+        anyhow::ensure!(
+            args.len() == 2,
+            "Usage: bri-import-addon native CO_LOCATED_FOLDER_OR_NATIVE_ZIP FRESH_OUTPUT_DIR"
+        );
+        let source = PathBuf::from(&args[0]);
+        let out = PathBuf::from(&args[1]);
+        let mut rules = out.as_os_str().to_owned();
+        rules.push("-rules");
+        anyhow::ensure!(
+            !out.exists() && !PathBuf::from(rules).exists(),
+            "Native output and its rules stage must be fresh"
+        );
+        if source.is_dir() {
+            bri_package::addon::stage(&source, &out)?;
+        } else {
+            bri_package::classic::unpack_native_zip(&source, &out)?;
+        }
+        println!(
+            "Native Add-On staged without conversion or execution: {}",
+            out.display()
+        );
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("map-audio") {
         let args = std::env::args_os().skip(2).collect::<Vec<_>>();
         if args.len() != 2 {

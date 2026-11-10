@@ -142,6 +142,7 @@ mod tests {
 
     fn declaration(value: serde_json::Value) -> StateKey {
         StateKey {
+            exported: false,
             default: value,
             visible: Visible::default(),
             persist: false,

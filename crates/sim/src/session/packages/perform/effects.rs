@@ -226,10 +226,9 @@ impl Perform for ops::Sound {
     }
 }
 impl Perform for ops::StopSound {
-    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let ops::StopSound { player, profile } = self;
-        ensure!(session.peers.contains_key(&player), "No such player");
-        // A control, not a cue: it consumes no budget (like `steer_view`).
+        session.take_presentation(cx.package, player)?;
         session.notify(player, Notice::StopSound { profile });
         Ok(())
     }

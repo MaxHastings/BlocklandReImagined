@@ -107,7 +107,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         on_fire: None,
         sport: None,
         riding_image: None,
-        aim_lock_axis: None,
+        aim_lock: None,
     };
     let item = bri_weapons::Item {
         id: ROCKET.into(),

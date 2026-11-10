@@ -63,12 +63,14 @@ impl ScriptOp for SetAvatarParts {
 pub struct SetAvatarUnlit {
     pub player: u64,
     pub material: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 }
 impl ScriptOp for SetAvatarUnlit {
     const CAPABILITY: &str = "player";
     const NAME: &str = "set_avatar_unlit";
     fn bounded(&self) -> bool {
-        !self.material.is_empty() && self.material.len() <= 32 && self.material.is_ascii()
+        !self.material.is_empty() && self.material.len() <= 32 && self.material.is_ascii() && !self.material.chars().any(char::is_control)
     }
 }
 
@@ -846,9 +848,8 @@ impl ScriptOp for KickView {
 /// Ease a player's own view toward a world point and hold it there while
 /// active: an Add-On drawing their gaze at something (an entity that wants
 /// to be looked at), turning it at most `rate` degrees a second. The client
-/// recomputes the direction from its own eye each frame, so a moving target
-/// needs no re-aiming by the host; player input competes with the pull and
-/// wins while they look away on purpose. No point clears it, leaving the
+/// recomputes the direction from its own eye each frame, so movement of the eye
+/// needs no re-aiming by the host; moving targets require a refreshed point; player input remains active alongside the bounded pull. No point clears it, leaving the
 /// view exactly where it is. While active, `grip` scales their look
 /// sensitivity — a heavy aim that makes looking away a struggle — and
 /// `fov_delta` dollies their camera in or out; both are temporary, restored
@@ -856,6 +857,9 @@ impl ScriptOp for KickView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SteerView {
     pub player: u64,
+    /// Lease duration; refresh before expiry to continue. A clear needs no renewal.
+    #[serde(default = "steer_seconds_default")]
+    pub seconds: f32,
     /// The world point to draw their gaze toward; `None` clears the pull.
     pub at: Option<[f32; 3]>,
     /// How fast the pull turns the view, degrees a second (0 to 180).
@@ -870,6 +874,8 @@ pub struct SteerView {
     #[serde(default)]
     pub fov_delta: f32,
 }
+fn steer_seconds_default() -> f32 { 1.0 }
+fn default_enabled() -> bool { true }
 fn steer_grip_default() -> f32 {
     1.0
 }
@@ -877,7 +883,8 @@ impl ScriptOp for SteerView {
     const CAPABILITY: &str = "player";
     const NAME: &str = "steer_view";
     fn bounded(&self) -> bool {
-        self.at.is_none_or(|p| finite(&p))
+        self.seconds.is_finite() && (0.1..=60.0).contains(&self.seconds)
+            && self.at.is_none_or(|p| finite(&p))
             && self.rate.is_finite()
             && (0.0..=180.0).contains(&self.rate)
             && self.grip.is_finite()
@@ -1190,7 +1197,7 @@ mod steer_view_tests {
     #[test]
     fn rate_grip_and_fov_delta_are_bounded() {
         let op = |rate: f32, grip: f32, fov: f32| {
-            SteerView { player: 1, at: Some([0.0; 3]), rate, grip, fov_delta: fov }.bounded()
+            SteerView { player: 1, seconds: 1.0, at: Some([0.0; 3]), rate, grip, fov_delta: fov }.bounded()
         };
         assert!(op(45.0, 1.0, 0.0));
         assert!(op(6.0, 0.35, -18.0));

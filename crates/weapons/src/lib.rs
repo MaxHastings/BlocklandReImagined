@@ -1461,17 +1461,17 @@ pub struct Image {
     /// The light it gives off while mounted on a player (`hasLight`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub light: Option<ImageLight>,
-    /// While mounted on a player, lock this image's barrel — an axis in its
-    /// own model frame (a flashlight beam is `[0, 1, 0]`) — to where the
-    /// holder looks: each frame the holder's hand re-poses, its wrist turned
-    /// by just what lines that axis up with their view and clamped to a
-    /// wrist's range (`bri_content::hold::AIM_LOCK_MAX_TURN`), so a tool
-    /// whose grip sits tilted on the hand still aims straight ahead and free-
-    /// look never twists it through the arm. The model rides rigidly on the
-    /// hand in every view; nothing of it travels over the wire (the holder's
-    /// look already does). None leaves the image as authored.
+    /// Cosmetic wrist alignment. The authored model axis follows action aim,
+    /// within its declared maximum turn; this does not change authoritative hits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aim_lock_axis: Option<[f32; 3]>,
+    pub aim_lock: Option<ImageAimLock>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageAimLock {
+    pub axis: [f32; 3],
+    /// Maximum wrist turn from the animated pose, degrees (0..180).
+    pub max_degrees: f32,
 }
 fn light_anchor_is_default(offset: &[f32; 3]) -> bool {
     *offset == [0.; 3]
@@ -4605,9 +4605,11 @@ impl Pack {
                 "Invalid image rope {id}: a projectile of the pack, speed 1 to 1000"
             );
             ensure!(
-                image.aim_lock_axis.is_none_or(|a| {
-                    a.iter().all(|v| v.is_finite())
-                        && (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]) > 1e-6
+                image.aim_lock.is_none_or(|a| {
+                    a.axis.iter().all(|v| v.is_finite())
+                        && a.axis.iter().map(|v| v * v).sum::<f32>().is_finite()
+                        && a.axis.iter().map(|v| v * v).sum::<f32>() > 1e-6
+                        && (0.0..=180.0).contains(&a.max_degrees)
                 }),
                 "Invalid aim lock axis of image {id}: finite and not zero"
             );

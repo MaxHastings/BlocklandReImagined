@@ -607,10 +607,8 @@ pub struct Snapshot {
     pub tethers: Vec<TetherView>,
     /// The Add-On packages loaded in this session (`package_loaded()`): their ids.
     pub package_ids: Vec<String>,
-    /// Other Add-Ons' server-visible per-player state, for `state_of()`: by
-    /// package id, then peer id, then key. Only keys the author marked visible
-    /// "server" appear — owner- and everyone-visible values stay private to
-    /// their own package's client sync.
+    /// Explicitly exported per-player state of other Add-Ons, indexed by
+    /// package, player and key. Client visibility never grants export access.
     pub peer_state: BTreeMap<String, BTreeMap<u64, BTreeMap<String, serde_json::Value>>>,
 }
 impl Snapshot {
@@ -1709,10 +1707,7 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
-    // Cross-package introspection (round 42's flashlight port needed neither;
-    // the walkie-morse gating of round 43 did): which Add-Ons are loaded in
-    // this session at all, and what per-player state their authors marked
-    // visible "server". Read-only queries like `players()`; no capability.
+    // Read-only feature detection and explicitly exported state.
     engine.register_fn("package_loaded", |id: &str| {
         with(|i| Ok(i.snapshot.package_ids.iter().any(|p| p == id)))
     });
@@ -3960,8 +3955,19 @@ fn register_presentation(engine: &mut Engine) {
         push(Op::SetAvatarUnlit(ops::SetAvatarUnlit {
             player: id(&player)?,
             material: material.to_owned(),
+            enabled: true,
         }))
     });
+    engine.register_fn(
+        "set_avatar_unlit",
+        |player: Dynamic, material: &str, enabled: bool| {
+            push(Op::SetAvatarUnlit(ops::SetAvatarUnlit {
+                player: id(&player)?,
+                material: material.to_owned(),
+                enabled,
+            }))
+        },
+    );
     // A body's dress: #{ skins: #{ face: "face_3.png", shirt: "shirt_1.png" },
     // scale: 1.12 }, or () for the body's own again.
     engine.register_fn("set_body_dress", |player: Dynamic, look: Dynamic| {
@@ -4266,6 +4272,7 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("steer_view", |player: Dynamic| {
         push(Op::SteerView(ops::SteerView {
             player: id(&player)?,
+            seconds: 1.0,
             at: None,
             rate: 0.0,
             grip: 1.0,
@@ -4280,6 +4287,7 @@ fn register_presentation(engine: &mut Engine) {
             };
             push(Op::SteerView(ops::SteerView {
                 player: id(&player)?,
+                seconds: 1.0,
                 at: Some(vector(&arr)?),
                 rate: number(&rate)? as f32,
                 grip: 1.0,
@@ -4295,10 +4303,32 @@ fn register_presentation(engine: &mut Engine) {
             };
             push(Op::SteerView(ops::SteerView {
                 player: id(&player)?,
+                seconds: 1.0,
                 at: Some(vector(&arr)?),
                 rate: number(&rate)? as f32,
                 grip: number(&grip)? as f32,
                 fov_delta: number(&fov_delta)? as f32,
+            }))
+        },
+    );
+    engine.register_fn(
+        "steer_view",
+        |player: Dynamic,
+         at: Dynamic,
+         rate: Dynamic,
+         grip: Dynamic,
+         fov_delta: Dynamic,
+         seconds: Dynamic| {
+            let arr = at
+                .try_cast::<Array>()
+                .ok_or_else(|| Box::<EvalAltResult>::from("a point to look at is [x, y, z]"))?;
+            push(Op::SteerView(ops::SteerView {
+                player: id(&player)?,
+                at: Some(vector(&arr)?),
+                rate: number(&rate)? as f32,
+                grip: number(&grip)? as f32,
+                fov_delta: number(&fov_delta)? as f32,
+                seconds: number(&seconds)? as f32,
             }))
         },
     );

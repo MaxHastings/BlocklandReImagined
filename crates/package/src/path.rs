@@ -61,7 +61,9 @@ pub fn inside(root: &Path, path: &str) -> Result<PathBuf, String> {
                 ));
             }
             Ok(_) => {}
-            Err(_) => break,
+            // A missing parent is valid for a staged write, but the remaining
+            // segments still belong to the returned path.
+            Err(_) => {}
         }
     }
     Ok(at)
@@ -70,6 +72,15 @@ pub fn inside(root: &Path, path: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_parents_do_not_truncate_a_staged_path() {
+        let root = std::env::temp_dir().join(format!("bri-missing-path-{}", std::process::id()));
+        assert_eq!(
+            inside(&root, "new/assets/model.json").unwrap(),
+            root.join("new/assets/model.json")
+        );
+    }
 
     #[test]
     fn unsafe_names_are_refused() {

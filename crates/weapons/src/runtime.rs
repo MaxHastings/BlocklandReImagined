@@ -945,7 +945,7 @@ pub struct Actor {
     /// flashlight worn with `keep: true`): re-mounted whenever a switch or
     /// put-away empties it; an akimbo gun's own left image takes over while
     /// held, and death, a put-away of everything and respawn take it off.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     kept_left: Option<NextImage>,
     /// The grenade whose fuse is burning in the hand ([`crate::Cook`]).
     #[serde(default)]

@@ -334,27 +334,27 @@ pub fn build_body_fits(input: BodyFitInput<'_>) -> BodyFits {
 /// A seat hand target: where a rider's hand reaches (`position`, world), and
 /// how far its grip node has turned since rest (`turn`, world frame) so the
 /// hand can follow — identity for targets without a named node to turn with
-/// (authored points, gunner grips). A NaN `position` skips the reach: the
+/// (authored points, gunner grips). An absent `position` skips the reach: the
 /// hand stays where its animation puts it and only turns
 /// ([`Self::turn_only`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HandHold {
-    pub position: Vec3,
+    pub position: Option<Vec3>,
     pub turn: Quat,
 }
 impl HandHold {
     /// A target with no grip node to turn with.
     pub fn position_only(position: Vec3) -> Self {
         Self {
-            position,
+            position: Some(position),
             turn: Quat::IDENTITY,
         }
     }
     /// A wrist turn with no reach target: the arm keeps its animation and
-    /// only the hand turns (`position` NaN skips the reach).
+    /// only the hand turns (`position: None` skips the reach).
     pub fn turn_only(turn: Quat) -> Self {
         Self {
-            position: Vec3::NAN,
+            position: None,
             turn,
         }
     }
@@ -393,10 +393,10 @@ pub fn apply_body_fitting(nodes: &mut [Mat4], input: BodyFittingInput<'_>) {
         if inverse.is_finite() && input.parents.len() == nodes.len() {
             for n in 0..2 {
                 if let (Some(end), Some(hold)) = (ends[n], input.holds.seat[n]) {
-                    // A NaN position skips the reach: a turn-only hold leaves
+                    // An absent position skips the reach: a turn-only hold leaves
                     // the arm exactly as animated and turns only the wrist.
-                    if hold.position.is_finite() {
-                        let local_target = inverse.transform_point3(hold.position);
+                    if let Some(position) = hold.position.filter(|p| p.is_finite()) {
+                        let local_target = inverse.transform_point3(position);
                         crate::hold::reach(
                             input.parents,
                             nodes,
@@ -875,7 +875,7 @@ mod tests {
                     holds: BodyHolds {
                         seat: targets.map(|v| {
                             Some(HandHold {
-                                position: frame.transform_point3(v),
+                                position: Some(frame.transform_point3(v)),
                                 turn,
                             })
                         }),
