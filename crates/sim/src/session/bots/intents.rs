@@ -103,10 +103,10 @@ impl Session {
     ) -> Result<()> {
         self.check_rest_rules_bot(package, bot)?;
         if let Some(BotIntent::Follow { leader, .. }) = &intent {
-            ensure!(
-                *leader != bot && self.peers.contains_key(leader),
-                "No player {leader} to follow"
-            );
+            // A leader that is gone by the time this runs simply lets the
+            // follow go (`bot_follow_intent`); failing here would abort the
+            // whole script call over a target that died mid-tick.
+            ensure!(*leader != bot, "A bot cannot follow itself");
         }
         let tick = self.simulation.state().tick;
         let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;

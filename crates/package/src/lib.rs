@@ -8,6 +8,7 @@
 //! by [`id::ContentId`] (`namespace:kind/name`).
 //!
 //! Format: `docs/architecture/packages.md`.
+pub mod addon;
 pub mod capability;
 pub mod classic;
 pub mod defaults;

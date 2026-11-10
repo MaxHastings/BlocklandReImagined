@@ -941,6 +941,12 @@ pub struct Actor {
     /// gets a round back, by [`slot_key`]. Host bookkeeping, not replicated.
     #[serde(skip)]
     cool_at: BTreeMap<String, u64>,
+    /// The image to keep in the left hand across tool switches (an off-hand
+    /// flashlight worn with `keep: true`): re-mounted whenever a switch or
+    /// put-away empties it; an akimbo gun's own left image takes over while
+    /// held, and death, a put-away of everything and respawn take it off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kept_left: Option<NextImage>,
     /// The grenade whose fuse is burning in the hand ([`crate::Cook`]).
     #[serde(default)]
     cook: Option<Cooking>,
@@ -1188,8 +1194,11 @@ enum Advance {
 pub const IMAGE_SLOTS: usize = 4;
 /// Slots 0 and 1 are the hands.
 pub const HAND_SLOTS: usize = 2;
-/// Slots worn on the body, which tool changes leave alone.
-pub const WORN_SLOTS: std::ops::Range<usize> = HAND_SLOTS..IMAGE_SLOTS;
+/// Slots `take_worn` strips when a body dies or respawns: everything but the
+/// right hand. Slot 1 (the left) counts because a kept off-hand image parked
+/// there (`wear(…, keep)`) re-keeps itself on death and would otherwise
+/// outlive its owner into respawn.
+pub const WORN_SLOTS: std::ops::Range<usize> = 1..IMAGE_SLOTS;
 pub struct WeaponsWorld {
     animation_serial: u64,
     pub pack: Arc<Pack>,
@@ -1642,6 +1651,7 @@ impl WeaponsWorld {
                 reserve: BTreeMap::new(),
                 reload: None,
                 cool_at: BTreeMap::new(),
+                kept_left: None,
                 cook: None,
                 cues: Vec::new(),
                 emote: None,
@@ -1878,7 +1888,12 @@ impl WeaponsWorld {
                     .map(|_| a.spray);
                 self.change_image(id, &mut a, &image, paint)
             }
-            None => self.unmount(id, &mut a),
+            None => {
+                self.unmount(id, &mut a);
+                // The kept off-hand image (a flashlight) comes back with the
+                // hand emptied; nothing else does.
+                self.rekeep_left(id, &mut a);
+            }
         }
         a.selected = slot;
         self.switch_magazine(id, &mut a);
@@ -1961,7 +1976,24 @@ impl WeaponsWorld {
             e.paint = next.paint;
         }
         if let Some(left) = self.left_image(&next.image) {
+            // The akimbo gun's own left image takes over the off hand while
+            // held; the kept one comes back when it is put away.
             self.mount(id, a, &left, 1);
+        } else {
+            self.rekeep_left(id, a);
+        }
+    }
+    /// The kept left-hand image ([`Actor::kept_left`]) back in after a
+    /// switch or put-away emptied it: an off-hand flashlight. An akimbo
+    /// gun's own left image wins while held.
+    fn rekeep_left(&mut self, id: ActorId, a: &mut Actor) {
+        if let Some(kept) = a.kept_left.clone()
+            && a.images[1].is_none()
+        {
+            self.mount(id, a, &kept.image, 1);
+            if let Some(e) = &mut a.images[1] {
+                e.paint = kept.paint;
+            }
         }
     }
     /// The image an image brings into the left hand ([`Image::left_image`]).
@@ -2786,8 +2818,14 @@ impl WeaponsWorld {
         if let Some(image) = image {
             self.mount(id, &mut a, &image, 0);
             if let Some(left) = self.left_image(&image) {
+                // The akimbo gun's own left image takes over the off hand
+                // while held; the kept one comes back when it is put away.
                 self.mount(id, &mut a, &left, 1);
+            } else {
+                self.rekeep_left(id, &mut a);
             }
+        } else {
+            self.rekeep_left(id, &mut a);
         }
         self.actors.insert(id, a);
         Ok(())
@@ -2870,29 +2908,41 @@ impl WeaponsWorld {
             }
         }
     }
-    /// `Player::mountImage(%image, %slot)` for a worn slot (2 or 3) from an
-    /// Add-On's rules: a carried flag on the back. `paint` tints it with a
+    /// `Player::mountImage(%image, %slot)` for a worn slot (1, 2 or 3) from
+    /// an Add-On's rules: the off hand (an akimbo gun's left, or a kept
+    /// flashlight), a carried flag on the back. `paint` tints it with a
     /// palette colour (a team's). `None` takes it off. Worn images stay
-    /// through tool changes; death and respawn take them off.
+    /// through tool changes; death and respawn take them off. With `keep`,
+    /// an image in slot 1 comes back after every switch that empties the
+    /// hand; without it, a slot-1 mount is just for as long as it is held.
     pub fn wear(
         &mut self,
         id: ActorId,
         slot: u8,
         image: Option<&str>,
         paint: Option<u8>,
+        keep: bool,
     ) -> Result<()> {
         ensure!(
             self.events.len() < 8192,
             "Command event budget; advance/drain before retry"
         );
+        // Slot 1 is the kept off-hand (`kept_left`): as wearable by a rule as
+        // the back slots. The check used to start at HAND_SLOTS and rejected
+        // it at perform time after script validation had already accepted it.
         ensure!(
             WORN_SLOTS.contains(&usize::from(slot)),
-            "Worn image slots are 2 and 3"
+            "Worn image slots are 1, 2 and 3"
         );
         if let Some(image) = image {
             ensure!(self.pack.images.contains_key(image), "Unknown image");
         }
         let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        if slot == 1 && (image.is_none() || keep) {
+            // Taking the kept image off, or keeping another in its place,
+            // ends the keeping either way.
+            a.kept_left = None;
+        }
         if a.images[usize::from(slot)].take().is_some() {
             self.events.push(Event::Unmounted {
                 actor: id,
@@ -2903,6 +2953,12 @@ impl WeaponsWorld {
             self.mount(id, &mut a, image, slot);
             if let Some(e) = &mut a.images[usize::from(slot)] {
                 e.paint = paint;
+            }
+            if slot == 1 && keep {
+                a.kept_left = Some(NextImage {
+                    image: image.into(),
+                    paint,
+                });
             }
         }
         self.actors.insert(id, a);
@@ -2923,6 +2979,9 @@ impl WeaponsWorld {
                 });
             }
         }
+        // The kept off-hand image goes with them; its Add-On's `on_death`
+        // decides what becomes of it.
+        a.kept_left = None;
     }
     /// Empty both hands (tools away, a new tool, death).
     fn unmount(&mut self, id: ActorId, a: &mut Actor) {

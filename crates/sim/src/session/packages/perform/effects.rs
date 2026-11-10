@@ -225,6 +225,14 @@ impl Perform for ops::Sound {
         Ok(())
     }
 }
+impl Perform for ops::StopSound {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let ops::StopSound { player, profile } = self;
+        session.take_presentation(cx.package, player)?;
+        session.notify(player, Notice::StopSound { profile });
+        Ok(())
+    }
+}
 impl Perform for ops::WorldVolume {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;

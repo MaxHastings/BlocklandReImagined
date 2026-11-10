@@ -334,18 +334,28 @@ pub fn build_body_fits(input: BodyFitInput<'_>) -> BodyFits {
 /// A seat hand target: where a rider's hand reaches (`position`, world), and
 /// how far its grip node has turned since rest (`turn`, world frame) so the
 /// hand can follow — identity for targets without a named node to turn with
-/// (authored points, gunner grips).
+/// (authored points, gunner grips). An absent `position` skips the reach: the
+/// hand stays where its animation puts it and only turns
+/// ([`Self::turn_only`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HandHold {
-    pub position: Vec3,
+    pub position: Option<Vec3>,
     pub turn: Quat,
 }
 impl HandHold {
     /// A target with no grip node to turn with.
     pub fn position_only(position: Vec3) -> Self {
         Self {
-            position,
+            position: Some(position),
             turn: Quat::IDENTITY,
+        }
+    }
+    /// A wrist turn with no reach target: the arm keeps its animation and
+    /// only the hand turns (`position: None` skips the reach).
+    pub fn turn_only(turn: Quat) -> Self {
+        Self {
+            position: None,
+            turn,
         }
     }
 }
@@ -382,17 +392,19 @@ pub fn apply_body_fitting(nodes: &mut [Mat4], input: BodyFittingInput<'_>) {
         let ends = input.hands.map(|n| n.filter(|&i| i < nodes.len()));
         if inverse.is_finite() && input.parents.len() == nodes.len() {
             for n in 0..2 {
-                if let (Some(end), Some(hold)) = (ends[n], input.holds.seat[n])
-                    && hold.position.is_finite()
-                {
-                    let local_target = inverse.transform_point3(hold.position);
-                    crate::hold::reach(
-                        input.parents,
-                        nodes,
-                        end,
-                        ends[1 - n].or(input.eye),
-                        local_target,
-                    );
+                if let (Some(end), Some(hold)) = (ends[n], input.holds.seat[n]) {
+                    // An absent position skips the reach: a turn-only hold leaves
+                    // the arm exactly as animated and turns only the wrist.
+                    if let Some(position) = hold.position.filter(|p| p.is_finite()) {
+                        let local_target = inverse.transform_point3(position);
+                        crate::hold::reach(
+                            input.parents,
+                            nodes,
+                            end,
+                            ends[1 - n].or(input.eye),
+                            local_target,
+                        );
+                    }
                     if !hold.turn.abs_diff_eq(Quat::IDENTITY, 1e-6) {
                         follow_grip_turn(
                             input.parents,
@@ -863,7 +875,7 @@ mod tests {
                     holds: BodyHolds {
                         seat: targets.map(|v| {
                             Some(HandHold {
-                                position: frame.transform_point3(v),
+                                position: Some(frame.transform_point3(v)),
                                 turn,
                             })
                         }),
@@ -898,6 +910,72 @@ mod tests {
                 !turned[wrists[n]].abs_diff_eq(rested[wrists[n]], 1e-4),
                 "hand {n} did not turn"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fitting_turn_only_holds_turn_the_wrist_without_reaching() -> Result<()> {
+        let rig = crate::testing::avatar::rig();
+        let parents: Vec<_> = rig.shape.nodes.iter().map(|n| n.parent).collect();
+        let index = |name: &str| rig.shape.nodes.iter().position(|n| n.name == name).unwrap();
+        let ends = [index("Mount0"), index("Mount1")];
+        let arms = [index("RightArm"), index("LeftArm")];
+        let bind = crate::animation::sample(&rig.shape, None, 0.)?.nodes;
+        let frame = Mat4::from_scale_rotation_translation(
+            Vec3::splat(1.7),
+            Quat::from_rotation_z(0.4),
+            Vec3::new(2., 3., 4.),
+        );
+        // Far off where the hands sit: a finite position would reach there,
+        // a NaN one must not.
+        let displaced = ends.map(|i| bind[i].w_axis.truncate() + Vec3::new(0.5, -0.3, 0.2));
+        let world_rotation =
+            |nodes: &[Mat4], i: usize| (frame * nodes[i]).to_scale_rotation_translation().1;
+        for turn in [Quat::IDENTITY, Quat::from_rotation_y(0.6)] {
+            let mut nodes = bind.clone();
+            apply_body_fitting(
+                &mut nodes,
+                BodyFittingInput {
+                    parents: &parents,
+                    hands: ends.map(Some),
+                    eye: None,
+                    fits: None,
+                    right_socket_offset: Vec3::ZERO,
+                    model_transform: frame,
+                    holds: BodyHolds {
+                        seat: displaced.map(|_| Some(HandHold::turn_only(turn))),
+                        ..Default::default()
+                    },
+                },
+            );
+            for n in 0..2 {
+                // No reach: the hand stays where the animation put it, and so
+                // does the arm.
+                assert!(
+                    nodes[ends[n]]
+                        .w_axis
+                        .truncate()
+                        .abs_diff_eq(bind[ends[n]].w_axis.truncate(), 1e-6),
+                    "hand {n} reached"
+                );
+                assert!(
+                    nodes[arms[n]].abs_diff_eq(bind[arms[n]], 1e-6),
+                    "arm {n} moved"
+                );
+                if turn != Quat::IDENTITY {
+                    // ...but the wrist subtree turns, exactly, in the world.
+                    assert!(
+                        world_rotation(&nodes, ends[n])
+                            .abs_diff_eq(turn * world_rotation(&bind, ends[n]), 1e-5)
+                    );
+                } else {
+                    assert!(
+                        nodes[ends[n]].abs_diff_eq(bind[ends[n]], 1e-6),
+                        "identity turn changed the hand"
+                    );
+                }
+            }
         }
         Ok(())
     }

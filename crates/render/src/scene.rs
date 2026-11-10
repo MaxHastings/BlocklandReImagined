@@ -397,6 +397,8 @@ pub struct Material {
     /// white colour, `TSMesh` 0x63ac97), so the model's colour shift does not
     /// tint it.
     pub untinted: bool,
+    /// Texture alpha selects self-lit artwork over the ordinarily lit vertex paint.
+    pub emissive_overlay: bool,
     /// A baked lightmap ([`Material::images`] slot 8, read with the vertices'
     /// `lightmap_uv`) on a [`MaterialKind::Physical`] material, and how much
     /// it is multiplied by. It stands for the sun and ambient light, shadows
@@ -544,6 +546,7 @@ impl Material {
             temp_brick_flash: false,
             ignore_texture_alpha: false,
             untinted: false,
+            emissive_overlay: false,
             baked_lightmap: None,
             baked_exact: false,
             tint_mask: false,
@@ -1982,10 +1985,9 @@ impl GpuScene {
 /// an unlit material, or a brick vertex carrying the Glow colour FX (code
 /// bits 0..3 of `BrickFx::encode`, colour 3).
 fn emissive_geometry(materials: &[Material], vertices: &[SceneVertex]) -> bool {
-    materials
-        .iter()
-        .any(|m| matches!(m.kind, MaterialKind::Unlit | MaterialKind::UnlitOverlay))
-        || vertices.iter().any(glow_vertex)
+    materials.iter().any(|m| {
+        m.emissive_overlay || matches!(m.kind, MaterialKind::Unlit | MaterialKind::UnlitOverlay)
+    }) || vertices.iter().any(glow_vertex)
 }
 fn glow_vertex(v: &SceneVertex) -> bool {
     let code = v.fx[3];
@@ -4053,7 +4055,8 @@ impl SceneRenderer {
                         )) << 7
                         | u16::from(material.baked_exact) << 8
                         | u16::from(material.baked_exact && material.alpha == AlphaMode::Blend)
-                            << 9,
+                            << 9
+                        | u16::from(material.emissive_overlay) << 10,
                 ),
             ]);
             if let Some(groups) = material.parameters {

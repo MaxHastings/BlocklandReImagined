@@ -49,6 +49,9 @@ pub struct ContentPaths {
     pub brick_extras: Vec<(String, PathBuf)>,
     /// Each Add-On's print pack (`content_identity::print_providers`).
     pub print_extras: Vec<(String, PathBuf)>,
+    /// Each Add-On's full-screen image pack
+    /// (`content_identity::ui_image_providers`), for rules' `screen_image`.
+    pub ui_image_extras: Vec<(String, PathBuf)>,
     /// Each Add-On's bot kinds file (`content_identity::bot_providers`).
     pub bot_extras: Vec<(String, PathBuf)>,
     /// The base game's converted map bundle.
@@ -373,6 +376,7 @@ impl ContentPaths {
             brick_extras: bri_net::content_identity::brick_catalog_providers(&root, packages)?,
             bot_extras: bri_net::content_identity::bot_providers(&root, packages)?,
             print_extras: bri_net::content_identity::print_providers(&root, packages)?,
+            ui_image_extras: bri_net::content_identity::ui_image_providers(&root, packages)?,
             packages: packages.clone(),
             root,
             shared: Default::default(),
@@ -733,6 +737,10 @@ impl ClientContent {
         }
         for (dir, assets) in &paths.print_extras {
             install_print_icons(&mut schema, dir, assets);
+        }
+        let mut ui_pixels_left = bri_content::screen_image::ImagePack::MAX_SET_PIXELS;
+        for (dir, assets) in &paths.ui_image_extras {
+            install_ui_images(&mut schema, dir, assets, &mut ui_pixels_left);
         }
         // Add-On bricks are named, printed and wrenched like base ones.
         bri_sim::definitions::extend_catalog(&mut catalog, &paths.brick_extras)?;
@@ -1268,6 +1276,77 @@ pub(crate) fn print_icon_key(icon: &bri_content::brick_materials::Image) -> Opti
     let archive = icon.source.archive.as_deref()?.strip_suffix(".zip")?;
     let source = icon.source.path.strip_suffix(".png")?;
     Some(format!("{archive}/{source}").to_ascii_lowercase())
+}
+/// An Add-On's full-screen image pack (`assets/ui-images.json`): UI-pack keys
+/// for bitmaps the package stores on disk, so a rule's `screen_image` can name
+/// them. A frame that does not load leaves its key missing (the board shows
+/// what loaded); each failure is reported once (`crate::cosmetic`).
+use bri_content::screen_image::ImagePack as UiImagePack;
+
+fn install_ui_images(schema: &mut UiPack, dir: &str, assets: &Path, pixels_left: &mut u64) {
+    let pack = file(assets, "ui-images.json", INDEX_LIMIT)
+        .and_then(|path| read_json::<UiImagePack>(&path, INDEX_LIMIT));
+    let pack = match pack {
+        Ok(pack) => pack,
+        Err(error) => {
+            let label = bri_package::library::add_on_label(assets.parent().unwrap_or(assets), dir);
+            crate::cosmetic::add_on_fault(&label, "ui-images.json", format!("{error:#}"));
+            return;
+        }
+    };
+    let owner = assets
+        .parent()
+        .and_then(|p| fs::read(p.join("package.json")).ok())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["id"].as_str().map(str::to_owned));
+    let Some(owner) = owner.filter(|id| bri_package::id::namespace_problem(id).is_none()) else {
+        crate::cosmetic::add_on_fault(dir, "ui-images.json", "Missing package identity");
+        return;
+    };
+    if let Err(error) = pack.validate(&owner) {
+        crate::cosmetic::add_on_fault(dir, "ui-images.json", error);
+        return;
+    }
+    if pack.pixels() > *pixels_left {
+        crate::cosmetic::add_on_fault(
+            dir,
+            "ui-images.json",
+            "Enabled UI image indexes exceed 64 million pixels",
+        );
+        return;
+    }
+    *pixels_left -= pack.pixels();
+    for entry in &pack.images {
+        let loaded = file(assets, &entry.file, INDEX_LIMIT).and_then(|path| {
+            ensure!(
+                !schema.images.contains_key(&entry.key),
+                "Duplicate UI image key {}",
+                entry.key
+            );
+            let bytes = fs::read(&path)?;
+            entry.verify(&bytes)?;
+            Ok(path)
+        });
+        match loaded {
+            Ok(path) => {
+                schema.images.insert(
+                    entry.key.clone(),
+                    bri_ui::schema::ImageEntry {
+                        file: path.to_string_lossy().into_owned(),
+                        width: entry.width,
+                        height: entry.height,
+                        sha256: entry.sha256.clone(),
+                        source: format!("{dir}/{}", entry.file),
+                    },
+                );
+            }
+            Err(error) => {
+                let label =
+                    bri_package::library::add_on_label(assets.parent().unwrap_or(assets), dir);
+                crate::cosmetic::add_on_fault(&label, &entry.file, format!("{error:#}"));
+            }
+        }
+    }
 }
 /// Another package's selectable bricks join the brick menu under the
 /// category and subcategory they declare, with the icons the package stores

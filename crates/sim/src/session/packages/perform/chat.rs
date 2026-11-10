@@ -241,14 +241,14 @@ impl Perform for ops::ScreenFlash {
             color,
             seconds,
         } = self;
-        session.take_cue(package)?;
         let notice = Notice::Flash { color, seconds };
         match player {
             Some(player) => {
-                ensure!(session.peers.contains_key(&player), "No such player");
+                session.take_presentation(package, player)?;
                 session.notify(player, notice);
             }
             None => {
+                session.take_cue(package)?;
                 let everyone: Vec<OwnerId> = session.peers.keys().copied().collect();
                 for owner in everyone {
                     session.notify(owner, notice.clone());
@@ -262,14 +262,35 @@ impl Perform for ops::ScreenOverlay {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
         let ops::ScreenOverlay { player, overlay } = self;
-        session.take_cue(package)?;
         let notice = Notice::Overlay(overlay);
         match player {
             Some(player) => {
-                ensure!(session.peers.contains_key(&player), "No such player");
+                session.take_presentation(package, player)?;
                 session.notify(player, notice);
             }
             None => {
+                session.take_cue(package)?;
+                let everyone: Vec<OwnerId> = session.peers.keys().copied().collect();
+                for owner in everyone {
+                    session.notify(owner, notice.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+impl Perform for ops::ScreenImage {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let OpCall { package, .. } = cx;
+        let ops::ScreenImage { player, cue } = self;
+        let notice = Notice::ScreenImage(cue);
+        match player {
+            Some(player) => {
+                session.take_presentation(package, player)?;
+                session.notify(player, notice);
+            }
+            None => {
+                session.take_cue(package)?;
                 let everyone: Vec<OwnerId> = session.peers.keys().copied().collect();
                 for owner in everyone {
                     session.notify(owner, notice.clone());

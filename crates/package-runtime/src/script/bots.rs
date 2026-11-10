@@ -31,9 +31,9 @@ fn kind_map(k: &BotKindView) -> Dynamic {
 
 fn add_bot(game: Dynamic, options: Map) -> Fallible<INT> {
     for key in options.keys() {
-        if !["kind", "team", "name"].contains(&key.as_str()) {
+        if !["kind", "team", "name", "muted", "quiet"].contains(&key.as_str()) {
             return fail(format!(
-                "add_bot options are kind, team and name, not `{key}`"
+                "add_bot options are kind, team, name, muted and quiet, not `{key}`"
             ));
         }
     }
@@ -59,11 +59,24 @@ fn add_bot(game: Dynamic, options: Map) -> Fallible<INT> {
         None => None,
         Some(t) => games::optional_id(t)?,
     };
+    // Born already exempt from NPC reaction Add-Ons: no spawn-time hook
+    // can queue a line for it before its rules have run.
+    let muted = match options.get("muted") {
+        None => false,
+        Some(m) => m
+            .as_bool()
+            .map_err(|_| "add_bot `muted` is true or false")?,
+    };
+    let quiet = options.get("quiet").map_or(Ok(false), |v| {
+        v.as_bool().map_err(|_| "add_bot `quiet` is true or false")
+    })?;
     push(Op::AddBot(ops::AddBot {
         game: id(&game)?,
         team,
         kind,
         name,
+        muted,
+        quiet,
     }))
 }
 
@@ -181,9 +194,11 @@ pub(super) fn register(engine: &mut Engine) {
     // The most characters a bot's name has; `add_bot` keeps that many of
     // a longer one.
     engine.register_fn("bot_name_limit", || MAX_BOT_NAME_CHARS as i64);
-    // `add_bot(game, #{ kind, name, team })`: a bot of `kind` named `name`
-    // joins `game`, on `team` when given. It joins next, when the
-    // operations run; the rules hear it as a member who joined.
+    // `add_bot(game, #{ kind, name, team, muted })`: a bot of `kind`
+    // named `name` joins `game`, on `team` when given. It joins next,
+    // when the operations run; the rules hear it as a member who joined.
+    // With `muted: true` it is born already exempt from NPC reaction
+    // Add-Ons (their spawn-time hooks see the flag set).
     engine.register_fn("add_bot", add_bot);
     engine.register_fn("remove_bot", |bot: Dynamic| {
         push(Op::RemoveBot(ops::RemoveBot { bot: id(&bot)? }))
@@ -211,6 +226,14 @@ pub(super) fn register(engine: &mut Engine) {
         push(Op::RestBot(ops::RestBot {
             bot: id(&bot)?,
             rest,
+            locomotion: false,
+        }))
+    });
+    engine.register_fn("rest_bot", |bot: Dynamic, rest: bool, locomotion: bool| {
+        push(Op::RestBot(ops::RestBot {
+            bot: id(&bot)?,
+            rest,
+            locomotion,
         }))
     });
     // `obscure(x, y, z, radius, seconds)`: smoke bots cannot see through.
@@ -229,6 +252,36 @@ pub(super) fn register(engine: &mut Engine) {
         push(Op::DazeBot(ops::DazeBot {
             bot: id(&bot)?,
             seconds: float(&seconds)?,
+        }))
+    });
+    // `set_bot_voice_muted(bot, muted)`: NPC reaction Add-Ons skip its cues.
+    engine.register_fn("set_bot_voice_muted", |bot: Dynamic, muted: bool| {
+        push(Op::SetBotVoiceMute(ops::SetBotVoiceMute {
+            bot: id(&bot)?,
+            muted,
+        }))
+    });
+    // `set_bot_facing(bot, target)`: a rested bot keeps turning toward an
+    // object ("player:N", "vehicle:N" or "entity:N"), a point [x, y, z],
+    // or () to release the hold.
+    engine.register_fn("set_bot_facing", |bot: Dynamic, target: Dynamic| {
+        let target = if target.is_unit() {
+            None
+        } else if target.is_string() {
+            Some(ops::FacingTarget::Object(object_ref(&target)?))
+        } else {
+            let a = target.clone().try_cast::<Array>().ok_or_else(|| {
+                "a facing point is [x, y, z] or an object like \"vehicle:3\"".to_owned()
+            })?;
+            let at: Vec<f32> = a.iter().map(float).collect::<Fallible<_>>()?;
+            let [x, y, z] = at[..] else {
+                return fail("a facing point is [x, y, z]");
+            };
+            Some(ops::FacingTarget::Point([x, y, z]))
+        };
+        push(Op::SetBotFacing(ops::SetBotFacing {
+            bot: id(&bot)?,
+            target,
         }))
     });
 }

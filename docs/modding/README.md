@@ -187,3 +187,6 @@ and the status of each seam is in [seams.md](../architecture/seams.md).
 - **Elevated client code**: joining asks "Trust and join" before a
   server's sandboxed client code runs ([What players are asked to trust](trust.md)), but code asking for
   `net.http` or `files.addon_folder` is not offered to joiners yet.
+
+For assets and native host rules authored and distributed in one folder or ZIP,
+see [co-located Add-Ons](co-located-addons.md) and `packages/samples/sample-co-located`.

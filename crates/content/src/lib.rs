@@ -26,6 +26,7 @@ pub mod presentation;
 pub mod regions;
 pub mod scatter;
 pub mod scene;
+pub mod screen_image;
 pub mod screen_overlay;
 pub mod shape;
 pub mod strict;

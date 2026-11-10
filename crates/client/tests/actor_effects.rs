@@ -204,6 +204,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             light: None,
             paint_picker: false,
             scripts: Default::default(),
+            aim_lock: None,
         },
     )
 }

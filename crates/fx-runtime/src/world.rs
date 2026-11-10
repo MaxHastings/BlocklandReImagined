@@ -354,6 +354,8 @@ struct Source {
     next: f64,
     lifetime: f64,
     flare: f32,
+    /// A rule's dimming of this light (`set_image_light_flicker`): 1 steady, lower dims.
+    intensity: f32,
     /// Asleep: no view can see its particles ([`EffectsWorld::cull_sources`]),
     /// so it has none and emits none until one can.
     dormant: bool,
@@ -620,6 +622,7 @@ impl EffectsWorld {
                 previous: transform,
                 transform,
                 flare: options.flare_visibility,
+                intensity: 1.,
                 options,
                 rng,
                 age: 0.,
@@ -642,6 +645,21 @@ impl EffectsWorld {
             .get_mut(&handle)
             .context("Stale effect handle")?
             .transform = transform;
+        Ok(())
+    }
+    /// Set a source's light intensity (a rule's `set_image_light_flicker`): 1 is
+    /// steady, lower dims it. Non-finite or out-of-range values are clamped so a
+    /// bad script cannot black out the whole scene. Emitters ignore this.
+    pub fn set_source_intensity(&mut self, handle: EffectHandle, value: f32) -> Result<()> {
+        let v = if value.is_finite() {
+            value.clamped(0., 8.)
+        } else {
+            1.
+        };
+        self.sources
+            .get_mut(&handle)
+            .context("Stale effect handle")?
+            .intensity = v;
         Ok(())
     }
     /// A finite attachment may outlive its emission source through attached tails.
@@ -1761,9 +1779,10 @@ impl EffectsWorld {
             let def = &self.pack.library.lights[s.definition];
             let (color, radius) = def.sample(s.age as f32);
             // A painted source tints its light (an image light worn in a
-            // team's colour).
-            let color =
-                Vec3::from_array(color) * s.options.paint.map_or(Vec3::ONE, Vec3::from_array);
+            // team's colour), and a rule can dim it (`set_image_light_flicker`).
+            let color = Vec3::from_array(color)
+                * s.options.paint.map_or(Vec3::ONE, Vec3::from_array)
+                * s.intensity;
             if color.max_element() <= 0. {
                 continue;
             }

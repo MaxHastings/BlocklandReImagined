@@ -1764,6 +1764,8 @@ override SURFACE_GROUP:u32=0u;
     var pigment=display_color(albedo.rgb)*base_color;
     // A model texture with no translucent texel: texture times light alone.
     if (flags&4u)!=0u {pigment=display_color(albedo.rgb);}
+    // An explicit material policy: artwork emits; the underlying vertex paint stays lit.
+    let emissive_overlay=(flags&1024u)!=0u;
     if (flags&32u)!=0u {pigment=display_color(albedo.rgb)*base_color;}
     let decal=overlay;
     if decal {
@@ -1802,7 +1804,7 @@ override SURFACE_GROUP:u32=0u;
         let lit=min(display_color(textureSample(layer0,tiled,v.uv).rgb)*v.color.rgb*2.0,vec3<f32>(1.0));
         return vec4<f32>(fogged(lit,v.world_position),alpha);
     }
-    if material[0].x==7.0 || material[0].x==8.0 {
+    if (material[0].x==7.0 || material[0].x==8.0) && !emissive_overlay {
         return vec4<f32>(fogged(pigment,v.world_position),alpha);
     }
     if (u32(material[0].w)&256u)!=0u {
@@ -1817,7 +1819,7 @@ override SURFACE_GROUP:u32=0u;
     var illumination=baked_light.rgb;
     var specular=vec3<f32>(0.0);
     let sun_toward=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
-    if material[0].x==2.0 || material[0].x==3.0 || surfaces {
+    if material[0].x==2.0 || material[0].x==3.0 || surfaces || emissive_overlay {
         var normal=v.normal/max(length(v.normal),0.0001);
         var live_normal=v.normal;
         if (decal || surfaces) && material[4].x>0.0 {
@@ -1898,6 +1900,7 @@ override SURFACE_GROUP:u32=0u;
     }
     var display=pigment*illumination;
     display+=specular;
+    if emissive_overlay {display=mix(base_color*illumination+specular,display_color(albedo.rgb),albedo.a);}
     return vec4<f32>(fogged(display,v.world_position),alpha);
 }
 

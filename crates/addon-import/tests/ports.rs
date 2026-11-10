@@ -941,7 +941,9 @@ fn slayer_ports_apply_with_their_rules() {
             radius: 12.0,
 
             cone: None,
-            color: [1.0; 3]
+            color: [1.0; 3],
+            offset: [0.; 3],
+            glow: None,
         })
     );
     let item = &pack.items["gamemode_slayer_ctf:weapon/slyrctf_flagitem"];

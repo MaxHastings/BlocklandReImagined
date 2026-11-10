@@ -1132,6 +1132,8 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
 
                     cone,
                     color: [1.; 3],
+                    offset: [0.; 3],
+                    glow: None,
                 }),
                 ..Default::default()
             },
@@ -1152,34 +1154,227 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         };
         let at = Vec3::new(2., 1., 0.);
         let rotation = glam::Quat::from_rotation_y(0.7);
-        fx.sync_image_lights(&worn(Some(1)), |owner, hand| {
-            (owner == 7 && hand == 3).then_some(bri_fx_runtime::SourceTransform {
-                position: at,
-                rotation,
-                ..Default::default()
-            })
-        })?;
+        fx.sync_image_lights(
+            &worn(Some(1)),
+            |owner, hand| {
+                (owner == 7 && hand == 3).then_some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
+                    rotation,
+                    at,
+                ))
+            },
+            |_| 0.0,
+            0.01,
+        )?;
         fx.advance(0.01, Vec3::ZERO, pose)?;
         let lights = fx.world().snapshot(&camera()).lights;
         let [light] = &lights[..] else {
             panic!("one light: {}", lights.len());
         };
         assert_eq!(light.position, at);
-        assert_eq!(
-            light.cone,
-            cone.map_or(bri_content::presentation::ALL_ROUND, |c| c.words(rotation))
+        let expected = cone.map_or(bri_content::presentation::ALL_ROUND, |c| c.words(rotation));
+        assert!(
+            light
+                .cone
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 1e-5)
         );
         assert_eq!(light.radius, 20.);
         assert_eq!(light.color, Vec3::new(0., 0., 1.), "blue, as it is worn");
-        fx.sync_image_lights(&WeaponView::default(), |_, _| {
-            Some(bri_fx_runtime::SourceTransform {
-                position: at,
-                rotation,
-                ..Default::default()
-            })
-        })?;
+        fx.sync_image_lights(
+            &WeaponView::default(),
+            |_, _| {
+                Some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
+                    rotation,
+                    at,
+                ))
+            },
+            |_| 0.0,
+            0.01,
+        )?;
         fx.advance(0.01, Vec3::ZERO, pose)?;
         assert!(fx.world().snapshot(&camera()).lights.is_empty());
+    }
+    // A light anchored inside its model leaves from there: a flashlight's
+    // lens, not its grip — and its beam follows the anchor's axis.
+    {
+        let mut pack = (*weapons()).clone();
+        pack.images.insert(
+            "torch".into(),
+            bri_weapons::Image {
+                id: "torch".into(),
+                light: Some(bri_weapons::ImageLight {
+                    radius: 25.,
+
+                    cone: Some(bri_content::presentation::LightCone {
+                        inner: 15.,
+                        outer: 38.,
+                        axis: [0., 1., 0.],
+                    }),
+                    color: [0.9, 0.87, 0.8],
+                    offset: [0., 1.5, 0.],
+                    glow: None,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut fx = WeaponEffects::new(fixture(false), Arc::new(pack), EffectsLimits::default())?;
+        let held = WeaponView {
+            images: BTreeMap::from([(
+                7,
+                vec![bri_sim::session::MountedImage {
+                    image: "torch".into(),
+                    state: "Idle".into(),
+                    hand: 1,
+                    paint: None,
+                }],
+            )]),
+            ..Default::default()
+        };
+        let at = Vec3::new(2., 1., 0.);
+        let rotation = glam::Quat::from_rotation_y(0.7);
+        fx.sync_image_lights(
+            &held,
+            |owner, hand| {
+                (owner == 7 && hand == 1).then_some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
+                    rotation,
+                    at,
+                ))
+            },
+            |_| 0.0,
+            0.01,
+        )?;
+        fx.advance(0.01, Vec3::ZERO, pose)?;
+        let lights = fx.world().snapshot(&camera()).lights;
+        let [light] = &lights[..] else {
+            panic!("one light: {}", lights.len());
+        };
+        assert_eq!(
+            light.position,
+            at + rotation * Vec3::new(0., 3.0, 0.),
+            "anchored at the lens"
+        );
+        let expected_cone = bri_content::presentation::LightCone {
+            inner: 15.,
+            outer: 38.,
+            axis: [0., 1., 0.],
+        }
+        .words(rotation);
+        assert!(
+            light
+                .cone
+                .iter()
+                .zip(expected_cone)
+                .all(|(a, b)| (a - b).abs() < 1e-5),
+            "beam out the barrel"
+        );
+    }
+    // A lens glow is a second, all-round source at the same anchor (a
+    // flashlight's beam and its spill): both ride the hand and go out with it.
+    {
+        let mut pack = (*weapons()).clone();
+        pack.images.insert(
+            "lantern".into(),
+            bri_weapons::Image {
+                id: "lantern".into(),
+                light: Some(bri_weapons::ImageLight {
+                    radius: 25.,
+
+                    cone: Some(bri_content::presentation::LightCone {
+                        inner: 15.,
+                        outer: 38.,
+                        axis: [0., 1., 0.],
+                    }),
+                    color: [0.9, 0.87, 0.8],
+                    offset: [0., 1.5, 0.],
+                    glow: Some(bri_weapons::ImageGlow {
+                        radius: 8.,
+                        color: [1.0, 0.6, 0.2],
+                    }),
+                }),
+                ..Default::default()
+            },
+        );
+        let mut fx = WeaponEffects::new(fixture(false), Arc::new(pack), EffectsLimits::default())?;
+        let held = WeaponView {
+            images: BTreeMap::from([(
+                7,
+                vec![bri_sim::session::MountedImage {
+                    image: "lantern".into(),
+                    state: "Idle".into(),
+                    hand: 1,
+                    paint: None,
+                }],
+            )]),
+            ..Default::default()
+        };
+        let at = Vec3::new(2., 1., 0.);
+        let rotation = glam::Quat::from_rotation_y(0.7);
+        fx.sync_image_lights(
+            &held,
+            |owner, hand| {
+                (owner == 7 && hand == 1).then_some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
+                    rotation,
+                    at,
+                ))
+            },
+            |_| 0.0,
+            0.01,
+        )?;
+        fx.advance(0.01, Vec3::ZERO, pose)?;
+        let lights = fx.world().snapshot(&camera()).lights;
+        assert_eq!(lights.len(), 2, "beam and glow: {lights:?}");
+        let lens = at + rotation * Vec3::new(0., 3.0, 0.);
+        let beam = lights
+            .iter()
+            .find(|l| {
+                let expected = bri_content::presentation::LightCone {
+                    inner: 15.,
+                    outer: 38.,
+                    axis: [0., 1., 0.],
+                }
+                .words(rotation);
+                l.cone
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| (a - b).abs() < 1e-5)
+            })
+            .expect("the beam");
+        let glow = lights
+            .iter()
+            .find(|l| l.cone == bri_content::presentation::ALL_ROUND)
+            .expect("the all-round glow");
+        assert_eq!(beam.position, lens, "beam at the lens");
+        assert_eq!(glow.position, lens, "glow at the same anchor");
+        assert_eq!(beam.radius, 25.);
+        assert_eq!(beam.color, Vec3::new(0.9, 0.87, 0.8));
+        assert_eq!(glow.radius, 8., "the glow's own radius");
+        assert_eq!(
+            glow.color,
+            Vec3::new(1.0, 0.6, 0.2),
+            "the glow's own colour"
+        );
+        fx.sync_image_lights(
+            &WeaponView::default(),
+            |_, _| {
+                Some(glam::Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.0),
+                    rotation,
+                    at,
+                ))
+            },
+            |_| 0.0,
+            0.01,
+        )?;
+        fx.advance(0.01, Vec3::ZERO, pose)?;
+        assert!(
+            fx.world().snapshot(&camera()).lights.is_empty(),
+            "both go out with the image"
+        );
     }
     Ok(())
 }

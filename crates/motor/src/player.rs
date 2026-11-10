@@ -752,6 +752,17 @@ impl PlayerState {
             -self.yaw.cos() * self.pitch.cos(),
         )
     }
+    /// The unit direction they actually see through their view: `forward()`
+    /// swung by the free-look head turn (`head_yaw`). Holding freelook turns
+    /// the camera up to ~172 deg off the body; it springs back when released.
+    pub fn forward_view(&self) -> Vec3 {
+        let yaw = self.yaw + self.head_yaw;
+        Vec3::new(
+            yaw.sin() * self.pitch.cos(),
+            self.pitch.sin(),
+            -yaw.cos() * self.pitch.cos(),
+        )
+    }
     /// The `Eye` node: above the feet and slightly ahead of the body's
     /// facing (it follows the body, not the head's free look).
     pub fn eye(&self, tuning: &PlayerTuning) -> Vec3 {

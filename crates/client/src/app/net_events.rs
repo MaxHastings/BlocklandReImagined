@@ -208,6 +208,11 @@ impl App {
                     self.audio
                         .profile_shaped(&profile, bri_audio::Placement::Listener, voice);
                 }
+                bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::StopSound {
+                    profile,
+                }) => {
+                    self.audio.stop_profile(&profile);
+                }
                 bri_net::client::ArrivalEvent::Notice(bri_sim::session::Notice::Music(play)) => {
                     self.audio.play_music(&play);
                 }
@@ -938,10 +943,15 @@ impl App {
                             );
                             continue;
                         }
+                        bri_sim::session::Notice::StopSound { profile } => {
+                            self.audio.stop_profile(&profile);
+                            continue;
+                        }
                         bri_sim::session::Notice::Flash { color, seconds } => {
                             UiUpdate::Flash { color, seconds }
                         }
                         bri_sim::session::Notice::Overlay(overlay) => UiUpdate::Overlay(overlay),
+                        bri_sim::session::Notice::ScreenImage(cue) => UiUpdate::ScreenImage(cue),
                         bri_sim::session::Notice::Line {
                             feed,
                             text,
@@ -995,6 +1005,22 @@ impl App {
                         bri_sim::session::Notice::ViewKick { pitch, yaw } => {
                             self.controls
                                 .kick_view(yaw.to_radians(), pitch.to_radians());
+                            continue;
+                        }
+                        bri_sim::session::Notice::SteerView {
+                            seconds,
+                            at,
+                            rate,
+                            grip,
+                            fov_delta,
+                        } => {
+                            self.controls.steer_view(
+                                at.map(glam::Vec3::from),
+                                rate,
+                                grip,
+                                fov_delta,
+                                seconds,
+                            );
                             continue;
                         }
                         bri_sim::session::Notice::Fov(fov) => {

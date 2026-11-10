@@ -14,7 +14,7 @@ fn voice(p) {
 }
 fn cue(bot, event, priority, chance) {
     let p = player(bot);
-    if p == () || !p.bot { return; }
+    if p == () || !p.bot || p.voice_muted { return; }
     note("eligible",event);
     let v = voice(p);
     if priority < 6 && tick() < v.next { return; }
@@ -97,7 +97,10 @@ fn mix() {
     for a in get("active") { if a.expires > tick() { active.push(a); } }
     set("active", active);
     let pending = [];
-    for q in get("pending") { if q.expires > tick() { pending.push(q); } }
+    for q in get("pending") {
+        let p = player(q.bot);
+        if q.expires > tick() && p != () && !p.voice_muted { pending.push(q); }
+    }
     set("pending", pending);
     if tick() < get("next") || active.len() >= 2 || pending.len() == 0 { return; }
     // Shuffle ties so an owner's numeric ID does not dominate the mix.

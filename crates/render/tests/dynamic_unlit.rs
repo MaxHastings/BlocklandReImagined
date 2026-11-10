@@ -9,6 +9,77 @@ use bri_render::{scene::*, shadow::ShadowSettings};
 use common::*;
 use glam::{Mat4, Vec3};
 
+#[test]
+fn masked_emission_preserves_paint_and_does_not_reinterpret_opaque_unlit_materials() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let target = color_target(&device, wgpu::TextureFormat::Rgba8Unorm, 128, 128);
+    let mut renderer =
+        SceneRenderer::with_settings(&device, wgpu::TextureFormat::Rgba8Unorm, 1, None);
+    let mut camera = Camera::perspective([0., 4., 0.01], [0.; 3], 1., 1., 0.05, 100.);
+    camera.sun_color = [0.; 4];
+    for mode in [0., 3.] {
+        for ambient in [0.05, 0.4] {
+            camera.ambient = [ambient, ambient, ambient, mode];
+            renderer.update_camera(&queue, &camera);
+            let mut samples = Vec::new();
+            for coverage in [0, 128, 255] {
+                let mut data = cuboid(Vec3::new(-1., -0.1, -1.), Vec3::new(1., 0., 1.));
+                for vertex in &mut data.vertices {
+                    vertex.color = [0., 0.7, 0., 1.];
+                }
+                data.images = vec![SceneImage {
+                    label: "art".into(),
+                    width: 1,
+                    height: 1,
+                    rgba: vec![255, 0, 0, coverage],
+                    srgb: true,
+                }];
+                let material = &mut data.materials[0];
+                material.kind = MaterialKind::Unlit;
+                material.untinted = true;
+                material.ignore_texture_alpha = true;
+                material.emissive_overlay = true;
+                let scene = renderer.upload(&device, &queue, &data)?;
+                let pixels = render(&device, &queue, &mut renderer, &target, &[&scene], &[], &[])?;
+                samples.push(pixels[(64 * 128 + 64) * 4..][..3].to_vec());
+                if coverage == 0 {
+                    data.materials[0].emissive_overlay = false;
+                    let legacy = renderer.upload(&device, &queue, &data)?;
+                    let pixels = render(
+                        &device,
+                        &queue,
+                        &mut renderer,
+                        &target,
+                        &[&legacy],
+                        &[],
+                        &[],
+                    )?;
+                    assert!(
+                        pixels[(64 * 128 + 64) * 4] >= 250,
+                        "existing flag combinations must retain opaque unlit texture color"
+                    );
+                }
+            }
+            assert!(
+                samples[0][1] > 2 && samples[0][0] <= 2,
+                "uncovered texels keep actual green paint: {samples:?}"
+            );
+            assert!(
+                samples[2][0] >= 250 && samples[2][1] <= 2,
+                "covered artwork is self-lit: {samples:?}"
+            );
+            for channel in 0..3 {
+                let middle = (i16::from(samples[0][channel]) + i16::from(samples[2][channel])) / 2;
+                assert!(
+                    (i16::from(samples[1][channel]) - middle).abs() <= 3,
+                    "fractional coverage must blend continuously: {samples:?}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Authored unlit is a material property, independent of model/texture names.
 /// The modern loader must retain it without changing the compatibility loader.
 #[test]

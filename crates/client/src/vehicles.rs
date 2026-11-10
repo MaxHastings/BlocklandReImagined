@@ -1434,7 +1434,7 @@ impl ClientVehicles {
                         .and_then(|nodes| nodes.get(&node.to_ascii_lowercase()))
                         .map_or(Quat::IDENTITY, |r| r.to_scale_rotation_translation().1);
                     return Some(HandHold {
-                        position: m.w_axis.truncate(),
+                        position: Some(m.w_axis.truncate()),
                         turn: turned * rested.conjugate() * frame.rotation.conjugate(),
                     });
                 }
@@ -2412,12 +2412,14 @@ pub(crate) mod tests {
             .truncate();
         let actual = vehicles.hand_holds(&assets, &info, seat)[0]
             .context("named hold")?
-            .position;
+            .position
+            .context("hold position")?;
         assert!(actual.abs_diff_eq(expected, 1e-5));
         info.scale = 1.;
         let unscaled = vehicles.hand_holds(&assets, &info, seat)[0]
             .unwrap()
-            .position;
+            .position
+            .unwrap();
         let origin = vehicles.frame(1).unwrap().position;
         assert!(
             (actual - origin).abs_diff_eq((unscaled - origin) * 2., 1e-5),
@@ -2434,6 +2436,7 @@ pub(crate) mod tests {
             vehicles.hand_holds(&assets, &info, seat)[0]
                 .unwrap()
                 .position
+                .unwrap()
                 .abs_diff_eq(expected, 1e-5)
         );
         assets.pack.definitions[index].seats[seat].hands.right_node = Some("missing-grip".into());

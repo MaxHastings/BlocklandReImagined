@@ -543,6 +543,10 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
 
                     cone: None,
                     color: [r, g, b].map(|c| c.clamped(0.0, 1.0)),
+                    offset: [0.; 3],
+                    // v20's image lights have no separate lens glow; a port
+                    // adds one in its own weapons.json.
+                    glow: None,
                 })
             }
         } else {
@@ -608,6 +612,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 // v20's own scripts run by image name (`runtime::callback`).
                 scripts: Default::default(),
                 light,
+                // No v20 equivalent; a port writes it into weapons.json.
+                aim_lock: None,
             },
         );
     }
@@ -1259,7 +1265,9 @@ AddDamageType(\"Radius\", '<bitmap:base/client/ui/ci/bomb> %1', '%2 <bitmap:base
                 radius: 20.0,
 
                 cone: None,
-                color: [1.0, 0.5, 0.0]
+                color: [1.0, 0.5, 0.0],
+                offset: [0.; 3],
+                glow: None,
             })
         );
         assert_eq!(light("pulseImage"), None);

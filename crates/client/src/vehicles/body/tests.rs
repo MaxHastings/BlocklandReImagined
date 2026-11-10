@@ -167,7 +167,11 @@ fn composed_body_parts_and_grips_follow_the_same_pose_and_shared_models_keep_the
     let grip = client.model_node(&assets, &info, "grip").unwrap();
     assert!(grip.abs_diff_eq(body * posed.nodes[wheel + 1], 1e-5));
     let held = client.hand_holds(&assets, &info, 0)[0].unwrap();
-    assert!(held.position.abs_diff_eq(grip.w_axis.truncate(), 1e-5));
+    assert!(
+        held.position
+            .unwrap()
+            .abs_diff_eq(grip.w_axis.truncate(), 1e-5)
+    );
     let lens = rig
         .parts
         .iter()

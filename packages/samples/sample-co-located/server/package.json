@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "version": "1.0.0",
+  "api": 1,
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "id": "sample-co-located-rules",
+  "name": "Co-located host rules",
+  "dependencies": {
+    "sample-co-located": "=1.0.0"
+  },
+  "capabilities": [
+    "chat"
+  ],
+  "provides": [
+    {
+      "kind": "behaviour",
+      "id": "sample-co-located-rules:behaviour/main",
+      "file": "behaviour.json"
+    },
+    {
+      "kind": "script",
+      "id": "sample-co-located-rules:script/main",
+      "file": "main.rhai"
+    }
+  ]
+}

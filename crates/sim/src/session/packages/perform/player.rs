@@ -1,6 +1,7 @@
 //! What the engine does for the `player` operations
 //! (`bri_package_runtime::ops::player`).
 use super::*;
+use bri_console::Clamp;
 
 impl Perform for ops::SetAvatarColors {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
@@ -21,6 +22,27 @@ impl Perform for ops::SetAvatarParts {
         let peer = session.peers.get_mut(&player).context("No such player")?;
         peer.uniform_parts = (!parts.is_empty() || face.is_some() || decal.is_some())
             .then_some(UniformParts { parts, face, decal });
+        Ok(())
+    }
+}
+impl Perform for ops::SetAvatarUnlit {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetAvatarUnlit {
+            player,
+            material,
+            enabled,
+        } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        let material = material.to_ascii_lowercase();
+        if enabled {
+            ensure!(
+                peer.unlit_materials.contains(&material) || peer.unlit_materials.len() < 8,
+                "At most 8 unlit avatar materials"
+            );
+            peer.unlit_materials.insert(material);
+        } else {
+            peer.unlit_materials.remove(&material);
+        }
         Ok(())
     }
 }
@@ -116,6 +138,34 @@ impl Perform for ops::RemoveBody {
         let ops::RemoveBody { player } = self;
         ensure!(session.peers.contains_key(&player), "No such player");
         session.remove_body(player)
+    }
+}
+impl Perform for ops::SetNametagVisible {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetNametagVisible { player, visible } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        peer.nametag_hidden = !visible;
+        Ok(())
+    }
+}
+impl Perform for ops::SetPlayerLight {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetPlayerLight { player, on } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        // The flag rides in vitals as `light` does for the Light key's own
+        // toggle; a rule may set it either way without asking them to press.
+        peer.combat.light = on;
+        Ok(())
+    }
+}
+impl Perform for ops::SetImageLightFlicker {
+    fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
+        let ops::SetImageLightFlicker { player, amount } = self;
+        let peer = session.peers.get_mut(&player).context("No such player")?;
+        // 0 to 1 (steady to fully unstable); it rides in vitals so each client
+        // flickers its own copy of the player's image lights on its own clock.
+        peer.combat.image_light_flicker = amount.clamped(0., 1.);
+        Ok(())
     }
 }
 impl Perform for ops::Control {
@@ -360,7 +410,9 @@ impl Perform for ops::WearImage {
             );
         }
         let kept = keep && image.is_some();
-        session.weapons.wear(actor, slot, image.as_deref(), paint)?;
+        session
+            .weapons
+            .wear(actor, slot, image.as_deref(), paint, keep)?;
         let host = session
             .packages
             .as_mut()
@@ -667,6 +719,30 @@ impl Perform for ops::KickView {
         Ok(())
     }
 }
+impl Perform for ops::SteerView {
+    fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
+        let ops::SteerView {
+            player,
+            seconds,
+            at,
+            rate,
+            grip,
+            fov_delta,
+        } = self;
+        session.take_presentation(cx.package, player)?;
+        session.notify(
+            player,
+            Notice::SteerView {
+                seconds,
+                at,
+                rate,
+                grip,
+                fov_delta,
+            },
+        );
+        Ok(())
+    }
+}
 impl Perform for ops::MountImage {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
         let OpCall { package, .. } = cx;
@@ -778,7 +854,6 @@ impl Perform for ops::ViewShake {
 }
 impl Perform for ops::CameraShake {
     fn perform(self, session: &mut Session, cx: OpCall<'_>) -> Result<()> {
-        let OpCall { package, .. } = cx;
         let ops::CameraShake {
             player,
             translation,
@@ -786,8 +861,7 @@ impl Perform for ops::CameraShake {
             seconds,
             hold,
         } = self;
-        session.take_cue(package)?;
-        ensure!(session.peers.contains_key(&player), "No such player");
+        session.take_presentation(cx.package, player)?;
         session.notify(
             player,
             Notice::CameraShake {

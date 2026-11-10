@@ -1,6 +1,6 @@
 use super::*;
 /// Weapon save schema. Alpha saves of any other version do not load.
-pub const SAVE_SCHEMA: u32 = 4;
+pub const SAVE_SCHEMA: u32 = 5;
 /// Complete fixed-tick state, independent of render/physics handles and legacy files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeaponsSave {
@@ -135,6 +135,12 @@ impl WeaponsWorld {
                     );
                 }
             }
+            ensure!(
+                a.kept_left
+                    .as_ref()
+                    .is_none_or(|i| w.pack.images.contains_key(&i.image)),
+                "Save unknown kept image"
+            );
             ensure!(w.actors.insert(id, a).is_none(), "Duplicate saved actor");
         }
         for p in save.projectiles {

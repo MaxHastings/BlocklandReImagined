@@ -385,6 +385,7 @@ mod tests {
                 temp_brick_flash: false,
                 ignore_texture_alpha: false,
                 untinted: false,
+                emissive_overlay: false,
                 baked_lightmap: None,
                 baked_exact: false,
                 tint_mask: false,

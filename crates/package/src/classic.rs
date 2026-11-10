@@ -293,9 +293,15 @@ pub fn is_native_zip(path: &Path) -> bool {
     let Ok(archive) = zip::ZipArchive::new(file) else {
         return false;
     };
-    archive
-        .file_names()
-        .any(|n| n.replace('\\', "/").split('/').count() == 2 && n.ends_with("/package.json"))
+    archive.file_names().any(|n| {
+        n.replace('\\', "/").split('/').count() == 2
+            && (n.ends_with("/package.json") || n.ends_with("/addon.json"))
+    })
+}
+
+/// Native authoring folders and ZIPs share the same installation path.
+pub fn is_native(path: &Path) -> bool {
+    (path.is_dir() && path.join(crate::addon::FILE).is_file()) || is_native_zip(path)
 }
 
 /// Unpack a native Add-On zip ([`is_native_zip`]) the way the importer
@@ -313,6 +319,7 @@ pub fn unpack_native_zip(zip_path: &Path, out: &Path) -> Result<()> {
     );
     let mut tops: BTreeMap<String, bool> = BTreeMap::new();
     let mut total = 0u64;
+    let mut paths = std::collections::BTreeSet::new();
     for i in 0..archive.len() {
         let entry = archive.by_index(i).context("Reading the zip")?;
         if entry.is_dir() {
@@ -320,6 +327,10 @@ pub fn unpack_native_zip(zip_path: &Path, out: &Path) -> Result<()> {
         }
         let name = entry.name().replace('\\', "/");
         let parts: Vec<&str> = name.split('/').collect();
+        anyhow::ensure!(
+            crate::path::problem(&name).is_none() && paths.insert(name.to_ascii_lowercase()),
+            "The zip holds an unsafe path or duplicate: {name}"
+        );
         anyhow::ensure!(
             !name.starts_with('/')
                 && !parts[0].contains(':')
@@ -332,10 +343,80 @@ pub fn unpack_native_zip(zip_path: &Path, out: &Path) -> Result<()> {
             parts.len() >= 2,
             "The zip holds a file outside its Add-On folders: {name}"
         );
-        total += entry.size();
+        total = total
+            .checked_add(entry.size())
+            .context("Zip size overflow")?;
         anyhow::ensure!(total <= NATIVE_MAX_BYTES, "The zip is over the size limit");
         let manifest = tops.entry(parts[0].to_string()).or_default();
-        *manifest |= parts.len() == 2 && parts[1] == "package.json";
+        *manifest |= parts.len() == 2 && matches!(parts[1], "package.json" | "addon.json");
+    }
+    // Co-located authoring container: validate both manifests before staging.
+    let containers: Vec<_> = tops
+        .keys()
+        .filter(|top| paths.contains(&format!("{top}/addon.json").to_ascii_lowercase()))
+        .cloned()
+        .collect();
+    if let Some(top) = containers.first() {
+        anyhow::ensure!(
+            tops.len() == 1,
+            "A co-located Add-On must occupy one top-level folder"
+        );
+        let read = |archive: &mut zip::ZipArchive<std::fs::File>,
+                    name: &str,
+                    limit: u64|
+         -> Result<Vec<u8>> {
+            use std::io::Read;
+            let mut entry = archive
+                .by_name(name)
+                .with_context(|| format!("Missing {name}"))?;
+            anyhow::ensure!(entry.size() <= limit, "{name} exceeds its size limit");
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        };
+        let layout =
+            crate::addon::Layout::parse(&read(&mut archive, &format!("{top}/addon.json"), 4096)?)?;
+        let content = read(
+            &mut archive,
+            &format!("{top}/{}/package.json", layout.content),
+            crate::library::MAX_MANIFEST_BYTES,
+        )?;
+        let server = layout
+            .server
+            .as_ref()
+            .map(|server| {
+                read(
+                    &mut archive,
+                    &format!("{top}/{server}/package.json"),
+                    crate::library::MAX_MANIFEST_BYTES,
+                )
+            })
+            .transpose()?;
+        layout.validate_manifests(&content, server.as_deref())?;
+        let components = layout.components(out);
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i)?;
+            if entry.is_dir() {
+                continue;
+            }
+            let name = entry.name().replace('\\', "/");
+            let (_, rest) = name.split_once('/').context("Missing container folder")?;
+            if rest == crate::addon::FILE {
+                continue;
+            }
+            let (component, relative) = rest
+                .split_once('/')
+                .context("Files must be inside a declared component")?;
+            let (_, target) = components
+                .iter()
+                .find(|(dir, _)| *dir == component)
+                .context("File in an undeclared Add-On component")?;
+            let target = crate::path::inside(target, relative).map_err(anyhow::Error::msg)?;
+            std::fs::create_dir_all(target.parent().context("Missing target parent")?)?;
+            let mut written = std::fs::File::create(target)?;
+            std::io::copy(&mut entry, &mut written)?;
+        }
+        return Ok(());
     }
     let mut main = None;
     let mut rules = None;
@@ -366,7 +447,7 @@ pub fn unpack_native_zip(zip_path: &Path, out: &Path) -> Result<()> {
             os.push("-rules");
             std::path::PathBuf::from(os)
         };
-        let target = base.join(rest);
+        let target = crate::path::inside(&base, rest).map_err(anyhow::Error::msg)?;
         if let Some(dir) = target.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("Creating {}", dir.display()))?;
         }
@@ -408,7 +489,7 @@ pub fn pack_native_zip(addon: &Path, out: &Path) -> Result<Packed> {
     use sha2::Digest;
     use std::io::Write;
     anyhow::ensure!(
-        addon.join("package.json").is_file(),
+        addon.join("package.json").is_file() || addon.join(crate::addon::FILE).is_file(),
         "{} has no package.json",
         addon.display()
     );
@@ -421,9 +502,13 @@ pub fn pack_native_zip(addon: &Path, out: &Path) -> Result<Packed> {
         !name.ends_with("-rules"),
         "{name} is a rules companion; package the Add-On it belongs to"
     );
+    let colocated = addon.join(crate::addon::FILE).is_file();
+    if colocated {
+        crate::addon::Layout::load(addon)?;
+    }
     let mut folders = vec![(name.clone(), addon.to_path_buf())];
     let rules = addon.with_file_name(format!("{name}-rules"));
-    if rules.join("package.json").is_file() {
+    if !colocated && rules.join("package.json").is_file() {
         folders.push((format!("{name}-rules"), rules));
     }
     let mut files = Vec::new();

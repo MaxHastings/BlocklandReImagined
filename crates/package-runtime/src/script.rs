@@ -90,6 +90,12 @@ pub struct PlayerView {
     pub eye: [f32; 3],
     #[serde(default)]
     pub look: [f32; 3],
+    /// The unit direction they actually see through their view: body heading
+    /// plus any free-look head turn (holding freelook swings this up to ~172
+    /// deg off `look`; it springs back when released). Equals `look`
+    /// otherwise.
+    #[serde(default)]
+    pub true_look: [f32; 3],
     /// Their control object's transform (`getControlObject().getTransform()`):
     /// a free or path camera's eye and heading while one has control, else
     /// the body's eye and heading. Yaw and pitch in radians.
@@ -201,6 +207,10 @@ pub struct PlayerView {
     /// rather than a spawn brick.
     #[serde(default)]
     pub spawner: Option<String>,
+    /// An Add-On marked this body exempt from NPC reaction sounds
+    /// (`set_bot_voice_muted`): the reactions check it before cueing one.
+    #[serde(default)]
+    pub voice_muted: bool,
     /// The player this one rides (`getObjectMount`), and on which of its
     /// mount points.
     #[serde(default)]
@@ -595,6 +605,11 @@ pub struct Snapshot {
     /// Every mini-game, with its members and teams.
     pub minigames: Vec<MinigameView>,
     pub tethers: Vec<TetherView>,
+    /// The Add-On packages loaded in this session (`package_loaded()`): their ids.
+    pub package_ids: Vec<String>,
+    /// Explicitly exported per-player state of other Add-Ons, indexed by
+    /// package, player and key. Client visibility never grants export access.
+    pub peer_state: BTreeMap<String, BTreeMap<u64, BTreeMap<String, serde_json::Value>>>,
 }
 impl Snapshot {
     /// A connected player or a bot.
@@ -900,6 +915,9 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("lx", p.look[0]),
         float_entry("ly", p.look[1]),
         float_entry("lz", p.look[2]),
+        float_entry("tlx", p.true_look[0]),
+        float_entry("tly", p.true_look[1]),
+        float_entry("tlz", p.true_look[2]),
         (
             "camera",
             map([
@@ -1020,6 +1038,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
             p.bot_spawn_team
                 .map_or(Dynamic::UNIT, |id| Dynamic::from_int(id as i64)),
         ),
+        ("voice_muted", p.voice_muted.into()),
         (
             "riding",
             p.riding
@@ -1688,6 +1707,24 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
+    // Read-only feature detection and explicitly exported state.
+    engine.register_fn("package_loaded", |id: &str| {
+        with(|i| Ok(i.snapshot.package_ids.iter().any(|p| p == id)))
+    });
+    engine.register_fn("state_of", |package: &str, player: Dynamic, key: &str| {
+        with(|i| {
+            let pid = match id(&player) {
+                Ok(pid) => pid,
+                Err(_) => return Ok(Dynamic::UNIT), // a gone body reads as unset, not an error
+            };
+            Ok(i.snapshot
+                .peer_state
+                .get(package)
+                .and_then(|m| m.get(&pid))
+                .and_then(|v| v.get(key))
+                .map_or(Dynamic::UNIT, to_dynamic))
+        })
+    });
     engine.register_fn(
         "add_player",
         |player: Dynamic, key: &str, amount: Dynamic| {
@@ -1990,6 +2027,33 @@ fn register_api(engine: &mut Engine) {
             player: id(&player)?,
         }))
     });
+    // `set_nametag_visible(player, visible)`: hide or show its name tag.
+    engine.register_fn("set_nametag_visible", |player: Dynamic, visible: bool| {
+        push(Op::SetNametagVisible(ops::SetNametagVisible {
+            player: id(&player)?,
+            visible,
+        }))
+    });
+    // `set_player_light(player, on)`: set its native light (the Light key's
+    // own) without a press; an Add-On owning the key clears a stale one this way.
+    engine.register_fn("set_player_light", |player: Dynamic, on: bool| {
+        push(Op::SetPlayerLight(ops::SetPlayerLight {
+            player: id(&player)?,
+            on,
+        }))
+    });
+    // `set_image_light_flicker(player, amount)`: 0 to 1, how hard the image
+    // lights they wear or hold flicker; generic for any rule that wants a held
+    // device to stutter. Rides in vitals so each client flickers its own copy.
+    engine.register_fn(
+        "set_image_light_flicker",
+        |player: Dynamic, amount: Dynamic| {
+            push(Op::SetImageLightFlicker(ops::SetImageLightFlicker {
+                player: id(&player)?,
+                amount: float(&amount)?,
+            }))
+        },
+    );
     engine.register_fn("set_archetype", |player: Dynamic, archetype: &str| {
         push(Op::SetArchetype(ops::SetArchetype {
             player: id(&player)?,
@@ -2907,6 +2971,34 @@ fn register_api(engine: &mut Engine) {
             overlay,
         }))
     });
+    // screen_image(player, #{ images=[...] or sequence=#{prefix,count}, fps,
+    // seconds, aspect }): a full-screen still or animated image cycled
+    // client-side at `fps`, held for `seconds` then faded out; `()` as the
+    // player for everyone. An empty spec (`screen_image(player, ())`) clears
+    // the board showing (fading it out). See docs/modding/rules.md.
+    engine.register_fn("screen_image", |player: Dynamic, spec: Dynamic| {
+        let cue = if spec.is_unit() {
+            None
+        } else {
+            Some(
+                serde_json::to_value(view::plain(&spec))
+                    .and_then(serde_json::from_value)
+                    .map_err(|e| {
+                        format!(
+                            "a screen image is #{{ images or sequence, fps, seconds, aspect }}: {e}"
+                        )
+                    })?,
+            )
+        };
+        push(Op::ScreenImage(ops::ScreenImage {
+            player: if player.is_unit() {
+                None
+            } else {
+                Some(id(&player)?)
+            },
+            cue,
+        }))
+    });
     // Every member of a mini-game, counted once.
     engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
         push(Op::TellMinigame(ops::TellMinigame {
@@ -3063,6 +3155,14 @@ fn register_api(engine: &mut Engine) {
             )))
         },
     );
+    // Cut every instance of a profile playing for one player, with a short
+    // fade on the client: the static's crackle under Render's kill sting.
+    engine.register_fn("stop_sound", |player: Dynamic, profile: &str| {
+        push(Op::StopSound(ops::StopSound {
+            player: id(&player)?,
+            profile: profile.to_string(),
+        }))
+    });
     physics::register(engine);
     register_queries(engine);
     register_presentation(engine);
@@ -3849,6 +3949,25 @@ fn register_presentation(engine: &mut Engine) {
             decal,
         }))
     });
+    // One avatar material drawn unlit (full brightness regardless of light):
+    // set_avatar_unlit(player, "face") — a bot's face glowing in the dark.
+    engine.register_fn("set_avatar_unlit", |player: Dynamic, material: &str| {
+        push(Op::SetAvatarUnlit(ops::SetAvatarUnlit {
+            player: id(&player)?,
+            material: material.to_owned(),
+            enabled: true,
+        }))
+    });
+    engine.register_fn(
+        "set_avatar_unlit",
+        |player: Dynamic, material: &str, enabled: bool| {
+            push(Op::SetAvatarUnlit(ops::SetAvatarUnlit {
+                player: id(&player)?,
+                material: material.to_owned(),
+                enabled,
+            }))
+        },
+    );
     // A body's dress: #{ skins: #{ face: "face_3.png", shirt: "shirt_1.png" },
     // scale: 1.12 }, or () for the body's own again.
     engine.register_fn("set_body_dress", |player: Dynamic, look: Dynamic| {
@@ -4141,6 +4260,75 @@ fn register_presentation(engine: &mut Engine) {
                 player: id(&player)?,
                 pitch: number(&pitch)? as f32,
                 yaw: number(&yaw)? as f32,
+            }))
+        },
+    );
+    // Draw a player's view toward a world point, capped so they can resist;
+    // no point clears the pull and leaves their look where it is. While
+    // active, `grip` (0.25 to 1) makes their aim heavy — looking away is a
+    // struggle but never impossible — and `fov_delta` (-30 to +10 degrees)
+    // dollies the camera in or out; both are temporary, restored by the
+    // clear with the pull.
+    engine.register_fn("steer_view", |player: Dynamic| {
+        push(Op::SteerView(ops::SteerView {
+            player: id(&player)?,
+            seconds: 1.0,
+            at: None,
+            rate: 0.0,
+            grip: 1.0,
+            fov_delta: 0.0,
+        }))
+    });
+    engine.register_fn(
+        "steer_view",
+        |player: Dynamic, at: Dynamic, rate: Dynamic| {
+            let Some(arr) = at.try_cast::<Array>() else {
+                return fail("a point to look at is [x, y, z]");
+            };
+            push(Op::SteerView(ops::SteerView {
+                player: id(&player)?,
+                seconds: 1.0,
+                at: Some(vector(&arr)?),
+                rate: number(&rate)? as f32,
+                grip: 1.0,
+                fov_delta: 0.0,
+            }))
+        },
+    );
+    engine.register_fn(
+        "steer_view",
+        |player: Dynamic, at: Dynamic, rate: Dynamic, grip: Dynamic, fov_delta: Dynamic| {
+            let Some(arr) = at.try_cast::<Array>() else {
+                return fail("a point to look at is [x, y, z]");
+            };
+            push(Op::SteerView(ops::SteerView {
+                player: id(&player)?,
+                seconds: 1.0,
+                at: Some(vector(&arr)?),
+                rate: number(&rate)? as f32,
+                grip: number(&grip)? as f32,
+                fov_delta: number(&fov_delta)? as f32,
+            }))
+        },
+    );
+    engine.register_fn(
+        "steer_view",
+        |player: Dynamic,
+         at: Dynamic,
+         rate: Dynamic,
+         grip: Dynamic,
+         fov_delta: Dynamic,
+         seconds: Dynamic| {
+            let arr = at
+                .try_cast::<Array>()
+                .ok_or_else(|| Box::<EvalAltResult>::from("a point to look at is [x, y, z]"))?;
+            push(Op::SteerView(ops::SteerView {
+                player: id(&player)?,
+                at: Some(vector(&arr)?),
+                rate: number(&rate)? as f32,
+                grip: number(&grip)? as f32,
+                fov_delta: number(&fov_delta)? as f32,
+                seconds: number(&seconds)? as f32,
             }))
         },
     );
@@ -4875,6 +5063,9 @@ impl Runtime {
             }
             if behaviour.on_drop_key {
                 need("on_drop_key".into(), 1, "on_drop_key");
+            }
+            if behaviour.on_light {
+                need("on_light".into(), 1, "on_light");
             }
             if behaviour.on_panel {
                 need("on_panel".into(), 2, "on_panel");

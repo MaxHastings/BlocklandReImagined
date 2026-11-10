@@ -531,6 +531,8 @@ struct Shares {
     replies: Allowance<(String, PlayerKey)>,
     /// Prints and sounds, per package.
     cues: Allowance<String>,
+    /// Targeted presentation traffic has an independent share per recipient.
+    presentation: Allowance<(String, OwnerId)>,
     /// Log lines and warnings, per package.
     logs: Allowance<String>,
     /// Projectiles, per package.
@@ -548,6 +550,7 @@ impl Shares {
             chat: Allowance::new(PACKAGE_CHAT_BURST, PACKAGE_CHAT_LINES, SECOND),
             replies: Allowance::new(PACKAGE_REPLY_LINES, PACKAGE_REPLY_LINES, SECOND),
             cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
+            presentation: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
             logs: Allowance::new(PACKAGE_LOG_LINES, PACKAGE_LOG_LINES, SECOND),
             shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
             environment: Allowance::new(
@@ -1299,6 +1302,44 @@ impl Session {
             None => PlayerKey::session(owner),
         }
     }
+    /// Explicitly exported per-player state of other Add-Ons, indexed by
+    /// package, player and key. Client visibility never grants export access.
+    fn peer_state_view(
+        &self,
+        host: Option<&PackageHost>,
+    ) -> BTreeMap<String, BTreeMap<u64, BTreeMap<String, serde_json::Value>>> {
+        let mut out = BTreeMap::new();
+        let Some(host) = host else { return out };
+        for (id, behaviour) in host.catalog.behaviours() {
+            let exported_keys: Vec<&String> = behaviour
+                .state
+                .player
+                .iter()
+                .filter(|(_, k)| k.exported)
+                .map(|(k, _)| k)
+                .collect();
+            if exported_keys.is_empty() {
+                continue;
+            }
+            for (owner, _) in self.peers.iter() {
+                let key = self.player_key(*owner);
+                let Some(values) = host.store.namespace(id).and_then(|ns| ns.players.get(&key))
+                else {
+                    continue;
+                };
+                let mut entry = BTreeMap::new();
+                for k in &exported_keys {
+                    if let Some(v) = values.get(k.as_str()) {
+                        entry.insert((*k).clone(), v.clone());
+                    }
+                }
+                if !entry.is_empty() {
+                    out.entry(id.clone()).or_default().insert(*owner, entry);
+                }
+            }
+        }
+        out
+    }
     pub(super) fn package_vars(&self, package: &str) -> script::EntityVars {
         self.packages
             .as_ref()
@@ -1363,6 +1404,7 @@ impl Session {
                 .map(|g| g.0),
             eye: p.player.eye().to_array(),
             look: p.player.state().forward().to_array(),
+            true_look: p.player.state().forward_view().to_array(),
             camera: camera.eye,
             camera_yaw: camera.yaw,
             camera_pitch: camera.pitch,
@@ -1418,6 +1460,7 @@ impl Session {
             bot_brick: bot_spawn.map(|(id, _)| id),
             bot_spawn_team: bot_spawn.and_then(|(_, team)| team).map(u64::from),
             spawner: self.bots.rules_package(owner).map(str::to_owned),
+            voice_muted: p.voice_muted,
             riding: self.riding_seat(owner),
             magazine: self.weapons.ammo(bri_weapons::ActorId(owner)).map(|m| {
                 bri_package_runtime::script::MagazineView {
@@ -1513,6 +1556,10 @@ impl Session {
             holds: self.hold_views(),
             minigames: self.script_minigames(),
             tethers: self.tether_views(),
+            package_ids: host
+                .map(|h| h.catalog.packages.keys().cloned().collect())
+                .unwrap_or_default(),
+            peer_state: self.peer_state_view(host.map(|v| &**v)),
         }
     }
     /// Initialize declared per-player state for an actual participant without
@@ -1993,6 +2040,20 @@ impl Session {
             "Dropped: more than {PACKAGE_CUES} prints and sounds a second"
         );
         host.shares.cues.spend(&origin, tick, 1);
+        Ok(())
+    }
+    /// Targeted screen/camera/audio controls cannot consume another player's
+    /// share, and cannot flood their reliable queue without a bound.
+    fn take_presentation(&mut self, package: &str, player: OwnerId) -> Result<()> {
+        ensure!(self.peers.contains_key(&player), "No such player");
+        let tick = self.simulation.state().tick;
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        let origin = (package.to_owned(), player);
+        ensure!(
+            host.shares.presentation.available(&origin, tick) >= 1,
+            "Dropped: more than {PACKAGE_CUES} presentation controls per player a second"
+        );
+        host.shares.presentation.spend(&origin, tick, 1);
         Ok(())
     }
     /// One log line or warning from `package`, within its share.
@@ -3621,6 +3682,17 @@ impl Session {
             vec![Dynamic::from_int(owner as i64)],
         )
     }
+    /// `on_light(player)` of every package that declares it, in load
+    /// order, until one takes the light key (returns `true`). Bots have no
+    /// light key to take.
+    pub(super) fn package_light(&mut self, owner: OwnerId) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_light,
+            "on_light",
+            vec![Dynamic::from_int(owner as i64)],
+        )
+    }
     /// Ask a player's input hook of each declaring package, in load order,
     /// until one answers `true`. Bots have no input to take.
     pub(super) fn package_take(
@@ -3721,10 +3793,16 @@ impl Session {
     }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {
-        if !self.package_participant(owner) {
-            return;
+        if self.package_participant(owner) {
+            self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
         }
-        self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
+        if let Some(host) = &mut self.packages {
+            host.kept_worn.retain(|(player, _), _| *player != owner);
+            host.shares
+                .presentation
+                .levels
+                .retain(|(_, player), _| *player != owner);
+        }
     }
     /// `on_damage(victim, attacker, amount, info)` from every package that
     /// declares it, in order, each seeing the amount the one before

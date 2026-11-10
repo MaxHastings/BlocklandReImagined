@@ -134,7 +134,8 @@ impl Session {
             );
             return Ok(());
         }
-        let joined = self.join_inner(name.clone(), home, false, true, None);
+        // A brick's bot keeps its spawn poof: it appears where the brick is.
+        let joined = self.join_inner(name.clone(), home, false, true, None, false);
         if joined.is_err() {
             self.notify(
                 builder,
@@ -305,24 +306,41 @@ impl Session {
         Ok(())
     }
     /// `add_bot`: a bot of `kind` joins `game` for `package`'s rules, on
-    /// `team` when given (Slayer's `addBotToGame` and `addMember`).
+    /// `team` when given (Slayer's `addBotToGame` and `addMember`). When
+    /// `muted`, it is born already exempt from NPC reaction Add-Ons: the
+    /// flag is set before any spawn-time hook or report can fire for it.
     pub(in crate::session) fn add_rules_bot(
         &mut self,
         package: &str,
-        game: u64,
-        team: Option<u64>,
-        kind: &str,
-        name: &str,
+        request: &bri_package_runtime::ops::AddBot,
     ) -> Result<()> {
+        let bri_package_runtime::ops::AddBot {
+            game,
+            team,
+            kind,
+            name,
+            muted,
+            quiet,
+        } = request;
+        let (game, team, muted, quiet) = (*game, *team, *muted, *quiet);
         self.check_rules_bot(game, team, kind)?;
         let kind = self.bots.kind(kind).expect("checked").clone();
         let game = bri_minigames::GameId(game);
         let team = team.map(|t| bri_minigames::TeamId(t as u32));
         let drop = self.spawn_points.first().copied().unwrap_or(Vec3::Y);
-        let bot = self.join_inner(name.to_owned(), drop, false, true, None)?;
+        // Quiet entry: the rules' own script plays where this bot appears.
+        let bot = self.join_inner(name.clone(), drop, false, true, None, quiet)?;
         if let Err(e) = self.embody_bot(bot, &kind) {
             self.drop_bot(bot)?;
             return Err(e);
+        }
+        if muted {
+            // Before placement: the game's spawn event and any first-step
+            // report fire after this, so reaction Add-Ons see it muted.
+            self.peers
+                .get_mut(&bot)
+                .expect("newly embodied bot")
+                .voice_muted = true;
         }
         let crossed = self.crossings.count();
         self.bots
@@ -479,9 +497,30 @@ impl Session {
         package: &str,
         bot: OwnerId,
         rest: bool,
+        locomotion: bool,
     ) -> Result<()> {
         self.check_rest_rules_bot(package, bot)?;
-        self.set_bot_resting(bot, rest)
+        self.set_bot_resting(bot, rest)?;
+        self.bots
+            .brains
+            .get_mut(&bot)
+            .context("No such bot")?
+            .rules_locomotion = rest && locomotion;
+        Ok(())
+    }
+    /// What a rule holds this bot's facing to (`set_bot_facing`): the
+    /// target `step_held_bot` keeps it turning toward while resting, or
+    /// `None` to release the hold and keep its heading.
+    pub(in crate::session) fn rules_bot_facing(
+        &mut self,
+        package: &str,
+        bot: OwnerId,
+        target: Option<bri_package_runtime::ops::FacingTarget>,
+    ) -> Result<()> {
+        self.check_rest_rules_bot(package, bot)?;
+        let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;
+        brain.rules_facing = target;
+        Ok(())
     }
     pub(in crate::session) fn set_bot_resting(&mut self, bot: OwnerId, rest: bool) -> Result<()> {
         let brain = self.bots.brains.get_mut(&bot).context("No such bot")?;
@@ -493,6 +532,7 @@ impl Session {
             brain.evidence_search.clear();
         }
         brain.resting = rest;
+        brain.rules_locomotion = false;
         if rest {
             self.bots.claims.release_owner(bot);
             if self.seated(bot) {
@@ -1028,6 +1068,240 @@ mod spawn_tests {
             check(&session);
             assert_eq!(session.bots.brains[&bot].sequence, 40);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn a_rested_bot_keeps_facing_its_held_target() -> Result<()> {
+        use rapier3d::prelude::*;
+        let world = bri_world::World::new("Facing".into(), "fixture".into(), vec![[1.; 4]]);
+        let floor = ColliderBuilder::cuboid(30., 0.5, 30.).translation(Vector::new(0., -0.5, 0.));
+        let mut s = Session::new(crate::simulation::Simulation::new(
+            world,
+            crate::testing::definitions(),
+            vec![floor],
+        )?);
+        s.set_lan_host(false);
+        s.spawn_points = vec![Vec3::new(0., 0.05, 0.)];
+        let host = s.join("Host".into(), Vec3::new(-8., 0.05, 0.), false)?;
+        let fighter = s.join("Fighter".into(), Vec3::new(-6., 0.05, 4.), false)?;
+        s.set_bot_kinds(crate::bot_kind::BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"fixture:bot/melee","name":"Melee bot","sight":80,"wander_radius":0,"reaction_seconds":0,"weapons":false,"side":"hostile","melee":{"damage":25,"reach":2.5,"seconds":0.3},"behaviours":{"fly":0},"perception":{"strength":0},"surprise":{"strength":0}}]}"#)?.bots)?;
+        s.minigame_request(
+            host,
+            crate::session::MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )?;
+        let game = s.game_of(host).unwrap();
+        const PKG: &str = "test:facing";
+        s.add_rules_bot(
+            PKG,
+            &bri_package_runtime::ops::AddBot {
+                game: game.0,
+                team: None,
+                kind: "fixture:bot/melee".into(),
+                name: "Fixture".into(),
+                muted: false,
+                quiet: false,
+            },
+        )?;
+        let bot = *s
+            .bots
+            .by_rules
+            .iter()
+            .find(|(_, (p, _))| p == PKG)
+            .unwrap()
+            .0;
+
+        // Rested without a facing hold, it stands where it stood...
+        s.rest_rules_bot(PKG, bot, true, false)?;
+        for _ in 0..16 {
+            s.step()?;
+        }
+
+        // ...and held to a point, it turns toward it.
+        s.rules_bot_facing(PKG, bot, Some(FacingTarget::Point([10., 0.05, 0.])))?;
+        for _ in 0..16 {
+            s.step()?;
+        }
+        let feet = Vec3::from(s.peers[&bot].player.state().feet);
+        let d = Vec3::new(10., 0.05, 0.) - feet;
+        assert!(
+            wrap(s.bots.brains[&bot].yaw - d.x.atan2(-d.z)).abs() < 0.02,
+            "the held bot must face the point"
+        );
+
+        // An object target is re-resolved each tick: it turns to the player...
+        s.rules_bot_facing(
+            PKG,
+            bot,
+            Some(FacingTarget::Object(ObjectRef::Player(fighter))),
+        )?;
+        for _ in 0..16 {
+            s.step()?;
+        }
+        let at = s.object_centre(ObjectRef::Player(fighter)).unwrap();
+        let d = at - Vec3::from(s.peers[&bot].player.state().feet);
+        assert!(
+            wrap(s.bots.brains[&bot].yaw - d.x.atan2(-d.z)).abs() < 0.02,
+            "the held bot must face the player"
+        );
+
+        // ...and a gone object releases the hold, keeping its last gaze.
+        let held = s.bots.brains[&bot].yaw;
+        s.disconnect(fighter)?;
+        for _ in 0..16 {
+            s.step()?;
+        }
+        assert!(
+            s.bots.brains[&bot].rules_facing.is_none(),
+            "the hold must go with the object"
+        );
+        assert!(
+            (s.bots.brains[&bot].yaw - held).abs() < 0.02,
+            "its heading must stay where its gaze left it"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_rested_bot_walks_to_its_follow_anchor_and_stops() -> Result<()> {
+        use bri_package_runtime::ops::BotIntent;
+        use rapier3d::prelude::*;
+        let world = bri_world::World::new("Walking".into(), "fixture".into(), vec![[1.; 4]]);
+        let floor = ColliderBuilder::cuboid(30., 0.5, 30.).translation(Vector::new(0., -0.5, 0.));
+        let mut s = Session::new(crate::simulation::Simulation::new(
+            world,
+            crate::testing::definitions(),
+            vec![floor],
+        )?);
+        s.set_lan_host(false);
+        s.spawn_points = vec![Vec3::new(0., 0.05, 0.)];
+        let host = s.join("Host".into(), Vec3::new(-8., 0.05, 0.), false)?;
+        let fighter = s.join("Fighter".into(), Vec3::new(-6., 0.05, 4.), false)?;
+        s.set_bot_kinds(crate::bot_kind::BotPack::from_json(br#"{"schema_version":1,"bots":[{"id":"fixture:bot/melee","name":"Melee bot","sight":80,"wander_radius":0,"reaction_seconds":0,"weapons":false,"side":"hostile","melee":{"damage":25,"reach":2.5,"seconds":0.3},"behaviours":{"fly":0},"perception":{"strength":0},"surprise":{"strength":0}}]}"#)?.bots)?;
+        s.minigame_request(
+            host,
+            crate::session::MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )?;
+        let game = s.game_of(host).unwrap();
+        const PKG: &str = "test:walking";
+        s.add_rules_bot(
+            PKG,
+            &bri_package_runtime::ops::AddBot {
+                game: game.0,
+                team: None,
+                kind: "fixture:bot/melee".into(),
+                name: "Fixture".into(),
+                muted: false,
+                quiet: false,
+            },
+        )?;
+        let bot = *s
+            .bots
+            .by_rules
+            .iter()
+            .find(|(_, (p, _))| p == PKG)
+            .unwrap()
+            .0;
+        s.rest_rules_bot(PKG, bot, true, false)?;
+
+        // It drops at the map drop point and stands there...
+        for _ in 0..16 {
+            s.step()?;
+        }
+        let start = Vec3::from(s.peers[&bot].player.state().feet);
+        assert!(
+            start.length() < 1.0,
+            "the rules bot drops at the map drop point"
+        );
+
+        // ...and a follow beyond its distance walks it toward the mark — at
+        // walk speed: no single tick may move it far (a teleport would).
+        s.peers.get_mut(&fighter).unwrap().player.teleport(
+            &mut s.simulation.physics,
+            Vec3::new(28., 0.05, 0.),
+            0.0,
+        )?;
+        for _ in 0..16 {
+            s.step()?;
+        }
+        s.set_bot_intent(
+            PKG,
+            bot,
+            Some(BotIntent::Follow {
+                leader: fighter,
+                distance: 25.0,
+            }),
+        )?;
+        for _ in 0..16 {
+            s.step()?;
+        }
+        assert!(
+            (Vec3::from(s.peers[&bot].player.state().feet) - start).length() < 0.05,
+            "rest must suppress prior intents by default"
+        );
+        s.rest_rules_bot(PKG, bot, true, true)?;
+        let mut last = start;
+        let mut still = 0u32;
+        let mut faced = false;
+        for _ in 0..2400 {
+            s.step()?;
+            let feet = Vec3::from(s.peers[&bot].player.state().feet);
+            let step_len = flat(feet - last).length();
+            assert!(
+                step_len < 1.0,
+                "a held bot walks; one tick moved it {step_len}"
+            );
+            // Facing its mark while it walks.
+            if !faced && flat(feet - start).length() > 1.0 {
+                let mark = s.object_centre(ObjectRef::Player(fighter)).unwrap();
+                let d = mark - feet;
+                assert!(
+                    wrap(s.bots.brains[&bot].yaw - d.x.atan2(-d.z)).abs() < 0.15,
+                    "the walking bot must face its mark"
+                );
+                faced = true;
+            }
+            still = if step_len <= 0.005 { still + 1 } else { 0 };
+            last = feet;
+            let mark = s.object_centre(ObjectRef::Player(fighter)).unwrap();
+            if flat(feet - mark).length() <= 25.5 && still >= 60 {
+                break;
+            }
+        }
+        assert!(faced, "the bot must have walked toward its mark");
+        let feet = Vec3::from(s.peers[&bot].player.state().feet);
+        let mark = s.object_centre(ObjectRef::Player(fighter)).unwrap();
+        assert!(
+            flat(feet - mark).length() <= 25.5,
+            "it stops inside the follow distance (now {})",
+            flat(feet - mark).length()
+        );
+
+        // Settled: it holds its place and keeps the intent...
+        let rest = feet;
+        for _ in 0..36 {
+            s.step()?;
+        }
+        assert!(
+            flat(Vec3::from(s.peers[&bot].player.state().feet) - rest).length() < 0.05,
+            "a settled bot holds its place"
+        );
+
+        // ...and a leader gone for good lets the follow go with it.
+        s.disconnect(fighter)?;
+        for _ in 0..16 {
+            s.step()?;
+        }
+        assert!(
+            s.bots.brains[&bot].intent.is_none(),
+            "the follow must go with its leader"
+        );
         Ok(())
     }
 }
