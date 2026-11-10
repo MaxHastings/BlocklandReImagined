@@ -45,7 +45,7 @@ fn clips(event) { [#{id:"fixture",profile:"npc_popculture:sound/fixture",
             schema_version: 1,
             packages: vec![PackageEntry {
                 id: "npc_popculture_rules".into(),
-                version: "1.0.0".into(),
+                version: manifest["version"].as_str().unwrap().into(),
                 side: Side::Server,
                 dir: "npc_popculture_rules".into(),
                 role: None,
@@ -116,6 +116,30 @@ fn clips(event) { [#{id:"fixture",profile:"npc_popculture:sound/fixture",
             vec![bot.into(), "death".into(), 5_i64.into(), 100_i64.into()],
         );
     }
+}
+
+#[test]
+fn npc_reactions_honor_mute_before_queueing_and_before_delivery_and_resume_after_unmute() {
+    let mut p = Policy::new();
+    p.snapshot.bots[0].voice_muted = true;
+    p.cue(1);
+    assert!(p.state.global["pending"].as_array().unwrap().is_empty());
+    assert!(p.state.global["eligible"].get("death").is_none());
+
+    p.snapshot.bots[0].voice_muted = false;
+    p.cue(1);
+    assert_eq!(p.state.global["pending"].as_array().unwrap().len(), 1);
+    p.snapshot.bots[0].voice_muted = true;
+    p.cue(2);
+    assert!(matches!(&p.call("mix", vec![])[..], [Op::Sound(s)]
+        if matches!(s.at, SoundAt::Speech { actor: 2, .. })));
+    assert!(p.state.global["pending"].as_array().unwrap().is_empty());
+
+    p.snapshot.tick = 15000;
+    p.snapshot.bots[0].voice_muted = false;
+    p.cue(1);
+    assert!(matches!(&p.call("mix", vec![])[..], [Op::Sound(s)]
+        if matches!(s.at, SoundAt::Speech { actor: 1, .. })));
 }
 
 #[test]

@@ -51,5 +51,8 @@ ordinary declared capabilities and trust; co-location grants no extra access.
 
 Existing standalone packages and separate companion folders/ZIPs remain
 supported. This layout does not combine independently managed dependencies
-or change their identities. Keep files inside the declared component folders;
+or require moving them inside the wrapper. The checker finds dependencies
+among sibling packages and sibling co-located Add-Ons in the authoring workspace.
+It does not search ancestors outside that workspace or change dependency
+identities. Keep files inside the declared component folders;
 the container's `addon.json` is authoring metadata, not runtime content.

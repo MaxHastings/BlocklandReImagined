@@ -71,6 +71,12 @@ fn manifest_id(dir: &Path) -> Option<String> {
 
 /// Check the Add-On in `folder`.
 pub fn check(folder: &Path) -> Report {
+    check_in(folder, None)
+}
+
+// A co-located component shares the wrapper's authoring workspace with
+// ordinary siblings and other wrappers. All catalog paths stay below it.
+fn check_in(folder: &Path, scope: Option<&Path>) -> Report {
     if folder.join(bri_package::addon::FILE).is_file() {
         return match bri_package::addon::Layout::load(folder) {
             Err(error) => Report {
@@ -79,9 +85,9 @@ pub fn check(folder: &Path) -> Report {
                 diagnostics: vec![Diagnostic::error("check.layout", format!("{error:#}"))],
             },
             Ok(layout) => {
-                let mut report = check(&folder.join(&layout.content));
+                let mut report = check_in(&folder.join(&layout.content), folder.parent());
                 if let Some(server) = layout.server {
-                    let other = check(&folder.join(server));
+                    let other = check_in(&folder.join(server), folder.parent());
                     report.ok &= other.ok;
                     for addon in other.add_ons {
                         if !report.add_ons.iter().any(|a| a.id == addon.id) {
@@ -104,15 +110,21 @@ pub fn check(folder: &Path) -> Report {
         add_ons: vec![],
         diagnostics,
     };
+    let raw_parent = scope.or_else(|| folder.parent());
+    let name = raw_parent
+        .and_then(|p| folder.strip_prefix(p).ok())
+        .and_then(|p| p.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| name.replace('\\', "/"));
     let (Some(parent), Some(name)) = (
-        folder.parent().map(|p| {
+        raw_parent.map(|p| {
             if p.as_os_str().is_empty() {
                 PathBuf::from(".")
             } else {
                 p.to_path_buf()
             }
         }),
-        folder.file_name().and_then(|n| n.to_str()),
+        name,
     ) else {
         return fail(vec![
             Diagnostic::error(
@@ -145,7 +157,20 @@ pub fn check(folder: &Path) -> Report {
             if dir_name != name
                 && let Some(id) = manifest_id(&dir.path())
             {
-                siblings.entry(id).or_insert(dir_name);
+                siblings.entry(id).or_insert_with(|| dir_name.clone());
+            }
+            if dir.path().join(bri_package::addon::FILE).is_file()
+                && let Ok(layout) = bri_package::addon::Layout::load(&dir.path())
+            {
+                for component in
+                    std::iter::once(layout.content.as_str()).chain(layout.server.as_deref())
+                {
+                    if let Some(id) = manifest_id(&dir.path().join(component)) {
+                        siblings
+                            .entry(id)
+                            .or_insert_with(|| format!("{dir_name}/{component}"));
+                    }
+                }
             }
         }
     }

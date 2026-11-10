@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "npc_popculture_rules",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "api": 1,
   "name": "NPC Pop-Culture Reaction Policy",
   "description": "Server-only situational reaction mixing for the bundled recording pack.",

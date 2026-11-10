@@ -1,8 +1,8 @@
 # PR 442 interface adjustments
 
 These changes apply to the reviewed engine interfaces first proposed in
-PR 442. They do not establish acceptance of the separately supplied RenderMan
-Add-Ons, whose assets and private test harness were unavailable during review.
+PR 442. Supplied private Add-Ons were migrated and checked through the actual
+headless host loader; this does not establish interactive playtest acceptance.
 
 - `state_of(package, player, key)` reads only keys declared with
   `"exported": true` in the provider's `behaviour.json` state schema.
@@ -12,7 +12,9 @@ Add-Ons, whose assets and private test harness were unavailable during review.
 - `steer_view(p, at, rate)` and the five-argument form now last one second.
   Renew them while needed or use
   `steer_view(p, at, rate, grip, fov_delta, seconds)` with a 0.1–60 second
-  lease. `steer_view(p)` clears immediately. Expiry restores sensitivity and
+  lease. Renew an active lease even when its parameters have not changed;
+  sending only on movement or parameter changes will let the control expire.
+  `steer_view(p)` clears immediately. Expiry restores sensitivity and
   FOV offset even if the body/eye is absent. The turn uses one proportional
   yaw/pitch budget; it has no special horizontal-pan preference.
 - Replace image `aim_lock_axis: [x, y, z]` with
@@ -26,6 +28,9 @@ Add-Ons, whose assets and private test harness were unavailable during review.
 - `add_bot` preserves normal stock spawn presentation unless its options
   include `quiet: true`. `muted: true` independently publishes the advisory
   NPC voice flag; reaction Add-Ons must honor it.
+  Bundled `npc_popculture_rules` 1.0.2 checks this flag before queueing and
+  before delivery. Muting discards pending reactions; it does not globally
+  stop unrelated audio already playing.
 - `screen_image` accepts `scale` (0.01–1, default 1) and optional RGBA
   `background` (default none). For the original small image over black, pass
   `scale: 0.5, background: [0.0, 0.0, 0.0, 1.0]`. `images` and `sequence`

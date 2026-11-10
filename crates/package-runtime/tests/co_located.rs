@@ -82,6 +82,60 @@ fn co_located_rules_keep_their_host_boundary_through_the_real_install_path() -> 
 }
 
 #[test]
+fn authoring_dependencies_cross_wrapper_boundaries_without_relocating_packages()
+-> anyhow::Result<()> {
+    use serde_json::json;
+    let root = tempfile::tempdir()?;
+    let root = root.path();
+    let write = |path: &str, data: serde_json::Value| -> anyhow::Result<()> {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(path, serde_json::to_vec(&data)?)?;
+        Ok(())
+    };
+    write(
+        "game/addon.json",
+        json!({"schema_version":1,"content":"art","server":"policy"}),
+    )?;
+    write(
+        "game/art/package.json",
+        json!({"schema_version":1,"id":"story-art","version":"1.0.0","api":1,"name":"Art","license":"CC0-1.0","companions":["story-policy"],"dependencies":{"shared-art":"*"},"provides":[]}),
+    )?;
+    write(
+        "game/policy/package.json",
+        json!({"schema_version":1,"id":"story-policy","version":"1.0.0","api":1,"name":"Policy","license":"CC0-1.0","dependencies":{"story-art":"*"},"provides":[{"kind":"behaviour","id":"story-policy:behaviour/main","file":"behaviour.json"},{"kind":"script","id":"story-policy:script/main","file":"main.rhai"}]}),
+    )?;
+    write(
+        "game/policy/behaviour.json",
+        json!({"schema_version":1,"script":"main.rhai","on_join":true}),
+    )?;
+    std::fs::write(root.join("game/policy/main.rhai"), "fn on_join(p) {}")?;
+    write(
+        "shared/addon.json",
+        json!({"schema_version":1,"content":"assets"}),
+    )?;
+    write(
+        "shared/assets/package.json",
+        json!({"schema_version":1,"id":"shared-art","version":"1.0.0","api":1,"name":"Shared","license":"CC0-1.0","provides":[]}),
+    )?;
+    write(
+        "consumer/package.json",
+        json!({"schema_version":1,"id":"consumer","version":"1.0.0","api":1,"name":"Consumer","license":"CC0-1.0","dependencies":{"story-art":"*"},"provides":[]}),
+    )?;
+    for folder in ["game", "consumer"] {
+        let report = check::check(&root.join(folder));
+        assert!(report.ok, "{folder}: {report}");
+        assert!(report.add_ons.iter().any(|a| a.id == "shared-art"));
+    }
+    std::fs::remove_file(root.join("shared/assets/package.json"))?;
+    assert!(
+        !check::check(&root.join("game")).ok,
+        "missing external dependency must still fail"
+    );
+    Ok(())
+}
+
+#[test]
 fn co_location_does_not_allow_path_escape_or_client_rules() {
     for json in [
         r#"{"schema_version":1,"content":"../outside"}"#,
