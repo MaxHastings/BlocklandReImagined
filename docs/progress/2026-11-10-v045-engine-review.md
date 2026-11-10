@@ -69,3 +69,14 @@ and forged-image admission. Documentation checker passed 79 maintained files
 and six generated guide layouts. Final camera/image/light/audio rechecks and
 the extended release gate remain pending. Evidence is kept outside Git under
 `E:/Downloads/BlocklandReImagined-Release-Evidence/v045-2026-11-10`.
+
+Final focused rechecks passed: camera filter nine tests (eight camera plus
+one existing vehicle match), same-frame sound stop, adjacent-holder flicker,
+and eight screen-image schema/animation cases including PNG/JPEG checksums,
+encoded dimensions, namespace isolation, duplicate keys and pixel budgets.
+The scaled image-light integration initially failed exact float equality
+after matrix rotation decomposition (one component differed by 0.0000007).
+Cone comparisons now use a 0.00001 absolute tolerance while retaining the
+exact expected direction/angle, positions, radius and paint checks; the
+corrected test passed. Full per-crate formatting and history checks passed.
+Public review is PR 443; publication and merging are still pending CI/gate.

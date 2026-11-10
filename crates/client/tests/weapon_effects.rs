@@ -1172,9 +1172,13 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
             panic!("one light: {}", lights.len());
         };
         assert_eq!(light.position, at);
-        assert_eq!(
-            light.cone,
-            cone.map_or(bri_content::presentation::ALL_ROUND, |c| c.words(rotation))
+        let expected = cone.map_or(bri_content::presentation::ALL_ROUND, |c| c.words(rotation));
+        assert!(
+            light
+                .cone
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 1e-5)
         );
         assert_eq!(light.radius, 20.);
         assert_eq!(light.color, Vec3::new(0., 0., 1.), "blue, as it is worn");
@@ -1253,14 +1257,18 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
             at + rotation * Vec3::new(0., 3.0, 0.),
             "anchored at the lens"
         );
-        assert_eq!(
-            light.cone,
-            bri_content::presentation::LightCone {
-                inner: 15.,
-                outer: 38.,
-                axis: [0., 1., 0.]
-            }
-            .words(rotation),
+        let expected_cone = bri_content::presentation::LightCone {
+            inner: 15.,
+            outer: 38.,
+            axis: [0., 1., 0.],
+        }
+        .words(rotation);
+        assert!(
+            light
+                .cone
+                .iter()
+                .zip(expected_cone)
+                .all(|(a, b)| (a - b).abs() < 1e-5),
             "beam out the barrel"
         );
     }
@@ -1324,13 +1332,16 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         let beam = lights
             .iter()
             .find(|l| {
+                let expected = bri_content::presentation::LightCone {
+                    inner: 15.,
+                    outer: 38.,
+                    axis: [0., 1., 0.],
+                }
+                .words(rotation);
                 l.cone
-                    == bri_content::presentation::LightCone {
-                        inner: 15.,
-                        outer: 38.,
-                        axis: [0., 1., 0.],
-                    }
-                    .words(rotation)
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| (a - b).abs() < 1e-5)
             })
             .expect("the beam");
         let glow = lights
