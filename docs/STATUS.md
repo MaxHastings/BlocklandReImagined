@@ -1,13 +1,24 @@
 # Status
 
-Current release and engineering decisions. Reviewed 2026-11-05. Players should
+Current release and engineering decisions. Reviewed 2026-11-10. Players should
 start with the [tester guide](TESTER-GUIDE.md), [features](FEATURES.md) and
 [known issues](KNOWN-ISSUES.md). Dated development receipts are in
 [progress/](progress/README.md); older history is in [progress.md](progress.md).
 
 ## Release state
 
-Published release: [v0.4.4 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.4),
+Published release: [v0.4.5 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.5),
+published 2026-11-10T18:34:26Z from `befa91e18a9560a5863fd44643bc21f57c3c28d0`.
+Windows x86-64, Apple-silicon macOS and Linux x86-64 ZIPs and SHA256SUMS are
+public; anonymous downloads match the verified native packages. This release
+merges the generalized PR 442 controls and resolves issue 428 with co-located
+native Add-Ons. See [release notes](releases/v0.4.5.md),
+[API migration](modding/v045-migration.md) and the
+[publication receipt](progress/2026-11-10-v045-public-release.md) for exact checks and retained limitations.
+Maxwell requested release without interactive playtesting; full alpha acceptance
+remains incomplete.
+
+Previous release: [v0.4.4 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.4),
 published November 05, 2026 at 05:56:46 UTC, from
 `cef86341bb39add681eb406eba5bd4a5e1480a1b`. Windows x86-64, Apple-silicon macOS
 and Linux x86-64 ZIPs and SHA256SUMS are public and match the verified packages.
@@ -31,7 +42,7 @@ published October 30, 2026 at 04:22:56 AM America/Chicago, from
 Apple-silicon macOS and Linux x86-64 ZIPs and SHA256SUMS are public. Every
 public download matches its tested artifact, the tag names the tested source,
 and its published assets stay immutable. The latest-release endpoint now
-returns v0.4.4.
+returns v0.4.5.
 
 That release integrates bot/navigation recovery, brick destruction contact,
 approved indoor/outdoor map ambience and tool swings, the accepted small
