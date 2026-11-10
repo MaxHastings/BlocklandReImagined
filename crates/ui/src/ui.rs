@@ -2403,7 +2403,7 @@ impl Ui {
                     }
                 }
                 _ => {}
-            }
+            },
             UiUpdate::DamageFlash(amount) => {
                 if amount.is_finite() {
                     c.damage_flash = (c.damage_flash + amount.max(0.0)).min(0.75);
@@ -3152,12 +3152,9 @@ impl Ui {
         if let Some((_, ran)) = &mut c.screen_image {
             *ran += dt_ms as f32 / 1000.0;
         }
-        if c
-            .screen_image
+        if c.screen_image
             .as_ref()
-            .is_some_and(|(cue, ran)| {
-                *ran >= cue.seconds + bri_content::screen_image::CLEAR_FADE
-            })
+            .is_some_and(|(cue, ran)| *ran >= cue.seconds + bri_content::screen_image::CLEAR_FADE)
         {
             c.screen_image = None;
         }

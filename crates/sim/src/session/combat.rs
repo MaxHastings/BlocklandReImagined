@@ -2906,8 +2906,7 @@ impl Session {
         // A bot Add-On rules placed re-enters without that presentation, as
         // it joined (its own script plays its poof).
         if self.bots.rules_package(owner).is_none() {
-            let center =
-                feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
+            let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
             let _ = self
                 .weapons
                 .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
@@ -2980,8 +2979,7 @@ impl Session {
             }
         }
         if !rules_placed {
-            let center =
-                feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
+            let center = feet + Vec3::Y * self.peers[&owner].player.tuning().stand_height * 0.5;
             let _ = self
                 .weapons
                 .spawn(SPAWN_PROJECTILE, ActorId(owner), center, Vec3::ZERO, 1.0);
@@ -3577,7 +3575,10 @@ mod tests {
         let mut s = session()?;
         let who = s.join("Gone".into(), Vec3::new(0.0, 0.1, 0.0), false)?;
         s.damage_player(who, 1000.0, DamageKind::Event, None)?;
-        assert!(!s.peers[&who].combat.corpse_cleared, "it lies until removed");
+        assert!(
+            !s.peers[&who].combat.corpse_cleared,
+            "it lies until removed"
+        );
         s.remove_body(who)?;
         let peer = &s.peers[&who];
         assert!(peer.combat.corpse_cleared && peer.combat.held);

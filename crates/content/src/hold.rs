@@ -289,7 +289,8 @@ pub const AIM_LOCK_MAX_TURN: f32 = std::f32::consts::FRAC_PI_3;
 /// more than [`AIM_LOCK_MAX_TURN`] from natural. A degenerate direction
 /// gives identity, leaving the hand exactly as posed.
 pub fn aim_lock_turn(natural: Vec3, look: Vec3) -> Quat {
-    if !natural.is_finite() || natural.length_squared() < 1e-6
+    if !natural.is_finite()
+        || natural.length_squared() < 1e-6
         || !look.is_finite()
         || look.length_squared() < 1e-6
     {
@@ -381,9 +382,7 @@ mod tests {
     #[test]
     fn an_aim_lock_turns_the_barrel_to_the_view_and_no_further() {
         // Aligned: no turn.
-        assert!(
-            aim_lock_turn(Vec3::NEG_Z, Vec3::NEG_Z).abs_diff_eq(Quat::IDENTITY, 1e-6)
-        );
+        assert!(aim_lock_turn(Vec3::NEG_Z, Vec3::NEG_Z).abs_diff_eq(Quat::IDENTITY, 1e-6));
         // A swing inside the wrist's range is the exact shortest arc.
         let look = Quat::from_rotation_y(0.4) * Vec3::NEG_Z;
         let turn = aim_lock_turn(Vec3::NEG_Z, look);

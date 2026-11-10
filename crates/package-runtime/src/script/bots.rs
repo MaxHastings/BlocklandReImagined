@@ -31,9 +31,7 @@ fn kind_map(k: &BotKindView) -> Dynamic {
 
 fn add_bot(game: Dynamic, options: Map) -> Fallible<INT> {
     for key in options.keys() {
-        if !["kind", "team", "name", "muted"]
-            .contains(&key.as_str())
-        {
+        if !["kind", "team", "name", "muted"].contains(&key.as_str()) {
             return fail(format!(
                 "add_bot options are kind, team, name and muted, not `{key}`"
             ));
@@ -65,7 +63,9 @@ fn add_bot(game: Dynamic, options: Map) -> Fallible<INT> {
     // can queue a line for it before its rules have run.
     let muted = match options.get("muted") {
         None => false,
-        Some(m) => m.as_bool().map_err(|_| "add_bot `muted` is true or false")?,
+        Some(m) => m
+            .as_bool()
+            .map_err(|_| "add_bot `muted` is true or false")?,
     };
     push(Op::AddBot(ops::AddBot {
         game: id(&game)?,

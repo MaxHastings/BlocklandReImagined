@@ -506,8 +506,16 @@ fn cmd_check(p) {
     s.step().unwrap();
     assert_eq!(gstate(&s, "loaded_radio"), json!(1));
     assert_eq!(gstate(&s, "loaded_missing"), json!(0));
-    assert_eq!(gstate(&s, "saw_on"), json!(1), "server-visible key unreadable");
-    assert_eq!(gstate(&s, "saw_secret"), json!(0), "owner-visible key leaked");
+    assert_eq!(
+        gstate(&s, "saw_on"),
+        json!(1),
+        "server-visible key unreadable"
+    );
+    assert_eq!(
+        gstate(&s, "saw_secret"),
+        json!(0),
+        "owner-visible key leaked"
+    );
 
     // A flip is visible on the next tick; an unset value reads as ().
     seq += 1;
@@ -525,7 +533,11 @@ fn cmd_check(p) {
     s.step().unwrap();
     check(&mut s, p, &mut seq);
     s.step().unwrap();
-    assert_eq!(gstate(&s, "saw_on"), json!(0), "stale value read across a flip");
+    assert_eq!(
+        gstate(&s, "saw_on"),
+        json!(0),
+        "stale value read across a flip"
+    );
 }
 
 #[test]

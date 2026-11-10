@@ -943,9 +943,7 @@ impl App {
                             );
                             continue;
                         }
-                        bri_sim::session::Notice::StopSound {
-                            profile,
-                        } => {
+                        bri_sim::session::Notice::StopSound { profile } => {
                             self.audio.stop_profile(&profile);
                             continue;
                         }
@@ -953,9 +951,7 @@ impl App {
                             UiUpdate::Flash { color, seconds }
                         }
                         bri_sim::session::Notice::Overlay(overlay) => UiUpdate::Overlay(overlay),
-                        bri_sim::session::Notice::ScreenImage(cue) => {
-                            UiUpdate::ScreenImage(cue)
-                        }
+                        bri_sim::session::Notice::ScreenImage(cue) => UiUpdate::ScreenImage(cue),
                         bri_sim::session::Notice::Line {
                             feed,
                             text,
@@ -1017,8 +1013,12 @@ impl App {
                             grip,
                             fov_delta,
                         } => {
-                            self.controls
-                                .steer_view(at.map(glam::Vec3::from), rate, grip, fov_delta);
+                            self.controls.steer_view(
+                                at.map(glam::Vec3::from),
+                                rate,
+                                grip,
+                                fov_delta,
+                            );
                             continue;
                         }
                         bri_sim::session::Notice::Fov(fov) => {

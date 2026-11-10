@@ -396,7 +396,9 @@ impl Perform for ops::WearImage {
             );
         }
         let kept = keep && image.is_some();
-        session.weapons.wear(actor, slot, image.as_deref(), paint, keep)?;
+        session
+            .weapons
+            .wear(actor, slot, image.as_deref(), paint, keep)?;
         let host = session
             .packages
             .as_mut()
@@ -705,9 +707,23 @@ impl Perform for ops::KickView {
 }
 impl Perform for ops::SteerView {
     fn perform(self, session: &mut Session, _cx: OpCall<'_>) -> Result<()> {
-        let ops::SteerView { player, at, rate, grip, fov_delta } = self;
+        let ops::SteerView {
+            player,
+            at,
+            rate,
+            grip,
+            fov_delta,
+        } = self;
         ensure!(session.peers.contains_key(&player), "No such player");
-        session.notify(player, Notice::SteerView { at, rate, grip, fov_delta });
+        session.notify(
+            player,
+            Notice::SteerView {
+                at,
+                rate,
+                grip,
+                fov_delta,
+            },
+        );
         Ok(())
     }
 }

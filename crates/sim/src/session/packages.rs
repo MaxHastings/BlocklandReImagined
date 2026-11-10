@@ -1323,10 +1323,7 @@ impl Session {
             }
             for (owner, _) in self.peers.iter() {
                 let key = self.player_key(*owner);
-                let Some(values) = host
-                    .store
-                    .namespace(id)
-                    .and_then(|ns| ns.players.get(&key))
+                let Some(values) = host.store.namespace(id).and_then(|ns| ns.players.get(&key))
                 else {
                     continue;
                 };
@@ -1560,12 +1557,7 @@ impl Session {
             minigames: self.script_minigames(),
             tethers: self.tether_views(),
             package_ids: host
-                .map(|h| {
-                    h.catalog
-                        .behaviours()
-                        .map(|(id, _)| id.clone())
-                        .collect()
-                })
+                .map(|h| h.catalog.behaviours().map(|(id, _)| id.clone()).collect())
                 .unwrap_or_default(),
             peer_state: self.peer_state_view(host.map(|v| &**v)),
         }

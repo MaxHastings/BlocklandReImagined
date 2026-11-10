@@ -2024,5 +2024,4 @@ mod tests {
         assert_eq!(normalized_pose(&once, 1.0), normalized_pose(&once, 1.05));
         assert_eq!(f32::from_bits(normalized_pose(&once, 1.0).seconds), 0.5);
     }
-
 }

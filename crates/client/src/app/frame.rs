@@ -1368,7 +1368,13 @@ impl App {
                 } else {
                     self.combat.hug_pose(*owner, held)
                 };
-                let mut seat_holds = self.mounts.rider_hands.get(owner).copied().filter(|_| !dead).unwrap_or_default();
+                let mut seat_holds = self
+                    .mounts
+                    .rider_hands
+                    .get(owner)
+                    .copied()
+                    .filter(|_| !dead)
+                    .unwrap_or_default();
                 if !dead {
                     if let Some(images) = view.weapons.images.get(owner) {
                         for mounted in images {
@@ -1386,8 +1392,10 @@ impl App {
                             else {
                                 continue;
                             };
-                            let Some(barrel) =
-                                self.world_items.assets().aim_lock_barrel(&mounted.image, axis)
+                            let Some(barrel) = self
+                                .world_items
+                                .assets()
+                                .aim_lock_barrel(&mounted.image, axis)
                             else {
                                 continue;
                             };
@@ -1404,9 +1412,13 @@ impl App {
                                     * glam::Quat::from_rotation_x(player.pitch)
                                     * glam::Vec3::NEG_Z
                             };
-                            if let Some(hold) = self.avatar.avatars.get_mut(owner).unwrap().aim_lock_hold(
-                                &self.avatar.avatar_assets, hand, barrel, look_dir,
-                            ) {
+                            if let Some(hold) = self
+                                .avatar
+                                .avatars
+                                .get_mut(owner)
+                                .unwrap()
+                                .aim_lock_hold(&self.avatar.avatar_assets, hand, barrel, look_dir)
+                            {
                                 seat_holds[hand] = Some(hold);
                             }
                         }
@@ -1768,7 +1780,12 @@ impl App {
                 Some(building),
                 weapons,
                 game_elapsed.as_secs_f32(),
-                |owner| view.vitals.get(&owner).map(|v| v.image_light_flicker).unwrap_or(0.),
+                |owner| {
+                    view.vitals
+                        .get(&owner)
+                        .map(|v| v.image_light_flicker)
+                        .unwrap_or(0.)
+                },
             );
             self.cosmetic_faults.absorb("weapon effects", parts);
             for (profile, point, seed) in self.fx.weapon_effects.take_contact_audio(|impact| {

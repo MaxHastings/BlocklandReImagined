@@ -1528,8 +1528,7 @@ impl ItemAssets {
             .unwrap_or(Mat4::IDENTITY);
         let (_, correction_rotation, _) = correction.to_scale_rotation_translation();
         let direction = (in_hand * correction_rotation) * Vec3::from(axis);
-        (direction.is_finite() && direction.length_squared() > 1e-6)
-            .then(|| direction.normalize())
+        (direction.is_finite() && direction.length_squared() > 1e-6).then(|| direction.normalize())
     }
     /// Where the off hand holds image `id` when it is held in both hands,
     /// in the frame of the hand holding it ([`bri_weapons::muzzle::support`]).

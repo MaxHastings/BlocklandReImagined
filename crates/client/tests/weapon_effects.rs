@@ -1218,12 +1218,15 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         );
         let mut fx = WeaponEffects::new(fixture(false), Arc::new(pack), EffectsLimits::default())?;
         let held = WeaponView {
-            images: BTreeMap::from([(7, vec![bri_sim::session::MountedImage {
-                image: "torch".into(),
-                state: "Idle".into(),
-                hand: 1,
-                paint: None,
-            }])]),
+            images: BTreeMap::from([(
+                7,
+                vec![bri_sim::session::MountedImage {
+                    image: "torch".into(),
+                    state: "Idle".into(),
+                    hand: 1,
+                    paint: None,
+                }],
+            )]),
             ..Default::default()
         };
         let at = Vec3::new(2., 1., 0.);
@@ -1289,12 +1292,15 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         );
         let mut fx = WeaponEffects::new(fixture(false), Arc::new(pack), EffectsLimits::default())?;
         let held = WeaponView {
-            images: BTreeMap::from([(7, vec![bri_sim::session::MountedImage {
-                image: "lantern".into(),
-                state: "Idle".into(),
-                hand: 1,
-                paint: None,
-            }])]),
+            images: BTreeMap::from([(
+                7,
+                vec![bri_sim::session::MountedImage {
+                    image: "lantern".into(),
+                    state: "Idle".into(),
+                    hand: 1,
+                    paint: None,
+                }],
+            )]),
             ..Default::default()
         };
         let at = Vec3::new(2., 1., 0.);
@@ -1317,13 +1323,15 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         let lens = at + rotation * Vec3::new(0., 1.5, 0.);
         let beam = lights
             .iter()
-            .find(|l| l.cone
-                == bri_content::presentation::LightCone {
-                    inner: 15.,
-                    outer: 38.,
-                    axis: [0., 1., 0.]
-                }
-                .words(rotation))
+            .find(|l| {
+                l.cone
+                    == bri_content::presentation::LightCone {
+                        inner: 15.,
+                        outer: 38.,
+                        axis: [0., 1., 0.],
+                    }
+                    .words(rotation)
+            })
             .expect("the beam");
         let glow = lights
             .iter()
@@ -1334,7 +1342,11 @@ fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result
         assert_eq!(beam.radius, 25.);
         assert_eq!(beam.color, Vec3::new(0.9, 0.87, 0.8));
         assert_eq!(glow.radius, 8., "the glow's own radius");
-        assert_eq!(glow.color, Vec3::new(1.0, 0.6, 0.2), "the glow's own colour");
+        assert_eq!(
+            glow.color,
+            Vec3::new(1.0, 0.6, 0.2),
+            "the glow's own colour"
+        );
         fx.sync_image_lights(
             &WeaponView::default(),
             |_, _| {

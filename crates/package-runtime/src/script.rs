@@ -1720,7 +1720,7 @@ fn register_api(engine: &mut Engine) {
         with(|i| {
             let pid = match id(&player) {
                 Ok(pid) => pid,
-                Err(_) => return Ok(Dynamic::UNIT),   // a gone body reads as unset, not an error
+                Err(_) => return Ok(Dynamic::UNIT), // a gone body reads as unset, not an error
             };
             Ok(i.snapshot
                 .peer_state
@@ -2050,12 +2050,15 @@ fn register_api(engine: &mut Engine) {
     // `set_image_light_flicker(player, amount)`: 0 to 1, how hard the image
     // lights they wear or hold flicker; generic for any rule that wants a held
     // device to stutter. Rides in vitals so each client flickers its own copy.
-    engine.register_fn("set_image_light_flicker", |player: Dynamic, amount: Dynamic| {
-        push(Op::SetImageLightFlicker(ops::SetImageLightFlicker {
-            player: id(&player)?,
-            amount: float(&amount)?,
-        }))
-    });
+    engine.register_fn(
+        "set_image_light_flicker",
+        |player: Dynamic, amount: Dynamic| {
+            push(Op::SetImageLightFlicker(ops::SetImageLightFlicker {
+                player: id(&player)?,
+                amount: float(&amount)?,
+            }))
+        },
+    );
     engine.register_fn("set_archetype", |player: Dynamic, archetype: &str| {
         push(Op::SetArchetype(ops::SetArchetype {
             player: id(&player)?,
@@ -2985,7 +2988,11 @@ fn register_api(engine: &mut Engine) {
             Some(
                 serde_json::to_value(view::plain(&spec))
                     .and_then(serde_json::from_value)
-                    .map_err(|e| format!("a screen image is #{{ images or sequence, fps, seconds, aspect }}: {e}"))?,
+                    .map_err(|e| {
+                        format!(
+                            "a screen image is #{{ images or sequence, fps, seconds, aspect }}: {e}"
+                        )
+                    })?,
             )
         };
         push(Op::ScreenImage(ops::ScreenImage {

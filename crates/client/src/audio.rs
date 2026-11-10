@@ -773,7 +773,9 @@ impl ClientAudio {
     /// here, with a short fade so the cut doesn't click; queued cues and
     /// other profiles are untouched.
     pub fn stop_profile(&mut self, profile: &str) {
-        let Some(handles) = self.rule_sounds.remove(profile) else { return; };
+        let Some(handles) = self.rule_sounds.remove(profile) else {
+            return;
+        };
         for handle in handles {
             // 50 ms: imperceptible as "still playing", no click on the cut.
             let result = self.runtime.stop_with_fade(handle, 0.05);

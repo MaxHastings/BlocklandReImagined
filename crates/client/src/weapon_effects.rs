@@ -710,8 +710,7 @@ impl WeaponEffects {
         // A stable offset in [0, 1) derived from the id.
         let seed = (owner.wrapping_mul(0x9E37_79B9) >> 11) as f64 / (1u64 << 53) as f64;
         let t = clock + seed;
-        let n =
-            ((t * 23.).sin() * 0.5 + (t * 40.).sin() * 0.3 + (t * 97.).sin() * 0.2) * 0.5 + 0.5;
+        let n = ((t * 23.).sin() * 0.5 + (t * 40.).sin() * 0.3 + (t * 97.).sin() * 0.2) * 0.5 + 0.5;
         // At full amount the light dips to ~5% of its brightness and recovers.
         (1. - a * (0.35 + 0.6 * n)).max(0.05) as f32
     }
@@ -736,7 +735,11 @@ impl WeaponEffects {
         let mut desired = BTreeMap::new();
         for (owner, images) in &view.images {
             for m in images {
-                if let Some(image) = self.weapons.images.get(&m.image).filter(|i| i.light.is_some())
+                if let Some(image) = self
+                    .weapons
+                    .images
+                    .get(&m.image)
+                    .filter(|i| i.light.is_some())
                     && let Some(mut transform) = at(*owner, m.hand).filter(|t| valid_transform(*t))
                 {
                     // A light anchored inside the model (a flashlight's lens)
@@ -789,9 +792,7 @@ impl WeaponEffects {
                             Ok(handle) => sources.glow = Some(handle),
                             Err(_) => {
                                 self.diagnostics.capacity_rejections =
-                                    self.diagnostics
-                                        .capacity_rejections
-                                        .saturating_add(1);
+                                    self.diagnostics.capacity_rejections.saturating_add(1);
                             }
                         }
                     }
@@ -808,17 +809,11 @@ impl WeaponEffects {
             match world.start_light(&image_light(&image), transform, options.clone()) {
                 Ok(main_handle) => {
                     let glow = if glow_wanted {
-                        match world.start_light(
-                            &image_glow_light(&image),
-                            transform,
-                            options,
-                        ) {
+                        match world.start_light(&image_glow_light(&image), transform, options) {
                             Ok(handle) => Some(handle),
                             Err(_) => {
                                 self.diagnostics.capacity_rejections =
-                                    self.diagnostics
-                                        .capacity_rejections
-                                        .saturating_add(1);
+                                    self.diagnostics.capacity_rejections.saturating_add(1);
                                 None
                             }
                         }

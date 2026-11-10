@@ -952,19 +952,28 @@ mod tests {
             for n in 0..2 {
                 // No reach: the hand stays where the animation put it, and so
                 // does the arm.
-                assert!(nodes[ends[n]]
-                    .w_axis
-                    .truncate()
-                    .abs_diff_eq(bind[ends[n]].w_axis.truncate(), 1e-6), "hand {n} reached");
-                assert!(nodes[arms[n]].abs_diff_eq(bind[arms[n]], 1e-6), "arm {n} moved");
+                assert!(
+                    nodes[ends[n]]
+                        .w_axis
+                        .truncate()
+                        .abs_diff_eq(bind[ends[n]].w_axis.truncate(), 1e-6),
+                    "hand {n} reached"
+                );
+                assert!(
+                    nodes[arms[n]].abs_diff_eq(bind[arms[n]], 1e-6),
+                    "arm {n} moved"
+                );
                 if turn != Quat::IDENTITY {
                     // ...but the wrist subtree turns, exactly, in the world.
-                    assert!(world_rotation(&nodes, ends[n]).abs_diff_eq(
-                        turn * world_rotation(&bind, ends[n]),
-                        1e-5
-                    ));
+                    assert!(
+                        world_rotation(&nodes, ends[n])
+                            .abs_diff_eq(turn * world_rotation(&bind, ends[n]), 1e-5)
+                    );
                 } else {
-                    assert!(nodes[ends[n]].abs_diff_eq(bind[ends[n]], 1e-6), "identity turn changed the hand");
+                    assert!(
+                        nodes[ends[n]].abs_diff_eq(bind[ends[n]], 1e-6),
+                        "identity turn changed the hand"
+                    );
                 }
             }
         }

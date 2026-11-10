@@ -566,7 +566,8 @@ fn hud(core: &Core) -> View {
     }
     if let Some((cue, ran)) = &core.screen_image {
         // The board holds through its seconds, then fades out over CLEAR_FADE.
-        let fade = 1.0 - ((*ran - cue.seconds) / bri_content::screen_image::CLEAR_FADE).clamp(0.0, 1.0);
+        let fade =
+            1.0 - ((*ran - cue.seconds) / bri_content::screen_image::CLEAR_FADE).clamp(0.0, 1.0);
         // The black backdrop ramps in fast, holds while the frame plays, and
         // fades with it.
         fill(
@@ -586,7 +587,12 @@ fn hud(core: &Core) -> View {
         if let Some(key) = cue.frame_key_at(*ran) {
             art(
                 &mut v,
-                Rect::new((w - fw as i32) / 2, (h - fh as i32) / 2, fw as i32, fh as i32),
+                Rect::new(
+                    (w - fw as i32) / 2,
+                    (h - fh as i32) / 2,
+                    fw as i32,
+                    fh as i32,
+                ),
                 &key,
                 [255, 255, 255, (fade * 255.0).round() as u8],
             );

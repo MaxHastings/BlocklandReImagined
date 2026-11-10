@@ -60,15 +60,20 @@ pub struct ScreenImageCue {
 impl ScreenImageCue {
     /// How many frames this cue shows.
     pub fn frame_count(&self) -> usize {
-        self.sequence.as_ref().map(|s| s.count).unwrap_or(self.images.len())
+        self.sequence
+            .as_ref()
+            .map(|s| s.count)
+            .unwrap_or(self.images.len())
     }
     /// Whether every number and key is usable.
     pub fn bounded(&self) -> bool {
         (1..=MAX_FRAMES).contains(&self.frame_count())
             && match &self.sequence {
-                Some(s) => !s.prefix.is_empty()
-                    && s.prefix.len() <= 96
-                    && !s.prefix.chars().any(char::is_control),
+                Some(s) => {
+                    !s.prefix.is_empty()
+                        && s.prefix.len() <= 96
+                        && !s.prefix.chars().any(char::is_control)
+                }
                 None => self
                     .images
                     .iter()
@@ -133,7 +138,10 @@ mod tests {
             aspect: 1.0,
         };
         assert!(cue.bounded());
-        assert_eq!(cue.frame_key_at(0.0).as_deref(), Some("add-ons/support_render/ui/render_0"));
+        assert_eq!(
+            cue.frame_key_at(0.0).as_deref(),
+            Some("add-ons/support_render/ui/render_0")
+        );
         assert_eq!(
             cue.frame_key_at(1.0 / 15.0).as_deref(),
             Some("add-ons/support_render/ui/render_1")

@@ -332,7 +332,10 @@ impl Session {
         if muted {
             // Before placement: the game's spawn event and any first-step
             // report fire after this, so reaction Add-Ons see it muted.
-            self.peers.get_mut(&bot).expect("newly embodied bot").voice_muted = true;
+            self.peers
+                .get_mut(&bot)
+                .expect("newly embodied bot")
+                .voice_muted = true;
         }
         let crossed = self.crossings.count();
         self.bots
@@ -1080,7 +1083,13 @@ mod spawn_tests {
         let game = s.game_of(host).unwrap();
         const PKG: &str = "test:facing";
         s.add_rules_bot(PKG, game.0, None, "fixture:bot/melee", "Render", false)?;
-        let bot = *s.bots.by_rules.iter().find(|(_, (p, _))| p == PKG).unwrap().0;
+        let bot = *s
+            .bots
+            .by_rules
+            .iter()
+            .find(|(_, (p, _))| p == PKG)
+            .unwrap()
+            .0;
 
         // Rested without a facing hold, it stands where it stood...
         s.rest_rules_bot(PKG, bot, true)?;
@@ -1101,7 +1110,11 @@ mod spawn_tests {
         );
 
         // An object target is re-resolved each tick: it turns to the player...
-        s.rules_bot_facing(PKG, bot, Some(FacingTarget::Object(ObjectRef::Player(fighter))))?;
+        s.rules_bot_facing(
+            PKG,
+            bot,
+            Some(FacingTarget::Object(ObjectRef::Player(fighter))),
+        )?;
         for _ in 0..16 {
             s.step()?;
         }
@@ -1155,7 +1168,13 @@ mod spawn_tests {
         let game = s.game_of(host).unwrap();
         const PKG: &str = "test:walking";
         s.add_rules_bot(PKG, game.0, None, "fixture:bot/melee", "Render", false)?;
-        let bot = *s.bots.by_rules.iter().find(|(_, (p, _))| p == PKG).unwrap().0;
+        let bot = *s
+            .bots
+            .by_rules
+            .iter()
+            .find(|(_, (p, _))| p == PKG)
+            .unwrap()
+            .0;
         s.rest_rules_bot(PKG, bot, true)?;
 
         // It drops at the map drop point and stands there...
@@ -1163,22 +1182,28 @@ mod spawn_tests {
             s.step()?;
         }
         let start = Vec3::from(s.peers[&bot].player.state().feet);
-        assert!(start.length() < 1.0, "the rules bot drops at the map drop point");
+        assert!(
+            start.length() < 1.0,
+            "the rules bot drops at the map drop point"
+        );
 
         // ...and a follow beyond its distance walks it toward the mark — at
         // walk speed: no single tick may move it far (a teleport would).
-        s.peers
-            .get_mut(&fighter)
-            .unwrap()
-            .player
-            .teleport(&mut s.simulation.physics, Vec3::new(28., 0.05, 0.), 0.0)?;
+        s.peers.get_mut(&fighter).unwrap().player.teleport(
+            &mut s.simulation.physics,
+            Vec3::new(28., 0.05, 0.),
+            0.0,
+        )?;
         for _ in 0..16 {
             s.step()?;
         }
         s.set_bot_intent(
             PKG,
             bot,
-            Some(BotIntent::Follow { leader: fighter, distance: 25.0 }),
+            Some(BotIntent::Follow {
+                leader: fighter,
+                distance: 25.0,
+            }),
         )?;
         let mut last = start;
         let mut still = 0u32;
@@ -1187,7 +1212,10 @@ mod spawn_tests {
             s.step()?;
             let feet = Vec3::from(s.peers[&bot].player.state().feet);
             let step_len = flat(feet - last).length();
-            assert!(step_len < 1.0, "a held bot walks; one tick moved it {step_len}");
+            assert!(
+                step_len < 1.0,
+                "a held bot walks; one tick moved it {step_len}"
+            );
             // Facing its mark while it walks.
             if !faced && flat(feet - start).length() > 1.0 {
                 let mark = s.object_centre(ObjectRef::Player(fighter)).unwrap();
