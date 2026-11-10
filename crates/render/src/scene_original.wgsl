@@ -572,6 +572,32 @@ fn combined_pcss_tap(uv:vec2<f32>,z:f32,z_map:f32,cascade:i32,occluder_layer:i32
     // the two separate interpolations.
     return dot(lit_caster*lit_map,vec4<f32>((1.0-t.x)*t.y,t.x*t.y,t.x*(1.0-t.y),(1.0-t.x)*(1.0-t.y)));
 }
+// The caster half of combined_pcss_tap on its own - the same two layers and
+// rules, bilinear over the per-texel lit values; 0 means every weighted texel
+// is blocked by a casting surface. Combined_pcss_lit uses it to prove a
+// receiver is fully covered before skipping the map work entirely.
+fn combined_caster_lit(uv:vec2<f32>,z:f32,cascade:i32,occluder_layer:i32,gap:f32)->f32 {
+    let size=shadows.params.y;
+    let f=uv*size-vec2<f32>(0.5);
+    let base=clamp(floor(f),vec2<f32>(0.0),vec2<f32>(size-2.0));
+    let t=clamp(f-base,vec2<f32>(0.0),vec2<f32>(1.0));
+    let corner=(base+vec2<f32>(1.0))/size;
+    let casters=textureGather(shadow_map,shadow_point,corner,cascade);
+    let occluders=textureGather(shadow_map,shadow_point,corner,occluder_layer);
+    let between=occluders>casters+vec4<f32>(gap) & occluders<vec4<f32>(z-gap);
+    let lit_caster=select(vec4<f32>(1.0),vec4<f32>(0.0),casters<vec4<f32>(z) & !between);
+    return dot(lit_caster,vec4<f32>((1.0-t.x)*t.y,t.x*t.y,t.x*(1.0-t.y),(1.0-t.x)*(1.0-t.y)));
+}
+// The map half of combined_pcss_tap on its own; one gather instead of three.
+fn combined_map_lit(uv:vec2<f32>,z_map:f32,map_layer:i32)->f32 {
+    let size=shadows.params.y;
+    let f=uv*size-vec2<f32>(0.5);
+    let base=clamp(floor(f),vec2<f32>(0.0),vec2<f32>(size-2.0));
+    let t=clamp(f-base,vec2<f32>(0.0),vec2<f32>(1.0));
+    let corner=(base+vec2<f32>(1.0))/size;
+    let maps=textureGather(shadow_map,shadow_point,corner,map_layer);
+    return dot(select(vec4<f32>(1.0),vec4<f32>(0.0),maps<vec4<f32>(z_map)),vec4<f32>((1.0-t.x)*t.y,t.x*t.y,t.x*(1.0-t.y),(1.0-t.x)*(1.0-t.y)));
+}
 // One PCSS pass over the live casters and the map layer together, so a
 // receiver's sun is filtered once instead of twice. The blocker search runs
 // in both layers at once: each layer keeps its own bias, slope and occluder
@@ -623,10 +649,17 @@ fn combined_pcss_lit(c:CascadeCoord)->f32 {
     );
     var blocker_sum=0.0;
     var weights=0.0;
+    // Whether the caster layer blocks anywhere (or everywhere) at the sampled
+    // positions, tracked for free while the search runs so the filter below
+    // can skip work that provably cannot change its result.
+    var caster_blocks_any=false;
+    var casters_block_all=true;
     let core_caster=textureGather(shadow_map,shadow_point,corner,c.cascade);
     let caster_blocks=core_caster<vec4<f32>(depth_minus_bias)+s;
     blocker_sum+=pcss_sum4(select(vec4<f32>(0.0),c.depth-core_caster,caster_blocks))*inv_scale;
     weights+=pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),caster_blocks));
+    caster_blocks_any=caster_blocks_any||pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),caster_blocks))>0.0;
+    casters_block_all=casters_block_all&&pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),caster_blocks))==4.0;
     let core_map=textureGather(shadow_map,shadow_point,corner,map_layer);
     let map_blocks=core_map<vec4<f32>(z_map_minus_bias)+s*map_scale;
     blocker_sum+=pcss_sum4(select(vec4<f32>(0.0),z_map-core_map,map_blocks))*inv_scale_map;
@@ -645,10 +678,13 @@ fn combined_pcss_lit(c:CascadeCoord)->f32 {
         // from the receiver's unadjusted depth, as each filter did alone.
         let w=1.0-(f32(i)+0.5)*search_weight_scale;
         let d_caster=textureLoad(shadow_map,texel_at,c.cascade,0);
-        if d_caster<depth_minus_bias+dot(c.slope,offset) {
+        let caster_here=d_caster<depth_minus_bias+dot(c.slope,offset);
+        if caster_here {
             blocker_sum+=w*(c.depth-d_caster)*inv_scale;
             weights+=w;
         }
+        caster_blocks_any=caster_blocks_any||caster_here;
+        casters_block_all=casters_block_all&&caster_here;
         let d_map=textureLoad(shadow_map,texel_at,map_layer,0);
         if d_map<z_map_minus_bias+dot(c.slope,offset)*map_scale {
             blocker_sum+=w*(z_map-d_map)*inv_scale_map;
@@ -661,6 +697,26 @@ fn combined_pcss_lit(c:CascadeCoord)->f32 {
     var lit=0.0;
     let radius_over_size=radius/size;
     let filter_weight_scale=1.0/f32(PCSS_FILTER_TAPS);
+    // Fast paths over the same fixed tap layout: if every sampled position is
+    // caster-blocked, prove full coverage at the taps themselves (each tap's
+    // weighted lit sum zero makes the per-texel product zero, so the combined
+    // filter would return exactly 0) and skip it; if no sampled position has a
+    // caster blocking, casters cannot contribute at search resolution, so the
+    // map factor alone - same taps, same radius, one gather each - is exact.
+    if casters_block_all {
+        var covered=true;
+        for (var i=0;i<PCSS_FILTER_TAPS;i+=1) {
+            let offset=pcss_disc(i,PCSS_FILTER_TAPS,0.0)*radius_over_size;
+            if combined_caster_lit(c.uv+offset,depth_minus_bias+dot(c.slope,offset),c.cascade,occluder_layer,gap)>0.0 {covered=false;break;}
+        }
+        if covered {return 0.0;}
+    } else if !caster_blocks_any {
+        for (var i=0;i<PCSS_FILTER_TAPS;i+=1) {
+            let offset=pcss_disc(i,PCSS_FILTER_TAPS,0.0)*radius_over_size;
+            lit+=combined_map_lit(c.uv+offset,z_map_minus_bias+dot(c.slope,offset)*map_scale,map_layer);
+        }
+        return lit*filter_weight_scale;
+    }
     // The filter taps keep one fixed layout across all pixels (the search
     // ring above keeps its per-pixel angle for the radius estimate): every
     // pixel averages the same directions, so neighbouring pixels differ only

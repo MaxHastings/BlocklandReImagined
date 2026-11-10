@@ -39,18 +39,17 @@ behaviour - and costs less than either pair of filters combined.
 
 ## Cost per shadowed receiver (texture ops)
 
-| Case | Branch as committed | Early-outs (prev note) | Unified pass |
-|---|---|---|---|
-| General (both layers active) | ~90 (41 + 49) | ~90 | **~82** (2 core gathers + 32 ring loads + 16 taps x 3 gathers) |
-| Cascade blend band (two cascades) | ~180 | ~180 | **~164** |
-| Fully covered by a live caster | ~90 | ~41 (map filter skipped) | ~82 (no short-circuit) |
+| Case | Branch as committed | Early-outs (prev note) | Unified pass | + fast paths |
+|---|---|---|---|---|
+| General (both layers active) | ~90 (41 + 49) | ~90 | **~82** (2 core gathers + 32 ring loads + 16 taps x 3 gathers) | ~82 (+few ALU ops tracking) |
+| Cascade blend band (two cascades) | ~180 | ~180 | **~164** | ~164 or less per side |
+| Fully covered by a live caster | ~90 | ~41 (map filter skipped) | ~82 (no short-circuit) | **~66** (exact pre-check, below) |
+| Map shadow, no casters nearby | n/a (fixed 4-tap map filter) | ~54 (cheap map + caster PCSS) | ~82 | **~50** (map-only filter, below) |
 
-The fully-covered case loses the early-out's short-circuit: the combined pass
-cannot know the result is zero until it has filtered. Accepted trade-off for
-one mechanism, but it is a real regression *for that specific case* - if
-in-game profiling shows live-object-shadow-heavy scenes regressing, restoring
-a caster-only pre-check there is the follow-up to make (it would keep both
-quality and cost).
+The fully-covered case initially lost the early-out's short-circuit: the
+combined pass cannot know the result is zero until it has filtered. The fast
+paths section below restores that - exactly, and with a second path for
+caster-free map shadows.
 
 ## The grain fix: fixed filter layout across pixels
 
@@ -71,6 +70,56 @@ a penumbra edge aliases against the tap lattice (the old per-pixel rotation
 averaged that away). The regression scene has one straight edge and cannot see
 it. If it shows up on brick-heavy shadows, the options are more taps at the
 cost above, or a two-ring fixed layout with offset angles.
+
+## Fast paths (measured follow-up to in-game profiling)
+
+In-game A/B on target hardware (city-scale scene, Soft Sun Shadows off vs
+on) showed the unified pass costing more GPU time than 0.4.5's caster-only
+PCSS: every shadowed receiver now pays for both layers (~82 ops), and
+receivers that were cheap fixed-filter map shadows before now pay full price.
+Two fast paths inside `combined_pcss_lit` (both shaders, byte-identical)
+cut the cost where one layer provably cannot contribute. Both reuse the same
+fixed 16-tap layout and radius; no tap counts changed.
+
+The search loop already loads caster depth at every sampled position (4 core
+texels + 16 ring positions); it now tracks two booleans for free while doing
+so: `caster_blocks_any` and `casters_block_all`.
+
+- **Exact coverage short-circuit.** If *every* sampled position is blocked in
+  the caster layer, the filter's own tap positions are re-checked with the
+  caster factor alone (`combined_caster_lit`, two gathers per tap - same
+  layers, occluder rule and slope-adjusted depth as `combined_pcss_tap`).
+  If every tap's weighted lit sum is zero, each per-texel product in the full
+  pass is zero wherever its bilinear weight is positive, so the combined
+  filter would return exactly 0.0 - the early return is bit-identical to the
+  filtered result, not an approximation. Cost: ~66 ops instead of ~82 for
+  fully covered receivers (interiors of brick/object shadows); zero added
+  cost elsewhere (the gate is a few ALU ops per search position).
+- **Map-only filter.** If *no* sampled position blocks in the caster layer,
+  no caster can contribute at search resolution, so the same 16 taps run
+  with the map factor alone (`combined_map_lit`, one gather per tap). The map
+  penumbra - width, grain, layout, radius law - is computed identically to
+  the full pass; the only difference from it would be a caster feature thinner
+  than the search sampling, which 0.4.5's shipped fixed four-tap map filter
+  also never saw (it was map-only). Cost: ~50 ops instead of ~82 for pure
+  map shadows (streets, terrain self-shadowing) - strictly more sampling
+  than what shipped in those regions.
+
+The general case (casters and map both active nearby), the PCSS-off paths,
+`far_map_pcss_lit`, and `sun_visibility()` are untouched. All three consumers
+(`object_sun`, `dynamic_sun`, `relit_sun`) benefit automatically since the
+fast paths live inside `combined_pcss_lit`.
+
+Validation (release; GPU suites serial on target hardware): headless naga 3/3,
+fmt clean, clippy `-D warnings` clean, full release build clean;
+`pcss_sun_shadows` 3/3; `unified_lighting` 3/3 including the Dynamic
+window-shadow regression in both its Bedroom-scale cascade and far-map cases
+(penumbra width >2x hard filter, edge grain <0.8x); `shadow_occluders::
+cascade_splits_do_not_cut_a_shadow`. The window-shadow receivers sit inside a
+real caster's shadow (full path, bit-identical) or beyond the cascades
+(`far_map_lit`, untouched), so both gates exercise unchanged code - which is
+why they pass trivially; the fast paths' quality argument above is the one to
+re-check if any future scene shows an edge that should not be there.
 
 ## Behaviour notes
 
@@ -99,10 +148,11 @@ cost above, or a two-ring fixed layout with offset angles.
 
 ## Remaining
 
-- No before/after GPU frame-time numbers exist; per the branch's own
-  requirement, profile representative terrain and interior scenes with Soft
-  Sun Shadows on and off (and note live-object-shadow-heavy scenes for the
-  lost short-circuit) before calling this performance-validated.
+- Before/after GPU frame times now exist for one city-scale scene (Soft Sun
+  Shadows off vs on, target hardware); the fast paths were added in response.
+  Per the branch's own requirement, re-profile representative terrain and
+  interior scenes with Soft Sun Shadows on and off after this change before
+  calling it performance-validated.
 - Visual check of the fixed filter pattern for moiré/shimmer while panning
   across brick-cast penumbrae; any sampling change must keep the Dynamic
   window-shadow regression green in both cases.

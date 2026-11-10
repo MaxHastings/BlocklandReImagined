@@ -36,6 +36,7 @@ and off before considering the branch performance-validated.
 The unified-pass follow-up mentioned above was implemented afterwards; see
 `2026-11-10-pcss-unified-pass.md`. Note its interaction with this note's
 dynamic_sun early-outs: when Soft Sun Shadows is on, the combined pass
-subsumes the caster filter, so a fully covered receiver no longer
-short-circuits before any map work - it pays the full ~82-op pass instead of
-~41. The faded-out (`strength<=0`) and zero-map early-outs are preserved.
+subsumes the caster filter. That initially removed the fully-covered
+short-circuit (a covered receiver paid ~82 ops instead of ~41); the unified
+note's exact coverage fast path restores it (~66 ops, bit-identical result).
+The faded-out (`strength<=0`) and zero-map early-outs are preserved.
