@@ -547,60 +547,141 @@ fn shadow_lit(c:ShadowCoord)->f32 {
 fn sun_visibility(position:vec3<f32>,normal:vec3<f32>)->f32 {
     return shadow_lit(shadow_coord(position,normal));
 }
-// Sun reaching a receiver past the map's own surfaces (the map layer): the
-// same smooth 3x3 texel filter as lamp shadows, four bilinear comparisons.
-fn map_pcss_lit(c:CascadeCoord)->f32 {
+
+// One bilinear comparison at uv against the receiver's plane in both layers
+// at once; 1 is lit. The caster layer keeps its occluder rule (a brick that
+// does not cast stops a shadow from passing); every map surface casts, so the
+// map factor is a plain comparison at its own rescaled depth.
+fn combined_pcss_tap(uv:vec2<f32>,z:f32,z_map:f32,cascade:i32,occluder_layer:i32,map_layer:i32,gap:f32)->f32 {
+    let size=shadows.params.y;
+    let f=uv*size-vec2<f32>(0.5);
+    // The 2x2 texel block holding the point, kept on the map.
+    let base=clamp(floor(f),vec2<f32>(0.0),vec2<f32>(size-2.0));
+    let t=clamp(f-base,vec2<f32>(0.0),vec2<f32>(1.0));
+    let corner=(base+vec2<f32>(1.0))/size;
+    let casters=textureGather(shadow_map,shadow_point,corner,cascade);
+    let occluders=textureGather(shadow_map,shadow_point,corner,occluder_layer);
+    let between=occluders>casters+vec4<f32>(gap) & occluders<vec4<f32>(z-gap);
+    let lit_caster=select(vec4<f32>(1.0),vec4<f32>(0.0),casters<vec4<f32>(z) & !between);
+    // The map layer over the same 2x2 block, compared at its own rescaled
+    // receiver depth.
+    let maps=textureGather(shadow_map,shadow_point,corner,map_layer);
+    let lit_map=select(vec4<f32>(1.0),vec4<f32>(0.0),maps<vec4<f32>(z_map));
+    // A texel is lit only where neither layer blocks it; bilinear over the
+    // per-texel product (for 0/1 values that is the per-texel min), not over
+    // the two separate interpolations.
+    return dot(lit_caster*lit_map,vec4<f32>((1.0-t.x)*t.y,t.x*t.y,t.x*(1.0-t.y),(1.0-t.x)*(1.0-t.y)));
+}
+// One PCSS pass over the live casters and the map layer together, so a
+// receiver's sun is filtered once instead of twice. The blocker search runs
+// in both layers at once: each layer keeps its own bias, slope and occluder
+// rules, but every blocker it finds adds its distance back along the sun to
+// one weighted sum in world units (each layer rescaled by its own depth
+// scale), so a single radius serves both shadows - the nearest surface that
+// blocks the sun sets how wide its penumbra is, whatever layer it lives in.
+// Each filter tap then reads all three layers and counts a texel as lit only
+// where neither blocks. Map shadows and player/object shadows are therefore
+// softened by exactly the same machinery - same taps, same radius law, same
+// bilinear behaviour - instead of two separate filters whose edges read
+// differently next to each other. When only one layer has blockers nearby the
+// weighted sum reduces to that layer's own distance estimate, as its filter
+// computed it alone.
+fn combined_pcss_lit(c:CascadeCoord)->f32 {
     let size=shadows.params.y;
     let texel=shadows.texels[c.cascade];
     let scale=shadows.depth_scale[c.cascade];
-    let layer=c.cascade+2*i32(shadows.forward_count.w);
-    let z=c.depth*shadows.map_scale[c.cascade]+shadows.map_offset[c.cascade];
-    let bias=0.5*texel*scale*shadows.map_scale[c.cascade];
+    let occluder_layer=c.cascade+i32(shadows.forward_count.w);
+    let map_layer=c.cascade+2*i32(shadows.forward_count.w);
+    let gap=0.1*scale;
+    // Half a texel of depth, in each layer's own units, so a surface never
+    // shadows itself.
+    let bias=0.5*texel*scale;
+    let map_scale=shadows.map_scale[c.cascade];
+    let z_map=c.depth*map_scale+shadows.map_offset[c.cascade];
+    let bias_map=0.5*texel*scale*map_scale;
+    // World units per unit of each layer's stored depth, so blocker distances
+    // from both layers accumulate in the same units.
+    let inv_scale=1.0/scale;
+    let inv_scale_map=inv_scale/map_scale;
     let angle=6.2831853*pcss_noise();
     let last=i32(size)-1;
-    let z_minus_bias=z-bias;
-    let slope=c.slope*shadows.map_scale[c.cascade];
+    let depth_minus_bias=c.depth-bias;
+    let z_map_minus_bias=z_map-bias_map;
+    // The four texels around the receiver always count, so a shadow even one
+    // texel wide is never missed by the sparser ring below. Each layer is
+    // compared at its own place on the receiver's plane.
     let core_base=clamp(floor(c.uv*size-vec2<f32>(0.5)),vec2<f32>(0.0),vec2<f32>(size-2.0));
-    let core=textureGather(shadow_map,shadow_point,(core_base+vec2<f32>(1.0))/size,layer);
+    let corner=(core_base+vec2<f32>(1.0))/size;
     let core_to_texel=(core_base+vec2<f32>(0.5))/size-c.uv;
-    let core_z=vec4<f32>(z_minus_bias)+vec4<f32>(
-        dot(slope,core_to_texel+vec2<f32>(0.0,1.0)/size),
-        dot(slope,core_to_texel+vec2<f32>(1.0,1.0)/size),
-        dot(slope,core_to_texel+vec2<f32>(1.0,0.0)/size),
-        dot(slope,core_to_texel),
+    // Gather order is (0,1), (1,1), (1,0), (0,0); the map layer's plane
+    // offsets are the same dots rescaled by its depth scale.
+    let s=vec4<f32>(
+        dot(c.slope,core_to_texel+vec2<f32>(0.0,1.0)/size),
+        dot(c.slope,core_to_texel+vec2<f32>(1.0,1.0)/size),
+        dot(c.slope,core_to_texel+vec2<f32>(1.0,0.0)/size),
+        dot(c.slope,core_to_texel),
     );
-    let core_blocks=core<core_z;
-    var blocker_sum=pcss_sum4(select(vec4<f32>(0.0),core,core_blocks));
-    var blockers=pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),core_blocks));
+    var blocker_sum=0.0;
+    var weights=0.0;
+    let core_caster=textureGather(shadow_map,shadow_point,corner,c.cascade);
+    let caster_blocks=core_caster<vec4<f32>(depth_minus_bias)+s;
+    blocker_sum+=pcss_sum4(select(vec4<f32>(0.0),c.depth-core_caster,caster_blocks))*inv_scale;
+    weights+=pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),caster_blocks));
+    let core_map=textureGather(shadow_map,shadow_point,corner,map_layer);
+    let map_blocks=core_map<vec4<f32>(z_map_minus_bias)+s*map_scale;
+    blocker_sum+=pcss_sum4(select(vec4<f32>(0.0),z_map-core_map,map_blocks))*inv_scale_map;
+    weights+=pcss_sum4(select(vec4<f32>(0.0),vec4<f32>(1.0),map_blocks));
+    // Then a ring out to the widest the filter can grow, in both layers at
+    // once, so a pixel just outside either shadow still finds it and the soft
+    // edge spreads to both sides of its true edge. Nearer taps count more,
+    // which keeps the distance estimate local to the edge in question.
+    let max_texels_over_size=PCSS_MAX_TEXELS/size;
     let search_weight_scale=1.0/f32(PCSS_MAP_SEARCH_TAPS);
-    let search_radius=PCSS_MAX_TEXELS/size;
     for (var i=0;i<PCSS_MAP_SEARCH_TAPS;i+=1) {
-        let offset=pcss_disc(i,PCSS_MAP_SEARCH_TAPS,angle)*search_radius;
+        let offset=pcss_disc(i,PCSS_MAP_SEARCH_TAPS,angle)*max_texels_over_size;
         let uv=c.uv+offset;
-        let tap_z=z_minus_bias+dot(slope,offset);
         let texel_at=clamp(vec2<i32>(floor(uv*size)),vec2<i32>(0),vec2<i32>(last));
-        let d=textureLoad(shadow_map,texel_at,layer,0);
-        if d<tap_z {
-            let weight=1.0-(f32(i)+0.5)*search_weight_scale;
-            blocker_sum+=weight*d;
-            blockers+=weight;
+        // Each layer is compared at its own slope-adjusted plane but measured
+        // from the receiver's unadjusted depth, as each filter did alone.
+        let w=1.0-(f32(i)+0.5)*search_weight_scale;
+        let d_caster=textureLoad(shadow_map,texel_at,c.cascade,0);
+        if d_caster<depth_minus_bias+dot(c.slope,offset) {
+            blocker_sum+=w*(c.depth-d_caster)*inv_scale;
+            weights+=w;
+        }
+        let d_map=textureLoad(shadow_map,texel_at,map_layer,0);
+        if d_map<z_map_minus_bias+dot(c.slope,offset)*map_scale {
+            blocker_sum+=w*(z_map-d_map)*inv_scale_map;
+            weights+=w;
         }
     }
-    if blockers==0.0 {return 1.0;}
-    let blocker_distance=(z-blocker_sum/blockers)/(scale*shadows.map_scale[c.cascade]);
-    let radius=clamp(blocker_distance*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS);
+    // Nothing in front of the receiver nearby, in either layer: lit.
+    if weights==0.0 {return 1.0;}
+    let radius=clamp(blocker_sum/weights*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS);
     var lit=0.0;
     let radius_over_size=radius/size;
-    let filter_weight_scale=1.0/f32(PCSS_MAP_FILTER_TAPS);
-    for (var i=0;i<PCSS_MAP_FILTER_TAPS;i+=1) {
-        let offset=pcss_disc(i,PCSS_MAP_FILTER_TAPS,angle)*radius_over_size;
-        let tap_z=z_minus_bias+dot(slope,offset);
-        lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,c.uv+offset,layer,tap_z);
+    let filter_weight_scale=1.0/f32(PCSS_FILTER_TAPS);
+    // The filter taps keep one fixed layout across all pixels (the search
+    // ring above keeps its per-pixel angle for the radius estimate): every
+    // pixel averages the same directions, so neighbouring pixels differ only
+    // by position. A per-pixel rotation here would make each pixel's average
+    // jitter against its neighbours and read as grain at the edge.
+    for (var i=0;i<PCSS_FILTER_TAPS;i+=1) {
+        let offset=pcss_disc(i,PCSS_FILTER_TAPS,0.0)*radius_over_size;
+        lit+=combined_pcss_tap(
+            c.uv+offset,
+            depth_minus_bias+dot(c.slope,offset),
+            z_map_minus_bias+dot(c.slope,offset)*map_scale,
+            c.cascade,occluder_layer,map_layer,gap);
     }
     return lit*filter_weight_scale;
 }
+
+// Sun reaching a receiver past the map's own surfaces (the map layer): the
+// same smooth 3x3 texel filter as lamp shadows, four bilinear comparisons.
+// Used when Soft Sun Shadows is off; with it on the combined pass covers
+// both layers at once.
 fn map_cascade_lit(c:CascadeCoord)->f32 {
-    if shadows.params.z>0.0 {return map_pcss_lit(c);}
     let layer=c.cascade+2*i32(shadows.forward_count.w);
     let depth=c.depth*shadows.map_scale[c.cascade]+shadows.map_offset[c.cascade];
     let step=0.5/shadows.params.y;
@@ -611,12 +692,6 @@ fn map_cascade_lit(c:CascadeCoord)->f32 {
     lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,c.uv+vec2<f32>(step,step),layer,depth);
     return lit*0.25;
 }
-// Unified: the share of the sun reaching a brick, player, item or vehicle.
-// Inside the shadow distance the map's own surfaces shade it from the map
-// layer, so sun through a window lands with a filtered edge, exactly where
-// it lights the walls and floor beside it; past it (and while the map layer
-// is not drawn) the visibility volume's coarse sun stands in. Live casters
-// shade it as everywhere.
 // Sun reaching a receiver past the map's own surfaces far from the eye,
 // from the far map layer: coarse texels over the whole map, filtered as
 // the cascades' map layer is. 1 (unshadowed) outside it or while it is not
@@ -684,35 +759,42 @@ fn far_map_lit(position:vec3<f32>,n:vec3<f32>,fallback:f32)->f32 {
     lit+=textureSampleCompareLevel(shadow_map,shadow_sampler,uv+vec2<f32>(step,step),layer,clip.z);
     return lit*0.25;
 }
+// Unified: the share of the sun reaching a brick, player, item or vehicle.
+// Inside the shadow distance one PCSS pass over the live casters and the
+// map layer together shades it - so sun through a window lands with the same
+// filtered edge as a player's shadow beside it; past it (and while the map
+// layer is not drawn) the visibility volume's coarse sun stands in.
 fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
     let c=shadow_coord(position,normal);
     if lighting_mode()==3 {return dynamic_sun(position,normal);}
     let n=normal/max(length(normal),0.0001);
-    // The receiver's dynamic (player/object) shadow wins over every map
-    // shadow: `min(map, dynamic)` is zero whatever the map layer says when
-    // the receiver is fully covered, so skip the map PCSS search/filter
-    // there instead of paying its ~49 texture reads for a shadow that is
-    // already solid. Exact-equivalent: min(map, 0) == 0. No tap counts or
-    // quality constants change, so the look is unchanged.
-    let dynamic=shadow_lit(c);
-    if dynamic<=0.0 {return 0.0;}
     var map=vis.low.x;
-    if c.near.cascade>=0 && shadows.map_params.x>0.0 {
-        if c.strength>0.0 {
-            var lit=map_cascade_lit(c.near);
-            if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
-            // Only receivers fading out of the last cascade pay for the far map.
-            if c.strength<1.0 {map=far_map_lit(position,n,map);}
-            map=mix(map,lit,c.strength);
-        } else {
-            // strength<=0: mix(map, lit, 0) == map, so cascade PCSS is
-            // discarded. far_map_lit's result becomes map directly.
-            map=far_map_lit(position,n,map);
+    if c.near.cascade>=0 && shadows.map_params.x>0.0 && c.strength>0.0 {
+        if shadows.params.z>0.0 {
+            // One PCSS pass over both layers: one radius, each tap lit only
+            // where neither the casters nor the map block.
+            var lit=combined_pcss_lit(c.near);
+            if c.blend>0.0 {lit=mix(lit,combined_pcss_lit(c.far),c.blend);}
+            if lit<=0.0 {return 0.0;}
+            // Only receivers fading out of the last cascade pay for the far
+            // map; past it the coarse fallback stands in and live casters
+            // fade with the cascades.
+            if c.strength<1.0 {lit=mix(far_map_lit(position,n,map),lit,c.strength);}
+            return lit;
         }
+        var lit=map_cascade_lit(c.near);
+        if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+        // Only receivers fading out of the last cascade pay for the far map.
+        if c.strength<1.0 {map=far_map_lit(position,n,map);}
+        map=mix(map,lit,c.strength);
     } else {
+        // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
+        // layer is not drawn: the coarse fallback stands in for the map part.
         map=far_map_lit(position,n,map);
     }
-    if map<=0.0 {return 0.0;}
+    if c.near.cascade<0 || c.strength<=0.0 {return map;}
+    let dynamic=shadow_lit(c);
+    if dynamic<=0.0 {return 0.0;}
     return min(map,dynamic);
 }
 // Lamp slot `slot`'s light reaching a surface past the same casters: the
@@ -914,16 +996,32 @@ fn relit_sun(baked:f32,position:vec3<f32>,n:vec3<f32>)->f32 {
     }
     let c=shadow_coord(position,n);
     var map=baked;
-    if c.near.cascade>=0 && shadows.map_params.x>0.0 {
+    if c.near.cascade>=0 && shadows.map_params.x>0.0 && c.strength>0.0 {
+        if shadows.params.z>0.0 {
+            // One PCSS pass over both layers, as object_sun takes it.
+            var lit=combined_pcss_lit(c.near);
+            if c.blend>0.0 {lit=mix(lit,combined_pcss_lit(c.far),c.blend);}
+            if lit<=0.0 {return 0.0;}
+            // Only receivers fading out of the last cascade pay for the far
+            // map; past it the baked share stands in and live casters fade
+            // with the cascades.
+            if c.strength<1.0 {lit=mix(far_map_lit(position,n,map),lit,c.strength);}
+            return lit;
+        }
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+        // Only receivers fading out of the last cascade pay for the far map.
         if c.strength<1.0 {map=far_map_lit(position,n,map);}
         map=mix(map,lit,c.strength);
     } else {
+        // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
+        // layer is not drawn: the coarse fallback stands in for the map part.
         map=far_map_lit(position,n,map);
     }
-    if map<=0.0 {return 0.0;}
-    return min(map,shadow_lit(c));
+    if c.near.cascade<0 || c.strength<=0.0 {return map;}
+    let dynamic=shadow_lit(c);
+    if dynamic<=0.0 {return 0.0;}
+    return min(map,dynamic);
 }
 // An interior lightmap with its decomposition (map_lighting::decompose_sheet
 // in material slot 9): RGB the static light, A the share of the sun the bake
@@ -1018,21 +1116,40 @@ fn map_light_total(position:vec3<f32>,n:vec3<f32>,visibility:MapVisibility)->vec
     }
     return total;
 }
-// Dynamic's authoritative sun visibility comes only from current geometry.
-// Beyond the bounded cascade range it fades to unshadowed, never old masks.
+// The Dynamic lighting path's sun: the same unified PCSS pass over live
+// casters and the map layer as object_sun takes, with no visibility volume -
+// past the bounded cascade range it fades to unshadowed, never old masks.
 fn dynamic_sun(position:vec3<f32>,normal:vec3<f32>)->f32 {
     let c=shadow_coord(position,normal);
     let n=normal/max(length(normal),0.0001);
     var map=1.0;
-    if c.near.cascade>=0 && shadows.map_params.x>0.0 {
+    if c.near.cascade>=0 && shadows.map_params.x>0.0 && c.strength>0.0 {
+        if shadows.params.z>0.0 {
+            // One PCSS pass over both layers: one radius, each tap lit only
+            // where neither the casters nor the map block.
+            var lit=combined_pcss_lit(c.near);
+            if c.blend>0.0 {lit=mix(lit,combined_pcss_lit(c.far),c.blend);}
+            if lit<=0.0 {return 0.0;}
+            // Only receivers fading out of the last cascade pay for the far
+            // map; past it the unshadowed sun stands in and live casters
+            // fade with the cascades.
+            if c.strength<1.0 {lit=mix(far_map_lit(position,n,map),lit,c.strength);}
+            return lit;
+        }
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+        // Only receivers fading out of the last cascade pay for the far map.
         if c.strength<1.0 {map=far_map_lit(position,n,map);}
         map=mix(map,lit,c.strength);
     } else {
+        // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
+        // layer is not drawn: the unshadowed sun stands in for the map part.
         map=far_map_lit(position,n,map);
     }
-    return min(map,shadow_lit(c));
+    if c.near.cascade<0 || c.strength<=0.0 {return map;}
+    let dynamic=shadow_lit(c);
+    if dynamic<=0.0 {return 0.0;}
+    return min(map,dynamic);
 }
 // Descriptors plus current geometry cubes: no legacy visibility input exists
 // in this function. Uniform ambient approximates unreconstructed indirect light.
