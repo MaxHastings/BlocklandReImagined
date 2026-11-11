@@ -736,5 +736,17 @@
         "reason": "Remove stray digit before section heading; the following line already declares two omni quads, matching the two following authored faces."
       }
     ]
+  },
+  {
+    "path": "Add-Ons/Brick_ForestTree/foresttree.blb",
+    "sha256": "fb494d33e3ddb53475cd5552f9a94a2546c227790c68945517ef22834efc8b04",
+    "edits": [
+      {
+        "line": 364,
+        "before": "54",
+        "after": "52",
+        "reason": "Source is truncated: declares 54 omni quads but the file ends after the 52nd complete quad. Match the declared count to actual content so the brick converts; two trailing foliage facets are lost."
+      }
+    ]
   }
 ]

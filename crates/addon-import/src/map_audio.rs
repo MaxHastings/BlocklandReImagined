@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use bri_content::scene::{Node, Scene};
 use bri_convert::effect_script::Declarations;
+use crate::legacy_text;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -443,7 +444,7 @@ pub fn export(
         .filter(|f| f.path.to_ascii_lowercase().ends_with(".cs"))
     {
         if let Err(error) = declarations.read_classes(
-            &String::from_utf8_lossy(&file.bytes),
+            &legacy_text(&file.bytes),
             &file.path,
             &["AudioProfile"],
         ) {

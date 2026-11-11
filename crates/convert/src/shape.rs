@@ -860,7 +860,22 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
     }
     ensure!(file.u8()? == 1, "Unsupported material list");
     let count = file.count(100_000)?;
-    let material_names = collect(count, || file.string8())?;
+    // A few community exporters (the 2012 NewJeep pack) leave non-UTF-8 bytes
+    // in a texture-less material's name slot; Torque copies such names
+    // verbatim, so read them lossily and rename the affected materials.
+    let mut material_names = Vec::with_capacity(count);
+    for i in 0..count {
+        let len = file.u8()? as usize;
+        match std::str::from_utf8(file.bytes(len)?) {
+            Ok(name) => material_names.push(name.to_owned()),
+            Err(_) => {
+                provenance.warnings.push(format!(
+                    "Material {i} name is not valid UTF-8; renamed to material_{i}"
+                ));
+                material_names.push(format!("material_{i}"));
+            }
+        }
+    }
     let flags = collect(count, || file.u32())?;
     let reflectance = collect(count, || file.i32())?;
     let bump = collect(count, || file.i32())?;
@@ -1143,5 +1158,85 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(read_dsq(&trailing, "test".into()).is_err());
+    }
+    /// A minimal DTS v24: one name, no meshes, and a two-material list whose
+    /// second name slot holds raw bytes. Mirrors `read_dts`'s layout (17
+    /// counts, two header words, guards 0..=15 before the names, guard 16
+    /// after).
+    fn dts_with_material_names(second_name: &[u8]) -> Vec<u8> {
+        let mut wide = Vec::new();
+        let mut short = Vec::new();
+        let mut byte = Vec::new();
+        for v in [0_u32; 16] {
+            wide.extend(v.to_le_bytes());
+        }
+        wide.extend(1u32.to_le_bytes()); // names
+        wide.extend(0u32.to_le_bytes());
+        wide.extend(0i32.to_le_bytes());
+        let mut guard = |wide: &mut Vec<u8>, short: &mut Vec<u8>, byte: &mut Vec<u8>, n: u32| {
+            wide.extend(n.to_le_bytes());
+            short.extend((n as u16).to_le_bytes());
+            byte.push(n as u8);
+        };
+        guard(&mut wide, &mut short, &mut byte, 0); // shape counts
+        for _ in 0..11 {
+            wide.extend(0f32.to_bits().to_le_bytes());
+        }
+        for n in 1..=15 {
+            guard(&mut wide, &mut short, &mut byte, n);
+        }
+        byte.extend(b"a\0"); // the one name
+        guard(&mut wide, &mut short, &mut byte, 16); // names
+
+        let first16 = (wide.len() / 4) as u32;
+        while short.len() % 4 != 0 {
+            short.push(0);
+        }
+        while byte.len() % 4 != 0 {
+            byte.push(0);
+        }
+        let first8 = first16 + (short.len() / 4) as u32;
+        let size = first8 + (byte.len() / 4) as u32;
+
+        let mut out = Vec::new();
+        for v in [24u32, size, first16, first8] {
+            out.extend(v.to_le_bytes());
+        }
+        out.extend(&wide);
+        out.extend(&short);
+        out.extend(&byte);
+
+        let mut word = |out: &mut Vec<u8>, v: u32| out.extend(v.to_le_bytes());
+        word(&mut out, 0); // no sequences
+        out.push(1); // material list marker
+        word(&mut out, 2); // two materials
+        for name in [b"ok", second_name] {
+            out.push(name.len() as u8);
+            out.extend(name);
+        }
+        for v in [0x43u32, 0x63] {
+            word(&mut out, v); // flags
+        }
+        for _ in 0..6 {
+            word(&mut out, (-1i32) as u32); // reflectance, bump and detail maps
+        }
+        for v in [1f32, 1.0] {
+            word(&mut out, v.to_bits()); // detail scales
+        }
+        for v in [0.5f32, 0.5] {
+            word(&mut out, v.to_bits()); // reflections
+        }
+        out
+    }
+    #[test]
+    fn material_names_may_be_invalid_utf8() {
+        let bytes = dts_with_material_names(b"\xff\xfe");
+        let (shape, provenance) = read_dts(&bytes, "test".into()).unwrap();
+        assert_eq!(shape.materials[0].name, "ok");
+        assert_eq!(shape.materials[1].name, "material_1");
+        assert!(provenance
+            .warnings
+            .iter()
+            .any(|w| w.contains("Material 1")));
     }
 }

@@ -311,8 +311,22 @@ pub fn lower(
         });
     }
     let mut wheels = vec![];
+    // The declared count selects v20's onAdd steering and power pattern, but
+    // the wheel set is whatever hub nodes the body actually has: Torque's
+    // WheeledVehicleData::preload scans MaxWheels slots and compacts the ones
+    // it finds (wheeledVehicle.cc), so a missing hub drops that corner rather
+    // than failing the vehicle.
     let wheel_count = number(b, "numWheels", if family == Family::Skis { 4. } else { 0. }) as usize;
-    for i in 0..wheel_count {
+    const MAX_WHEELS: usize = 8; // WheeledVehicleData::MaxWheels (wheeledVehicle.h)
+    let hub_slots: Vec<(usize, [f32; 3])> = (0..MAX_WHEELS)
+        .filter_map(|slot| {
+            find_node(s, &n, &format!("hub{slot}"))
+                .ok()
+                .map(|t| (slot, t.position))
+        })
+        .collect();
+    for &(slot, position) in &hub_slots {
+        let internal = wheels.len();
         let tire = blocks
             .get(&if family == Family::Skis {
                 "nothingtire".into()
@@ -340,7 +354,16 @@ pub fn lower(
                 .context("wheel source shape")?
                 .1,
         )?;
-        let position = find_node(s, &n, &format!("hub{i}"))?.position;
+        // v20's onAdd pattern applies to the compacted wheel indices; a wheel
+        // past the declared count keeps Torque's Wheel defaults (no steering,
+        // powered).
+        let (steering, powered) = if name == "TankVehicle" {
+            (if slot < 2 { 1. } else { -0.8 }, true)
+        } else if internal < wheel_count {
+            v20_wheel(wheel_count, internal)
+        } else {
+            (0., true)
+        };
         wheels.push(Wheel {
             position,
             radius: (tire_max.z - tire_min.z) / 2.,
@@ -365,13 +388,8 @@ pub fn lower(
             },
             // TankVehicle::onAdd steers all four wheels and powers them all;
             // skis have no engine.
-            steering: if name == "TankVehicle" {
-                if i < 2 { 1. } else { -0.8 }
-            } else {
-                v20_wheel(wheel_count, i).0
-            },
-            powered: name == "TankVehicle"
-                || (family != Family::Skis && v20_wheel(wheel_count, i).1),
+            steering,
+            powered: family != Family::Skis && powered,
             model: wheel_model.clone(),
             // WheeledVehicle turns each tire a quarter turn about up so its
             // +Y face points outward: clockwise (Torque's positive) on the right.
@@ -382,6 +400,27 @@ pub fn lower(
             })
             .to_array(),
         });
+    }
+    if !wheels.is_empty() {
+        let has_hub = |slot: usize| hub_slots.iter().any(|(s, _)| *s == slot);
+        let missing: Vec<String> = (0..wheel_count)
+            .filter(|slot| !has_hub(*slot))
+            .map(|slot| format!("hub{slot}"))
+            .collect();
+        if !missing.is_empty() {
+            adaptations.push(format!(
+                "Model lacks {}; Torque skips that wheel slot and compacts the rest ({} of the declared {} wheels lowered)",
+                missing.join(", "),
+                wheels.len(),
+                wheel_count,
+            ));
+        } else if wheels.len() != wheel_count {
+            adaptations.push(format!(
+                "Model has {} hub nodes but numWheels is {}",
+                wheels.len(),
+                wheel_count,
+            ));
+        }
     }
     let mut attachment_model = None;
     let mut attachment_collision_hulls = vec![];
@@ -734,5 +773,139 @@ mod tests {
         let t = find_node(&shape, &nodes(&shape), "Mount0").unwrap();
         assert!((Vec3::from_array(t.position) - Vec3::new(8., 2., 0.)).length() < 0.001);
         assert!(find_node(&shape, &nodes(&shape), "mount99").is_err());
+    }
+    #[test]
+    fn missing_hub_slots_are_skipped_and_compacted() {
+        // NewJeep's body has hubs 0, 1, 3 and 4 but no hub2. Torque's preload
+        // compacts the found slots into four wheels, and v20's numWheels=4
+        // onAdd pattern steers the first two and powers the rest; the importer
+        // must not fail the vehicle over the missing slot.
+        let node = |name: &str, t: [f32; 3]| bri_content::shape::Node {
+            name: name.into(),
+            parent: None,
+            translation: t,
+            rotation: Quat::IDENTITY.to_array(),
+        };
+        let body = Shape {
+            schema_version: 1,
+            id: "body".into(),
+            nodes: vec![
+                node("hub0", [-1.4, 0.35, -2.]),
+                node("hub1", [1.4, 0.35, -2.]),
+                node("hub3", [1.4, 0.32, 1.5]),
+                node("hub4", [-1.4, 0.32, 1.5]),
+            ],
+            objects: vec![bri_content::shape::Object {
+                name: "body".into(),
+                node: None,
+                meshes: vec![0],
+                visibility: 1.,
+                frame: 0,
+                material_frame: 0,
+                live: None,
+            }],
+            details: vec![],
+            meshes: vec![Some(bri_content::shape::Mesh {
+                frame_vertices: 2,
+                positions: vec![[-1., 0., -1.], [1., 1., 1.]],
+                normals: vec![[0.; 3]; 2],
+                uv: vec![[0.; 2]; 2],
+                uv1: vec![],
+                colors: vec![],
+                vertex_rig: None,
+                primitives: vec![],
+                skin: None,
+                billboard: false,
+                billboard_y: false,
+            })],
+            materials: vec![],
+            animations: vec![],
+        };
+        // A DTS v24 header carrying only the bounds box dts_bounds reads.
+        let dts = |min: [f32; 3], max: [f32; 3]| {
+            let mut b = vec![0u8; 144];
+            b[0..4].copy_from_slice(&24u32.to_le_bytes());
+            for (i, v) in min.iter().chain(max.iter()).enumerate() {
+                b[(29 + i) * 4..(29 + i) * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            b
+        };
+        let block = |name: &str, fields: BTreeMap<String, String>| Block {
+            package: "Vehicle_Test".into(),
+            fields,
+            evidence: Evidence {
+                source: "synthetic".into(),
+                sha256: String::new(),
+                line: 1,
+                subject: name.into(),
+            },
+        };
+        let mut blocks = BTreeMap::new();
+        blocks.insert(
+            "testjeep".into(),
+            block(
+                "TestJeep",
+                BTreeMap::from([
+                    ("shapefile".into(), "./body.dts".into()),
+                    ("numwheels".into(), "4".into()),
+                    ("defaulttire".into(), "TestTire".into()),
+                    ("defaultspring".into(), "TestSpring".into()),
+                ]),
+            ),
+        );
+        blocks.insert(
+            "testtire".into(),
+            block("TestTire", BTreeMap::from([("shapefile".into(), "./tire.dts".into())])),
+        );
+        blocks.insert("testspring".into(), block("TestSpring", BTreeMap::new()));
+        let mut models = BTreeMap::new();
+        models.insert(
+            "add-ons/vehicle_test/body.dts".into(),
+            ("body".into(), body.clone()),
+        );
+        models.insert(
+            "add-ons/vehicle_test/tire.dts".into(),
+            (
+                "tire".into(),
+                Shape {
+                    schema_version: 1,
+                    id: "tire".into(),
+                    nodes: vec![],
+                    objects: vec![],
+                    details: vec![],
+                    meshes: vec![],
+                    materials: vec![],
+                    animations: vec![],
+                },
+            ),
+        );
+        let mut files = BTreeMap::new();
+        files.insert(
+            "add-ons/vehicle_test/body.dts".into(),
+            ("body".into(), dts([0.; 3], [1., 1., 1.])),
+        );
+        files.insert(
+            "add-ons/vehicle_test/tire.dts".into(),
+            // Strictly increasing box: dts_bounds rejects equal components.
+            ("tire".into(), dts([-0.5, -0.2, -1.], [0.5, 0.2, 1.])),
+        );
+        let def = lower(
+            "TestJeep",
+            Family::Wheeled,
+            &blocks,
+            &models,
+            &files,
+            &|kind, name| format!("{kind}:{name}"),
+        )
+        .unwrap();
+        assert_eq!(def.wheels.len(), 4);
+        let (steer, powered): (Vec<_>, Vec<_>) = def
+            .wheels
+            .iter()
+            .map(|w| (w.steering, w.powered))
+            .unzip();
+        assert_eq!(steer, vec![1., 1., 0., 0.]);
+        assert_eq!(powered, vec![false, false, true, true]);
+        assert!(def.adaptations.iter().any(|a| a.contains("hub2")));
     }
 }
