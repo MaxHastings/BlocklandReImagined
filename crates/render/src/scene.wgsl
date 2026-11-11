@@ -389,15 +389,23 @@ fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     if cascade+1<count {
         let start=select(0.0,shadows.splits[max(cascade-1,0)],cascade>0);
         let band=CASCADE_BLEND*(shadows.splits[cascade]-start);
-        out.far=cascade_coord(position,n,cascade+1);
-        if inside_map(out.far) {
-            let depth_blend=clamp((view_depth-(shadows.splits[cascade]-band))/band,0.0,1.0);
-            var edge_blend=0.0;
-            if shadows.params.z>0.0 {
-                let edge_texels=min(min(out.near.uv.x,out.near.uv.y),min(1.0-out.near.uv.x,1.0-out.near.uv.y))*shadows.params.y;
-                edge_blend=1.0-smoothstep(PCSS_MAX_TEXELS,2.0*PCSS_MAX_TEXELS,edge_texels);
+        // The far cascade is only read where blend is above zero: in the last
+        // part of this cascade's range, or (PCSS) within two filter widths of
+        // the near map's edge. Build it only there.
+        var edge_texels=1.0e30;
+        if shadows.params.z>0.0 {
+            edge_texels=min(min(out.near.uv.x,out.near.uv.y),min(1.0-out.near.uv.x,1.0-out.near.uv.y))*shadows.params.y;
+        }
+        if band<=0.0 || view_depth>shadows.splits[cascade]-band || edge_texels<2.0*PCSS_MAX_TEXELS {
+            out.far=cascade_coord(position,n,cascade+1);
+            if inside_map(out.far) {
+                let depth_blend=clamp((view_depth-(shadows.splits[cascade]-band))/band,0.0,1.0);
+                var edge_blend=0.0;
+                if shadows.params.z>0.0 {
+                    edge_blend=1.0-smoothstep(PCSS_MAX_TEXELS,2.0*PCSS_MAX_TEXELS,edge_texels);
+                }
+                out.blend=max(depth_blend,edge_blend);
             }
-            out.blend=max(depth_blend,edge_blend);
         }
     }
     // Fade out over the last tenth of the shadow distance.
@@ -832,8 +840,8 @@ fn far_map_lit(position:vec3<f32>,n:vec3<f32>,fallback:f32)->f32 {
 // filtered edge as a player's shadow beside it; past it (and while the map
 // layer is not drawn) the visibility volume's coarse sun stands in.
 fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
-    let c=shadow_coord(position,normal);
     if lighting_mode()==3 {return dynamic_sun(position,normal);}
+    let c=shadow_coord(position,normal);
     let n=normal/max(length(normal),0.0001);
     var map=vis.low.x;
     if c.near.cascade>=0 && shadows.map_params.x>0.0 && c.strength>0.0 {
@@ -1167,8 +1175,12 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,uv:vec2<f32>,position:v
     let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
     let facing=max(dot(n,-direction),0.0);
     var sun=parts.a;
-    if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
-    if relit() && facing>0.0 {sun=relit_sun(parts.a,position,n);}
+    if facing>0.0 {
+        // A relit texel takes relit_sun outright; only the others need the
+        // plain live-caster visibility, so a relit texel never pays both.
+        if relit() {sun=relit_sun(parts.a,position,n);}
+        else if sun>0.0 {sun=min(sun,sun_visibility(position,n));}
+    }
     // The bake's own sun, which the live sun replaces.
     let baked_direction=baked_sun_direction();
     let baked_facing=max(dot(n,-baked_direction),0.0);
@@ -1314,9 +1326,14 @@ fn dynamic_light_sum(position:vec3<f32>,normal:vec3<f32>,power:f32)->LocalLight 
 }
 fn dynamic_illumination(position:vec3<f32>,normal:vec3<f32>)->LocalLight {
     let n=normal/max(length(normal),0.0001);
+    return dynamic_illumination_lit(position,normal,dynamic_sun(position,n));
+}
+// dynamic_illumination for a sun share the caller already evaluated at the
+// same position and normal.
+fn dynamic_illumination_lit(position:vec3<f32>,normal:vec3<f32>,sun:f32)->LocalLight {
+    let n=normal/max(length(normal),0.0001);
     let toward=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
     let facing=max(dot(n,toward),0.0);
-    let sun=dynamic_sun(position,n);
     let local=dynamic_light_sum(position,n,SPECULAR_POWER);
     let eye=normalize(camera.eye.xyz-position);
     // Preserve main's expression when off. Multiplying ambient by a uniform
@@ -2052,16 +2069,19 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
         if fx.x==2u {strength*=2.0;}
         let facing=max(dot(normal,-direction),0.0)*strength;
         var sun=0.0;
+        // The sun share this fragment already evaluated, for the glint below.
+        var sun_cached=0.0;
         if lighting_mode()==0 {
             var reach=0.0;
-            if facing>0.0 {reach=sun_visibility(v.world_position,normal);sun=facing*reach;}
+            if facing>0.0 {reach=sun_visibility(v.world_position,normal);sun=facing*reach;sun_cached=reach;}
             // Classic: interior lights exist only in lightmaps; the brighter of
             // the sun and that baked light, so dark maps' lamps light players
             // and bricks.
             illumination=max(ambient_at(reach)+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
                 +v.point_light*strength;
         } else if lighting_mode()==3 {
-            let live=dynamic_illumination(v.world_position,live_normal);
+            sun_cached=dynamic_sun(v.world_position,live_normal/max(length(live_normal),0.0001));
+            let live=dynamic_illumination_lit(v.world_position,live_normal,sun_cached);
             illumination=live.diffuse+map_surface_point_light(v.world_position,live_normal,live.diffuse)*strength;
             specular=live.specular;
         } else {
@@ -2072,6 +2092,7 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
             let vis=map_visibility(v.world_position,normal);
             var sun_share=0.0;
             if facing>0.0 {sun_share=object_sun(v.world_position,normal,vis);}
+            sun_cached=sun_share;
             sun=facing*sun_share;
             let local=map_light_sum(v.world_position,normal,vis,true,SPECULAR_POWER);
             illumination=ambient_at(sun_share)+camera.sun_color.rgb*sun+local.diffuse*strength
@@ -2091,11 +2112,9 @@ fn shade_surface(v:VertexOut)->vec4<f32> {
             let eye=normalize(camera.eye.xyz-v.world_position);
             var sun_share=0.0;
             var local=vec3<f32>(0.0);
-            if facing>0.0 {
-                if lighting_mode()==0 {sun_share=sun_visibility(v.world_position,normal);}
-                else if lighting_mode()==3 {sun_share=dynamic_sun(v.world_position,normal);}
-                else {sun_share=object_sun(v.world_position,normal,map_visibility(v.world_position,normal));}
-            }
+            // The same sun the diffuse light above took, at the same position
+            // and normal: reuse it rather than shading the receiver twice.
+            if facing>0.0 {sun_share=sun_cached;}
             if lighting_mode()==3 {local=dynamic_light_sum(v.world_position,normal,power).specular;}
             else if lighting_mode()!=0 {local=map_light_sum(v.world_position,normal,map_visibility(v.world_position,normal),true,power).specular;}
             specular=(camera.sun_color.rgb*sun_share*select(0.0,glint(normal,sun_toward,eye,power),facing>0.0)
