@@ -69,7 +69,17 @@
 //! residual is sampled. Geometry changes invalidate the cubes. The nearest
 //! quality-limited lamps additionally receive live brick and moving shadows;
 //! sun cascades read current opaque map geometry including terrain and models.
-//! Past the finite cascade range the sun is unshadowed rather than baked.
+//! Past the shadow distance the last cascade keeps shadowing: its box
+//! reaches away from the sun by `LAST_FAR_REACH` more shadow distances, so
+//! casters shading those distant receivers are drawn into it at its own
+//! coarse texel size. Beyond even that a receiver reads at clamped
+//! coordinates - off the uv edges edge texels repeat, and past a depth plane
+//! the comparison clamps to it, where empty space reads lit and only real
+//! geometry between the receiver and the sun blocks - smeared but present.
+//! Distant shadows get coarser rather than vanishing at the split plane or
+//! switching off past the far plane. Where no cascade reaches at all (behind
+//! the camera) the far map layer shades the map's own surfaces and the sun
+//! is otherwise unshadowed rather than baked.
 //!
 //! Bricks hardly ever move, so their lamp faces are kept: a face is drawn
 //! again only when its lamp or view changes, or when the static chunks
@@ -108,6 +118,15 @@ pub(crate) const CASTER_REACH: f32 = 400.0;
 /// Map surfaces this far beyond a cascade toward the sun still shade it
 /// (the map layer): past the stock maps' extent.
 const MAP_REACH: f32 = 10000.0;
+/// How far past its fitted slice, away from the sun, the last cascade's box
+/// reaches (in shadow distances). Casters shading receivers out there are
+/// still drawn into it at that cascade's coarse texel size, so their shadows
+/// persist at distance instead of ending at the shadow distance.
+const LAST_FAR_REACH: f32 = 4.0;
+/// The far map deliberately fits the whole-map box into a sub-region of its
+/// layer (twice fewer texels across it), so shadows past the last cascade
+/// read as low quality - present and steady, but visibly cheap.
+const FAR_TEXEL_SCALE: f32 = 2.0;
 /// Caster uniform stride; dynamic offsets must be 256-byte aligned.
 const CASTER_STRIDE: u64 = 256;
 /// Caster uniform: light matrix, then the occluder gap (padded to a vec4).
@@ -140,7 +159,9 @@ const VIEW_SLOTS: usize =
 const FAR_SLOT: usize = VIEW_SLOTS + 2 * MAX_CASCADES * (FITTED_VIEWS - 1);
 
 /// Sun shadow quality: how many cascades, their square resolution, and how
-/// far from the eye shadows reach before fading out.
+/// far from the eye the cascades are fitted (`distance`). Shadows do not stop
+/// there: the last cascade keeps serving receivers past it until its map ends
+/// (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowSettings {
     pub cascades: u32,
@@ -248,12 +269,14 @@ impl ShadowSettings {
         self.cascades * 3
     }
     /// The far map layer: one orthographic sun depth map of the whole map's
-    /// opaque geometry (the map's bounds, so a texel is coarse), drawn once
-    /// per map and sun direction. Receivers past the last cascade read it,
-    /// as engines keep a static far shadow map behind their cascades, so
-    /// the far side of a large interior stays in the shade the walls give
-    /// it instead of turning sunlit where the cascades end. Its layer
-    /// comes after every other.
+    /// opaque geometry (fitted into a sub-region of its layer on purpose,
+    /// so a texel is deliberately coarse - low quality at range), redrawn
+    /// every frame - the casters first, then the map surfaces on top - so
+    /// both moving things and static walls keep shading past the cascades.
+    /// Receivers past the last cascade read it, as engines keep a far shadow
+    /// map behind their cascades, so the far side of a large interior stays
+    /// in the shade the walls give it instead of turning sunlit where the
+    /// cascades end. Its layer comes after every other.
     pub fn far_layer(&self) -> u32 {
         self.cascade_layers() + self.lamp_layers() + self.cube_layers()
     }
@@ -458,7 +481,7 @@ pub(crate) fn cascades_after(
     let point_at = |ray: Vec3, depth: f32| eye + (ray - eye) * (depth / (ray - eye).dot(forward));
     let mut start = near_depth;
     let mut out = Vec::with_capacity(count);
-    for split in splits {
+    for (index, &split) in splits.iter().enumerate() {
         let slice: Vec<Vec3> = far
             .iter()
             .flat_map(|&ray| [point_at(ray, start), point_at(ray, split)])
@@ -483,13 +506,22 @@ pub(crate) fn cascades_after(
         );
         // Right-handed view looks down -Z: depth along the sun is -z.
         let depth = -light.z;
+        // The last slice keeps serving receivers past the shadow distance at
+        // its own coarse texel size (the read side clamps them to these
+        // planes): extend its box away from the sun by that much so the
+        // casters shading those distant receivers are drawn into it.
+        let far_reach = if index + 1 == count {
+            distance * LAST_FAR_REACH
+        } else {
+            0.0
+        };
         let projection = glam::camera::rh::proj::directx::orthographic(
             x - radius,
             x + radius,
             y - radius,
             y + radius,
             depth - radius - CASTER_REACH,
-            depth + radius,
+            depth + radius + far_reach,
         );
         let map_projection = glam::camera::rh::proj::directx::orthographic(
             x - radius,
@@ -497,24 +529,24 @@ pub(crate) fn cascades_after(
             y - radius,
             y + radius,
             depth - radius - MAP_REACH,
-            depth + radius,
+            depth + radius + far_reach,
         );
-        let span = 2.0 * radius + CASTER_REACH;
-        let map_span = 2.0 * radius + MAP_REACH;
+        let span = 2.0 * radius + CASTER_REACH + far_reach;
+        let map_span = 2.0 * radius + MAP_REACH + far_reach;
         out.push(Cascade {
             view_projection: projection * rotation,
             map_view_projection: map_projection * rotation,
             map_depth: [span / map_span, (MAP_REACH - CASTER_REACH) / map_span],
             far: split,
             texel,
-            depth_scale: 1.0 / (2.0 * radius + CASTER_REACH),
+            depth_scale: 1.0 / span,
             radius,
             center_texels: [
                 (light.x / texel).round() as i64,
                 (light.y / texel).round() as i64,
             ],
             half_texels: i64::from(settings.resolution / 2),
-            depth_range: [depth - radius - CASTER_REACH, depth + radius],
+            depth_range: [depth - radius - CASTER_REACH, depth + radius + far_reach],
         });
         start = split;
     }
@@ -689,10 +721,11 @@ impl CubeCache {
 }
 
 type FarFields = ([f32; 16], [f32; 4]);
-/// The far map layer's state: the map, sun and matrix it was drawn with,
+/// The far map layer's state: what it was last drawn with (the map `key`,
+/// sun, matrix and the casters' signature - a still frame redraws nothing)
 /// and the receiver fields last written.
 struct FarMap {
-    drawn: Option<(Vec<usize>, Vec3, Mat4)>,
+    drawn: Option<(Vec<usize>, Vec3, Mat4, u64)>,
     fields: FarFields,
 }
 impl Default for FarMap {
@@ -725,16 +758,23 @@ pub(crate) fn far_fit(bounds: (Vec3, Vec3), sun: Vec3, resolution: u32) -> (Mat4
         max = max.max(light);
     }
     let centre = (min + max) * 0.5;
-    let half = ((max.x - min.x).max(max.y - min.y)) * 0.5 + FAR_MARGIN;
-    let texel = 2.0 * half / resolution.max(1) as f32;
+    // The margin also leaves room for the receiver bias push, which scales
+    // with the coarser texel.
+    let margin = FAR_MARGIN * FAR_TEXEL_SCALE;
+    let half = ((max.x - min.x).max(max.y - min.y)) * 0.5 + margin;
+    // The box fits into a central sub-region of the layer: `FAR_TEXEL_SCALE`
+    // times fewer texels across it, so distant shadows are deliberately
+    // coarse (low quality at range by design).
+    let view_half = half * FAR_TEXEL_SCALE;
+    let texel = 2.0 * half / (resolution.max(1) as f32 / FAR_TEXEL_SCALE);
     // Right-handed view looks down -Z: depth along the sun is -z.
     let projection = glam::camera::rh::proj::directx::orthographic(
-        centre.x - half,
-        centre.x + half,
-        centre.y - half,
-        centre.y + half,
-        -max.z - FAR_MARGIN,
-        -min.z + FAR_MARGIN,
+        centre.x - view_half,
+        centre.x + view_half,
+        centre.y - view_half,
+        centre.y + view_half,
+        -max.z - margin,
+        -min.z + margin,
     );
     (projection * rotation, texel)
 }
@@ -822,7 +862,7 @@ impl ShadowMaps {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: SHADOW_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let array_view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -1500,21 +1540,25 @@ impl ShadowMaps {
         *self.cubes.borrow_mut() = CubeCache::default();
         *self.far.borrow_mut() = FarMap::default();
     }
-    /// The far map layer's draw this frame, if it must be drawn again: the
-    /// map `key` (empty: no map) within `bounds` changed, or the sun
-    /// turned since it was drawn. Writes its matrix for the draw and the
-    /// receivers' far fields (every view's) either way, so the layer is
-    /// read only while it holds the current map from the current sun.
+    /// The far map layer's draw this frame, when it is due: while a map
+    /// `key` (empty: no map) within `bounds` is drawn and the sun or the
+    /// casters (`casters_sig`) have moved since it last drew. Casters move,
+    /// so their distant shadows can't be cached across them; a still frame
+    /// redraws nothing at all. Writes its matrix for the draw, and the
+    /// receivers' far fields (every view's) either way, so the layer is read
+    /// only while it holds this map from this sun.
     pub fn far_map(
         &self,
         queue: &wgpu::Queue,
         key: &[usize],
         bounds: Option<(Vec3, Vec3)>,
+        casters_sig: u64,
     ) -> Option<Mat4> {
         let mut far = self.far.borrow_mut();
         let settings = self.settings.filter(|_| !key.is_empty());
         let fit = settings.and_then(|s| bounds.map(|b| far_fit(b, self.sun, s.resolution)));
-        let current = fit.map(|(matrix, _)| (key.to_vec(), self.sun, matrix));
+        let current = fit
+            .map(|(matrix, _)| (key.to_vec(), self.sun, matrix, casters_sig));
         let draw = if current.is_some() && far.drawn != current {
             fit.map(|(matrix, _)| matrix)
         } else {
@@ -1524,7 +1568,15 @@ impl ShadowMaps {
         let fields = match (settings, fit) {
             (Some(s), Some((matrix, texel))) if far.drawn.is_some() => (
                 matrix.to_cols_array(),
-                [1.0, s.far_layer() as f32, texel, 1.0 / s.resolution as f32],
+                // w: one (hardware) texel in map coordinates - the fixed
+                // 4-tap filter keeps its usual width even though the box now
+                // occupies a sub-region of the layer (see `far_fit`).
+                [
+                    1.0,
+                    s.far_layer() as f32,
+                    texel,
+                    1.0 / s.resolution as f32,
+                ],
             ),
             _ => (Mat4::IDENTITY.to_cols_array(), [0.0; 4]),
         };
@@ -1727,9 +1779,13 @@ mod tests {
                     "{sun:?} {corner:?} -> {clip:?}"
                 );
             }
-            // Square and no coarser than the map's longest side plus margins.
+            // Square and no coarser than the map's longest side plus margins,
+            // times the deliberate far-map coarsening.
             let span = (hi - lo).max_element() * 3f32.sqrt() + 2.0 * FAR_MARGIN;
-            assert!(texel > 0.0 && texel <= span / 2048.0, "{texel}");
+            assert!(
+                texel > 0.0 && texel <= span * FAR_TEXEL_SCALE / 2048.0,
+                "{texel}"
+            );
         }
     }
 

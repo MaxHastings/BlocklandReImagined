@@ -332,7 +332,10 @@ fn cascade_coord(position:vec3<f32>,n:vec3<f32>,cascade:i32)->CascadeCoord {
     // Offset along the normal by the cascade's texel size against acne.
     let clip=shadows.matrices[cascade]*vec4<f32>(position+n*shadows.texels[cascade]*1.5,1.0);
     out.uv=clip.xy*vec2<f32>(0.5,-0.5)+vec2<f32>(0.5);
-    out.depth=clip.z;
+    // Past the far plane (depth above 1) the comparison clamps to it: empty
+    // space holds exactly 1 and reads lit, so a receiver beyond the map is
+    // shaded only by geometry that really lies between it and the sun.
+    out.depth=min(clip.z,1.0);
     out.cascade=cascade;
     out.slope=vec2<f32>(0.0);
     if shadows.params.z>0.0 {
@@ -359,27 +362,39 @@ fn inside_map(c:CascadeCoord)->bool {
 }
 // The cascade a receiver reads, and the next one it fades into over the
 // last part of this cascade's range, so detail changes gradually instead of
-// along a hard line (a straight seam across a flat wall).
-struct ShadowCoord { near:CascadeCoord, far:CascadeCoord, blend:f32, strength:f32 };
+// along a hard line (a straight seam across a flat wall). Past the last
+// split the last cascade keeps serving the receiver at clamped coordinates
+// (its coarse texel size), so distant shadows get softer, not absent.
+struct ShadowCoord { near:CascadeCoord, far:CascadeCoord, blend:f32, strength:f32, far_blend:f32 };
 fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
     var out:ShadowCoord;
     out.near.cascade=-1;
     out.blend=0.0;
+    out.far_blend=0.0;
     let count=i32(shadows.forward_count.w);
     let view_depth=dot(position-shadows.origin.xyz,shadows.forward_count.xyz);
     var cascade=-1;
     for(var i=0;i<count;i+=1) {
         if view_depth<shadows.splits[i] {cascade=i;break;}
     }
-    if cascade<0 {return out;}
+    // Past the last split the last cascade still holds the receiver wherever
+    // its map reaches - and past that it keeps serving at clamped uv and depth
+    // (below): every caster and map surface is drawn into the whole square, so
+    // shadows keep that cascade's texel size out to the edge of its map and
+    // degrade beyond it rather than ending at the split distance.
+    if cascade<0 {
+        if count<=0 {return out;}
+        cascade=count-1;
+    }
     let n=normal/max(length(normal),0.0001);
     out.near=cascade_coord(position,n,cascade);
     // Cascades are fitted to the player's view; a receiver outside its
     // depth's cascade (behind the camera, as a mirror shows it) reads the
-    // finest wider one that holds it, or none.
+    // finest wider one that holds it. Past the shadow distance none need hold
+    // it - the last one serves at clamped coordinates instead (below).
     while !inside_map(out.near) {
         cascade+=1;
-        if cascade>=count {out.near.cascade=-1;return out;}
+        if cascade>=count {break;}
         out.near=cascade_coord(position,n,cascade);
     }
     if cascade+1<count {
@@ -394,9 +409,29 @@ fn shadow_coord(position:vec3<f32>,normal:vec3<f32>)->ShadowCoord {
             }
         }
     }
-    // Fade out over the last tenth of the shadow distance.
+    // No cascade holds the receiver in its map. Past the shadow distance the
+    // last one keeps serving at clamped coordinates anyway: off the uv edges
+    // the sampler repeats edge texels, and past a depth plane the comparison
+    // clamps to it (cascade_coord), so empty space reads lit and only real
+    // geometry between the receiver and the sun blocks - smeared but present,
+    // degrading with distance instead of switching off. Anywhere else nothing
+    // can shade it. Full strength wherever a cascade serves: quality falls
+    // through the data read, not through a fade to unshadowed sun.
     let last=shadows.splits[count-1];
-    out.strength=clamp((last-view_depth)/(last*0.1),0.0,1.0);
+    if cascade>=count && view_depth<=last {out.near.cascade=-1;}
+    out.strength=select(0.0,1.0,out.near.cascade>=0);
+    // The fitted cascades only hold this receiver up to the last split: their
+    // boxes follow the view, so reading them past it (clamped uv and depth)
+    // makes distant shadows swim as the camera moves - and a zoom refits every
+    // box, so even a still eye sees them jump between notches. The hand off to
+    // the stable whole-map layer (far_map_lit), fitted once per map and sun,
+    // therefore completes at the last split: over its final quarter of range
+    // the read crossfades from the last cascade - still valid there - to the
+    // coarse but steady far layer, like the fade between two cascades. Past it
+    // nothing view-fitted is sampled any more: distant shadows keep that
+    // layer's texel size forever, present and unshakeable by movement or zoom,
+    // never gone, never phasing. Zero inside three quarters of the distance.
+    if count>0 {out.far_blend=smoothstep(0.75*last,last,view_depth);}
     return out;
 }
 // Share of each cascade's depth range over which it fades into the next.
@@ -420,6 +455,10 @@ const PCSS_FILTER_TAPS:i32=16;
 // The disc never grows past this many texels, nor shrinks below the width of
 // the ordinary 3x3 filter's softest edge.
 const PCSS_MAX_TEXELS:f32=10.0;
+// The far map's texels are deliberately coarse, so its penumbra search is
+// capped lower: an unscaled radius would reach across whole shadow edges and
+// smear false partial shade onto lit faces at range.
+const PCSS_FAR_MAX_TEXELS:f32=4.0;
 const PCSS_MIN_TEXELS:f32=1.5;
 const PCSS_MAP_SEARCH_TAPS:i32=16;
 const PCSS_MAP_FILTER_TAPS:i32=32;
@@ -545,6 +584,10 @@ fn shadow_lit(c:ShadowCoord)->f32 {
     var lit=cascade_lit(c.near);
     // Only receivers in the blend band pay for the second cascade.
     if c.blend>0.0 {lit=mix(lit,cascade_lit(c.far),c.blend);}
+    // Live casters have no stable layer past the shadow distance: over the
+    // hand off ramp they yield to unshadowed sun, so their shadows fade out
+    // smoothly instead of phasing on a box that no longer fits them.
+    if c.far_blend>0.0 {lit=mix(lit,1.0,c.far_blend);}
     return mix(1.0,lit,c.strength);
 }
 // Sun light reaching a vertex-lit surface past bricks, players and models.
@@ -796,7 +839,7 @@ fn far_map_pcss_lit(uv:vec2<f32>,depth:f32,n:vec3<f32>,layer:i32)->f32 {
     }
     if blockers==0.0 {return 1.0;}
     let blocker_distance=(depth-blocker_sum/blockers)/depth_scale;
-    let radius=clamp(blocker_distance*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_MAX_TEXELS);
+    let radius=clamp(blocker_distance*shadows.params.w/texel,PCSS_MIN_TEXELS,PCSS_FAR_MAX_TEXELS);
     var lit=0.0;
     for (var i=0;i<PCSS_MAP_FILTER_TAPS;i+=1) {
         let offset=pcss_disc(i,PCSS_MAP_FILTER_TAPS,angle)*(radius/size);
@@ -822,31 +865,36 @@ fn far_map_lit(position:vec3<f32>,n:vec3<f32>,fallback:f32)->f32 {
 // Unified: the share of the sun reaching a brick, player, item or vehicle.
 // Inside the shadow distance one PCSS pass over the live casters and the
 // map layer together shades it - so sun through a window lands with the same
-// filtered edge as a player's shadow beside it; past it (and while the map
-// layer is not drawn) the visibility volume's coarse sun stands in.
+// filtered edge as a player's shadow beside it; over the next shadow distance
+// the read hands off to the stable whole-map layer (coarse but steady), and
+// where that is not drawn the visibility volume's coarse sun stands in.
 fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
     if lighting_mode()==3 {return dynamic_sun(position,normal);}
     let c=shadow_coord(position,normal);
     let n=normal/max(length(normal),0.0001);
     var map=vis.low.x;
+    // Fully past the hand off ramp: the stable whole-map layer is the answer
+    // and live casters have faded out over it, so skip the fitted reads.
+    if c.far_blend>=1.0 {return far_map_lit(position,n,map);}
     if c.near.cascade>=0 && shadows.map_params.x>0.0 && c.strength>0.0 {
         if shadows.params.z>0.0 {
             // One PCSS pass over both layers: one radius, each tap lit only
             // where neither the casters nor the map block.
             var lit=combined_pcss_lit(c.near);
             if c.blend>0.0 {lit=mix(lit,combined_pcss_lit(c.far),c.blend);}
+            // In the hand off band the static part moves to the stable
+            // whole-map layer; the casters in `lit` yield with it (past the
+            // ramp they are gone anyway).
+            if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
             if lit<=0.0 {return 0.0;}
-            // Only receivers fading out of the last cascade pay for the far
-            // map; past it the coarse fallback stands in and live casters
-            // fade with the cascades.
-            if c.strength<1.0 {lit=mix(far_map_lit(position,n,map),lit,c.strength);}
             return lit;
         }
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
-        // Only receivers fading out of the last cascade pay for the far map.
-        if c.strength<1.0 {map=far_map_lit(position,n,map);}
-        map=mix(map,lit,c.strength);
+        // The same hand off for the map part without PCSS (strength is 1
+        // here, so the cascade result stands in outright inside the distance).
+        if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
+        map=lit;
     } else {
         // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
         // layer is not drawn: the coarse fallback stands in for the map part.
@@ -995,14 +1043,19 @@ fn lamp_slot(light:u32)->i32 {
 // surface by a fixed share whatever its baked light, so players and vehicles
 // shadow the dim Bedroom carpet too. The share is the mission's ambient to
 // ambient+sun ratio, bounded so shadows stay visible but never black.
+// How much of a lightmapped texel's baked light a live shadow takes away
+// when the bake's own sun share is unknown (a lightmap without its
+// decomposition): the ambient part of full daylight, clamped so lamps and
+// bounce keep most of their picture.
+fn lightmap_shade()->f32 {
+    let weights=vec3<f32>(0.2126,0.7152,0.0722);
+    let ambient=dot(camera.ambient.rgb,weights);
+    return clamp(ambient/max(ambient+dot(camera.sun_color.rgb,weights),0.0001),0.4,0.7);
+}
 fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     let c=shadow_coord(position,normal);
     if c.near.cascade<0 {return lightmap;}
-    let weights=vec3<f32>(0.2126,0.7152,0.0722);
-    let ambient=dot(camera.ambient.rgb,weights);
-    let lit=ambient+dot(camera.sun_color.rgb,weights);
-    let shade=clamp(ambient/max(lit,0.0001),0.4,0.7);
-    return lightmap*mix(shade,1.0,shadow_lit(c));
+    return lightmap*mix(lightmap_shade(),1.0,shadow_lit(c));
 }
 // Lighting model (camera.ambient.w): 0 Classic, the v20 look (baked maps,
 // sun-lit bricks, live shadows darken lightmaps by a fixed share); 2 Unified
@@ -1047,8 +1100,9 @@ fn ambient_at(reach:f32)->vec3<f32> {
 // The live sun reaching a lightmapped texel whose bake let `baked` of the
 // map's own sun through. From the map's baked direction: that share, past
 // live casters. From a new direction: the map's own surfaces in the shadow
-// cascades near the eye; past them the baked share stands in, as the
-// texel's openness to the sky.
+// cascades near the eye; over the hand off ramp the stable whole-map layer
+// takes over (coarse but steady), and where it is not drawn the baked share
+// stands in, as the texel's openness to the sky.
 fn relit_sun(baked:f32,position:vec3<f32>,n:vec3<f32>)->f32 {
     if baked_sun_direction_kept() {
         if baked<=0.0 {return 0.0;}
@@ -1056,23 +1110,25 @@ fn relit_sun(baked:f32,position:vec3<f32>,n:vec3<f32>)->f32 {
     }
     let c=shadow_coord(position,n);
     var map=baked;
+    // Fully past the hand off ramp: as object_sun, the stable whole-map layer
+    // is the answer and live casters have faded out over it.
+    if c.far_blend>=1.0 {return far_map_lit(position,n,map);}
     if c.near.cascade>=0 && shadows.map_params.x>0.0 && c.strength>0.0 {
         if shadows.params.z>0.0 {
             // One PCSS pass over both layers, as object_sun takes it.
             var lit=combined_pcss_lit(c.near);
             if c.blend>0.0 {lit=mix(lit,combined_pcss_lit(c.far),c.blend);}
+            // In the hand off band the static part moves to the stable
+            // whole-map layer; the casters in `lit` yield with it.
+            if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
             if lit<=0.0 {return 0.0;}
-            // Only receivers fading out of the last cascade pay for the far
-            // map; past it the baked share stands in and live casters fade
-            // with the cascades.
-            if c.strength<1.0 {lit=mix(far_map_lit(position,n,map),lit,c.strength);}
             return lit;
         }
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
-        // Only receivers fading out of the last cascade pay for the far map.
-        if c.strength<1.0 {map=far_map_lit(position,n,map);}
-        map=mix(map,lit,c.strength);
+        // The same hand off for the map part without PCSS.
+        if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
+        map=lit;
     } else {
         // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
         // layer is not drawn: the coarse fallback stands in for the map part.
@@ -1187,24 +1243,26 @@ fn dynamic_sun(position:vec3<f32>,normal:vec3<f32>)->f32 {
     let c=shadow_coord(position,normal);
     let n=normal/max(length(normal),0.0001);
     var map=1.0;
+    // Fully past the hand off ramp: as object_sun, the stable whole-map layer
+    // is the answer and live casters have faded out over it.
+    if c.far_blend>=1.0 {return far_map_lit(position,n,map);}
     if c.near.cascade>=0 && shadows.map_params.x>0.0 && c.strength>0.0 {
         if shadows.params.z>0.0 {
             // One PCSS pass over both layers: one radius, each tap lit only
             // where neither the casters nor the map block.
             var lit=combined_pcss_lit(c.near);
             if c.blend>0.0 {lit=mix(lit,combined_pcss_lit(c.far),c.blend);}
+            // In the hand off band the static part moves to the stable
+            // whole-map layer; the casters in `lit` yield with it.
+            if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
             if lit<=0.0 {return 0.0;}
-            // Only receivers fading out of the last cascade pay for the far
-            // map; past it the unshadowed sun stands in and live casters
-            // fade with the cascades.
-            if c.strength<1.0 {lit=mix(far_map_lit(position,n,map),lit,c.strength);}
             return lit;
         }
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
-        // Only receivers fading out of the last cascade pay for the far map.
-        if c.strength<1.0 {map=far_map_lit(position,n,map);}
-        map=mix(map,lit,c.strength);
+        // The same hand off for the map part without PCSS.
+        if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
+        map=lit;
     } else {
         // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
         // layer is not drawn: the unshadowed sun stands in for the map part.
@@ -2080,8 +2138,21 @@ override SURFACE_GROUP:u32=0u;
         illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.lightmap_uv,v.world_position,v.normal)
             +baked_point_light(v.world_position,v.normal);
     } else {
-        illumination=shadowed_lightmap(illumination,v.world_position,v.normal)
-            +baked_point_light(v.world_position,v.normal);
+        if lighting_mode()==0 {
+            // Classic keeps the v20 look: live casters darken the bake by a
+            // fixed share.
+            illumination=shadowed_lightmap(illumination,v.world_position,v.normal)
+                +baked_point_light(v.world_position,v.normal);
+        } else {
+            // Unified shades these lightmaps through both layers, as it does
+            // for bricks and models: the casters and the map's own geometry
+            // (the map layer), so a distant surface keeps its sun shadow at
+            // the last cascade's coarse texel size instead of dropping out.
+            let vis=map_visibility(v.world_position,v.normal);
+            let reach=object_sun(v.world_position,v.normal,vis);
+            illumination=illumination*mix(lightmap_shade(),1.0,reach)
+                +baked_point_light(v.world_position,v.normal);
+        }
         // A lightmap without its decomposition: only the ambient light
         // changes with the live environment.
         if relit() {illumination=max(illumination*sky_follow()+(camera.ambient.rgb-baked_ambient())*(1.0-sky_share()),vec3<f32>(0.0));}

@@ -57,6 +57,11 @@ impl Placement {
         let half = i64::from(size / 2);
         let reach = half as f32 * cascade.texel;
         let depth = -light.z;
+        // The layer's far side follows the cascade's own: the last cascade's
+        // box reaches away from the sun past its fitted slice, and a held
+        // layer must cover that band too.
+        let far_reach =
+            (cascade.depth_range[1] - cascade.depth_range[0]) - reach - CASTER_REACH;
         Self {
             sun,
             texel: cascade.texel,
@@ -65,7 +70,7 @@ impl Placement {
                 (light.y / cascade.texel).round() as i64,
             ],
             half_texels: half,
-            depth_range: [depth - reach - CASTER_REACH, depth + reach],
+            depth_range: [depth - reach - CASTER_REACH, depth + reach + far_reach],
         }
     }
     /// Whether `cascade`'s map lies inside this layer, on the same grid.

@@ -5432,11 +5432,31 @@ impl SceneRenderer {
         if player && let Some(queue) = self.queue.borrow().as_ref() {
             let bounds = map_drawn.then(|| world_bounds(map)).flatten();
             if let (Some(matrix), Some(settings)) = (
-                self.shadows.far_map(queue, &map_key, bounds),
+                self.shadows
+                    .far_map(queue, &map_key, bounds, caster_signature),
                 self.shadows.settings,
             ) {
+                // The far layer redraws whenever its content moves (casters,
+                // map or sun) - a still frame keeps what it holds. The first
+                // pass clears it and draws the casters; the second loads that
+                // depth and adds the map surfaces on top: one combined
+                // whole-map shadow for everything past the last cascade
+                // (occluders stay out: they never cast).
+                let far_view = &self.shadows.layer_views[settings.far_layer() as usize];
                 targets.push((
-                    &self.shadows.layer_views[settings.far_layer() as usize],
+                    far_view,
+                    None,
+                    matrix,
+                    casters,
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::far_offset(),
+                    false,
+                    false,
+                ));
+                extras.push(TargetExtra::default());
+                targets.push((
+                    far_view,
                     None,
                     matrix,
                     map,
@@ -5651,14 +5671,16 @@ impl SceneRenderer {
                     kept_layers.insert(layer, key);
                 }
                 // Kept faces share layers with other kept faces: never clear
-                // a whole layer under them.
-                let load =
-                    if clear_tile || (tile.is_some() && cleared.contains(&(view as *const _))) {
-                        wgpu::LoadOp::Load
-                    } else {
-                        cleared.push(view as *const _);
-                        wgpu::LoadOp::Clear(1.0)
-                    };
+                // a whole layer under them. A view already cleared this frame
+                // keeps its content - a later target on the same layer (the
+                // far map's second pass, or another tile of it) loads over
+                // what drew before.
+                let load = if clear_tile || cleared.contains(&(view as *const _)) {
+                    wgpu::LoadOp::Load
+                } else {
+                    cleared.push(view as *const _);
+                    wgpu::LoadOp::Clear(1.0)
+                };
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("shadow map"),
                     color_attachments: &[],
