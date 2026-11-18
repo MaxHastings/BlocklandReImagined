@@ -559,7 +559,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         .files
         .iter()
         .filter(|(key, _)| key.ends_with(".cs"))
-        .flat_map(|(_, f)| reference::required_addons(&String::from_utf8_lossy(&f.bytes)))
+        .flat_map(|(_, f)| reference::required_addons(&legacy_text(&f.bytes)))
         .collect();
     // One it requires that the reference lacks is looked for beside it.
     if let Some(folder) = opts.input.parent() {
@@ -837,8 +837,7 @@ fn source_info(src: &source::Source) -> SourceInfo {
             "Unlicense",
         ];
         info.licence_spdx = info.licence_files.iter().find_map(|m| {
-            let text = String::from_utf8_lossy(&src.get(&format!("{}/{m}", src.dir()))?.bytes)
-                .into_owned();
+            let text = legacy_text(&src.get(&format!("{}/{m}", src.dir()))?.bytes);
             SPDX.iter()
                 .find(|id| text.contains(**id))
                 .map(|id| (*id).to_owned())
@@ -847,15 +846,65 @@ fn source_info(src: &source::Source) -> SourceInfo {
     info
 }
 
-/// A script or text file as the importer reads it: UTF-8 (lossily) with
-/// Unix line endings, so a copy saved on Windows, or checked out there with
-/// `core.autocrlf`, imports exactly as it does elsewhere.
+/// The text of a file from a legacy Add-On, decoded for the importer.
+/// Strict UTF-8 where it is valid; otherwise CP1252, the encoding pre-UTF-8
+/// Add-Ons were written in. Their brick names carry degree signs (`45°
+/// Ramp`) and their descriptions smart quotes, which lossy decoding used to
+/// turn into U+FFFD so that old saves could no longer match them.
+pub(crate) fn legacy_text(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes.iter().copied().map(cp1252_char).collect(),
+    }
+}
+
+/// One byte of CP1252 as a character. Below 0x80 it is ASCII, and from 0xA0
+/// on CP1252 agrees with Latin-1; only the 0x80–0x9F block is Windows' own,
+/// and its five undefined slots become U+FFFD.
+fn cp1252_char(byte: u8) -> char {
+    match byte {
+        0x00..=0x7f | 0xa0..=0xff => byte as char,
+        0x80 => '\u{20AC}', // euro sign
+        0x82 => '\u{201A}', // single low-9 quotation mark
+        0x83 => '\u{0192}', // latin small f with hook
+        0x84 => '\u{201E}', // double low-9 quotation mark
+        0x85 => '\u{2026}', // horizontal ellipsis
+        0x86 => '\u{2020}', // dagger
+        0x87 => '\u{2021}', // double dagger
+        0x88 => '\u{02C6}', // modifier letter circumflex accent
+        0x89 => '\u{2030}', // per mille sign
+        0x8a => '\u{0160}', // latin capital s with caron
+        0x8b => '\u{2039}', // single left-pointing angle quotation mark
+        0x8c => '\u{0152}', // latin capital ligature oe
+        0x8e => '\u{017D}', // latin capital z with caron
+        0x91 => '\u{2018}', // left single quotation mark
+        0x92 => '\u{2019}', // right single quotation mark
+        0x93 => '\u{201C}', // left double quotation mark
+        0x94 => '\u{201D}', // right double quotation mark
+        0x95 => '\u{2022}', // bullet
+        0x96 => '\u{2013}', // en dash
+        0x97 => '\u{2014}', // em dash
+        0x98 => '\u{02DC}', // small tilde
+        0x99 => '\u{2122}', // trade mark sign
+        0x9a => '\u{0161}', // latin small s with caron
+        0x9b => '\u{203A}', // single right-pointing angle quotation mark
+        0x9c => '\u{0153}', // latin small ligature oe
+        0x9e => '\u{017E}', // latin small z with caron
+        0x9f => '\u{0178}', // latin capital y with diaeresis
+        _ => '\u{FFFD}',
+    }
+}
+
+/// A script or text file as the importer reads it: legacy-decoded (UTF-8, or
+/// CP1252 for pre-UTF-8 Add-Ons) with Unix line endings, so a copy saved on
+/// Windows, or checked out there with `core.autocrlf`, imports exactly as it
+/// does elsewhere.
 pub(crate) fn script_text(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let text = legacy_text(bytes);
     if text.contains('\r') {
         text.replace("\r\n", "\n").replace('\r', "\n")
     } else {
-        text.into_owned()
+        text
     }
 }
 
@@ -945,8 +994,7 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
         .values()
         .filter(|f| reachable.contains(&f.path.to_ascii_lowercase()))
         .map(|f| {
-            let text =
-                tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase();
+            let text = tscript::without_comments(&legacy_text(&f.bytes)).to_ascii_lowercase();
             regex::Regex::new(r"\bexec\s*\(")
                 .expect("pattern")
                 .find_iter(&text)
@@ -974,7 +1022,7 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
         .files
         .values()
         .filter(|f| kind_of(&f.path) == "script")
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .map(|f| tscript::without_comments(&legacy_text(&f.bytes)).to_ascii_lowercase())
         .collect::<Vec<_>>()
         .join("\n");
     for f in cx.src.files.values() {
@@ -3746,7 +3794,7 @@ fn sounds_and_rest(cx: &mut Ctx) {
         .files
         .values()
         .filter(|f| kind_of(&f.path) == "script")
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .map(|f| tscript::without_comments(&legacy_text(&f.bytes)).to_ascii_lowercase())
         .collect::<Vec<_>>()
         .join("\n");
     let mentions = |name: &str| {
@@ -4144,7 +4192,7 @@ fn load_path(
         .files
         .values()
         .find(|f| f.path.eq_ignore_ascii_case(script))
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)))?;
+        .map(|f| tscript::without_comments(&legacy_text(&f.bytes)))?;
     let assigned =
         regex::RegexBuilder::new(&format!(r#"%{}\s*=\s*"([^"]*)"\s*;"#, regex::escape(&c[1])))
             .case_insensitive(true)
@@ -4757,5 +4805,46 @@ mod tests {
         assert!(!guarded(12), "after it");
         assert!(!guarded(13), "a check for another Add-On");
         assert!(guarded(14), "a check on the call's own line");
+    }
+
+    #[test]
+    fn legacy_text_keeps_valid_utf8_untouched() {
+        // The degree sign and friends as UTF-8: not re-read byte by byte.
+        let text = "45° Ramp 8x — “quoted” • €\n";
+        assert_eq!(super::legacy_text(text.as_bytes()), text);
+    }
+
+    #[test]
+    fn legacy_text_decodes_cp1252_when_utf8_fails() {
+        // The degree sign as pre-UTF-8 Add-Ons wrote it: one CP1252 byte.
+        assert_eq!(super::legacy_text(b"45\xB0 Ramp 8x"), "45° Ramp 8x");
+    }
+
+    #[test]
+    fn legacy_text_decodes_the_cp1252_punctuation_block() {
+        // Curly quotes, em dash, bullet, trade mark and euro from 0x93–0x9F/0x80.
+        assert_eq!(
+            super::legacy_text(&[0x93, 0x94, 0x97, 0x95, 0x99, 0x80]),
+            "“”—•™€"
+        );
+    }
+
+    #[test]
+    fn legacy_text_maps_undefined_cp1252_slots_to_replacement() {
+        // The five slots Windows left undefined: 0x81, 0x8D, 0x8F, 0x90, 0x9D.
+        assert_eq!(
+            super::legacy_text(&[0x81, 0x8D, 0x8F, 0x90, 0x9D]),
+            "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}"
+        );
+    }
+
+    #[test]
+    fn legacy_text_agrees_with_latin1_above_0x7f() {
+        assert_eq!(super::legacy_text(b"caf\xE9"), "café");
+    }
+
+    #[test]
+    fn script_text_normalizes_line_endings_after_cp1252_fallback() {
+        assert_eq!(super::script_text(b"a\r\n45\xB0\r"), "a\n45°\n");
     }
 }

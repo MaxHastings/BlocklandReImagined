@@ -1,7 +1,7 @@
 //! What the base game already provides: datablocks, damage types and files
 //! of a read-only v20 reference install, so an Add-On's references to them
 //! become dependencies instead of unknowns.
-use crate::source;
+use crate::{legacy_text, source};
 use anyhow::{Context, Result};
 use bri_convert::tscript::{self, Datablock};
 use std::{
@@ -405,7 +405,7 @@ impl Reference {
                 self.blbs.insert(key.clone(), file.bytes.clone());
             }
             if key.ends_with(".cs") {
-                let text = String::from_utf8_lossy(&file.bytes);
+                let text = legacy_text(&file.bytes);
                 self.requires
                     .entry(src.name.to_ascii_lowercase())
                     .or_default()

@@ -1,5 +1,6 @@
 //! Bounded literal AudioEmitter adaptation into ordinary native sound/rule data.
 //! No source script execution, runtime Torque dependency, or map-name policy.
+use crate::legacy_text;
 use anyhow::{Context, Result, bail, ensure};
 use bri_content::scene::{Node, Scene};
 use bri_convert::effect_script::Declarations;
@@ -442,11 +443,9 @@ pub fn export(
         .values()
         .filter(|f| f.path.to_ascii_lowercase().ends_with(".cs"))
     {
-        if let Err(error) = declarations.read_classes(
-            &String::from_utf8_lossy(&file.bytes),
-            &file.path,
-            &["AudioProfile"],
-        ) {
+        if let Err(error) =
+            declarations.read_classes(&legacy_text(&file.bytes), &file.path, &["AudioProfile"])
+        {
             result.diagnostics.push(format!(
                 "{}: literal audio declarations incomplete: {error:#}",
                 file.path

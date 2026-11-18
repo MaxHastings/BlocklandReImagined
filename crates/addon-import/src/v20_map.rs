@@ -7,6 +7,7 @@
 //! scratch folder: `Add-Ons/<Map_Name>` beside the install's `base/` (hard
 //! links, or copies across drives) when `--v20` names one, for the
 //! textures, skies and models a map borrows from the base game.
+use crate::legacy_text;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -89,7 +90,7 @@ fn borrowed(input: &Path, stem: &str) -> Result<Vec<String>> {
     }
     let mut names = std::collections::BTreeSet::new();
     for text in missions {
-        let text = String::from_utf8_lossy(&text).replace('\\', "/");
+        let text = legacy_text(&text).replace('\\', "/");
         let lower = text.to_ascii_lowercase();
         // `add-ons/Name/...` and the mission's mod-root form `~/Name/...`.
         let starts = lower
@@ -542,7 +543,7 @@ fn foliage(root: &Path, mission: &str, map_id: &str, scene: &Value, dir: &Path) 
             "new fxfoliagereplicator("
         };
         let nth = seen.entry(class.into()).or_default();
-        let line = String::from_utf8_lossy(&text)
+        let line = legacy_text(&text)
             .lines()
             .enumerate()
             .filter(|(_, l)| l.to_ascii_lowercase().contains(class))
@@ -708,7 +709,7 @@ fn scripts(root: &Path, stem: &str) -> Result<Vec<(String, String)>> {
                         .strip_prefix(&folder)?
                         .to_string_lossy()
                         .replace('\\', "/");
-                    let text = String::from_utf8_lossy(&std::fs::read(&path)?).into_owned();
+                    let text = legacy_text(&std::fs::read(&path)?);
                     out.push((format!("Add-Ons/{stem}/{relative}"), text));
                 }
             }
@@ -721,10 +722,7 @@ fn scripts(root: &Path, stem: &str) -> Result<Vec<(String, String)>> {
             if entry.is_file() && is_script(&name) && entry.size() < 4 << 20 {
                 let mut bytes = vec![];
                 std::io::Read::read_to_end(&mut entry, &mut bytes)?;
-                out.push((
-                    format!("Add-Ons/{stem}/{name}"),
-                    String::from_utf8_lossy(&bytes).into_owned(),
-                ));
+                out.push((format!("Add-Ons/{stem}/{name}"), legacy_text(&bytes)));
             }
         }
     }
