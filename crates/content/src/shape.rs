@@ -164,8 +164,8 @@ pub struct Mesh {
     /// ([`Surface::lightmap`]) is read (glTF `TEXCOORD_1`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uv1: Vec<[f32; 2]>,
-    /// Per-vertex colours (RGBA, glTF `COLOR_0`) of a surface lit by its vertices alone (a layer-blended terrain's baked light), one
-    /// per vertex or none. Models and other surfaces ignore them.
+    /// Per-vertex colours (RGBA, glTF `COLOR_0`), one per vertex or none: on a layer-blended surface they are its baked light; on any
+    /// other material they modulate the paint it is drawn in — a posed model's mask, white full-bright and darker vertices darker.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub colors: Vec<[u8; 4]>,
     /// The baked light of a mesh of static meshes among fixed lights, worked out when it loads: times `colors` where both are given.

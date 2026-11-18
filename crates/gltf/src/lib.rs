@@ -925,14 +925,20 @@ pub fn convert(
                             || g["extras"]["bri_vertex_light"].as_bool() == Some(true)
                     })
                 });
+            // Vertex colours ride wherever they do: a layer-blended surface's
+            // baked light, or a posed model's paint mask (white full-bright,
+            // darker vertices drawn darker). Only sector-lit terrain drops
+            // them: its computed lights replace the saved values.
             let colors = attr["COLOR_0"]
                 .as_u64()
-                .filter(|_| layered && terrain_lighting.is_none())
+                .filter(|_| !(layered && terrain_lighting.is_some()))
                 .map(|a| doc.floats(a as usize))
                 .transpose()?;
-            if attr.get("COLOR_0").is_some() && !layered && warned.insert("color") {
-                report.warnings.push(
-                    "vertex colours are ignored; bake them into the Base Color texture".into(),
+            if let Some(rows) = &colors {
+                ensure!(
+                    rows.len() == count,
+                    "`{}` primitive {pi} vertex colours do not match its vertices",
+                    names[k]
                 );
             }
             if uv.is_none() && p["material"].is_u64() {
@@ -1095,10 +1101,14 @@ pub fn convert(
                 _ => colors,
             };
             node_vertex += count;
-            // Vertex colours ride along once a primitive has them; the vertices before it, and later ones without, get the neutral light (128).
+            // Vertex colours ride along once a primitive has them. Vertices
+            // without their own take the surface's neutral: half light (128)
+            // on a layer-blended baked-light surface, white (no modulation)
+            // elsewhere.
+            let neutral = if layered { NEUTRAL_LIGHT } else { [255u8; 4] };
             if colors.is_some() || !mesh.colors.is_empty() {
                 let filled = mesh.positions.len() - count;
-                mesh.colors.resize(filled, NEUTRAL_LIGHT);
+                mesh.colors.resize(filled, neutral);
                 match &colors {
                     Some(rows) => mesh.colors.extend(rows.iter().map(|c| {
                         let byte = |v: f32| (v.clamped(0.0, 1.0) * 255.0).round() as u8;
@@ -1111,7 +1121,7 @@ pub fn convert(
                     })),
                     None => mesh
                         .colors
-                        .extend(std::iter::repeat_n(NEUTRAL_LIGHT, count)),
+                        .extend(std::iter::repeat_n(neutral, count)),
                 }
             }
             if skinned {

@@ -833,3 +833,35 @@ fn a_solid_colour_survives_the_round_trip_without_a_picture() {
     assert_eq!(lowered.shape.materials[0].color, None);
     assert_eq!(lowered.shape.materials[1].color, Some([0.25, 0.5, 0.75, 1.0]));
 }
+
+/// A posed model's paint mask (glTF `COLOR_0`) rides into the shape: quantized to bytes, a colourless sibling primitive takes white (no
+/// modulation).
+#[test]
+fn vertex_colours_are_a_paint_mask_for_posed_models() {
+    let mut g = bri_gltf::Gltf::new();
+    // Each primitive keeps its own positions: the mask must match them one for one.
+    let masked = g.floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 3);
+    // VEC3: no alpha channel in the file, so it defaults to opaque.
+    let mask = g.floats(&[1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0], 3);
+    let bare = g.floats(&[2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 2.0, 1.0, 0.0], 3);
+    let mesh = g.mesh(
+        "mask",
+        vec![
+            serde_json::json!({ "attributes": { "POSITION": masked, "COLOR_0": mask } }),
+            serde_json::json!({ "attributes": { "POSITION": bare } }),
+        ],
+    );
+    g.material("blank", [1.0; 4], None, serde_json::json!({}));
+    g.node(serde_json::json!({ "mesh": mesh }), None);
+    let bytes = g.glb();
+
+    let doc = bri_gltf::Document::from_bytes(&bytes, None).unwrap();
+    let opts = bri_gltf::Options::new("", "", bri_gltf::Kind::Item);
+    let lowered = bri_gltf::convert(&doc, None, &opts, "mask", "").unwrap();
+    let mesh = lowered.shape.meshes[0].as_ref().unwrap();
+
+    // Quantized to bytes: white stays full-bright, half dims to 128.
+    assert_eq!(&mesh.colors[..3], &[[255u8; 4], [128, 128, 128, 255], [0, 0, 0, 255]]);
+    // The colourless primitive takes white: no modulation.
+    assert_eq!(&mesh.colors[3..], &[[255u8; 4]; 3]);
+}

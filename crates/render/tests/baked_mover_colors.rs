@@ -1,5 +1,6 @@
 //! A lit moving body whose material holds the room's light in its vertex colours (a map's mover: `bri_actor_lit` with
-//! `bri_vertex_light`) is built with those colours; without them it would take the object's white and draw full-bright.
+//! `bri_vertex_light`) is built with those colours; without them it would take the object's white and draw full-bright. Any other
+//! material takes the mask too: a posed model's vertex colour modulates its paint, white full-bright and darker vertices darker.
 use bri_content::animation;
 use bri_content::testing::{material, plain, rigid_shape};
 use bri_render::scene::{Material, MaterialKind, SceneData, SceneImage};
@@ -66,8 +67,66 @@ fn a_baked_mover_keeps_its_dark_vertex_colours() {
 }
 
 #[test]
-fn a_free_body_ignores_vertex_colours() {
+fn a_free_bodys_paint_is_modulated_by_its_vertex_mask() {
     for c in door_vertices(false) {
-        assert_eq!(c, [1.0; 4]);
+        assert!(
+            (c[0] - 10.0 / 255.0).abs() < 1e-3 && (c[1] - 12.0 / 255.0).abs() < 1e-3
+                && (c[2] - 14.0 / 255.0).abs() < 1e-3,
+            "{c:?}"
+        );
+    }
+}
+
+/// The item case: a plain vertex-lit material (no `bri_vertex_light`) whose paint is modulated by the model's mask — white full-bright,
+/// darker vertices drawn darker.
+fn gun_mask() -> Vec<[f32; 4]> {
+    let mut shape = rigid_shape(
+        "gun",
+        &[("root", None, [0.0; 3])],
+        &[(0, [0.0; 3], [1.0; 3], plain(0))],
+        vec![material("gun", "opaque")],
+    );
+    // The magazine sits at the box's first vertex: half-dark in the model itself.
+    let mesh = shape.meshes[0].as_mut().unwrap();
+    mesh.colors = vec![[255u8; 4]; mesh.positions.len()];
+    mesh.colors[0] = [128, 128, 128, 255];
+    let pose = animation::sample(&shape, None, 0.0).unwrap();
+    let mut scene = SceneData {
+        images: vec![SceneImage {
+            label: "grey".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![128; 4],
+            srgb: false,
+        }],
+        ..Default::default()
+    };
+    scene.materials.push(Material::vertex_lit("gun", 0));
+    scene
+        .append_shape(
+            ShapeInstance {
+                shape: &shape,
+                pose: &pose,
+                detail: 0,
+                transform: Mat4::from_scale(Vec3::ONE),
+                materials: &[0],
+                translucent_materials: None,
+                unassigned_material: 0,
+            },
+            |_| Some([1.0; 4]),
+        )
+        .unwrap();
+    scene.vertices.iter().map(|v| v.color).collect()
+}
+
+#[test]
+fn a_plain_vertex_lit_models_paint_is_modulated_by_its_mask() {
+    let colors = gun_mask();
+    assert!(!colors.is_empty());
+    // The half-dark vertex draws at half the paint; every other vertex full-bright.
+    assert!(colors.iter().any(|c| (c[0] - 128.0 / 255.0).abs() < 1e-3));
+    for c in colors {
+        let dark = (c[0] - 128.0 / 255.0).abs() < 1e-3;
+        assert!(dark || c == [1.0; 4], "{c:?}");
     }
 }

@@ -157,8 +157,12 @@ impl SceneData {
                             .to_array(),
                         uv: vertex.uv,
                         lightmap_uv: vertex.uv1,
+                        // A vertex's own colour modulates the paint it is
+                        // drawn in (a posed model's mask: white full-bright,
+                        // darker vertices darker); without one a layer-blended
+                        // surface takes its neutral half light.
                         color: match vertex.color {
-                            Some(c) if layered => [
+                            Some(c) => [
                                 c[0] * color[0],
                                 c[1] * color[1],
                                 c[2] * color[2],
