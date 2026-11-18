@@ -890,6 +890,7 @@ pub fn read_dts(data: &[u8], id: String) -> Result<(Shape, Provenance)> {
             wrap_u: f & 1 != 0,
             wrap_v: f & 2 != 0,
             blend: blend(f).into(),
+            color: None, // DTS names its pictures; solid colour is glTF's.
             unlit: f & 32 != 0,
             environment: f & 64 == 0,
             mipmaps: f & 128 == 0,

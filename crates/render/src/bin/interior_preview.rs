@@ -81,11 +81,22 @@ async fn run() -> Result<()> {
             .filter(|n| matches!(n.kind, Kind::Interior))
         {
             let id = node.asset.as_ref().context("Interior missing asset")?;
-            let file = bundle["assets"][id]
+            let name = bundle["assets"][id]
                 .as_str()
-                .context("Interior missing native file")?;
-            let interior: Interior = serde_json::from_slice(&std::fs::read(root.join(file))?)?;
-            interior.validate()?;
+                .context("Interior missing native file")?
+                .to_owned();
+            // A self-contained interior (.glb) or the legacy JSON beside it.
+            let (interior, glb_textures): (Interior, Option<Vec<Option<Vec<u8>>>>) =
+                if name.ends_with(".glb") {
+                    let doc = bri_gltf::Document::open(&root.join(&name))?;
+                    let glb = bri_gltf::interior_glb::InteriorGlb::from_document(&doc)?;
+                    // Detail 0 is the only one this preview draws.
+                    (glb.interior, Some(glb.textures.first().cloned().unwrap_or_default()))
+                } else {
+                    let interior: Interior = serde_json::from_slice(&std::fs::read(root.join(&name))?)?;
+                    interior.validate()?;
+                    (interior, None)
+                };
             let detail = &interior.details[0];
             let transform = Mat4::from_cols_array(&node.transform);
             let mut lightmaps = Vec::new();
@@ -116,24 +127,35 @@ async fn run() -> Result<()> {
                 });
             }
             let mut material_images = BTreeMap::new();
-            for binding in bundle["bindings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|b| b["asset"].as_str() == Some(id) && b["detail"].as_u64() == Some(0))
-            {
-                let file = binding["texture"]
-                    .as_str()
-                    .context("Missing original texture")?;
-                let index = if let Some(&index) = texture_indices.get(file) {
-                    index
-                } else {
-                    let index = images.len();
-                    images.push(decode(&std::fs::read(root.join(file))?, true)?);
-                    texture_indices.insert(file.to_owned(), index);
-                    index
-                };
-                material_images.insert(binding["material"].as_u64().unwrap() as usize, index);
+            if let Some(texs) = glb_textures.as_deref() {
+                // A .glb interior carries its diffuse textures inside itself.
+                for (j, tex) in texs.iter().enumerate() {
+                    if let Some(bytes) = tex {
+                        let index = images.len();
+                        images.push(decode(bytes, true)?);
+                        material_images.insert(j, index);
+                    }
+                }
+            } else {
+                for binding in bundle["bindings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|b| b["asset"].as_str() == Some(id) && b["detail"].as_u64() == Some(0))
+                {
+                    let file = binding["texture"]
+                        .as_str()
+                        .context("Missing original texture")?;
+                    let index = if let Some(&index) = texture_indices.get(file) {
+                        index
+                    } else {
+                        let index = images.len();
+                        images.push(decode(&std::fs::read(root.join(file))?, true)?);
+                        texture_indices.insert(file.to_owned(), index);
+                        index
+                    };
+                    material_images.insert(binding["material"].as_u64().unwrap() as usize, index);
+                }
             }
             // Group by texture pair to keep this inspection representative of batching.
             let mut groups: BTreeMap<(usize, usize), Vec<TextureVertex>> = BTreeMap::new();

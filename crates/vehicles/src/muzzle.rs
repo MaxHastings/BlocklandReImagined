@@ -69,6 +69,19 @@ fn read(root: &Path, asset: &Asset, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// The model behind a vehicle asset: older packs ship JSON shapes; current
+/// ones GLBs, lowered with the same conversion as what renders them.
+fn shape_of(root: &Path, asset: &Asset) -> Result<Shape> {
+    let bytes = read(root, asset, 32 << 20)?;
+    let shape: Shape = if asset.path.to_ascii_lowercase().ends_with(".glb") {
+        bri_gltf::lower(&bytes, &asset.virtual_path)?.shape
+    } else {
+        serde_json::from_slice(&bytes)?
+    };
+    shape.validate()?;
+    Ok(shape)
+}
+
 /// Where `pitch` falls along a three-key aim clip ordered highest, level,
 /// lowest whose end keys sit at `up` and `down` radians: 0 at `up`, 0.5
 /// level, 1 at `down`, each half sampled evenly (Halo's aiming screens, with
@@ -198,8 +211,7 @@ impl Pack {
                 .iter()
                 .find(|a| &a.path == model)
                 .with_context(|| format!("Vehicle {} weapon model is missing", d.id))?;
-            let shape: Shape = serde_json::from_slice(&read(root, asset, 32 << 20)?)?;
-            shape.validate()?;
+            let shape = shape_of(root, asset)?;
             let Some(clip) = look_clip(&clips, &shape) else {
                 continue;
             };
@@ -273,7 +285,7 @@ mod tests {
             assert_eq!(weapon.look_muzzle.len(), MUZZLE_SAMPLES, "{id}");
             let model = d.attachment_model.as_ref().unwrap_or(&d.model);
             let asset = pack.assets.iter().find(|a| &a.path == model).unwrap();
-            let shape: Shape = serde_json::from_slice(&read(&root, asset, 32 << 20)?)?;
+            let shape = shape_of(&root, asset)?;
             let clip = look_clip(&clips, &shape).unwrap();
             let hinge = shape
                 .nodes

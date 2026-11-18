@@ -179,6 +179,9 @@ pub struct ItemAssets {
     pub faults: Vec<String>,
     shapes: BTreeMap<String, Shape>,
     textures: BTreeMap<String, SceneImage>,
+    /// A `.glb` model's own bitmaps by material name (its empty presentation
+    /// bindings), decoded once at load; a material with none draws clear.
+    glb_images: BTreeMap<String, BTreeMap<String, SceneImage>>,
     /// Icons to draw from their models, until [`Self::draw_icons`].
     icon_requests: Vec<(String, String, String, crate::item_icon_render::Request)>,
     /// Icons drawn from their models, each filled once drawn; until then
@@ -406,6 +409,13 @@ pub(crate) fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) 
         "Item resource checksum mismatch: {file}"
     );
     Ok(bytes)
+}
+/// A `.glb`'s bytes as a native shape with the PNGs its materials carry, in
+/// the file's own material order (its `convert` does), plus the input size
+/// for the budgets. Used on the manifest's own model files and other packs'
+/// models.
+pub(crate) fn lower_glb_bytes(bytes: &[u8], id: &str) -> Result<(usize, bri_gltf::Converted)> {
+    Ok((bytes.len(), bri_gltf::lower(bytes, id)?))
 }
 fn valid_tint(tint: [f32; 4]) -> bool {
     tint.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v))
@@ -680,6 +690,13 @@ fn bind_tint_mask(
     material.images[10] = index;
     material.tint_mask = true;
 }
+/// A linear colour channel as the sRGB byte a picture's bytes would carry it
+/// in (glTF's `baseColorFactor` is linear; scene pictures are sRGB).
+pub(crate) fn srgb_byte(c: f32) -> u8 {
+    let c = c.clamp(0.0, 1.0);
+    let v = if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
 /// Whether v20 counts `image` as having a translucent texel, as its texture
 /// manager does when it loads one (0x509d79-0x509dc2): every 16th texel
 /// along each row and column, both walks bounded by the width, any alpha
@@ -822,8 +839,11 @@ impl ItemAssets {
                     .models
                     .get(&resource.path.to_ascii_lowercase())
                     .context("Missing native model resource")?;
+                // Legacy packs pin the original DTS on both sides; GLB-era
+                // re-imports pin the converted file instead (the original no
+                // longer ships), so either recorded pin proves provenance.
                 ensure!(
-                    model.source_sha256 == resource.sha256,
+                    model.sha256 == resource.sha256 || model.source_sha256 == resource.sha256,
                     "Original/native model provenance mismatch"
                 );
             }
@@ -1011,20 +1031,42 @@ impl ItemAssets {
             textures.insert(id.clone(), image);
         }
         let mut shapes = BTreeMap::new();
+        let mut glb_images = BTreeMap::new();
         let mut vertex_budget = 0usize;
         for (id, m) in &manifest.models {
-            let mut load = || -> Result<Shape> {
+            // The manifest names the model's own .glb. A legacy .shape.json is
+            // no longer read: until its content converts to glTF it draws
+            // nothing (a logged fault, base game and Add-On alike).
+            if !m.file.to_ascii_lowercase().ends_with(".glb") {
+                let owner = added.owner(&format!("model:{id}"));
+                faults.push(crate::cosmetic::add_on_fault(
+                    if owner.is_empty() {
+                        "base game"
+                    } else {
+                        &owner
+                    },
+                    &m.file,
+                    format!(
+                        "ships its legacy model file {}; the game draws models from .glb only",
+                        m.file
+                    ),
+                ));
+                continue;
+            }
+            let mut load = || -> Result<(Shape, BTreeMap<String, SceneImage>)> {
+                // The manifest's own .glb: its real checksum.
                 let bytes = checked_read(
                     &file_root("model", id),
                     &m.file,
                     &m.sha256,
                     32 * 1024 * 1024,
                 )?;
+                let (input_len, converted) = lower_glb_bytes(&bytes, id)?;
                 ensure!(
-                    input_bytes + bytes.len() <= 256 * 1024 * 1024,
+                    input_bytes + input_len <= 256 * 1024 * 1024,
                     "Item aggregate input budget exceeded"
                 );
-                let mut shape: Shape = serde_json::from_slice(&bytes)?;
+                let mut shape = converted.shape;
                 shape.validate()?;
                 shape.expand_live_frames();
                 let vertices = shape
@@ -1037,43 +1079,72 @@ impl ItemAssets {
                     vertex_budget + vertices <= 2_000_000,
                     "Item geometry budget exceeded"
                 );
+                // A binding names a listed texture or is empty: the model's
+                // own bitmap for that material (its .glb carries it), or an
+                // untextured one.
                 ensure!(
-                    m.textures.len() == shape.materials.len()
-                        && m.textures.iter().all(|id| textures.contains_key(id)),
-                    "Unbound item material: {id}"
+                    m.textures.len() == shape.materials.len(),
+                    "Unbound item material count on {id}"
                 );
-                input_bytes += bytes.len();
+                for t in m.textures.iter().filter(|t| !t.is_empty()) {
+                    ensure!(
+                        textures.contains_key(t.as_str()),
+                        "Unbound item material: {id}"
+                    );
+                }
+                let mut embedded = BTreeMap::new();
+                for (name, png) in &converted.textures {
+                    let pixels = image::load_from_memory(png)?.to_rgba8();
+                    embedded.insert(
+                        name.clone(),
+                        SceneImage {
+                            label: format!("{id}/{name}"),
+                            width: pixels.width(),
+                            height: pixels.height(),
+                            rgba: pixels.into_raw(),
+                            srgb: false,
+                        },
+                    );
+                }
+                input_bytes += input_len;
                 vertex_budget += vertices;
-                Ok(shape)
+                Ok((shape, embedded))
             };
             match load() {
-                Ok(shape) => {
+                Ok((shape, embedded)) => {
+                    glb_images.insert(id.clone(), embedded);
                     shapes.insert(id.clone(), shape);
                 }
                 Err(error) if added.models.contains(id) => {
                     faults.push(crate::cosmetic::add_on_fault(
                         &added.owner(&format!("model:{id}")),
                         &m.file,
-                        format!("{error:#}"),
+                        format!("GLB unusable ({error:#}); the model draws nothing"),
                     ))
                 }
                 Err(error) => return Err(error),
             }
         }
+        let listed_models = manifest
+            .models
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
         manifest.models.retain(|id, _| shapes.contains_key(id));
-        // What Add-Ons present is repaired rather than refused: an unknown
-        // model draws nothing, an invalid colour draws white, a missing icon
-        // shows the item's letter (`crate::item_ui`).
-        for (id, item) in manifest
-            .items
-            .iter_mut()
-            .filter(|(id, _)| added.items.contains(*id))
-        {
-            let owner = added.owner(&format!("item:{id}"));
+        // A model that did not load draws nothing for whoever names it — an
+        // Add-On part or the base pack itself (whose legacy files fault at
+        // the file level above). The presentation is repaired rather than
+        // refused (`crate::item_ui`); a base entry naming a model no pack
+        // ever listed stays a hard error.
+        for (id, item) in manifest.items.iter_mut() {
             if !item.model.is_empty() && !shapes.contains_key(&item.model) {
-                if !added.models.contains(&item.model) {
+                let is_add_on = added.items.contains(id);
+                if !is_add_on && !listed_models.contains(&item.model) {
+                    return Err(anyhow::anyhow!("Invalid item presentation: {id}"));
+                }
+                if is_add_on && !added.models.contains(&item.model) {
                     faults.push(crate::cosmetic::add_on_fault(
-                        &owner,
+                        &added.owner(&format!("item:{id}")),
                         "presentation.json",
                         format!(
                             "item {id} names model {}, which it does not list",
@@ -1084,6 +1155,16 @@ impl ItemAssets {
                 item.model.clear();
                 item_physics.items.remove(id);
             }
+        }
+        // What Add-Ons present is repaired rather than refused: an invalid
+        // colour draws white, a missing icon shows the item's letter
+        // (`crate::item_ui`).
+        for (id, item) in manifest
+            .items
+            .iter_mut()
+            .filter(|(id, _)| added.items.contains(*id))
+        {
+            let owner = added.owner(&format!("item:{id}"));
             if !valid_tint(item.tint) {
                 item.tint = [1.; 4];
             }
@@ -1102,14 +1183,20 @@ impl ItemAssets {
                 item.icon = None;
             }
         }
+        for (id, image) in manifest.images.iter_mut() {
+            if !image.model.is_empty() && !shapes.contains_key(&image.model) {
+                let is_add_on = added.images.contains(id);
+                if !is_add_on && !listed_models.contains(&image.model) {
+                    return Err(anyhow::anyhow!("Invalid mounted image: {id}"));
+                }
+                image.model.clear();
+            }
+        }
         for (_, image) in manifest
             .images
             .iter_mut()
             .filter(|(id, _)| added.images.contains(*id))
         {
-            if !shapes.contains_key(&image.model) {
-                image.model.clear();
-            }
             // A scope picture that did not load leaves the plain zoom.
             if image
                 .overlay
@@ -1142,14 +1229,24 @@ impl ItemAssets {
                 }
             }
         }
+        for (id, p) in manifest.projectiles.iter_mut() {
+            let Some(model) = &p.model else {
+                continue;
+            };
+            if shapes.contains_key(model) {
+                continue;
+            }
+            let is_add_on = added.projectiles.contains(id);
+            if !is_add_on && !listed_models.contains(model) {
+                return Err(anyhow::anyhow!("Invalid projectile presentation: {id}"));
+            }
+            p.model = None;
+        }
         for (_, p) in manifest
             .projectiles
             .iter_mut()
             .filter(|(id, _)| added.projectiles.contains(*id))
         {
-            if p.model.as_ref().is_some_and(|m| !shapes.contains_key(m)) {
-                p.model = None;
-            }
             if !valid_tint(p.tint) {
                 p.tint = [1.; 4];
             }
@@ -1191,6 +1288,7 @@ impl ItemAssets {
             faults,
             shapes,
             textures,
+            glb_images,
             icon_requests: Vec::new(),
             drawn: BTreeMap::new(),
             drawing: Default::default(),
@@ -1390,11 +1488,71 @@ impl ItemAssets {
     ) -> Result<SceneData> {
         let shape = self.shape(model)?;
         let pose = self.pose(model, sequence, seconds)?;
-        let textures: Vec<&SceneImage> = self.presentation.models[model]
-            .textures
-            .iter()
-            .map(|id| &self.textures[id])
-            .collect();
+        // A binding names a listed texture or is empty: the model's own
+        // bitmap for that material (its .glb carries it), its solid colour
+        // where the .glb says one, else an untextured one drawn clear in the
+        // item's colour shift.
+        let clear = SceneImage {
+            label: "untextured material".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+            srgb: false,
+        };
+        // One pixel of each solid colour. All the pixels are built before
+        // anything borrows them: `textures` keeps references into this vec,
+        // so it must be complete first.
+        let mut solids: Vec<SceneImage> = Vec::new();
+        for (i, binding) in self.presentation.models[model].textures.iter().enumerate() {
+            if !binding.is_empty() || shape.materials[i].color.is_none() {
+                continue;
+            }
+            let name = &shape.materials[i].name;
+            if self
+                .glb_images
+                .get(model)
+                .and_then(|images| images.get(name))
+                .is_some()
+            {
+                continue; // The model's own bitmap outranks the colour.
+            }
+            let c = shape.materials[i].color.unwrap();
+            solids.push(SceneImage {
+                label: format!("{model}/{name} (solid colour)"),
+                width: 1,
+                height: 1,
+                rgba: vec![
+                    srgb_byte(c[0]),
+                    srgb_byte(c[1]),
+                    srgb_byte(c[2]),
+                    (c[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+                ],
+                srgb: true,
+            });
+        }
+        let mut solids_used = 0;
+        let mut textures: Vec<&SceneImage> = Vec::with_capacity(shape.materials.len());
+        for (i, binding) in self.presentation.models[model].textures.iter().enumerate() {
+            if !binding.is_empty() {
+                textures.push(&self.textures[binding]);
+                continue;
+            }
+            let name = &shape.materials[i].name;
+            if let Some(image) = self
+                .glb_images
+                .get(model)
+                .and_then(|images| images.get(name))
+            {
+                textures.push(image);
+                continue;
+            }
+            if shape.materials[i].color.is_some() {
+                textures.push(&solids[solids_used]);
+                solids_used += 1;
+            } else {
+                textures.push(&clear);
+            }
+        }
         native_shape_scene(model, shape, &textures, tint, true, transform, &pose)
     }
     pub fn item_scene(&self, id: &str, transform: Mat4) -> Result<SceneData> {
@@ -2249,18 +2407,19 @@ const ICON_SIDE: u32 = 512;
 /// Largest scope overlay file, and side: sharp on a 4K screen's height.
 const OVERLAY_BYTES: u64 = 4 * 1024 * 1024;
 const OVERLAY_SIDE: u32 = 2048;
-/// An Add-On's own item model names a native model file (`bri_content::shape`).
-const OWN_MODEL: &str = ".shape.json";
+/// An Add-On's own item model names a `.glb` the game lowers to a shape.
+const OWN_MODEL: &str = ".glb";
 /// Largest Add-On model file, and model texture file and side.
 const OWN_MODEL_BYTES: u64 = 8 * 1024 * 1024;
 const OWN_TEXTURE_BYTES: u64 = 4 * 1024 * 1024;
 const OWN_TEXTURE_SIDE: u32 = 1024;
-/// An Add-On's own item model: `<name>.shape.json`, relative to the folder
-/// holding `weapons.json`, a native model whose materials each name a PNG
-/// beside it (`wood` draws `wood.png`), as vehicle models' do. It is keyed
-/// under the Add-On (`<dir>/<name>`), so two Add-Ons' models never collide,
-/// and its bounds are its vertices' box. None when it is missing or does
-/// not read (logged): the item then draws no model.
+/// An Add-On's own item model: `<name>.glb`, relative to the folder holding
+/// `weapons.json`. A material whose bitmap the .glb carries needs nothing
+/// beside it; any other names a PNG there (`wood` draws `wood.png`), as
+/// vehicle models' do. It is keyed under the Add-On (`<dir>/<name>`), so two
+/// Add-Ons' models never collide, and its bounds are its vertices' box.
+/// None when it is missing or does not read (logged): the item then draws no
+/// model.
 fn own_model(
     dir: &str,
     abs: &Path,
@@ -2281,7 +2440,8 @@ fn own_model(
             "model {file} must be a path inside the Add-On"
         );
         let bytes = crate::materials::read_resource(abs, &file, OWN_MODEL_BYTES)?;
-        let shape: Shape = serde_json::from_slice(&bytes)?;
+        let (_, converted) = lower_glb_bytes(&bytes, &key)?;
+        let shape = converted.shape;
         shape.validate()?;
         let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         for p in shape.meshes.iter().flatten().flat_map(|m| &m.positions) {
@@ -2292,6 +2452,11 @@ fn own_model(
         let folder = file.rsplit_once('/').map_or("", |(folder, _)| folder);
         let mut bound = Vec::new();
         for material in &shape.materials {
+            // A bitmap the .glb carries needs no file beside it.
+            if converted.textures.contains_key(&material.name) {
+                bound.push(String::new());
+                continue;
+            }
             let png = match folder {
                 "" => format!("{}.png", material.name),
                 folder => format!("{folder}/{}.png", material.name),
@@ -2601,7 +2766,7 @@ mod add_on_icon_tests {
             .map(|a| Quat::from_rotation_x(*a).to_array())
             .collect();
         let shape = json!({
-            "schema_version": 1, "id": "tool:file/models/tool.shape.json",
+            "schema_version": 1, "id": "tool:file/models/tool.glb",
             "nodes": [node("root", None), node("mountPoint", Some(0)), node("swing", Some(0))],
             "objects": [
                 { "name": "tool", "node": 0, "meshes": [0], "visibility": 1.0, "frame": 0, "material_frame": 0 },
@@ -2619,10 +2784,11 @@ mod add_on_icon_tests {
                 "objects": [], "ground_translations": [], "ground_rotations": [], "triggers": [],
             }],
         });
-        std::fs::write(
-            assets.join("models/tool.shape.json"),
-            serde_json::to_vec(&shape)?,
-        )?;
+        // The model ships as a .glb: the game draws item models from glTF
+        // only, and its materials' PNGs stay beside it.
+        let shape: Shape = serde_json::from_value(shape)?;
+        let (glb, _embedded) = bri_gltf::export_shape(&shape, &BTreeMap::new(), &mut Vec::new())?;
+        std::fs::write(assets.join("models/tool.glb"), &glb)?;
         for (name, rgb) in [("handle", [150u8, 100, 55]), ("head", [110, 112, 116])] {
             let pixels: Vec<u8> = (0..16)
                 .flat_map(|_| [rgb[0], rgb[1], rgb[2], 255])
@@ -2638,8 +2804,8 @@ mod add_on_icon_tests {
         let weapons = json!({
             "schema_version": 5, "id": "tool",
             "items": { "tool:weapon/pick": { "ui_name": "Pick", "image": "tool:image/pick",
-                "model": "models/tool.shape.json", "icon": "icons/pick", "can_drop": false } },
-            "images": { "tool:image/pick": { "name": "PickImage", "model": "models/tool.shape.json",
+                "model": "models/tool.glb", "icon": "icons/pick", "can_drop": false } },
+            "images": { "tool:image/pick": { "name": "PickImage", "model": "models/tool.glb",
                 "melee": true, "arm_ready": true, "color": [1.0, 1.0, 1.0, 1.0],
                 "states": [{ "name": "Ready" }] } },
         });
@@ -2931,7 +3097,7 @@ mod add_on_icon_tests {
             &mut faults,
         );
         assert!(faults.is_empty(), "{faults:?}");
-        let key = "tool/models/tool.shape.json";
+        let key = "tool/models/tool.glb";
         let (item, image) = ("tool:weapon/pick", "tool:image/pick");
         // Its icon is asked to be drawn from the model at the Hammer's pose.
         let [(drawn, _, file, spec)] = &added.icon_renders[..] else {
@@ -2954,12 +3120,9 @@ mod add_on_icon_tests {
             "a handle and a head across it: {resource:?}"
         );
         let origin = &added.origin[&format!("model:{key}")];
-        let shape: Shape = serde_json::from_slice(&checked_read(
-            origin,
-            &resource.file,
-            &resource.sha256,
-            OWN_MODEL_BYTES,
-        )?)?;
+        let bytes = checked_read(origin, &resource.file, &resource.sha256, OWN_MODEL_BYTES)?;
+        let (_, converted) = lower_glb_bytes(&bytes, key)?;
+        let shape = converted.shape;
         shape.validate()?;
         assert!(
             shape.nodes.iter().any(|n| n.name == "mountPoint"),
@@ -3044,10 +3207,7 @@ mod add_on_icon_tests {
         assert!(moves_visible_detail(&shape, fire, true));
         assert!(!moves_visible_detail(&shape, fire, false));
         // A model that is not there, or outside the Add-On: no model, logged.
-        for name in [
-            "models/missing.shape.json",
-            "../assets/models/tool.shape.json",
-        ] {
+        for name in ["models/missing.glb", "../assets/models/tool.glb"] {
             let mut faults = Vec::new();
             assert!(
                 own_model(

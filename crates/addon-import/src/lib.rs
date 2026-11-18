@@ -225,6 +225,12 @@ struct Ctx<'a> {
     /// Other Add-Ons' brick geometry copied in: mesh id to package-relative
     /// output file.
     borrowed: BTreeMap<String, String>,
+    /// Lower virtual paths of texture files embedded inside an exported .glb:
+    /// the union over every model written, so a texture that rides in a GLB
+    /// is not also copied out as its own PNG (step 5 skips those).
+    embedded_textures: BTreeSet<String>,
+    /// Output paths claimed by name, so original names never collide.
+    names: Names,
 }
 
 impl Ctx<'_> {
@@ -595,6 +601,8 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         ported: BTreeMap::new(),
         bots: Vec::new(),
         borrowed: BTreeMap::new(),
+        embedded_textures: BTreeSet::new(),
+        names: Names::default(),
     };
     metadata(&mut cx);
     let mut scripts = read_scripts(&mut cx);
@@ -643,8 +651,11 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     top_level(&mut cx, &scripts);
     datablocks(&mut cx, &scripts);
     references(&mut cx);
-    convert_files(&mut cx)?;
+    let dsq = plan_dsq_clips(&mut cx);
+    convert_files(&mut cx, &dsq)?;
+    dsq_statuses(&mut cx, &dsq);
     prints(&mut cx)?;
+    dedupe_embedded_textures(&mut cx, &scripts)?;
     weapons(&mut cx, &scripts)?;
     vehicles(&mut cx, &scripts)?;
     bricks(&mut cx, &scripts)?;
@@ -1071,7 +1082,9 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
                     vec!["a subfolder's description; Blockland reads only the Add-On's own, so it is not game data".into()],
                 )
             }
-            "shape" | "texture" | "sound" | "brick_geometry" => ("pending", vec![]),
+            "shape" | "texture" | "sound" | "brick_geometry" | "animation" => {
+                ("pending", vec![])
+            }
             "text" | "other"
                 if !script_text.contains(member.rsplit('/').next().unwrap_or(&member)) =>
             {
@@ -1610,9 +1623,97 @@ fn references(cx: &mut Ctx) {
     }
 }
 
+/// Output file names claimed across one package: everything written under
+/// `assets/` registers its lowercased path here, so an original name never
+/// takes a path another asset already holds (hashed placeholders and borrowed
+/// geometry block originals that would collide with them).
+#[derive(Default)]
+struct Names {
+    taken: BTreeSet<String>,
+}
+
+impl Names {
+    /// A file written under a fixed or hashed name claims its path.
+    fn claim(&mut self, rel: &str) {
+        self.taken.insert(rel.to_ascii_lowercase());
+    }
+
+    /// One part of an original name: the characters Windows forbids in
+    /// package paths (and control characters) replaced and any trailing space
+    /// or dot dropped (`bri_package::path::problem` is the final judge).
+    fn part(p: &str) -> String {
+        p.chars()
+            .map(|c| {
+                if c.is_control() || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect::<String>()
+            .trim_end_matches([' ', '.'])
+            .to_owned()
+    }
+
+    /// The package-relative path for a converted asset of `dir` (models,
+    /// textures, sounds or bricks), after the source file's original name:
+    /// `{dir}/{subpath}/{stem}.{ext}`, then that with `-<digest8>` where the
+    /// original is taken or invalid, and finally the flat hash name
+    /// `{dir}/{digest24}.{ext}` (and `-{k}` if even it is taken). The winner
+    /// is claimed. Brick geometry passes a file name alone: its mesh must sit
+    /// flat beside `stock-catalog.json`.
+    fn original(&mut self, dir: &str, member: &str, ext: &str, digest: &str) -> String {
+        let parts: Vec<&str> = member.split('/').collect();
+        let file = *parts.last().unwrap_or(&"");
+        let stem = Self::part(file.rsplit_once('.').map_or(file, |(s, _)| s));
+        let sub: Vec<String> = parts[..parts.len() - 1]
+            .iter()
+            .map(|p| Self::part(p))
+            .filter(|p| !p.is_empty())
+            .collect();
+        if !stem.is_empty() {
+            for suffix in ["", format!("-{}", &digest[..8]).as_str()] {
+                let p = if sub.is_empty() {
+                    format!("{dir}/{stem}{suffix}.{ext}")
+                } else {
+                    format!("{}/{}{suffix}.{ext}", [dir, &sub.join("/")].join("/"), stem)
+                };
+                if bri_package::path::problem(&p).is_none()
+                    && !self.taken.contains(&p.to_ascii_lowercase())
+                {
+                    self.claim(&p);
+                    return p;
+                }
+            }
+        }
+        let flat = format!("{dir}/{}.{ext}", &digest[..24]);
+        let mut k = 1usize;
+        loop {
+            let p = if k == 1 {
+                flat.clone()
+            } else {
+                format!("{flat}-{k}")
+            };
+            if bri_package::path::problem(&p).is_none()
+                && !self.taken.contains(&p.to_ascii_lowercase())
+            {
+                self.claim(&p);
+                return p;
+            }
+            k += 1;
+        }
+    }
+}
+
 fn rel_member(cx: &Ctx, path: &str) -> String {
     let dir = cx.src.dir();
     path.get(dir.len() + 1..).unwrap_or(path).to_owned()
+}
+
+/// Brick geometry always lands flat under `bricks/`: the runtime names the
+/// mesh file beside `stock-catalog.json`, where a subfolder would not read.
+fn brick_name(member: &str) -> String {
+    member.rsplit('/').next().unwrap_or(member).to_owned()
 }
 
 fn set_asset(
@@ -1636,7 +1737,193 @@ fn set_asset(
     }
 }
 
-fn convert_files(cx: &mut Ctx) -> Result<()> {
+/// The clips this Add-On's own datablocks ask of their `.dsq` files,
+/// resolved before any model is exported: each owning shape (a datablock's
+/// `shapefile`) gains the clips its sequences name — a file two owners share
+/// merges into both, and a clip named twice for one owner once. Every
+/// referenced file also learns which owners asked for what, so the report can
+/// say where it went; files outside the Add-On are noted instead.
+struct DsqPlan {
+    /// Lower virtual path of an owned shape to the clips it gains.
+    by_owner: BTreeMap<String, Vec<bri_content::shape::Animation>>,
+    /// Each referenced file (lower virtual path) to its owners and the clip
+    /// each asked for; an empty owner names a datablock without `shapefile`.
+    refs: BTreeMap<String, Vec<(String, Option<String>)>>,
+}
+
+fn plan_dsq_clips(cx: &mut Ctx) -> DsqPlan {
+    let mut by_owner: BTreeMap<String, Vec<bri_content::shape::Animation>> = BTreeMap::new();
+    let mut refs: BTreeMap<String, Vec<(String, Option<String>)>> = BTreeMap::new();
+    // The Add-On's own .dsq files, by lower virtual path and by base name.
+    let dsqs: Vec<&source::File> = cx
+        .src
+        .files
+        .values()
+        .filter(|f| kind_of(&f.path) == "animation")
+        .collect();
+    let mut by_base: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, f) in dsqs.iter().enumerate() {
+        let base = f.path.rsplit('/').next().unwrap_or(f.path.as_str());
+        by_base
+            .entry(base.to_ascii_lowercase())
+            .or_default()
+            .push(i);
+    }
+    for o in cx.owned.values() {
+        // The shape this datablock draws: its sequences merge into it.
+        // `shapefile` (PlayerData and friends) or a TSShapeConstructor's
+        // `baseShape`, resolved as the declaring script resolves them.
+        let owner = source::resolve(
+            &o.path,
+            literal(
+                o.fields
+                    .get("shapefile")
+                    .or_else(|| o.fields.get("baseshape"))
+                    .map(String::as_str)
+                    .unwrap_or(""),
+            ),
+        )
+        .trim()
+        .to_ascii_lowercase();
+        for value in o.fields.values() {
+            // Any field may carry a sequence (`sequence0`, `runSequence`):
+            // "path.dsq clip", the clip optional (then every one in the file).
+            let v = literal(value);
+            let mut parts = v.split_whitespace();
+            let Some(first) = parts.next() else {
+                continue;
+            };
+            if !first.to_ascii_lowercase().ends_with(".dsq") {
+                continue;
+            }
+            let clip = parts.next().map(str::to_owned);
+            let path = source::resolve(&o.path, first).to_ascii_lowercase();
+            // Exact virtual path first, then a lone base name (one file only).
+            let found = cx
+                .src
+                .get(&path)
+                .filter(|f| kind_of(&f.path) == "animation")
+                .or_else(|| {
+                    by_base
+                        .get(path.rsplit('/').next().unwrap_or(&path))
+                        .filter(|v| v.len() == 1)
+                        .map(|v| dsqs[v[0]])
+                });
+            let Some(file) = found else {
+                if cx.reference.files.contains(&path) {
+                    cx.report.diagnostics.push(format!(
+                        "datablock `{}` asks for sequence `{first}`, which comes from the base game or another Add-On; this import carries no .dsq files, so its clips are not in the model",
+                        o.d.name
+                    ));
+                } else {
+                    cx.report.diagnostics.push(format!(
+                        "datablock `{}` asks for sequence `{first}`, which is in neither this Add-On nor the reference install; nothing to merge",
+                        o.d.name
+                    ));
+                }
+                refs.entry(path).or_default().push((owner.clone(), clip));
+                continue;
+            };
+            match bri_convert::shape::read_dsq(
+                &file.bytes,
+                content_id(&cx.ns, "animation", &file.path),
+            ) {
+                Ok((set, _provenance)) => {
+                    for a in &set.animations {
+                        if let Some(w) = clip.as_ref()
+                            && !w.eq_ignore_ascii_case(&a.name)
+                        {
+                            continue;
+                        }
+                        by_owner.entry(owner.clone()).or_default().push(a.clone());
+                    }
+                    if let Some(w) = clip.as_deref()
+                        && !set
+                            .animations
+                            .iter()
+                            .any(|a| a.name.eq_ignore_ascii_case(w))
+                    {
+                        cx.report.diagnostics.push(format!(
+                            "datablock `{}` asks for clip `{w}` of {}, which it does not have",
+                            o.d.name, file.path
+                        ));
+                    }
+                }
+                Err(e) => cx
+                    .report
+                    .diagnostics
+                    .push(format!("{}: DSQ: {e:#}", file.path)),
+            }
+            refs.entry(path).or_default().push((owner.clone(), clip));
+        }
+    }
+    // A clip two references of one owner name is merged once.
+    for clips in by_owner.values_mut() {
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        clips.retain(|a| seen.insert(a.name.to_ascii_lowercase()));
+    }
+    DsqPlan { by_owner, refs }
+}
+
+/// Where each `.dsq` file ended up: merged into its owner's model where one
+/// was converted, skipped with a word otherwise; `finish` then leaves none
+/// pending.
+fn dsq_statuses(cx: &mut Ctx, plan: &DsqPlan) {
+    for a in cx
+        .report
+        .assets
+        .iter_mut()
+        .filter(|a| a.kind == "animation")
+    {
+        let path = a.source.to_ascii_lowercase();
+        let Some(owners) = plan.refs.get(&path) else {
+            a.status = "skipped".into();
+            a.notes
+                .push("no owned datablock references it, so nothing plays it; left out".into());
+            continue;
+        };
+        let mut merged_into: Vec<String> = vec![];
+        let mut missing: Vec<String> = vec![];
+        for (owner, _) in owners {
+            if owner.is_empty() {
+                continue;
+            }
+            match cx.shapes.get(owner) {
+                Some((rel, _)) => merged_into.push(format!("assets/{rel}")),
+                None => missing.push(owner.clone()),
+            }
+        }
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        merged_into.retain(|m| seen.insert(m.clone()));
+        if !merged_into.is_empty() {
+            a.status = "merged".into();
+            for m in &merged_into {
+                a.notes.push(format!("clips merged into {m}"));
+            }
+            if !missing.is_empty() {
+                a.notes.push(format!(
+                    "its owner{} {} not converted; no clips went there",
+                    if missing.len() == 1 { " is" } else { "s are" },
+                    missing.join(", ")
+                ));
+            }
+        } else {
+            a.status = "skipped".into();
+            let why = if missing.is_empty() {
+                "only datablocks without a shapefile reference it; nothing to merge into"
+            } else {
+                &format!(
+                    "its owner{} {} not converted",
+                    if missing.len() == 1 { " is" } else { "s are" },
+                    missing.join(", ")
+                )
+            };
+            a.notes.push(why.into());
+        }
+    }
+}
+
+fn convert_files(cx: &mut Ctx, dsq: &DsqPlan) -> Result<()> {
     let files: Vec<_> = cx.src.files.values().cloned().collect();
     for f in files {
         let member = rel_member(cx, &f.path);
@@ -1660,24 +1947,83 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
             }
             "shape" => {
                 match bri_convert::shape::read_dts(&f.bytes, content_id(&cx.ns, "shape", &member)) {
-                    Ok((shape, provenance)) => {
-                        let rel = format!("models/{}.shape.json", &digest[..24]);
-                        cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&shape)?)?;
-                        let id = cx.id("asset", &member, &f.path, &format!("assets/{rel}"));
-                        cx.shapes
-                            .insert(f.path.to_ascii_lowercase(), (rel.clone(), shape));
-                        cx.outputs.insert(f.path.to_ascii_lowercase(), rel.clone());
-                        set_asset(
-                            cx,
-                            &f.path,
-                            "converted",
-                            Some(format!("assets/{rel}")),
-                            Some(id),
-                            None,
-                        );
-                        if let Some(a) = cx.report.assets.iter_mut().find(|a| a.source == f.path) {
-                            a.notes.extend(provenance.faithful);
-                            a.gaps.extend(provenance.warnings);
+                    Ok((mut shape, provenance)) => {
+                        // Animation sequences the datablocks that draw this
+                        // shape reference (`sequenceN = "path.dsq clip"`):
+                        // merged in before export, so the .glb carries them.
+                        if let Some(extra) = dsq.by_owner.get(&f.path.to_ascii_lowercase()) {
+                            for a in extra.iter() {
+                                if !shape
+                                    .animations
+                                    .iter()
+                                    .any(|x| x.name.eq_ignore_ascii_case(&a.name))
+                                {
+                                    shape.animations.push(a.clone());
+                                }
+                            }
+                        }
+                        // The texture each material would draw: the file Torque
+                        // finds beside the shape (its folder, then up), from
+                        // this Add-On's own files only.
+                        let folder = f.path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
+                        let mut textures: BTreeMap<usize, Option<(String, Vec<u8>)>> =
+                            BTreeMap::new();
+                        for (i, m) in shape.materials.iter().enumerate() {
+                            let found = texture_folders(&folder).find_map(|dir| {
+                                ["", ".png", ".jpg", ".jpeg"].iter().find_map(|ext| {
+                                    cx.src
+                                        .get(&format!("{dir}/{}{ext}", m.name).to_ascii_lowercase())
+                                })
+                            });
+                            textures.insert(
+                                i,
+                                found.map(|t| (t.path.to_ascii_lowercase(), t.bytes.clone())),
+                            );
+                        }
+                        // One model file per shape: a .glb the game draws
+                        // directly. A shape glTF cannot export (a collision-
+                        // only one has no mesh to draw) ships no file; its
+                        // items present as the placeholder cube instead.
+                        let mut notes = vec![];
+                        let exported = match gltf::export_shape(&shape, &textures, &mut notes) {
+                            Ok(exported) => Some(exported),
+                            Err(e) => {
+                                set_asset(
+                                    cx,
+                                    &f.path,
+                                    "failed",
+                                    None,
+                                    None,
+                                    Some(format!(
+                                        "DTS: glTF export failed: {e:#}; the model ships no file"
+                                    )),
+                                );
+                                None
+                            }
+                        };
+                        if let Some((glb, embedded)) = exported {
+                            cx.embedded_textures.extend(embedded);
+                            let rel = cx.names.original("models", &member, "glb", &digest);
+                            cx.write(&format!("assets/{rel}"), &glb)?;
+                            let id = cx.id("asset", &member, &f.path, &format!("assets/{rel}"));
+                            cx.shapes
+                                .insert(f.path.to_ascii_lowercase(), (rel.clone(), shape));
+                            cx.outputs.insert(f.path.to_ascii_lowercase(), rel.clone());
+                            set_asset(
+                                cx,
+                                &f.path,
+                                "converted",
+                                Some(format!("assets/{rel}")),
+                                Some(id),
+                                None,
+                            );
+                            if let Some(a) =
+                                cx.report.assets.iter_mut().find(|a| a.source == f.path)
+                            {
+                                a.notes.extend(provenance.faithful);
+                                a.gaps.extend(provenance.warnings);
+                                a.notes.extend(notes);
+                            }
                         }
                     }
                     Err(e) => set_asset(
@@ -1702,7 +2048,7 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
                 } else {
                     "sounds"
                 };
-                let rel = format!("{dir}/{}.{ext}", &digest[..24]);
+                let rel = cx.names.original(dir, &member, &ext, &digest);
                 cx.write(&format!("assets/{rel}"), &f.bytes)?;
                 let id = cx.id("asset", &member, &f.path, &format!("assets/{rel}"));
                 cx.outputs.insert(f.path.to_ascii_lowercase(), rel.clone());
@@ -1719,9 +2065,39 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
                 let id = content_id(&cx.ns, "brick_geometry", &member);
                 match bri_convert::brick::read(&f.bytes, id.clone()) {
                     Ok((brick, provenance)) => {
-                        let native = serde_json::to_vec(&brick)?;
-                        let rel = format!("bricks/{}.brick.json", &hash(&native)[..24]);
-                        cx.write(&format!("assets/{rel}"), &native)?;
+                        // One brick file per BLB: a .glb the game lowers back
+                        // to this very brick (faces, surfaces and collision in
+                        // its extras); Blender sees a plain mesh. No legacy JSON.
+                        let glb = match gltf::export_brick(&brick) {
+                            Ok(glb) => glb,
+                            Err(e) => {
+                                set_asset(
+                                    cx,
+                                    &f.path,
+                                    "failed",
+                                    None,
+                                    None,
+                                    Some(format!("BLB: glTF export failed: {e:#}")),
+                                );
+                                continue;
+                            }
+                        };
+                        let rel =
+                            cx.names
+                                .original("bricks", &brick_name(&member), "glb", &hash(&glb));
+                        if let Err(e) = cx.write(&format!("assets/{rel}"), &glb) {
+                            set_asset(
+                                cx,
+                                &f.path,
+                                "failed",
+                                None,
+                                None,
+                                Some(format!(
+                                    "BLB: the .glb at assets/{rel} could not be written: {e:#}"
+                                )),
+                            );
+                            continue;
+                        }
                         let id =
                             cx.id("brick_geometry", &member, &f.path, &format!("assets/{rel}"));
                         cx.outputs.insert(f.path.to_ascii_lowercase(), rel.clone());
@@ -1904,6 +2280,115 @@ fn reference_definition(o: &reference::Owned) -> bri_weapons::Definition {
         },
         fields: o.datablock.fields.clone(),
     }
+}
+
+/// A model texture that rides inside its exported .glb is not also written
+/// out as its own PNG, unless something else names the file: an item or
+/// kill icon, a particle texture, or a model whose glTF export failed and
+/// keeps drawing from files. Runs before the weapons and vehicles packs
+/// inventory `cx.outputs`, so what they list is exactly what ships.
+fn dedupe_embedded_textures(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
+    if cx.embedded_textures.is_empty() {
+        return Ok(());
+    }
+    let mut keep = BTreeSet::new();
+    // Item icons bind their file by name.
+    for o in cx
+        .owned
+        .values()
+        .filter(|o| o.d.class.eq_ignore_ascii_case("ItemData"))
+    {
+        if let Some(icon) = o
+            .fields
+            .get("icon")
+            .map(|v| literal(v))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            for ext in ["", ".png", ".jpg", ".jpeg"] {
+                keep.insert(format!("{icon}{ext}").to_ascii_lowercase());
+            }
+        }
+    }
+    // Particle textures (every owned particle's, whether or not it imports).
+    for o in cx
+        .owned
+        .values()
+        .filter(|o| o.d.class.eq_ignore_ascii_case("ParticleData"))
+    {
+        let Some(name) = o
+            .fields
+            .get("texturename")
+            .map(|v| literal(v))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
+        let Ok(path) = bri_convert::effects::texture_path(name.to_owned(), &o.path) else {
+            continue;
+        };
+        for ext in ["", ".png", ".jpg", ".jpeg"] {
+            keep.insert(format!("{path}{ext}").to_ascii_lowercase());
+        }
+    }
+    // Kill icons, named by their messages as `{id}.png` beside the Add-On.
+    for text in scripts.iter().filter_map(|s| cx.script_text(&s.path)) {
+        let types = bri_weapons_import::damage_types(&text)
+            .unwrap_or_default()
+            .into_iter()
+            .chain(bri_weapons_import::special_kills(&text).unwrap_or_default());
+        for t in types {
+            for icon in t.icons() {
+                keep.insert(format!("{icon}.png").to_ascii_lowercase());
+            }
+        }
+    }
+    // A model that could not export to glTF still draws its textures from files.
+    for (vp, (rel, shape)) in &cx.shapes {
+        if rel.to_ascii_lowercase().ends_with(".glb") {
+            continue;
+        }
+        let folder = vp.rsplit_once('/').map_or("", |(d, _)| d);
+        for m in &shape.materials {
+            if let Some(k) = texture_folders(folder).find_map(|dir| {
+                ["", ".png", ".jpg", ".jpeg"].iter().find_map(|ext| {
+                    let k = format!("{dir}/{}{ext}", m.name).to_ascii_lowercase();
+                    (cx.src.get(&k).is_some() && cx.outputs.contains_key(&k)).then_some(k)
+                })
+            }) {
+                keep.insert(k);
+            }
+        }
+    }
+    // What is embedded and named by nothing else rides in its .glb alone.
+    let drop: Vec<(String, String)> = cx
+        .outputs
+        .iter()
+        .filter(|(vp, _)| cx.embedded_textures.contains(*vp) && !keep.contains(*vp))
+        .map(|(vp, rel)| (vp.clone(), rel.clone()))
+        .collect();
+    for (vp, rel) in drop {
+        std::fs::remove_file(cx.out.join("assets").join(&rel))
+            .with_context(|| format!("removing the embedded texture assets/{rel}"))?;
+        cx.outputs.remove(&vp);
+        let file = format!("assets/{rel}");
+        cx.provides
+            .retain(|p| p["file"].as_str() != Some(file.as_str()));
+        if let Some(a) = cx
+            .report
+            .assets
+            .iter_mut()
+            .find(|a| a.source.eq_ignore_ascii_case(&vp))
+        {
+            a.output = None;
+            a.notes.push(
+                "embedded in the .glb of the model that draws it; not written as its own texture file"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
@@ -2326,11 +2811,29 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
             continue;
         };
         let folder = f.path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
+        // A .glb carries its own bitmaps: a texture found in this Add-On
+        // binds empty (the client draws it from the model), and one found
+        // nowhere needs no placeholder file. Stock textures the reference
+        // install names stay file keys, as clients already carry them.
+        let is_glb = rel.to_ascii_lowercase().ends_with(".glb");
         let mut bindings = vec![];
         for m in &shape.materials {
             // Torque looks for a material's texture beside the shape, then
             // in each folder above it; a material it finds nowhere is drawn
             // untextured (white, under the item's colour shift).
+            // A bitmap that rides inside this .glb was de-duplicated out of
+            // the package's files, so look for it in the source and the
+            // embedded set rather than among what ships as its own file.
+            let own = texture_folders(&folder).find_map(|dir| {
+                ["", ".png", ".jpg", ".jpeg"].iter().find_map(|ext| {
+                    let k = format!("{dir}/{}{ext}", m.name).to_ascii_lowercase();
+                    (cx.src.get(&k).is_some() && cx.embedded_textures.contains(&k)).then_some(k)
+                })
+            });
+            if is_glb && own.is_some() {
+                bindings.push(String::new());
+                continue;
+            }
             let found = texture_folders(&folder)
                 .find_map(|dir| texture(cx, &mut textures, &format!("{dir}/{}", m.name)))
                 .or_else(|| cx.reference.base_texture(&m.name));
@@ -2381,7 +2884,13 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
                     cx.report
                         .diagnostics
                         .push(format!("presentation: {key} {note}"));
-                    bindings.push(flat_texture(cx, &mut textures, Flat::Clear)?);
+                    if is_glb {
+                        // The client draws an untextured glTF material with
+                        // its own flat stand-in; no placeholder file needed.
+                        bindings.push(String::new());
+                    } else {
+                        bindings.push(flat_texture(cx, &mut textures)?);
+                    }
                 }
             }
         }
@@ -2406,11 +2915,25 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         .cloned()
         .collect();
     if !missing.is_empty() {
+        // The placeholder cube as a .glb of its own: one material whose
+        // bitmap is embedded in the file, so it needs no texture beside it.
         let shape = placeholder();
-        let shape_bytes = serde_json::to_vec(&shape)?;
-        let shape_rel = format!("models/{}.shape.json", &hash(&shape_bytes)[..24]);
-        cx.write(&format!("assets/{shape_rel}"), &shape_bytes)?;
-        flat_texture(cx, &mut textures, Flat::White)?;
+        let mut white_png = vec![];
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]))
+            .write_to(
+                &mut std::io::Cursor::new(&mut white_png),
+                image::ImageFormat::Png,
+            )
+            .expect("in-memory PNG");
+        let mut notes = vec![];
+        let (glb, _) = gltf::export_shape(
+            &shape,
+            &BTreeMap::from([(0usize, Some(("placeholder:white".to_owned(), white_png)))]),
+            &mut notes,
+        )?;
+        let shape_rel = format!("models/{}.glb", &hash(&glb)[..24]);
+        cx.names.claim(&shape_rel);
+        cx.write(&format!("assets/{shape_rel}"), &glb)?;
         for key in missing {
             cx.report.ambiguous.push(Finding {
                 what: format!("model {key}"),
@@ -2422,8 +2945,8 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
             models.insert(
                 key,
                 json!({
-                    "file": shape_rel, "sha256": hash(&shape_bytes), "source": "placeholder",
-                    "source_sha256": hash(&shape_bytes), "textures": ["placeholder:white"],
+                    "file": shape_rel, "sha256": hash(&glb), "source": "placeholder",
+                    "source_sha256": hash(&glb), "textures": [""],
                     "bounds_min": [-0.1, -0.1, -0.1], "bounds_max": [0.1, 0.1, 0.1],
                 }),
             );
@@ -2502,36 +3025,25 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
     Ok(())
 }
 
-/// A 1x1 texture of one colour, written once.
-#[derive(Clone, Copy)]
-enum Flat {
-    /// Opaque white: the placeholder cube.
-    White,
-    /// Clear white: a material with no texture, showing the tint.
-    Clear,
-}
-
 /// Where Torque looked for a shape's material texture: the shape's folder,
 /// then each folder above it.
 fn texture_folders(folder: &str) -> impl Iterator<Item = &str> {
     std::iter::successors(Some(folder), |d| d.rsplit_once('/').map(|(up, _)| up))
 }
 
+/// The 1x1 clear placeholder for a legacy model material with no texture.
 fn flat_texture(
     cx: &mut Ctx,
     textures: &mut serde_json::Map<String, serde_json::Value>,
-    flat: Flat,
 ) -> Result<String> {
-    let (key, alpha) = match flat {
-        Flat::White => ("placeholder:white", 255),
-        Flat::Clear => ("placeholder:clear", 0),
-    };
+    let key = "placeholder:clear";
     if !textures.contains_key(key) {
         let mut png = vec![];
-        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, alpha]))
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 0]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .expect("in-memory PNG");
         let rel = format!("textures/{}.png", &hash(&png)[..24]);
+        cx.names.claim(&rel);
         cx.write(&format!("assets/{rel}"), &png)?;
         textures.insert(
             key.into(),
@@ -2618,6 +3130,7 @@ fn placeholder() -> bri_content::shape::Shape {
             wrap_u: true,
             wrap_v: true,
             blend: "opaque".into(),
+            color: None,
             unlit: false,
             environment: false,
             mipmaps: false,
@@ -3324,9 +3837,15 @@ fn borrow_brick(cx: &mut Ctx, path: &str, bytes: &[u8]) -> String {
         return id;
     }
     let fingerprint = hash(format!("{id}\0{}", hash(bytes)).as_bytes());
-    let rel = format!("bricks/{}.brick.json", &fingerprint[..24]);
+    // The geometry's own name in its Add-On: the file of the virtual path
+    // after `add-ons/<name>/`, so it lands beside this package's own bricks.
+    let member = brick_name(&path.split('/').skip(2).collect::<Vec<_>>().join("/"));
+    let rel = cx.names.original("bricks", &member, "glb", &fingerprint);
+    // The geometry as a .glb (the game lowers it back to this brick), so a
+    // borrowed brick matches the format this package's own bricks ship in.
     let written = bri_convert::brick::read(bytes, id.clone())
-        .and_then(|(brick, _)| cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&brick)?));
+        .and_then(|(brick, _)| gltf::export_brick(&brick))
+        .and_then(|glb| cx.write(&format!("assets/{rel}"), &glb));
     match written {
         Ok(()) => {
             cx.id("brick_geometry", path, path, &format!("assets/{rel}"));
@@ -3351,11 +3870,15 @@ fn borrow_native_brick(cx: &mut Ctx, path: &str, mut native: reference::NativeBr
     }
     let fingerprint =
         hash(format!("{id}\0{}\0{}", native.source_sha256, native.native_sha256).as_bytes());
-    let rel = format!("bricks/{}.brick.json", &fingerprint[..24]);
+    // The geometry's own name in its Add-On: the file of the virtual path
+    // after `add-ons/<name>/`, so it lands beside this package's own bricks.
+    let member = brick_name(&path.split('/').skip(2).collect::<Vec<_>>().join("/"));
+    let rel = cx.names.original("bricks", &member, "glb", &fingerprint);
     native.mesh.id = id.clone();
-    let written = serde_json::to_vec(&native.mesh)
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| cx.write(&format!("assets/{rel}"), &bytes));
+    // Normalized to this package's .glb: the installed conversion may be a
+    // legacy .brick.json, but what ships here is the brick as glTF.
+    let written =
+        gltf::export_brick(&native.mesh).and_then(|glb| cx.write(&format!("assets/{rel}"), &glb));
     match written {
         Ok(()) => {
             cx.id("brick_geometry", path, path, &format!("assets/{rel}"));
@@ -3417,7 +3940,13 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
             continue;
         };
         let bytes = std::fs::read(cx.out.join("assets").join(rel))?;
-        let brick: bri_content::brick::Brick = serde_json::from_slice(&bytes)?;
+        // This package's bricks are .glb (lowered back to the very brick);
+        // a borrowed legacy conversion may still be its .brick.json.
+        let brick: bri_content::brick::Brick = if rel.to_ascii_lowercase().ends_with(".glb") {
+            gltf::brick_from_glb(&bytes, &entry.mesh_id)?
+        } else {
+            serde_json::from_slice(&bytes)?
+        };
         // A brick with `collisionShapeName` (ModTer's slopes) collides
         // with that shape's collision details, as the stock catalog bakes
         // the base game's (`stock_catalog`).

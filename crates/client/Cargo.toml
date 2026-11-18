@@ -13,6 +13,9 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bri-content = { path = "../content" }
+# glTF lowering for Add-On .glb models (docs/progress runtime-GLB record):
+# the Torque readers stay in bri-addon-import, a dev-dependency only.
+bri-gltf = { path = "../gltf" }
 bri-world = { path = "../world" }
 bri-events = { path = "../events" }
 bri-bls = { path = "../bls" }

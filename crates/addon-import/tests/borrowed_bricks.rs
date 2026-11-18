@@ -205,11 +205,17 @@ fn a_declared_dependency_can_lend_its_installed_native_brick_geometry() {
             .as_str()
             .unwrap(),
     );
-    let mut mesh: bri_content::brick::Brick =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    mesh.quads[0].vertices[0].position[0] += 0.001;
-    mesh.validate().unwrap();
-    std::fs::write(&path, serde_json::to_vec(&mesh).unwrap()).unwrap();
+    // The brick ships as a .glb; lower it back to change one vertex.
+    let bytes = std::fs::read(&path).unwrap();
+    let mesh = bri_addon_import::gltf::brick_from_glb(&bytes, "test:brick_geometry/shape")
+        .expect("the installed brick lowers");
+    let mut changed_mesh = mesh;
+    changed_mesh.quads[0].vertices[0].position[0] += 0.001;
+    std::fs::write(
+        &path,
+        bri_addon_import::gltf::export_brick(&changed_mesh).expect("re-export"),
+    )
+    .unwrap();
     let changed = import(&Options {
         input: borrower.clone(),
         out: root.join("changed"),
@@ -217,7 +223,9 @@ fn a_declared_dependency_can_lend_its_installed_native_brick_geometry() {
         ..Default::default()
     })
     .unwrap();
-    assert_ne!(
+    // Original names are stable across re-imports, so a native change is
+    // invalidated by content, not by the file's name.
+    assert_eq!(
         changed
             .assets
             .iter()
@@ -225,11 +233,26 @@ fn a_declared_dependency_can_lend_its_installed_native_brick_geometry() {
             .unwrap()
             .output,
         first_output,
-        "native changes invalidate the borrowed output fingerprint"
+        "the borrowed brick keeps its original name on re-import"
     );
-    // An installed file claiming a different identity is not a usable source.
-    mesh.id = "other:brick_geometry/forged".into();
-    std::fs::write(&path, serde_json::to_vec(&mesh).unwrap()).unwrap();
+    let first_bytes = std::fs::read(out.join(first_output.as_deref().unwrap())).unwrap();
+    let changed_bytes =
+        std::fs::read(root.join("changed").join(first_output.as_deref().unwrap())).unwrap();
+    assert_ne!(
+        first_bytes, changed_bytes,
+        "native changes must change the borrowed bytes"
+    );
+    // An installed conversion whose catalog claims a different identity than
+    // its import record is not a usable source.
+    let index_path = provider.join("assets/content.json");
+    let mut index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
+    for item in index["content"].as_array_mut().unwrap() {
+        if item["kind"] == "brick_geometry" {
+            item["id"] = serde_json::json!("other:brick_geometry/forged");
+        }
+    }
+    std::fs::write(&index_path, serde_json::to_vec(&index).unwrap()).unwrap();
     let invalid_out = root.join("invalid");
     import(&Options {
         input: borrower,

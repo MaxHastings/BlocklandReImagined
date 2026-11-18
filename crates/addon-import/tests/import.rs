@@ -1494,14 +1494,10 @@ datablock AudioProfile(JingleBell) { fileName = "./bell.wav"; description = Audi
 }
 
 /// The smallest DTS (v24) Torque reads: no nodes, objects or meshes, the
-/// box `lo` to `hi`, and these materials. Written here; ours (CC0).
+/// box `lo` to `hi`, and these materials. Written here; ours (CC0). Every
+/// section count is zero; only the bounds and the material list are set,
+/// each material plain opaque.
 fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
-    let materials: Vec<_> = materials.iter().map(|m| (*m, 3)).collect();
-    tiny_dts_flags(lo, hi, &materials)
-}
-
-/// [`tiny_dts`] with each material's `TSMaterialList` flags.
-fn tiny_dts_flags(lo: [f32; 3], hi: [f32; 3], materials: &[(&str, u32)]) -> Vec<u8> {
     let mut wide: Vec<u32> = vec![0; 17]; // every count zero
     wide.extend([0, 0]);
     let guards = 17u32;
@@ -1537,12 +1533,12 @@ fn tiny_dts_flags(lo: [f32; 3], hi: [f32; 3], materials: &[(&str, u32)]) -> Vec<
     out.extend(0u32.to_le_bytes()); // no sequences
     out.push(1); // material list version
     out.extend((materials.len() as u32).to_le_bytes());
-    for (m, _) in materials {
+    for m in materials {
         out.push(m.len() as u8);
         out.extend(m.as_bytes());
     }
-    for (_, flags) in materials {
-        out.extend(flags.to_le_bytes());
+    for _ in materials {
+        out.extend(3u32.to_le_bytes()); // plain opaque material
     }
     for _ in 0..3 {
         for _ in materials {
@@ -1561,6 +1557,9 @@ fn tiny_dts_flags(lo: [f32; 3], hi: [f32; 3], materials: &[(&str, u32)]) -> Vec<
 /// translucent one imports opaque, as Torque draws it (the Rallypack P90's
 /// black body vanished as additive in v0.2.8), and the report says so; a
 /// real additive surface (both bits, as v20's rocket trail) stays additive.
+/// The fixture is the shotgun shell with its two materials' `TSMaterialList`
+/// flag words pointed at those blends; it has geometry, so it exports to a
+/// .glb and each blend rides back in the file's extras.
 #[test]
 fn additive_without_translucent_imports_opaque_and_is_noted() {
     let source = fresh("blend-source").with_file_name("Weapon_Blend");
@@ -1571,22 +1570,20 @@ fn additive_without_translucent_imports_opaque_and_is_noted() {
     )
     .unwrap();
     std::fs::write(source.join("server.cs"), "exec(\"./blend.cs\");\n").unwrap();
-    std::fs::write(
-        source.join("gun.dts"),
-        tiny_dts_flags(
-            [-0.1, -0.2, -0.3],
-            [0.1, 0.4, 0.3],
-            &[("body", 0x4b), ("trail", 0x4f)],
-        ),
+    // The material list is the DTS's tail: a version byte, the count, each
+    // name length-prefixed, then one u32 of flags per material in order.
+    let mut dts = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/models/shotgunShell.dts"),
     )
     .unwrap();
-    for name in ["body", "trail"] {
-        let mut png = std::io::Cursor::new(Vec::new());
-        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]))
-            .write_to(&mut png, image::ImageFormat::Png)
-            .unwrap();
-        std::fs::write(source.join(format!("{name}.png")), png.into_inner()).unwrap();
-    }
+    let red_name = dts
+        .windows(8)
+        .position(|w| *w == *b"\x07red.png")
+        .expect("fixture layout");
+    let flags_off = red_name + 1 + 7; // after the last name's length byte and bytes
+    dts[flags_off..flags_off + 4].copy_from_slice(&0x4bu32.to_le_bytes());
+    dts[flags_off + 4..flags_off + 8].copy_from_slice(&0x4fu32.to_le_bytes());
+    std::fs::write(source.join("gun.dts"), &dts).unwrap();
     std::fs::write(
         source.join("blend.cs"),
         r#"
@@ -1605,32 +1602,28 @@ datablock ShapeBaseImageData(blendGunImage) { shapeFile = "./gun.dts"; item = bl
     let presentation: serde_json::Value =
         serde_json::from_slice(&std::fs::read(out.join("assets/presentation.json")).unwrap())
             .unwrap();
-    let file = presentation["models"]["add-ons/weapon_blend/gun.dts"]["file"]
-        .as_str()
-        .unwrap();
-    let shape: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(out.join("assets").join(file)).unwrap()).unwrap();
-    let blends: Vec<_> = shape["materials"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|m| m["blend"].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(blends, ["opaque", "additive"]);
+    let model = &presentation["models"]["add-ons/weapon_blend/gun.dts"];
+    // The shape has geometry, so it exports; the blends ride in its extras.
+    assert!(model["file"].as_str().unwrap().ends_with(".glb"), "{model}");
+    assert_ne!(model["source"], "placeholder", "{model}");
     let notes = serde_json::to_string(&report.assets).unwrap();
     assert!(
-        notes.contains("material body marks additive without translucent (0x4b): drawn opaque"),
+        notes.contains(
+            "material yellow.png marks additive without translucent (0x4b): drawn opaque"
+        ),
         "{notes}"
     );
-    assert!(!notes.contains("material trail marks"), "{notes}");
+    // Both bits set is a real additive surface; Torque draws it as-is.
+    assert!(!notes.contains("material red.png marks"), "{notes}");
 }
 
-/// A model material whose texture is nowhere (not in the Add-On, not in
+/// A model material whose texture is nowhere (not in its Add-On, not in
 /// the base game) draws in the item's colour shift, as Torque drew a
-/// material it found no bitmap for: the model stays, its plain parts take
-/// the colour (Loz's Hookshot's `black50`, blue), and it is not swapped for
-/// a placeholder cube. The clear texture shows the tint through, as a
-/// colour-shift model's clear texels do; an opaque white one hid it.
+/// material it found no bitmap for: the model stays (a .glb under its own
+/// name), its plain parts take the colour (Loz's Hookshot's `black50`,
+/// blue), and it is not swapped for a placeholder cube. The textured
+/// material rides inside the .glb, so nothing ships beside it and no
+/// placeholder clear file stands in for the missing one.
 #[test]
 fn a_material_with_no_texture_draws_plain_and_keeps_its_model() {
     let source = fresh("plain-source").with_file_name("Weapon_Plain");
@@ -1641,16 +1634,18 @@ fn a_material_with_no_texture_draws_plain_and_keeps_its_model() {
     )
     .unwrap();
     std::fs::write(source.join("server.cs"), "exec(\"./plain.cs\");\n").unwrap();
-    std::fs::write(
-        source.join("gun.dts"),
-        tiny_dts([-0.1, -0.2, -0.3], [0.1, 0.4, 0.3], &["metal", "nowhere"]),
+    // The shotgun shell's materials are named after their textures; ship
+    // one of them so that material is textured, leave the other found nowhere.
+    let dts = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/models/shotgunShell.dts"),
     )
     .unwrap();
-    let mut metal = std::io::Cursor::new(Vec::new());
+    std::fs::write(source.join("gun.dts"), &dts).unwrap();
+    let mut yellow = std::io::Cursor::new(Vec::new());
     image::RgbaImage::from_pixel(4, 4, image::Rgba([90, 90, 100, 255]))
-        .write_to(&mut metal, image::ImageFormat::Png)
+        .write_to(&mut yellow, image::ImageFormat::Png)
         .unwrap();
-    std::fs::write(source.join("metal.png"), metal.into_inner()).unwrap();
+    std::fs::write(source.join("yellow.png"), yellow.into_inner()).unwrap();
     std::fs::write(
         source.join("plain.cs"),
         r#"
@@ -1677,33 +1672,29 @@ datablock ShapeBaseImageData(plainGunImage) { shapeFile = "./gun.dts"; item = pl
             .unwrap();
     let model = &presentation["models"]["add-ons/weapon_plain/gun.dts"];
     assert_ne!(model["source"], "placeholder", "{model}");
-    assert_eq!(
-        model["textures"],
-        serde_json::json!(["add-ons/weapon_plain/metal.png", "placeholder:clear"]),
-        "{model}"
+    // Both materials bind empty: yellow.png rides inside the .glb, and a
+    // material found nowhere needs no placeholder file at all.
+    assert_eq!(model["textures"], serde_json::json!(["", ""]), "{model}");
+    assert!(
+        presentation["textures"].get("placeholder:clear").is_none(),
+        "{}",
+        presentation["textures"]
     );
-    let clear = out.join("assets").join(
-        presentation["textures"]["placeholder:clear"]["file"]
-            .as_str()
-            .unwrap(),
-    );
-    let clear = image::open(clear).unwrap().to_rgba8();
-    assert_eq!(
-        clear.get_pixel(0, 0).0[3],
-        0,
-        "the colour shift shows through"
-    );
+    // The texture ships inside the .glb, not as a copy beside it.
+    assert!(!out.join("assets/textures/yellow.png").exists());
     assert_eq!(
         presentation["items"]["weapon_plain:weapon/plaingunitem"]["tint"],
         serde_json::json!([0.2f32, 0.2f32, 1.0, 1.0])
     );
+    let diagnostics = report.diagnostics.join("\n");
     assert!(
-        report
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("material nowhere has no texture; drawn in the colour shift")),
-        "{:?}",
-        report.diagnostics
+        diagnostics.contains("material red.png has no texture; drawn in the colour shift"),
+        "{diagnostics}"
+    );
+    // yellow.png was found and embedded, so it gets no such note.
+    assert!(
+        !diagnostics.contains("material yellow.png has no texture"),
+        "{diagnostics}"
     );
 }
 
@@ -1727,11 +1718,13 @@ fn a_shape_named_through_a_path_global_is_found() {
         "$PG::FilePath = filePath($Con::File) @ \"/\";\n$PG::ModelPath = $PG::FilePath @ \"models/\";\nexec(\"./guns.cs\");\n",
     )
     .unwrap();
-    std::fs::write(
-        source.join("models/gun.dts"),
-        tiny_dts([-0.1, -0.2, -0.3], [0.1, 0.4, 0.3], &["metal"]),
+    // Real geometry (the shotgun shell): a shape glTF cannot hold would
+    // present as the placeholder cube and hide what this test checks.
+    let dts = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/models/shotgunShell.dts"),
     )
     .unwrap();
+    std::fs::write(source.join("models/gun.dts"), &dts).unwrap();
     std::fs::write(
         source.join("guns.cs"),
         r#"
@@ -1775,11 +1768,14 @@ fn each_item_gets_the_worst_coverage_of_what_it_is_made_of() {
     )
     .unwrap();
     std::fs::write(source.join("server.cs"), "exec(\"./guns.cs\");\n").unwrap();
-    std::fs::write(
-        source.join("gun.dts"),
-        tiny_dts([-0.1, -0.2, -0.3], [0.1, 0.4, 0.3], &["nowhere"]),
+    // Real geometry (the shotgun shell), whose textures ship nowhere in the
+    // Add-On: the model converts and its plain materials draw as Torque drew
+    // them, so what's under test is the datablocks' coverage.
+    let dts = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/models/shotgunShell.dts"),
     )
     .unwrap();
+    std::fs::write(source.join("gun.dts"), &dts).unwrap();
     std::fs::write(source.join("beep.wav"), wav()).unwrap();
     std::fs::write(
         source.join("guns.cs"),
@@ -1847,4 +1843,163 @@ function scriptGunImage::onFire(%this, %obj, %slot)
         markdown.contains("| Lost Gun | `lostGunItem` | missing source | missing_source: "),
         "{markdown}"
     );
+}
+
+/// Converted files keep their original names and folders instead of hash
+/// names: a model lands under `models/` beside its source subpath as the
+/// `.glb` the game draws (no `.shape.json` beside it); textures keep theirs
+/// too. Root-level files land flat in their tree.
+#[test]
+fn converted_files_keep_their_original_names() {
+    let source = fresh("names-source").with_file_name("Weapon_X");
+    std::fs::create_dir_all(source.join("models")).unwrap();
+    std::fs::create_dir_all(source.join("textures/car")).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: X\nAuthor: Tester\nA test.",
+    )
+    .unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./x.cs\");\n").unwrap();
+    // A real DTS (the shotgun shell from the Weapon_Shotgun Add-On) so both
+    // models have geometry and export to glTF; a shape without any presents
+    // as the placeholder cube instead.
+    let dts = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/models/shotgunShell.dts"),
+    )
+    .unwrap();
+    std::fs::write(source.join("models/vehicle.dts"), &dts).unwrap();
+    std::fs::write(source.join("gun.dts"), &dts).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([9, 8, 7, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let png = png.into_inner();
+    std::fs::write(source.join("textures/car/paint.png"), &png).unwrap();
+    std::fs::write(source.join("icon.png"), png).unwrap();
+    std::fs::write(
+        source.join("x.cs"),
+        r#"
+datablock ItemData(vehicleItem) { shapeFile = "./models/vehicle.dts"; uiName = "Vehicle X"; image = vehicleImage; };
+datablock ShapeBaseImageData(vehicleImage) { shapeFile = "./models/vehicle.dts"; item = vehicleItem; stateName[0] = "Ready"; };
+datablock ItemData(xGunItem) { shapeFile = "./gun.dts"; uiName = "X Gun"; image = xGunImage; };
+datablock ShapeBaseImageData(xGunImage) { shapeFile = "./gun.dts"; item = xGunItem; stateName[0] = "Ready"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("names-out").join("weapon_x");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let output_of = |suffix: &str| -> Option<String> {
+        report
+            .assets
+            .iter()
+            .find(|a| a.source.ends_with(suffix))
+            .and_then(|a| a.output.clone())
+    };
+    assert_eq!(
+        output_of("models/vehicle.dts"),
+        Some("assets/models/models/vehicle.glb".to_owned())
+    );
+    assert_eq!(
+        output_of("/gun.dts"),
+        Some("assets/models/gun.glb".to_owned())
+    );
+    assert_eq!(
+        output_of("textures/car/paint.png"),
+        Some("assets/textures/textures/car/paint.png".to_owned())
+    );
+    assert_eq!(
+        output_of("/icon.png"),
+        Some("assets/textures/icon.png".to_owned())
+    );
+    for glb in ["models/models/vehicle.glb", "models/gun.glb"] {
+        let bytes = std::fs::read(out.join("assets").join(glb)).unwrap();
+        assert_eq!(&bytes[0..4], b"glTF");
+        // The package's own glTF reader reads it back.
+        let read = bri_addon_import::gltf::Document::from_bytes(&bytes, None).unwrap();
+        assert!(
+            read.json["asset"]["version"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("2"))
+        );
+    }
+    // No legacy .shape.json beside either model.
+    for json in ["models/models/vehicle.shape.json", "models/gun.shape.json"] {
+        assert!(!out.join("assets").join(json).exists(), "{json}");
+    }
+}
+
+/// A shape glTF cannot hold (no visible mesh) ships no model file of its
+/// own; the items that draw it present as one shared placeholder cube, and
+/// the report says why. The client still draws them and lets them be picked
+/// up; their coverage names the model unsupported rather than missing.
+#[test]
+fn a_shape_without_geometry_presents_as_the_placeholder_cube() {
+    let source = fresh("cube-source").with_file_name("Weapon_Cube");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Cube\nAuthor: Tester\nA test.",
+    )
+    .unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./cube.cs\");\n").unwrap();
+    std::fs::write(
+        source.join("gun.dts"),
+        tiny_dts([-0.1, -0.2, -0.3], [0.1, 0.4, 0.3], &["metal"]),
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("cube.cs"),
+        r#"
+datablock ItemData(cubeGunItem) { shapeFile = "./gun.dts"; uiName = "Cube Gun"; image = cubeGunImage; };
+datablock ShapeBaseImageData(cubeGunImage) { shapeFile = "./gun.dts"; item = cubeGunItem; stateName[0] = "Ready"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("cube-out").join("weapon_cube");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let presentation: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/presentation.json")).unwrap())
+            .unwrap();
+    let model = &presentation["models"]["add-ons/weapon_cube/gun.dts"];
+    assert_eq!(model["source"], "placeholder", "{model}");
+    let file = model["file"].as_str().unwrap();
+    assert!(
+        file.starts_with("models/") && file.ends_with(".glb"),
+        "{file}"
+    );
+    // The placeholder is a real .glb the client can draw.
+    let glb = std::fs::read(out.join("assets").join(file)).unwrap();
+    assert_eq!(&glb[0..4], b"glTF", "the placeholder cube is a real .glb");
+    // The failure is reported on the asset and in the ambiguous list.
+    let notes = serde_json::to_string(&report.assets).unwrap();
+    assert!(notes.contains("DTS: glTF export failed"), "{notes}");
+    assert!(notes.contains("the model ships no file"), "{notes}");
+    let r = serde_json::to_value(&report).unwrap();
+    assert!(
+        r["ambiguous"]
+            .to_string()
+            .contains("presented as a placeholder cube"),
+        "{}",
+        r["ambiguous"]
+    );
+    // The item still presents, so the client can draw and pick it up.
+    let item = &presentation["items"]["weapon_cube:weapon/cubegunitem"];
+    assert!(!item.is_null(), "{item}");
+    // And its coverage says the model is unsupported, not that it vanished.
+    let covered = report
+        .items
+        .iter()
+        .find(|i| i.ui_name == "Cube Gun")
+        .unwrap();
+    assert_eq!(covered.coverage.as_str(), "unsupported", "{covered:?}");
 }

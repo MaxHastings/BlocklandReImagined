@@ -345,7 +345,7 @@ impl Ord for Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gltf::testing::{cuboid, rounded_cuboid};
+    use crate::testing::{cuboid, rounded_cuboid};
     use glam::Vec3;
 
     fn mesh(parts: (Vec<Vec3>, Vec<Vec3>, Vec<[f32; 2]>, Vec<u32>)) -> Mesh {

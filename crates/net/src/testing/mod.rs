@@ -196,8 +196,9 @@ fn write_bricks(catalog_dir: &Path, geometry_dir: &Path) -> Result<Vec<(String, 
         };
         mesh.quads = bricks::block(&mesh.id, mesh.footprint_studs, mesh.height_plates, look).quads;
         let name = mesh.id.rsplit('/').next().unwrap_or(&mesh.id).to_string();
-        let file = format!("{}.brick.json", name.replace(['/', ':', '#'], "-"));
-        write_file(geometry_dir, &file, &serde_json::to_vec(&mesh)?)?;
+        // Brick geometry ships as .glb (the quads and grid facts in glTF extras).
+        let file = format!("{}.glb", name.replace(['/', ':', '#'], "-"));
+        write_file(geometry_dir, &file, &bri_gltf::export_brick(&mesh)?)?;
         bindings.push(json!({ "id": id, "native_mesh": file }));
         bodies.push(d.collision.clone());
         let display = names

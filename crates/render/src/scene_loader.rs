@@ -533,6 +533,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         "Invalid native map scene identity/schema"
     );
     let mut interiors = BTreeMap::new();
+    // Diffuse textures carried inside an interior's own .glb, by asset id.
+    let mut interior_textures: BTreeMap<String, Vec<Option<Vec<u8>>>> = BTreeMap::new();
     for node in scene
         .nodes
         .iter()
@@ -543,14 +545,29 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
             .as_deref()
             .context("Interior placement has no native asset")?;
         if !interiors.contains_key(id) {
-            let interior: Interior = bri_content::strict::from_slice(&read(
-                &root,
-                bundle["assets"][id]
-                    .as_str()
-                    .context("Interior asset missing from bundle")?,
-            )?)?;
-            interior.validate()?;
-            interiors.insert(id.to_owned(), interior);
+            let file = bundle["assets"][id]
+                .as_str()
+                .context("Interior asset missing from bundle")?
+                .to_owned();
+            // A self-contained interior: geometry, textures and lightmaps in
+            // one .glb; legacy bundles still carry the JSON beside them.
+            if file.ends_with(".glb") {
+                let doc = bri_gltf::Document::open(&root.join(&file))
+                    .with_context(|| format!("Interior asset {file} does not open"))?;
+                let glb = bri_gltf::interior_glb::InteriorGlb::from_document(&doc)
+                    .with_context(|| format!("Interior asset {file} is not a readable interior .glb"))?;
+                // Detail 0 is the only one this pass draws.
+                interior_textures
+                    .insert(id.to_owned(), glb.textures.first().cloned().unwrap_or_default());
+                interiors.insert(id.to_owned(), glb.interior); // validated inside from_document
+            } else {
+                let interior: Interior = bri_content::strict::from_slice(&read(
+                    &root,
+                    &file,
+                )?)?;
+                interior.validate()?;
+                interiors.insert(id.to_owned(), interior);
+            }
         }
     }
     // A map with light nodes and no lightmap is lit by those nodes, whatever
@@ -723,8 +740,8 @@ fn load_bundle_unscoped(root: &Path, map_id: &str, legacy: bool) -> Result<MapSc
         }
         match node.kind {
             Kind::Interior=>{
-                let interior = &interiors[node.asset.as_deref().context("Interior placement has no native asset")?];
-                load_interior(&root,&bundle,bindings,&scene,node_index,node,interior,&mut out,&mut cache,legacy)?
+                let id = node.asset.as_deref().context("Interior placement has no native asset")?;
+                load_interior(&root,&bundle,bindings,&scene,node_index,node,&interiors[id],&mut out,&mut cache,legacy, interior_textures.get(id).map(Vec::as_slice))?
             }
             Kind::StaticModel|Kind::DatablockModel if node.asset.is_some()=>{
                 load_static_shape(&root,&bundle,bindings,node,&mut out,&mut cache,legacy)?;
@@ -1425,6 +1442,9 @@ fn load_interior(
     out: &mut SceneData,
     cache: &mut BTreeMap<(String, bool), usize>,
     legacy: bool,
+    // The interior's embedded diffuse textures (present only for a .glb
+    // interior; JSON interiors resolve theirs from the bindings).
+    glb_textures: Option<&[Option<Vec<u8>>]>,
 ) -> Result<()> {
     let id = node
         .asset
@@ -1529,23 +1549,34 @@ fn load_interior(
         }
     }
     let mut materials = BTreeMap::new();
-    for binding in bindings
-        .iter()
-        .filter(|b| b["asset"].as_str() == Some(id) && b["detail"].as_u64() == Some(0))
-    {
-        let material = binding["material"]
-            .as_u64()
-            .context("Interior material binding index missing")? as usize;
-        let image = texture(
-            root,
-            binding["texture"]
-                .as_str()
-                .context("Interior texture binding missing")?,
-            true,
-            out,
-            cache,
-        )?;
-        materials.insert(material, image);
+    if let Some(texs) = glb_textures {
+        // A .glb interior carries its diffuse textures inside itself.
+        for (j, tex) in texs.iter().enumerate() {
+            if let Some(bytes) = tex {
+                let index = out.images.len();
+                out.images.push(decode(bytes, &format!("{id}/material-{j}"), true)?);
+                materials.insert(j, index);
+            }
+        }
+    } else {
+        for binding in bindings
+            .iter()
+            .filter(|b| b["asset"].as_str() == Some(id) && b["detail"].as_u64() == Some(0))
+        {
+            let material = binding["material"]
+                .as_u64()
+                .context("Interior material binding index missing")? as usize;
+            let image = texture(
+                root,
+                binding["texture"]
+                    .as_str()
+                    .context("Interior texture binding missing")?,
+                true,
+                out,
+                cache,
+            )?;
+            materials.insert(material, image);
+        }
     }
     let mut groups: BTreeMap<(usize, usize, usize), Vec<u32>> = BTreeMap::new();
     for surface in &detail.surfaces {

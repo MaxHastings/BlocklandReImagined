@@ -1,7 +1,7 @@
 //! Vehicle presentation: native vehicle models drawn as GPU instances at
 //! interpolated authoritative transforms, with wheels, steering, suspension
 //! and turrets, plus seat transforms for riders and the driving camera.
-use crate::items::native_shape_scene;
+use crate::items::{native_shape_scene, srgb_byte};
 use crate::portal_view::Straddle;
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
@@ -322,6 +322,9 @@ impl VehicleAssets {
         let mut looks = BTreeMap::new();
         let mut bodies = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "model") {
+            // New imports ship the model's own .glb, its textures embedded;
+            // older packs its .shape.json.
+            let glb = asset.path.to_ascii_lowercase().ends_with(".glb");
             let shape = crate::items::checked_read(
                 &bri_vehicles::asset_root(&root, asset),
                 &asset.path,
@@ -329,12 +332,18 @@ impl VehicleAssets {
                 32 << 20,
             )
             .and_then(|bytes| {
-                let mut shape: Shape = serde_json::from_slice(&bytes)?;
+                let (mut shape, embedded) = if glb {
+                    let (_, converted) =
+                        crate::items::lower_glb_bytes(&bytes, &asset.virtual_path)?;
+                    (converted.shape, converted.textures)
+                } else {
+                    (serde_json::from_slice(&bytes)?, BTreeMap::new())
+                };
                 shape.validate()?;
                 shape.expand_live_frames();
-                Ok(shape)
+                Ok((shape, embedded))
             });
-            let shape = match shape {
+            let (shape, embedded) = match shape {
                 Ok(shape) => shape,
                 Err(error) => {
                     fault(asset, error)?;
@@ -371,14 +380,44 @@ impl VehicleAssets {
                 .virtual_path
                 .rsplit_once('/')
                 .map_or(String::new(), |(dir, _)| dir.to_ascii_lowercase());
-            // A material whose texture is nowhere draws as blank paint.
+            // A material whose texture is nowhere draws its solid colour or
+            // as blank paint; a GLB's own bitmap covers it when the pack
+            // ships no file for it.
             let images: Vec<SceneImage> = shape
                 .materials
                 .iter()
                 .map(|m| {
-                    material_texture(&textures, &folder, &m.name)
-                        .cloned()
-                        .unwrap_or_else(|| blank.clone())
+                    if let Some(file) = material_texture(&textures, &folder, &m.name) {
+                        return file.clone();
+                    }
+                    if let Some(pixels) = embedded
+                        .get(&m.name)
+                        .and_then(|png| image::load_from_memory(png).ok())
+                        .map(|decoded| decoded.to_rgba8())
+                    {
+                        return SceneImage {
+                            label: format!("{}/{}", asset.virtual_path, m.name),
+                            width: pixels.width(),
+                            height: pixels.height(),
+                            rgba: pixels.into_raw(),
+                            srgb: false,
+                        };
+                    }
+                    if let Some(c) = m.color {
+                        return SceneImage {
+                            label: format!("{}/{name} (solid colour)", asset.virtual_path, name = m.name),
+                            width: 1,
+                            height: 1,
+                            rgba: vec![
+                                srgb_byte(c[0]),
+                                srgb_byte(c[1]),
+                                srgb_byte(c[2]),
+                                (c[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+                            ],
+                            srgb: true,
+                        };
+                    }
+                    blank.clone()
                 })
                 .collect();
             let refs: Vec<&SceneImage> = images.iter().collect();

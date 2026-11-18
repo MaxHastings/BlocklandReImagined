@@ -1110,8 +1110,8 @@ fn validate_catalog(paths: &ContentPaths) -> Result<Catalog> {
             mesh.id
         );
         ensure!(
-            mesh.native_mesh.ends_with(".brick.json"),
-            "Expected native brick JSON: {}",
+            mesh.native_mesh.to_ascii_lowercase().ends_with(".glb"),
+            "Expected a .glb brick geometry: {}",
             mesh.native_mesh
         );
         file(&paths.geometry, &mesh.native_mesh, GEOMETRY_LIMIT)?;

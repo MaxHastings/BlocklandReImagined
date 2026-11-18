@@ -346,9 +346,15 @@ impl AvatarAssets {
                 .with_context(|| format!("Undeclared vehicle asset {path}"))
         };
         let model = asset(&definition.model)?;
-        let shape: bri_content::shape::Shape = serde_json::from_slice(
-            &crate::items::checked_read(&root, &model.path, &model.sha256, 32 << 20)?,
-        )?;
+        let bytes = crate::items::checked_read(&root, &model.path, &model.sha256, 32 << 20)?;
+        // GLB-era packs ship the horse as a glTF (lowered exactly as the
+        // vehicle renderer draws it); legacy packs still carry JSON shapes.
+        let shape: bri_content::shape::Shape = if model.path.to_ascii_lowercase().ends_with(".glb")
+        {
+            crate::items::lower_glb_bytes(&bytes, &model.virtual_path)?.1.shape
+        } else {
+            serde_json::from_slice(&bytes)?
+        };
         shape.validate()?;
         let mut sequences = BTreeMap::new();
         for (key, clips) in &pack.animation_aliases {
@@ -496,14 +502,36 @@ impl AvatarAssets {
             None => file(model)?,
         };
         let root = dir.canonicalize()?;
-        let shape: bri_content::shape::Shape = serde_json::from_slice(
-            &crate::materials::read_resource(&root, &shape_file, 32 << 20)?,
-        )?;
+        // New imports ship a body's own .glb, its textures embedded; older
+        // packages its .shape.json and image assets.
+        let bytes = crate::materials::read_resource(&root, &shape_file, 32 << 20)?;
+        let is_glb = shape_file.to_ascii_lowercase().ends_with(".glb");
+        let (shape, embedded) = if is_glb {
+            let (_, converted) = crate::items::lower_glb_bytes(&bytes, model)?;
+            (converted.shape, converted.textures)
+        } else {
+            (serde_json::from_slice(&bytes)?, BTreeMap::new())
+        };
         shape.validate()?;
         let package = model.split(':').next().unwrap_or_default();
         let mut images = BTreeMap::new();
         for material in &shape.materials {
             let name = material.name.to_ascii_lowercase();
+            // A GLB's own bitmap covers its materials before the package's assets do.
+            if let Some(png) = embedded.get(&material.name) {
+                let pixels = image::load_from_memory(png)?.to_rgba8();
+                images.insert(
+                    name.clone(),
+                    SceneImage {
+                        label: format!("{model}/{name}"),
+                        width: pixels.width(),
+                        height: pixels.height(),
+                        rgba: pixels.into_raw(),
+                        srgb: false,
+                    },
+                );
+                continue;
+            }
             let png = if name.ends_with(".png") {
                 name.clone()
             } else {

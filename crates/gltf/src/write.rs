@@ -34,7 +34,7 @@ impl Gltf {
         a.len() - 1
     }
 
-    fn view(&mut self, bytes: &[u8]) -> usize {
+    pub fn view(&mut self, bytes: &[u8]) -> usize {
         while !self.bin.len().is_multiple_of(4) {
             self.bin.push(0);
         }

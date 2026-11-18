@@ -32,14 +32,20 @@ fn main() -> Result<()> {
         let mut triangles = 0;
         for node in interiors {
             let id = node.asset.as_ref().context("Missing interior asset")?;
-            let interior: Interior = serde_json::from_slice(&std::fs::read(
-                root.join(
-                    bundle["assets"][id]
-                        .as_str()
-                        .context("Missing native interior")?,
-                ),
-            )?)?;
-            interior.validate()?;
+            // A self-contained interior (.glb) or the legacy JSON beside it.
+            let name = bundle["assets"][id]
+                .as_str()
+                .context("Missing native interior")?
+                .to_owned();
+            let interior: Interior = if name.ends_with(".glb") {
+                let doc = bri_gltf::Document::open(&root.join(&name))?;
+                bri_gltf::interior_glb::InteriorGlb::from_document(&doc)?.interior
+            } else {
+                let interior: Interior =
+                    serde_json::from_slice(&std::fs::read(root.join(&name))?)?;
+                interior.validate()?;
+                interior
+            };
             let matrix = glam::Mat4::from_cols_array(&node.transform);
             let geometry = &interior.details[0].collision_triangles;
             triangles += geometry.len();

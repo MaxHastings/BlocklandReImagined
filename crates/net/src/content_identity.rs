@@ -698,12 +698,21 @@ pub fn brick_geometry_assets(
                 total <= WEAPON_TOTAL_LIMIT,
                 "Shared geometry byte budget exceeded"
             );
-            let mut mesh: bri_content::brick::Brick = serde_json::from_slice(&bytes)?;
-            mesh.validate()?;
+            let mesh: bri_content::brick::Brick = if file.to_ascii_lowercase().ends_with(".glb") {
+                // The overhauled importer ships bricks as .glb; the
+                // content index binds the identity, so the lowering takes
+                // it from here.
+                bri_gltf::brick_from_glb(&bytes, id)?
+            } else {
+                let mut mesh: bri_content::brick::Brick = serde_json::from_slice(&bytes)?;
+                mesh.validate()?;
+                // The content index binds authored identity. Identical
+                // source BLBs may share one generated file with another
+                // embedded id.
+                mesh.id = id.to_owned();
+                mesh
+            };
             bri_world::ContentRef::Resolved(id.to_owned()).validate()?;
-            // The content index binds authored identity. Identical source
-            // BLBs may share one generated file with another embedded id.
-            mesh.id = id.to_owned();
             if mesh.needs_external_collision || mesh.collision_boxes.is_empty() {
                 // These require their catalog's explicit collision recipe.
                 continue;

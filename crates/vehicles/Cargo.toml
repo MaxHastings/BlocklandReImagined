@@ -13,6 +13,7 @@ glam = { workspace = true, features = ["serde"] }
 rapier3d.workspace = true
 sha2.workspace = true
 bri-content = { path = "../content" }
+bri-gltf = { path = "../gltf" }
 bri-motor = { path = "../motor" }
 bri-package = { path = "../package" }
 bri-physics = { path = "../physics" }

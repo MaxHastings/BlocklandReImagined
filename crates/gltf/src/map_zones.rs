@@ -120,7 +120,7 @@ pub(super) fn sections(opts: &Options) -> Result<Option<Sections>> {
 }
 
 /// The zone graph and its file name below `map/`, when the import names map data.
-pub(super) fn zones(
+pub fn zones(
     opts: &Options,
     id: &str,
     put: Put<'_>,
@@ -198,7 +198,7 @@ pub(super) fn zones(
 }
 
 /// The map's own display ramp `[brightness, contrast, gamma]` from `--mapdata`'s `display_ramp`, when it names one. A player's setting overrides it.
-pub(super) fn display_ramp(opts: &Options) -> Result<Option<[f32; 3]>> {
+pub fn display_ramp(opts: &Options) -> Result<Option<[f32; 3]>> {
     let Some(dir) = &opts.mapdata else {
         return Ok(None);
     };

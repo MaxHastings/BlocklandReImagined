@@ -372,8 +372,11 @@ pub fn write_with_icons(dir: &Path, weapons_dir: &Path, paint: IconPainter) -> R
         {
             icons.insert(key.clone(), icon);
         }
-        let file = format!("models/{stem}.shape.json");
-        let sha = write_file(dir, &file, &serde_json::to_vec(&shape)?)?;
+        // The model ships as a .glb: the game draws item models from glTF
+        // only, and this pack's textures stay beside it as files.
+        let file = format!("models/{stem}.glb");
+        let (glb, _embedded) = bri_gltf::export_shape(&shape, &BTreeMap::new(), &mut Vec::new())?;
+        let sha = write_file(dir, &file, &glb)?;
         let (min, max) = authored_bounds(&shape)?;
         bounds.insert(key.clone(), (min, max));
         models.insert(

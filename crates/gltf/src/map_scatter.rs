@@ -19,11 +19,11 @@ use std::path::Path;
 const MAX_LAYERS: usize = 64;
 
 /// Writes a file below the output folder, noting it in the report.
-pub(super) type Put<'a> = &'a mut dyn FnMut(&str, &[u8], &mut Report) -> Result<()>;
+pub type Put<'a> = &'a mut dyn FnMut(&str, &[u8], &mut Report) -> Result<()>;
 
 /// What the layers add to the map's bundle.
 #[derive(Default)]
-pub(super) struct Built {
+pub struct Built {
     /// Asset id to the shape's file in `map/`.
     pub assets: BTreeMap<String, String>,
     /// The layers' textures, file to file (in `map/`).
@@ -35,7 +35,7 @@ pub(super) struct Built {
 }
 
 /// Convert every `--scatter` file, writing the shapes, textures and placements through `put` (paths below `map/`).
-pub(super) fn layers(
+pub fn layers(
     opts: &Options,
     map_key: &str,
     id: &str,

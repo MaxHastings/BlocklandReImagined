@@ -140,6 +140,7 @@ pub fn material(name: &str, blend: &str) -> Material {
         wrap_u: true,
         wrap_v: true,
         blend: blend.into(),
+        color: None,
         unlit: false,
         environment: false,
         mipmaps: true,

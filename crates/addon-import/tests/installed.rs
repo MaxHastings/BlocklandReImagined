@@ -611,10 +611,10 @@ fn identical_brick_files_keep_their_own_native_identity() {
     assert_eq!(entries.len(), 2);
     assert_ne!(entries[0]["file"], entries[1]["file"]);
     for entry in entries {
-        let mesh: bri_content::brick::Brick = serde_json::from_slice(
-            &std::fs::read(out.join(entry["file"].as_str().unwrap())).unwrap(),
-        )
-        .unwrap();
+        // The brick ships as a .glb; the content index binds its identity.
+        let bytes = std::fs::read(out.join(entry["file"].as_str().unwrap())).unwrap();
+        let mesh = bri_addon_import::gltf::brick_from_glb(&bytes, entry["id"].as_str().unwrap())
+            .expect("the brick lowers");
         assert_eq!(mesh.id, entry["id"].as_str().unwrap());
     }
 }

@@ -1,0 +1,17 @@
+[package]
+name = "bri-gltf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "glTF 2.0 models to and from the native shape: read, lower, write and round-trip"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bri-content = { path = "../content" }
+bri-console = { path = "../console" }
+glam.workspace = true
+image = { workspace = true, features = ["jpeg"] }
+zip.workspace = true

@@ -6,6 +6,16 @@ pub use super::write::{Channel, Gltf};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::json;
 
+/// The name [`super::convert`] stores a glTF animation under: the stored
+/// clip of the role its name matches, else its safe form (a re-imported
+/// `idle` is stored as `root`). Round-trip tests compare clips by this.
+pub fn clip_identity(name: &str) -> String {
+    match super::role(name) {
+        Some((_, clip, _, _)) => clip.to_string(),
+        None => super::safe_name(name),
+    }
+}
+
 /// A box of the figure: centre, size and its `(bone, weight)` pairs.
 type Part<'a> = (Vec3, Vec3, &'a [(u32, f32)]);
 

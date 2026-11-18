@@ -501,7 +501,7 @@ impl CatalogEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Brick {
     pub schema_version: u32,
     pub id: String,
@@ -518,13 +518,13 @@ pub struct Brick {
     pub quads: Vec<Quad>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CollisionBox {
     pub center: [f32; 3],
     pub size: [f32; 3],
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Coverage {
     pub hides_adjacent: bool,
     pub required_area: f32,
@@ -562,7 +562,7 @@ pub const FACES: [Face; 7] = [
     Face::Omni,
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Quad {
     pub face: Face,
     pub surface: Surface,
@@ -573,7 +573,7 @@ pub struct Quad {
     pub colors: Option<[[f32; 4]; 4]>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],

@@ -3,7 +3,6 @@
 //! visibility become each instance's transform and tint alpha.
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
-use bri_content::shape::Shape;
 use bri_render::scene::{
     GpuInstances, GpuScene, SceneData, SceneImage, SceneRenderer, SceneTransform,
 };
@@ -46,21 +45,57 @@ impl ExplosionShapes {
                      resource: &bri_weapons::Resource,
                      file: &str|
          -> Result<Model> {
-            let shape: Shape = serde_json::from_slice(&crate::materials::read_resource(
+            let bytes = crate::materials::read_resource(
                 &bri_weapons::resource_root(&root, resource),
                 file,
                 32 << 20,
-            )?)?;
+            )?;
+            // New imports ship the explosion shape's own .glb, its textures
+            // embedded; older packs its .shape.json and texture files.
+            let is_glb = file.to_ascii_lowercase().ends_with(".glb");
+            let (shape, embedded) = if is_glb {
+                let (_, converted) = crate::items::lower_glb_bytes(&bytes, path)?;
+                (converted.shape, converted.textures)
+            } else {
+                (serde_json::from_slice(&bytes)?, BTreeMap::new())
+            };
             shape.validate()?;
             let folder = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+            // A GLB material its .glb does not carry draws clear; a JSON one
+            // still needs its texture file.
+            let clear = SceneImage {
+                label: "untextured explosion material".into(),
+                width: 1,
+                height: 1,
+                rgba: vec![0; 4],
+                srgb: false,
+            };
             let mut images = Vec::new();
             for material in &shape.materials {
+                // A GLB's own bitmap covers its materials before the pack's files do.
+                if let Some(png) = embedded.get(&material.name) {
+                    let pixels = image::load_from_memory(png)?.to_rgba8();
+                    images.push(SceneImage {
+                        label: format!("{path}/{}", material.name),
+                        width: pixels.width(),
+                        height: pixels.height(),
+                        rgba: pixels.into_raw(),
+                        srgb: false,
+                    });
+                    continue;
+                }
                 let path = format!("{folder}/{}.png", material.name);
-                let texture = pack
+                let Some(texture) = pack
                     .resources
                     .iter()
                     .find(|r| r.path.eq_ignore_ascii_case(&path))
-                    .with_context(|| format!("Missing explosion texture {path}"))?;
+                else {
+                    if is_glb {
+                        images.push(clear.clone());
+                        continue;
+                    }
+                    anyhow::bail!("Missing explosion texture {path}");
+                };
                 let bytes = crate::items::checked_read(
                     &bri_weapons::resource_root(&root, texture),
                     texture.native_file.as_deref().context("Unstored texture")?,

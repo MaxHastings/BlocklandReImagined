@@ -1,7 +1,8 @@
 //! `--kind brick`: a glTF model as a brick Add-On (docs/modding/bricks.md).
 //!
-//! The model becomes one native brick (`*.brick.json`, the format converted
-//! BLBs use): its triangles drawn in the player's paint colour, its grid
+//! The model becomes one native brick (a `.glb` the game lowers back to the
+//! brick; converted BLBs ship the same way): its triangles drawn in the
+//! player's paint colour, its grid
 //! size the model's bounds rounded up to whole studs and plates, and its
 //! collision a box per `col_` mesh, or the whole grid box when there are
 //! none. The Add-On's catalog lists it like any imported brick, so it is
@@ -163,8 +164,13 @@ pub(super) fn write(opts: &Options, id: &str, converted: Converted) -> Result<Re
         Ok(())
     };
     let dir = "assets/brick-catalog";
-    let mesh_file = format!("{id}.brick.json");
-    put(&format!("{dir}/{mesh_file}"), serde_json::to_vec(&mesh)?)?;
+    // The brick as a .glb: the game lowers it back to this very brick (faces,
+    // surfaces and collision in its extras); Blender sees a plain mesh.
+    let mesh_file = format!("{id}.glb");
+    put(
+        &format!("{dir}/{mesh_file}"),
+        crate::gltf::export_brick(&mesh)?,
+    )?;
     put(
         &format!("{dir}/stock-catalog.json"),
         serde_json::to_vec_pretty(&Catalog {

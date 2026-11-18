@@ -6,7 +6,7 @@
 //! authors) as `KHR_lights_punctual` lights with `bri_` custom properties.
 //! The scene is the map as the game places it (after the floor lift), so
 //! an exported, edited and reimported map lines up with the original.
-use super::write::Gltf;
+use super::Gltf;
 use anyhow::{Context, Result, ensure};
 use bri_content::interior::Interior;
 use bri_content::scene::{Kind, Node, Scene};

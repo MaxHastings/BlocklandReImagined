@@ -362,6 +362,7 @@ dependencies = [
  "bri-convert",
  "bri-effects-render",
  "bri-foliage",
+ "bri-gltf",
  "bri-minigames",
  "bri-net",
  "bri-package",
@@ -490,6 +491,7 @@ dependencies = [
  "bri-files",
  "bri-foliage",
  "bri-fx-runtime",
+ "bri-gltf",
  "bri-identity",
  "bri-minigames",
  "bri-net",
@@ -707,6 +709,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bri-gltf"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bri-console",
+ "bri-content",
+ "glam 0.33.10",
+ "image",
+ "serde",
+ "serde_json",
+ "zip",
+]
+
+[[package]]
 name = "bri-identity"
 version = "0.1.0"
 dependencies = [
@@ -752,6 +768,7 @@ dependencies = [
  "bri-crash",
  "bri-events",
  "bri-files",
+ "bri-gltf",
  "bri-identity",
  "bri-minigames",
  "bri-package",
@@ -819,6 +836,7 @@ dependencies = [
  "anyhow",
  "bri-console",
  "bri-content",
+ "bri-gltf",
  "glam 0.33.10",
  "rapier3d",
  "serde_json",
@@ -838,6 +856,7 @@ dependencies = [
  "anyhow",
  "bri-console",
  "bri-content",
+ "bri-gltf",
  "bri-package",
  "bytemuck",
  "glam 0.33.10",
@@ -876,6 +895,7 @@ dependencies = [
  "bri-content",
  "bri-controller",
  "bri-events",
+ "bri-gltf",
  "bri-minigames",
  "bri-motor",
  "bri-package",
@@ -972,6 +992,7 @@ dependencies = [
  "anyhow",
  "bri-console",
  "bri-content",
+ "bri-gltf",
  "bri-motor",
  "bri-package",
  "bri-physics",

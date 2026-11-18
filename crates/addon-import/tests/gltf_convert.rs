@@ -1,6 +1,15 @@
-use super::testing::{ARMATURE_SCALE, BONES, character, rifle, room};
-use super::*;
+//! The glTF import's tests: `convert`'s lowering of a model to the native
+//! shape, and full `import` round trips through the runtime's checkers.
+//! (Lives with the package writers in bri-addon-import.)
+use anyhow::Result;
+use bri_addon_import::gltf::{self, *};
 use bri_content::animation;
+use bri_content::shape::Shape;
+use glam::{Mat4, Quat, Vec3};
+use gltf::testing::{ARMATURE_SCALE, BONES, character, rifle, room};
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 fn convert_glb(glb: &[u8], opts: &Options) -> Result<Converted> {
     let doc = Document::from_bytes(glb, None)?;
@@ -345,10 +354,10 @@ fn materials_become_pngs_with_their_colour_baked_in() {
     let c = convert_glb(&character(true).glb, &body_opts()).unwrap();
     assert_eq!(
         c.report.materials,
-        ["boots", "skin_tone"],
-        "in the order the nodes use them"
+        ["skin_tone", "boots"],
+        "in the order the file declares them"
     );
-    let skin = &c.shape.materials[1];
+    let skin = &c.shape.materials[0];
     assert!(!skin.wrap_u && skin.wrap_v && skin.blend == "opaque");
     let png = image::load_from_memory(&c.textures["skin_tone"])
         .unwrap()
@@ -474,7 +483,7 @@ fn imports_write_a_package_the_runtime_reads() {
 
 #[test]
 fn what_a_model_lacks_is_named() {
-    let mut g = super::testing::Gltf::new();
+    let mut g = gltf::testing::Gltf::new();
     g.node(json!({ "name": "Empty" }), None);
     let err = convert_glb(&g.glb(), &body_opts())
         .err()
@@ -490,8 +499,8 @@ fn what_a_model_lacks_is_named() {
 
 #[test]
 fn a_vehicle_lists_its_seats_hubs_gun_and_collision_hulls() {
-    let mut g = super::testing::Gltf::new();
-    let (p, n, uv, i) = super::testing::cuboid(Vec3::new(0.0, 0.5, 0.0), Vec3::new(2.0, 1.0, 4.0));
+    let mut g = gltf::testing::Gltf::new();
+    let (p, n, uv, i) = gltf::testing::cuboid(Vec3::new(0.0, 0.5, 0.0), Vec3::new(2.0, 1.0, 4.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     let (a, b, c, d) = (
         g.floats(&flat(&p), 3),
@@ -564,7 +573,9 @@ fn a_vehicle_lists_its_seats_hubs_gun_and_collision_hulls() {
         c.shape.objects[collision.object_start].name, "col_body",
         "not drawn"
     );
-    assert_eq!(c.shape.materials[0].name, "hog_default");
+    // A model without glTF materials has none of its own: its faces draw the
+    // scene's unassigned stand-in, as a native null-material face does.
+    assert!(c.shape.materials.is_empty());
 }
 
 /// The posed vertices of `detail`, in the idle clip's middle.
@@ -580,7 +591,7 @@ fn posed_detail(shape: &Shape, detail: usize) -> Vec<Vec3> {
 
 #[test]
 fn a_heavy_body_gets_a_distant_detail_that_keeps_its_skin_and_sockets() {
-    let figure = super::testing::detailed_character(true, 12);
+    let figure = gltf::testing::detailed_character(true, 12);
     let mut opts = body_opts();
     opts.lod = Some(8652 / 4);
     let c = convert_glb(&figure.glb, &opts).unwrap();
@@ -639,7 +650,7 @@ fn a_heavy_body_gets_a_distant_detail_that_keeps_its_skin_and_sockets() {
 
 #[test]
 fn a_distant_detail_is_made_only_when_asked_for() {
-    let heavy = super::testing::detailed_character(true, 12);
+    let heavy = gltf::testing::detailed_character(true, 12);
     let mut opts = body_opts();
     for lod in [None, Some(0)] {
         opts.lod = lod;
@@ -657,10 +668,10 @@ fn a_distant_detail_is_made_only_when_asked_for() {
 
 #[test]
 fn hand_made_lod1_objects_stand_in_at_a_distance() {
-    let mut g = super::testing::Gltf::new();
+    let mut g = gltf::testing::Gltf::new();
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
-    let mesh = |g: &mut super::testing::Gltf, name: &str, size: f32| {
-        let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::splat(size));
+    let mesh = |g: &mut gltf::testing::Gltf, name: &str, size: f32| {
+        let (p, n, uv, i) = gltf::testing::cuboid(Vec3::ZERO, Vec3::splat(size));
         let (a, b, c, d) = (
             g.floats(&flat(&p), 3),
             g.floats(&flat(&n), 3),
@@ -738,8 +749,8 @@ fn import_room(col_floor: bool) -> (tempfile::TempDir, Report) {
 
 /// A scatter layer's glTF: one box with the scene's `bri_scatter` naming its placements file.
 fn scatter_layer(dir: &std::path::Path, fade: Option<[f32; 2]>) -> PathBuf {
-    use super::testing::{Gltf, cuboid};
     use bri_content::scatter::{Instance, encode};
+    use gltf::testing::{Gltf, cuboid};
     let mut g = Gltf::new();
     let (p, n, uv, i) = cuboid(Vec3::ZERO, Vec3::splat(1.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
@@ -852,7 +863,7 @@ fn a_scatter_layer_without_placements_or_with_a_bad_fade_is_refused() {
 
 /// A backdrop's glTF: one box with the scene's `bri_backdrop` naming the eye it is viewed from.
 fn backdrop_model(dir: &std::path::Path, eye: Option<[f32; 3]>) -> PathBuf {
-    use super::testing::{Gltf, cuboid};
+    use gltf::testing::{Gltf, cuboid};
     let mut g = Gltf::new();
     let (p, n, uv, i) = cuboid(Vec3::ZERO, Vec3::splat(1.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
@@ -1018,7 +1029,7 @@ fn a_projector_node_bakes_a_decal_the_way_a_games_projector_makes_one() {
     // A box 2 wide, 6 deep, thrown straight down from 3 above the floor (glTF -Z turned to -Y).
     std::fs::write(
         &input,
-        super::testing::room_with(false, "Floor", |g| {
+        gltf::testing::room_with(false, "Floor", |g| {
             g.node(
                 json!({ "name": "Shadow", "translation": [1.0, 3.0, -2.0],
                     "rotation": Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2).to_array(),
@@ -1097,7 +1108,7 @@ fn a_projector_node_without_its_picture_or_with_a_bad_reach_fails_plainly() {
     let build = |spec: Value| {
         std::fs::write(
             &input,
-            super::testing::room_with(false, "Floor", |g| {
+            gltf::testing::room_with(false, "Floor", |g| {
                 g.node(
                     json!({ "name": "Shadow", "extras": { "bri_projector": spec } }),
                     None,
@@ -1124,7 +1135,7 @@ fn a_projector_node_without_its_picture_or_with_a_bad_reach_fails_plainly() {
 
 /// A one-layer lit-by-vertex mesh whose node names its lights (`mask` is the visibility mask of its one light).
 fn vertex_lit_import(mask: &str) -> Vec<[f32; 4]> {
-    let mut g = super::testing::Gltf::new();
+    let mut g = gltf::testing::Gltf::new();
     g.material(
         "sand",
         [1.0; 4],
@@ -1146,7 +1157,7 @@ fn vertex_lit_import(mask: &str) -> Vec<[f32; 4]> {
             "weights": { "index": 1 },
         } } }),
     );
-    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let (p, n, uv, i) = gltf::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     let (a, b, c, d) = (
         g.floats(&flat(&p), 3),
@@ -1414,7 +1425,7 @@ fn col_meshes_keep_the_query_types_they_block() {
     use bri_physics::blocks::{MOVE, RAY, SHOT, SWEEP, query_groups};
     // Three collision slabs: one that stops bodies and sweeps, one that only
     // shots and rays see, one with no mask (it blocks every query).
-    let mut g = super::testing::Gltf::new();
+    let mut g = gltf::testing::Gltf::new();
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     for (name, x, blocks) in [
         ("Floor", 0.0, None),
@@ -1422,7 +1433,7 @@ fn col_meshes_keep_the_query_types_they_block() {
         ("col_shoot", 20.0, Some(json!(["ray", "shot"]))),
         ("col_all", 30.0, None),
     ] {
-        let (p, _, _, i) = super::testing::cuboid(Vec3::new(x, 0.0, 0.0), Vec3::new(4.0, 1.0, 4.0));
+        let (p, _, _, i) = gltf::testing::cuboid(Vec3::new(x, 0.0, 0.0), Vec3::new(4.0, 1.0, 4.0));
         let (a, b) = (g.floats(&flat(&p), 3), g.uints(&i, 1));
         let mesh = g.mesh(
             name,
@@ -1477,7 +1488,7 @@ fn col_meshes_keep_the_query_types_they_block() {
 #[test]
 fn a_collider_triangle_reports_the_identity_of_its_material() {
     // Two collision slabs, their materials named by `bri_material`: a hit says which material it struck.
-    let mut g = super::testing::Gltf::new();
+    let mut g = gltf::testing::Gltf::new();
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     let wood = g.material(
         "a",
@@ -1496,7 +1507,7 @@ fn a_collider_triangle_reports_the_identity_of_its_material() {
         ("col_wood", 10.0, Some(wood)),
         ("col_plate", 20.0, Some(plate)),
     ] {
-        let (p, _, _, i) = super::testing::cuboid(Vec3::new(x, 0.0, 0.0), Vec3::new(4.0, 1.0, 4.0));
+        let (p, _, _, i) = gltf::testing::cuboid(Vec3::new(x, 0.0, 0.0), Vec3::new(4.0, 1.0, 4.0));
         let (a, b) = (g.floats(&flat(&p), 3), g.uints(&i, 1));
         let mut prim = json!({ "attributes": { "POSITION": a }, "indices": b });
         if let Some(m) = material {
@@ -1541,7 +1552,7 @@ fn a_collider_triangle_reports_the_identity_of_its_material() {
 fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
     use bri_render::scene::{AlphaMode, MaterialKind};
     // A terrain slab drawn in two passes: three layers weighted by one map, then one more layer blended over by its own map.
-    let mut g = super::testing::Gltf::new();
+    let mut g = gltf::testing::Gltf::new();
     let tile = |rgb: [u8; 3]| {
         (
             2u32,
@@ -1554,7 +1565,7 @@ fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
                 .collect::<Vec<u8>>(),
         )
     };
-    let texture_of = |g: &mut super::testing::Gltf, name: &str, rgb| {
+    let texture_of = |g: &mut gltf::testing::Gltf, name: &str, rgb| {
         g.material(name, [1.0; 4], Some(tile(rgb)), json!({}));
         g.json["textures"].as_array().unwrap().len() - 1
     };
@@ -1587,7 +1598,7 @@ fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
             "weights": { "index": weights_b },
         } } }),
     );
-    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let (p, n, uv, i) = gltf::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     let (a, b, c, d) = (
         g.floats(&flat(&p), 3),
@@ -1685,8 +1696,8 @@ fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
             .all(|w| !w.contains("no Empty named"))
     );
 
-    let mut g = super::testing::Gltf::new();
-    let (p, _, _, i) = super::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
+    let mut g = gltf::testing::Gltf::new();
+    let (p, _, _, i) = gltf::testing::cuboid(Vec3::ZERO, Vec3::new(4.0, 1.0, 4.0));
     let flat: Vec<f32> = p.iter().flat_map(|v| v.to_array()).collect();
     let (a, b) = (g.floats(&flat, 3), g.uints(&i, 1));
     let mesh = g.mesh(
@@ -1713,14 +1724,14 @@ fn a_map_without_a_spawn_or_with_col_meshes_says_what_it_did() {
 #[test]
 fn a_map_brings_its_own_sun_sky_and_water() {
     let root = tempfile::tempdir().unwrap();
-    let mut g = super::testing::Gltf::new();
+    let mut g = gltf::testing::Gltf::new();
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
-    let part = |g: &mut super::testing::Gltf,
+    let part = |g: &mut gltf::testing::Gltf,
                 name: &str,
                 center: Vec3,
                 size: Vec3,
                 extras: Value| {
-        let (p, n, uv, i) = super::testing::cuboid(center, size);
+        let (p, n, uv, i) = gltf::testing::cuboid(center, size);
         let (a, b, c, d) = (
             g.floats(&flat(&p), 3),
             g.floats(&flat(&n), 3),
@@ -1766,7 +1777,7 @@ fn a_map_brings_its_own_sun_sky_and_water() {
     std::fs::write(&input, g.glb()).unwrap();
     let sky = root.path().join("sky");
     std::fs::create_dir_all(&sky).unwrap();
-    for (k, face) in super::map_environment::SKY_FACES.iter().enumerate() {
+    for (k, face) in SKY_FACES.iter().enumerate() {
         let img = image::RgbaImage::from_pixel(4, 4, image::Rgba([k as u8 * 40, 100, 200, 255]));
         img.save(sky.join(format!("{face}.png"))).unwrap();
     }
@@ -1862,7 +1873,7 @@ fn a_map_brings_its_own_sun_sky_and_water() {
 /// plain surface stays as it was.
 #[test]
 fn metal_and_glow_come_from_the_material() {
-    let doc = super::read::Document::from_bytes(
+    let doc = Document::from_bytes(
         serde_json::to_string(&json!({
             "asset": { "version": "2.0" },
             "materials": [
@@ -1883,7 +1894,7 @@ fn metal_and_glow_come_from_the_material() {
     let mut report = Report::default();
     let mut taken = BTreeSet::new();
     let mut get = |i| {
-        super::make_material(&doc, None, Some(i), "", &mut taken, &mut report)
+        make_material(&doc, None, Some(i), "", &mut taken, &mut report)
             .unwrap()
             .0
     };
@@ -1895,7 +1906,7 @@ fn metal_and_glow_come_from_the_material() {
     assert_eq!(motion.center, [0.5; 2]);
     assert_eq!(motion.rotation_rate_degrees, 180.);
     assert!(
-        super::make_material(&doc, None, Some(5), "", &mut taken, &mut report).is_err(),
+        make_material(&doc, None, Some(5), "", &mut taken, &mut report).is_err(),
         "invalid motion must be reported, never silently ignored"
     );
     // A chain of modifiers, outermost first, survives import in order.
@@ -1921,8 +1932,8 @@ fn metal_and_glow_come_from_the_material() {
 /// the mesh, and the strength kept.
 #[test]
 fn a_baked_lightmap_and_its_second_uv_set_survive_import() {
-    let mut g = super::testing::Gltf::new();
-    let (p, n, uv, i) = super::testing::cuboid(Vec3::ZERO, Vec3::splat(2.0));
+    let mut g = gltf::testing::Gltf::new();
+    let (p, n, uv, i) = gltf::testing::cuboid(Vec3::ZERO, Vec3::splat(2.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     let second: Vec<f32> = uv
         .iter()
@@ -1981,8 +1992,8 @@ fn a_baked_lightmap_and_its_second_uv_set_survive_import() {
 #[test]
 fn a_map_brings_its_own_heightmap_terrain() {
     let root = tempfile::tempdir().unwrap();
-    let mut g = super::testing::Gltf::new();
-    let (p, n, uv, i) = super::testing::cuboid(Vec3::new(0.0, 6.0, 0.0), Vec3::splat(2.0));
+    let mut g = gltf::testing::Gltf::new();
+    let (p, n, uv, i) = gltf::testing::cuboid(Vec3::new(0.0, 6.0, 0.0), Vec3::splat(2.0));
     let flat = |v: &[Vec3]| v.iter().flat_map(|v| v.to_array()).collect::<Vec<f32>>();
     let (a, b, c, d) = (
         g.floats(&flat(&p), 3),
@@ -2056,7 +2067,7 @@ fn a_map_brings_its_own_heightmap_terrain() {
 /// the shape material, and an extension nothing maps is refused by name.
 #[test]
 fn a_cutout_keeps_its_cutoff_and_sidedness_and_unmapped_extensions_are_refused() {
-    let doc = super::read::Document::from_bytes(
+    let doc = Document::from_bytes(
         serde_json::to_string(&json!({
             "asset": { "version": "2.0" },
             "materials": [
@@ -2073,7 +2084,7 @@ fn a_cutout_keeps_its_cutoff_and_sidedness_and_unmapped_extensions_are_refused()
     .unwrap();
     let mut report = Report::default();
     let mut taken = BTreeSet::new();
-    let mut get = |i| super::make_material(&doc, None, Some(i), "", &mut taken, &mut report);
+    let mut get = |i| make_material(&doc, None, Some(i), "", &mut taken, &mut report);
     let leaf = get(0).unwrap().0;
     assert_eq!(leaf.alpha_cutoff, Some(0.47));
     assert!(leaf.double_sided);
@@ -2093,7 +2104,7 @@ fn map_data_splits_the_world_mesh_by_zone_and_lists_the_zone_graph() {
     let input = root.path().join("Test Room.glb");
     std::fs::write(
         &input,
-        super::testing::room_named(false, "aa25_pipeline_generated"),
+        gltf::testing::room_named(false, "aa25_pipeline_generated"),
     )
     .unwrap();
     // The floor is one primitive of 12 triangles: the first 4 lie in zone 1, the rest in zone 2.

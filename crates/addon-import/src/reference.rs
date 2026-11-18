@@ -581,7 +581,15 @@ impl Reference {
                     continue;
                 }
                 let bytes = std::fs::read(file)?;
-                let Ok(mesh) = serde_json::from_slice::<bri_content::brick::Brick>(&bytes) else {
+                // The overhauled importer ships bricks as .glb; legacy
+                // packages still hold their .brick.json beside them.
+                let mesh = if output.to_ascii_lowercase().ends_with(".glb") {
+                    crate::gltf::brick_from_glb(&bytes, native_id)
+                } else {
+                    serde_json::from_slice::<bri_content::brick::Brick>(&bytes)
+                        .map_err(anyhow::Error::from)
+                };
+                let Ok(mesh) = mesh else {
                     continue;
                 };
                 if mesh.id != native_id || mesh.validate().is_err() {

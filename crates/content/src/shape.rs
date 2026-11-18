@@ -203,6 +203,12 @@ pub struct Material {
     pub wrap_u: bool,
     pub wrap_v: bool,
     pub blend: String,
+    /// A solid colour where the model carries no picture for this material
+    /// (glTF's `baseColorFactor`): linear RGBA, with glTF's default white
+    /// left as None. Drawn lit like a texture; a bound picture wins over it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[f32; 4]>,
+
     /// Solid cutout geometry: discard texels below this alpha, then write depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha_cutoff: Option<f32>,

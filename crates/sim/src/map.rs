@@ -437,15 +437,25 @@ impl NativeMap {
         {
             let id = node.asset.as_ref().context("Missing interior reference")?;
             if !interiors.contains_key(id) {
-                let file = native_file(
-                    root,
-                    bundle["assets"][id]
-                        .as_str()
-                        .context("Missing native interior file")?,
-                )?;
-                let interior: Interior = bri_content::strict::from_slice(&std::fs::read(file)?)?;
-                interior.validate()?;
-                interiors.insert(id.clone(), interior);
+                let name = bundle["assets"][id]
+                    .as_str()
+                    .context("Missing native interior file")?
+                    .to_owned();
+                // A self-contained interior: geometry and collision in one
+                // .glb; legacy bundles still carry the JSON beside them.
+                if name.ends_with(".glb") {
+                    let doc = bri_gltf::Document::open(&native_file(root, &name)?)?;
+                    interiors.insert(
+                        id.clone(),
+                        bri_gltf::interior_glb::InteriorGlb::from_document(&doc)?.interior,
+                    ); // validated inside from_document
+                } else {
+                    let interior: Interior = bri_content::strict::from_slice(
+                        &std::fs::read(native_file(root, &name)?)?,
+                    )?;
+                    interior.validate()?;
+                    interiors.insert(id.clone(), interior);
+                }
             }
         }
         let lift = scene.floor_lift(|id| interiors.get(id));

@@ -9,12 +9,39 @@ description = "Offline importer: one legacy Blockland Add-On to a native package
 name = "bri-import-addon"
 path = "src/main.rs"
 
+# TEMPORARY: one-shot content migrator; delete this entry (and the file) once
+# all installed content has been converted to GLB.
+[[bin]]
+name = "migrate-content"
+path = "src/bin/migrate-content.rs"
+
+# TEMPORARY: one-shot renamer that restores original Blockland file names for
+# hash-named assets; delete this entry (and the file) once content is renamed.
+[[bin]]
+name = "rename-content"
+path = "src/bin/rename-content.rs"
+
+# TEMPORARY: one-shot migrator that converts interior JSON files to
+# self-contained .glb files and gives baked lightmaps structural names;
+# delete this entry (and the file) once all installed content is converted.
+[[bin]]
+name = "convert-map-interiors"
+path = "src/bin/convert-map-interiors.rs"
+
+# TEMPORARY: one-shot backfill that puts a model's presentation-table texture
+# references inside its .glb (a solid colour as baseColorFactor, a patterned
+# picture embedded); delete this entry (and the file) once content is done.
+[[bin]]
+name = "backfill-glb-textures"
+path = "src/bin/backfill-glb-textures.rs"
+
 [dependencies]
 bri-console = { path = "../console" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bri-content = { path = "../content" }
+bri-gltf = { path = "../gltf" }
 bri-convert = { path = "../convert" }
 bri-package = { path = "../package" }
 bri-package-runtime = { path = "../package-runtime" }

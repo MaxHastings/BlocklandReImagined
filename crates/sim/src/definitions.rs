@@ -319,9 +319,16 @@ impl Definitions {
                         !file.contains(['/', '\\', ':']),
                         "Invalid native mesh filename"
                     );
-                    let mesh: Brick = serde_json::from_slice(&std::fs::read(content.join(file))?)?;
-                    mesh.validate()?;
-                    ensure!(mesh.id == entry.mesh_id, "Mesh identity mismatch");
+                    // Brick geometry ships as .glb (the quads and grid facts in
+                    // glTF extras); a legacy .brick.json is no longer read.
+                    ensure!(
+                        file.to_ascii_lowercase().ends_with(".glb"),
+                        "Brick {} mesh {}: brick geometry must be a .glb; convert it with the Add-On importer",
+                        entry.id,
+                        file
+                    );
+                    let bytes = std::fs::read(content.join(file))?;
+                    let mesh: Brick = bri_gltf::brick_from_glb(&bytes, &entry.mesh_id)?;
                     let collision = own.context("Missing native collision recipe")?;
                     let shape = bri_physics::content::collider(&collision)?
                         .build()
@@ -584,25 +591,26 @@ mod tests {
         catalog(
             &dir,
             &[entry(ids[0], "plate", None), coffin],
-            &ids.map(|id| (id, json!({ "native_mesh": "plate.brick.json" }))),
+            &ids.map(|id| (id, json!({ "native_mesh": "plate.glb" }))),
             &ids,
         );
+        let plate: bri_content::brick::Brick = serde_json::from_value(json!({
+            "schema_version": 1, "id": "plate", "footprint_studs": [1, 1],
+            "height_plates": 1, "attachment_rows": ["b"], "collision_boxes": [],
+            "needs_external_collision": false, "coverage": null, "quads": [{
+                "face": "omni", "surface": "side", "colors": null,
+                "vertices": [
+                    { "position": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                    { "position": [1.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                    { "position": [1.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                    { "position": [0.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] }
+                ]
+            }]
+        }))
+        .unwrap();
         std::fs::write(
-            dir.join("plate.brick.json"),
-            serde_json::to_vec(&json!({
-                "schema_version": 1, "id": "plate", "footprint_studs": [1, 1],
-                "height_plates": 1, "attachment_rows": ["b"], "collision_boxes": [],
-                "needs_external_collision": false, "coverage": null, "quads": [{
-                    "face": "omni", "surface": "side", "colors": null,
-                    "vertices": [
-                        { "position": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
-                        { "position": [1.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
-                        { "position": [1.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
-                        { "position": [0.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] }
-                    ]
-                }]
-            }))
-            .unwrap(),
+            dir.join("plate.glb"),
+            bri_gltf::export_brick(&plate).unwrap(),
         )
         .unwrap();
         let loaded = Definitions::load(&dir, &dir).unwrap();
@@ -619,28 +627,26 @@ mod tests {
         catalog(
             &base,
             &[entry("v20/brick/window", "v20/window.blb", None)],
-            &[(
-                "v20/brick/window",
-                json!({ "native_mesh": "window.brick.json" }),
-            )],
+            &[("v20/brick/window", json!({ "native_mesh": "window.glb" }))],
             &["v20/brick/window"],
         );
+        let window: bri_content::brick::Brick = serde_json::from_value(json!({
+            "schema_version": 1, "id": "v20/window.blb", "footprint_studs": [4, 1],
+            "height_plates": 3, "attachment_rows": ["bbbb", "bbbb", "bbbb"], "collision_boxes": [],
+            "needs_external_collision": false, "coverage": null, "quads": [{
+                "face": "omni", "surface": "side", "colors": null,
+                "vertices": [
+                    { "position": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                    { "position": [1.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                    { "position": [1.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
+                    { "position": [0.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] }
+                ]
+            }]
+        }))
+        .unwrap();
         std::fs::write(
-            base.join("window.brick.json"),
-            serde_json::to_vec(&json!({
-                "schema_version": 1, "id": "v20/window.blb", "footprint_studs": [4, 1],
-                "height_plates": 3, "attachment_rows": ["bbbb", "bbbb", "bbbb"], "collision_boxes": [],
-                "needs_external_collision": false, "coverage": null, "quads": [{
-                    "face": "omni", "surface": "side", "colors": null,
-                    "vertices": [
-                        { "position": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
-                        { "position": [1.0, 0.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
-                        { "position": [1.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] },
-                        { "position": [0.0, 1.0, 0.0], "normal": [0.0, 0.0, 1.0], "uv": [0.0, 0.0] }
-                    ]
-                }]
-            }))
-            .unwrap(),
+            base.join("window.glb"),
+            bri_gltf::export_brick(&window).unwrap(),
         )
         .unwrap();
         let mirror = json!({ "faces": ["north", "south"], "depth": 0.5 });
