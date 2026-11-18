@@ -130,10 +130,16 @@ impl EffectsPack {
                 "Effects decoded image budget exceeded"
             );
             let bytes = bounded(&root, file, 32 << 20)?;
-            ensure!(
-                digest(&bytes) == record.sha256,
-                "Texture checksum mismatch: {id}"
-            );
+            let actual = digest(&bytes);
+            if actual != record.sha256 {
+                let target = root.join(file).canonicalize()?;
+                bri_package::repin::verify(
+                    format!("Texture checksum mismatch: {id}"),
+                    &target,
+                    &actual,
+                    &record.sha256,
+                )?;
+            }
             let reader =
                 image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
             ensure!(

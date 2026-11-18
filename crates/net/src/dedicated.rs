@@ -196,10 +196,16 @@ fn load_packages_in(
     avatar.validate()?;
     // The Blockhead's mount points (`mountObject`), from its rig.
     let bytes = std::fs::read(avatar_dir.join(&avatar.rig))?;
-    anyhow::ensure!(
-        format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes)) == avatar.rig_sha256,
-        "Avatar rig checksum mismatch"
-    );
+    let actual = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+    if actual != avatar.rig_sha256 {
+        let target = avatar_dir.join(&avatar.rig).canonicalize()?;
+        bri_package::repin::verify(
+            "Avatar rig checksum mismatch",
+            &target,
+            &actual,
+            &avatar.rig_sha256,
+        )?;
+    }
     let rig: bri_content::avatar::Rig = serde_json::from_slice(&bytes)?;
     rig.validate()?;
     let body_mounts = bri_sim::session::shape_mount_points(&rig.shape);

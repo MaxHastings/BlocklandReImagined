@@ -84,7 +84,7 @@ fn game() -> Result<()> {
     }
     if args.first().is_some_and(|a| a == "--help") {
         println!(
-            "Blockland ReImagined {}\nUsage: bri-client [--run] [native-content-directory] [client-state-directory]\n       bri-client --check [native-content-directory] [client-state-directory]\nWith no arguments the game opens with the content beside it.\n--check validates startup content/settings silently without a window or audio device; it changes nothing unless BRI_INSTALL_DEFAULT_ADD_ONS=1 lets it install a checkout's default Add-Ons first.\n--version prints the build's version.",
+            "Blockland ReImagined {}\nUsage: bri-client [--run] [native-content-directory] [client-state-directory]\n       bri-client --check [native-content-directory] [client-state-directory]\nWith no arguments the game opens with the content beside it.\n--check validates startup content/settings silently without a window or audio device; it changes nothing unless BRI_INSTALL_DEFAULT_ADD_ONS=1 lets it install a checkout's default Add-Ons first, or self-heal re-stamps the stale sha256 pins of edited files in a source checkout (BRI_REPIN_ON_EDIT=0 disables).\n--version prints the build's version.",
             bri_client::updates::version()
         );
         return Ok(());
@@ -120,6 +120,10 @@ fn game() -> Result<()> {
     // between a private preview and a release must not evict the other's cache.
     if let Ok(cache) = bri_package::environment::content_hash_cache_file(&content, &state) {
         bri_package::environment::remember_file_hashes_in(cache);
+    }
+    // Edited checkout content re-stamps its own stale pins as it loads.
+    if bri_package::repin::arm(&content) {
+        bri_console::echo("Content self-heal on: editing an installed file re-stamps its sha256 pin automatically.");
     }
     if mode == "--check" {
         // Validation leaves the content as it is (the push gate checks the

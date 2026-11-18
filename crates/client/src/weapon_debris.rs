@@ -263,11 +263,16 @@ impl WeaponDebrisAssets {
         let mut shapes = BTreeMap::new();
         for resource in &pack.models {
             let bytes = crate::materials::read_resource(&root, &resource.file, 32 * 1024 * 1024)?;
-            ensure!(
-                sha(&bytes) == resource.native_sha256,
-                "debris model checksum mismatch: {}",
-                resource.id
-            );
+            let actual = sha(&bytes);
+            if actual != resource.native_sha256 {
+                let target = root.join(&resource.file).canonicalize()?;
+                bri_package::repin::verify(
+                    format!("debris model checksum mismatch: {}", resource.id),
+                    &target,
+                    &actual,
+                    &resource.native_sha256,
+                )?;
+            }
             let shape: Shape = serde_json::from_slice(&bytes)?;
             shape.validate()?;
             vertex_budget += shape

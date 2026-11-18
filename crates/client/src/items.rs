@@ -404,10 +404,18 @@ pub(crate) fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) 
         "Invalid native SHA256"
     );
     let bytes = crate::materials::read_resource(root, file, limit)?;
-    ensure!(
-        hash(&bytes) == expected,
-        "Item resource checksum mismatch: {file}"
-    );
+    let actual = hash(&bytes);
+    if actual != expected {
+        // `read_resource` already proved the path stays inside `root`, so
+        // the canonical target is this join; a checkout re-stamps its pin.
+        let target = root.join(file).canonicalize()?;
+        bri_package::repin::verify(
+            format!("Item resource checksum mismatch: {file}"),
+            &target,
+            &actual,
+            expected,
+        )?;
+    }
     Ok(bytes)
 }
 /// A `.glb`'s bytes as a native shape with the PNGs its materials carry, in

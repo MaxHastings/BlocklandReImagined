@@ -680,3 +680,37 @@ Verified: headless `bri-client --check content <tmp>` with
 `BRI_INSTALL_DEFAULT_ADD_ONS=1` installed the three GLB packs into
 content/addons and passed startup validation (hash-checked loads included);
 no `.shape.json` remains in those packs, add-on health report clean for them.
+
+## 2026-11-17 — Self-heal stale content pins on launch (source checkouts)
+
+Editing an installed asset (e.g. fixing a vertex in a jeep GLB) used to leave
+its manifest pin stale; the next launch failed with a checksum mismatch until
+a hash-refresh script was run. Running from a source checkout, the client and
+dedicated server now re-stamp pins for edited files automatically at load — no
+script needed. Releases stay strict on both sides (`BRI_REPIN_ON_EDIT=1` opts
+in anywhere as an explicit integrity bypass).
+
+- New module `bri_package::repin` (arm/verify/restamp walker over installed
+  manifests). Ref keys `{file, path, native_mesh, native_file}` + live pin slots
+  `{sha256, native_sha256}`, plus `K`/`K_sha256` pairs (avatar `rig`). Merged
+  weapons resources resolve via the sibling `"package"` field. Never touches
+  provenance (`source`/`source_sha256`) or aggregate pins (`weapons_sha256`,
+  `item_physics_sha256`, fx `library_sha256`, lighting bundles). Manifest
+  rewrite is atomic (temp + rename) and byte-identical to the installed format
+  except the pin value.
+- Hooked at the ten verification sites that matter for modding: item models and
+  physics (`items::checked_read`), brick images, avatar rig + textures,
+  weapon-debris model, four icon/preview sites in `content.rs`, fx pack
+  textures, server avatar rig. Deliberately still strict (documented in the
+  module): weather/sky/water images, fx library aggregate, map lighting
+  bundles, cross-package physics pins.
+- Arming: client (`main.rs`) and `bri-server` print "Content self-heal on" when
+  active; env `BRI_REPIN_ON_EDIT` (unset = auto via checkout detection,
+  `0` off, `1` force).
+
+Verified: bri-package suite 81/81 (sibling-pin, merged-package, idempotency and
+strict-vs-heal cases); headless `bri-client --check content <tmp>` EXIT=0.
+End-to-end demo: corrupted one real pin in `vehicle_stunt_plane`'s presentation
+(`stuntplanetire.glb`, first digit flipped) → next launch re-pinned it to the
+file's actual sha256, and the diff against the pre-corruption manifest is empty
+(zero formatting churn); a second launch is idempotent (no restamp).

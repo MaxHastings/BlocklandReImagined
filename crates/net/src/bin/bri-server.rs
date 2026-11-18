@@ -42,6 +42,10 @@ async fn main() -> Result<()> {
     {
         println!("Installed the default Add-Ons {}.", done.ids().join(", "));
     }
+    // Edited checkout content re-stamps its own stale pins as it loads.
+    if bri_package::repin::arm(&content_root) {
+        println!("Content self-heal on: editing an installed file re-stamps its sha256 pin automatically.");
+    }
     let state_dir = PathBuf::from(&args[2]);
     std::fs::create_dir_all(&state_dir)?;
     // The last run did not stop cleanly: what it kept is that run's world.

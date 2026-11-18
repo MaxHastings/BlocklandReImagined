@@ -18,8 +18,8 @@ bytemuck.workspace = true
 image = { workspace = true, features = ["jpeg"] }
 wgpu.workspace = true
 bri-content = { path = "../content" }
+bri-package = { path = "../package" }
 rayon = "1.12"
 
 [dev-dependencies]
-bri-package = { path = "../package" }
 pollster.workspace = true

@@ -255,10 +255,16 @@ impl AvatarAssets {
         let package: Package = serde_json::from_slice(&read("avatar.json", 8 * 1024 * 1024)?)?;
         package.validate()?;
         let bytes = read(&package.rig, 64 * 1024 * 1024)?;
-        ensure!(
-            format!("{:x}", Sha256::digest(&bytes)) == package.rig_sha256,
-            "Avatar rig checksum mismatch"
-        );
+        let actual = format!("{:x}", Sha256::digest(&bytes));
+        if actual != package.rig_sha256 {
+            let target = root.join(&package.rig).canonicalize()?;
+            bri_package::repin::verify(
+                "Avatar rig checksum mismatch",
+                &target,
+                &actual,
+                &package.rig_sha256,
+            )?;
+        }
         let rig: Rig = serde_json::from_slice(&bytes)?;
         rig.validate()?;
         ensure!(
@@ -273,10 +279,16 @@ impl AvatarAssets {
         let mut images = BTreeMap::new();
         for (id, texture) in &package.textures {
             let bytes = read(&texture.file, 16 * 1024 * 1024)?;
-            ensure!(
-                format!("{:x}", Sha256::digest(&bytes)) == texture.sha256,
-                "Avatar texture checksum mismatch: {id}"
-            );
+            let actual = format!("{:x}", Sha256::digest(&bytes));
+            if actual != texture.sha256 {
+                let target = root.join(&texture.file).canonicalize()?;
+                bri_package::repin::verify(
+                    format!("Avatar texture checksum mismatch: {id}"),
+                    &target,
+                    &actual,
+                    &texture.sha256,
+                )?;
+            }
             let dimensions = image::ImageReader::with_format(
                 std::io::Cursor::new(&bytes),
                 image::ImageFormat::Png,

@@ -20,6 +20,7 @@ pub mod json_edit;
 pub mod library;
 pub mod packages;
 pub mod path;
+pub mod repin;
 pub mod setting;
 pub mod sync;
 pub mod testing;

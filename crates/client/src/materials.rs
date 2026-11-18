@@ -205,11 +205,16 @@ fn load_image(root: &Path, entry: &Image) -> Result<SceneImage> {
 /// `entry`'s image, read from `relative` under `root`.
 fn load_image_at(root: &Path, relative: &str, entry: &Image) -> Result<SceneImage> {
     let bytes = read_resource(root, relative, 32 * 1024 * 1024)?;
-    ensure!(
-        format!("{:x}", Sha256::digest(&bytes)) == entry.sha256,
-        "Native brick image checksum mismatch: {}",
-        entry.path
-    );
+    let actual = format!("{:x}", Sha256::digest(&bytes));
+    if actual != entry.sha256 {
+        let target = root.join(relative).canonicalize()?;
+        bri_package::repin::verify(
+            format!("Native brick image checksum mismatch: {}", entry.path),
+            &target,
+            &actual,
+            &entry.sha256,
+        )?;
+    }
     let dimensions =
         image::ImageReader::with_format(std::io::Cursor::new(&bytes), image::ImageFormat::Png)
             .into_dimensions()?;

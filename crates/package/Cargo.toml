@@ -12,3 +12,8 @@ serde_json.workspace = true
 sha2.workspace = true
 zip.workspace = true
 bri-files = { path = "../files" }
+bri-content = { path = "../content" }
+bri-console = { path = "../console" }
+
+[dev-dependencies]
+tempfile.workspace = true

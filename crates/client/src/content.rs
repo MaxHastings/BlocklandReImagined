@@ -858,10 +858,15 @@ fn install_map_preview(
         );
         let path = file(root, &image.file, 4 * 1024 * 1024)?;
         let bytes = fs::read(&path)?;
-        ensure!(
-            format!("{:x}", sha2::Sha256::digest(&bytes)) == image.sha256,
-            "Map preview checksum mismatch"
-        );
+        let actual = format!("{:x}", sha2::Sha256::digest(&bytes));
+        if actual != image.sha256 {
+            bri_package::repin::verify(
+                "Map preview checksum mismatch",
+                &path,
+                &actual,
+                &image.sha256,
+            )?;
+        }
         let mut reader =
             image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
         let expected = image::ImageFormat::from_path(&path)?;
@@ -1166,10 +1171,15 @@ fn install_death_icons(
                 INDEX_LIMIT,
             )?;
             let bytes = fs::read(&path)?;
-            ensure!(
-                format!("{:x}", sha2::Sha256::digest(&bytes)) == resource.sha256,
-                "Death icon checksum mismatch: {id}"
-            );
+            let actual = format!("{:x}", sha2::Sha256::digest(&bytes));
+            if actual != resource.sha256 {
+                bri_package::repin::verify(
+                    format!("Death icon checksum mismatch: {id}"),
+                    &path,
+                    &actual,
+                    &resource.sha256,
+                )?;
+            }
             let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
                 .with_guessed_format()?
                 .into_dimensions()?;
@@ -1238,11 +1248,15 @@ fn install_print_icons(schema: &mut UiPack, dir: &str, assets: &Path) {
         };
         let loaded = file(assets, &icon.path, INDEX_LIMIT).and_then(|path| {
             let bytes = fs::read(&path)?;
-            ensure!(
-                format!("{:x}", sha2::Sha256::digest(&bytes)) == icon.sha256,
-                "Print icon checksum mismatch: {}",
-                print.id
-            );
+            let actual = format!("{:x}", sha2::Sha256::digest(&bytes));
+            if actual != icon.sha256 {
+                bri_package::repin::verify(
+                    format!("Print icon checksum mismatch: {}", print.id),
+                    &path,
+                    &actual,
+                    &icon.sha256,
+                )?;
+            }
             Ok(path)
         });
         match loaded {
@@ -1380,11 +1394,15 @@ fn install_package_bricks(
         let loaded = icons.get(&entry.icon_source).map(|image| -> Result<_> {
             let path = file(catalog_dir, &image.file, INDEX_LIMIT)?;
             let bytes = fs::read(&path)?;
-            ensure!(
-                format!("{:x}", sha2::Sha256::digest(&bytes)) == image.sha256,
-                "Brick icon checksum mismatch: {}",
-                entry.id
-            );
+            let actual = format!("{:x}", sha2::Sha256::digest(&bytes));
+            if actual != image.sha256 {
+                bri_package::repin::verify(
+                    format!("Brick icon checksum mismatch: {}", entry.id),
+                    &path,
+                    &actual,
+                    &image.sha256,
+                )?;
+            }
             Ok(bri_ui::schema::ImageEntry {
                 file: path.to_string_lossy().into_owned(),
                 ..image.clone()
