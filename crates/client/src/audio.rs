@@ -94,7 +94,12 @@ impl SoundLookup for PreparedSounds {
     }
 }
 impl PreparedSounds {
-    pub(crate) fn load(bank: Arc<SoundBank>, pack: &bri_weapons::Pack, root: &Path) -> Self {
+    pub(crate) fn load(
+        bank: Arc<SoundBank>,
+        pack: &bri_weapons::Pack,
+        content_root: &Path,
+        base_root: &Path,
+    ) -> Self {
         let mut prepared = Self {
             bank: bank.clone(),
             section_audio: pack.effects.brick_debris_audio.is_some(),
@@ -110,7 +115,7 @@ impl PreparedSounds {
         };
         for (profile, def) in &pack.sounds {
             if def.variants.is_empty() {
-                prepared.load_clip(profile, def, root);
+                prepared.load_clip(profile, def, content_root, base_root);
             }
         }
         for (profile, def) in &pack.sounds {
@@ -140,12 +145,18 @@ impl PreparedSounds {
                 prepared.failed.remove(profile);
                 prepared.variants.insert(profile.clone(), choices);
             } else if !def.variants.is_empty() {
-                prepared.load_clip(profile, def, root);
+                prepared.load_clip(profile, def, content_root, base_root);
             }
         }
         prepared
     }
-    fn load_clip(&mut self, profile: &str, def: &bri_weapons::SoundDef, root: &Path) {
+    fn load_clip(
+        &mut self,
+        profile: &str,
+        def: &bri_weapons::SoundDef,
+        content_root: &Path,
+        base_root: &Path,
+    ) {
         let (near, far) = PACK_SOUND_RANGE;
         // The game's own file, played from the bank's copy.
         let stock = def.stock.then(|| {
@@ -154,7 +165,7 @@ impl PreparedSounds {
                 .map(|clip| SoundAsset::world(profile, clip.clone(), near, far))
                 .ok_or_else(|| format!("the game has no sound {}", def.file))
         });
-        let dir = bri_weapons::sound_root(root, def);
+        let dir = bri_weapons::sound_root(content_root, base_root, def);
         let loaded = stock.unwrap_or_else(|| {
             bri_package::path::inside(&dir, &def.file).and_then(|path| {
                 if def.music {
@@ -1286,12 +1297,22 @@ impl ClientAudio {
                 .is_ok_and(|asset| asset.playback.looping),
         }
     }
-    /// Decode the sounds `pack` ships (Add-On weapons), each read from
-    /// beside its own `weapons.json` under `root` (the base weapons
-    /// folder). A sound that fails to load is a warning, never an error:
-    /// its weapon plays silently.
-    pub fn set_pack_sounds(&mut self, pack: &bri_weapons::Pack, root: &Path) {
-        self.install_pack_sounds(PreparedSounds::load(self.sound_bank(), pack, root));
+    /// Decode the sounds `pack` ships (Add-On weapons), each read from its
+    /// package's directory under `content_root` when merged, else beside
+    /// the base pack's own `weapons.json` under `root`. A sound that fails
+    /// to load is a warning, never an error: its weapon plays silently.
+    pub fn set_pack_sounds(
+        &mut self,
+        pack: &bri_weapons::Pack,
+        content_root: &Path,
+        root: &Path,
+    ) {
+        self.install_pack_sounds(PreparedSounds::load(
+            self.sound_bank(),
+            pack,
+            content_root,
+            root,
+        ));
     }
     pub(crate) fn sound_bank(&self) -> Arc<SoundBank> {
         self.runtime.bank().clone()
@@ -2004,7 +2025,7 @@ mod tests {
                 "sustain":{"loop_start_seconds":0.1,"attack_seconds":0.05,"release_seconds":0.15}
             }))?,
         );
-        audio.set_pack_sounds(&pack, &fx.root);
+        audio.set_pack_sounds(&pack, &fx.root, &fx.root);
         assert!(audio.warnings.is_empty(), "{:?}", audio.warnings);
         let wanted = BTreeMap::from([(1, (profile.into(), [0., 0., -2.], true))]);
         for _ in 0..60 {
@@ -2978,7 +2999,7 @@ mod tests {
             "addon:sound/gone".into(),
             def("base/data/sound/missing.wav"),
         );
-        audio.set_pack_sounds(&pack, &fx.root);
+        audio.set_pack_sounds(&pack, &fx.root, &fx.root);
         let (asset, volume) = &audio.pack_sounds[boom];
         assert_eq!(*volume, 0.5);
         assert_eq!(
@@ -3120,7 +3141,7 @@ mod tests {
         let mut pack: bri_weapons::Pack = serde_json::from_value(value)?;
         pack.validate()?;
         let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
-        audio.set_pack_sounds(&pack, dir.path());
+        audio.set_pack_sounds(&pack, dir.path(), dir.path());
         let a = audio.pack_sounds["a"].0.clone();
         let b = audio.pack_sounds["b"].0.clone();
         let choices = &audio.pack_sound_variants["hit"];
@@ -3165,7 +3186,7 @@ mod tests {
         );
         let mut missing = pack.clone();
         missing.sounds.get_mut("b").unwrap().file = "missing.wav".into();
-        audio.set_pack_sounds(&missing, dir.path());
+        audio.set_pack_sounds(&missing, dir.path(), dir.path());
         assert!(audio.has_sound("hit"));
         assert_eq!(audio.pack_sound_variants["hit"].len(), 1);
         assert!(Arc::ptr_eq(
@@ -3174,7 +3195,7 @@ mod tests {
         ));
         assert!(audio.pack_sound_failures.contains_key("b"));
         pack.sounds.get_mut("hit").unwrap().variants.clear();
-        audio.set_pack_sounds(&pack, dir.path());
+        audio.set_pack_sounds(&pack, dir.path(), dir.path());
         assert!(!audio.pack_sound_variants.contains_key("hit"));
         assert!((audio.pack_asset("hit").unwrap().1 - 0.5).abs() < 1e-6);
         Ok(())
@@ -3222,7 +3243,7 @@ mod tests {
         let heard = |distance: f32| -> Result<f32> {
             let mut audio =
                 ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
-            audio.set_pack_sounds(&pack, dir.path());
+            audio.set_pack_sounds(&pack, dir.path(), dir.path());
             assert!(audio.warnings.is_empty(), "{:?}", audio.warnings);
             audio.profile(blast, Placement::World([0.0, 0.0, -distance]));
             audio.tick(0.2, Listener::default());
@@ -3326,7 +3347,7 @@ mod tests {
                         "spatial":{"reference_distance":reference,"max_distance":maximum}}
                 }
             }))?;
-            audio.set_pack_sounds(&pack, source.path());
+            audio.set_pack_sounds(&pack, source.path(), source.path());
             assert!(
                 audio.pack_sound_failures.is_empty(),
                 "{:?}",
@@ -3392,7 +3413,7 @@ mod tests {
                 "test:inside":{"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true,"music":true,"environment":"interior"}
             }
         }))?;
-        audio.set_pack_sounds(&pack, &fx.root);
+        audio.set_pack_sounds(&pack, &fx.root, &fx.root);
         let measure =
             |audio: &mut ClientAudio, track: &str, exposure: crate::sound_carry::Exposure, room| {
                 audio.play_ambient(&bri_sim::session::AmbientPlay {
@@ -3466,7 +3487,7 @@ mod tests {
                 "test:neutral": {"file":crate::testing::audio::TONE_PATH,"stock":true,"looping":true}
             }
         }))?;
-        audio.set_pack_sounds(&pack, &fx.root);
+        audio.set_pack_sounds(&pack, &fx.root, &fx.root);
         assert_eq!(
             audio.pack_sounds["test:exterior"]
                 .0
@@ -3535,7 +3556,7 @@ mod recorded_brick_tests {
             &mut Settings::default(),
             OutputKind::Offline,
         )?;
-        audio.set_pack_sounds(&pack, &root);
+        audio.set_pack_sounds(&pack, &root, &root);
         assert!(
             audio.pack_sound_failures.is_empty(),
             "{:?}",

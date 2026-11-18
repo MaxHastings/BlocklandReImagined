@@ -165,7 +165,7 @@ fn actual_tools_sound_on_misses_keep_contacts_and_mix_for_both_observers() -> Re
     let mut observer =
         ClientAudio::load(&audio_root, &mut Settings::default(), OutputKind::Offline)?;
     for audio in [&mut local, &mut observer] {
-        audio.set_pack_sounds(&pack, &weapons_root);
+        audio.set_pack_sounds(&pack, &root, &weapons_root);
         for cue in &miss_cues {
             audio.cue(cue);
         }

@@ -201,8 +201,8 @@ Recovery cannot reconstruct light metadata that the original map never retained.
 For an existing map pack, without reimporting the original installation:
 
 ```sh
-cargo run --release --locked -p bri-render --bin prepare_lighting -- content/map-bundle-017
-cargo run --release --locked -p bri-render --bin prepare_lighting -- content/map-bundle-017 --check
+cargo run --release --locked -p bri-render --bin prepare_lighting -- content/default-pack/map-bundle-017
+cargo run --release --locked -p bri-render --bin prepare_lighting -- content/default-pack/map-bundle-017 --check
 ```
 
 The sidecar is checked against the bundle identity and travels in the private

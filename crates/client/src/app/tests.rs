@@ -1601,7 +1601,7 @@ impl Mounts {
         use bri_vehicles::testing as vt;
         let scratch = crate::testing::ScratchDir::new("app-mounts")?;
         crate::testing::vehicles::write_pack(scratch.path())?;
-        let assets = crate::vehicles::VehicleAssets::load(scratch.path())?;
+        let assets = crate::vehicles::VehicleAssets::load(scratch.path(), scratch.path())?;
         Ok(Self {
             assets,
             // The ball has no seat; the tumble body's seat has no controls.
@@ -1620,7 +1620,7 @@ impl Mounts {
             "vehicles",
         );
         Ok(Self {
-            assets: crate::vehicles::VehicleAssets::load(&root)?,
+            assets: crate::vehicles::VehicleAssets::load(&root, &root)?,
             predicted: [
                 ("v20.vehicle.jeepvehicle", true),
                 ("v20.vehicle.tankvehicle", true),

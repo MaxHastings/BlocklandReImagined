@@ -110,8 +110,12 @@ fn client_loads_imported_packages_beside_the_base_game(f: &ContentRoot) -> anyho
             .bounds
             .contains_key("weapon_synthetic_blaster:weapon/blasteritem")
     );
-    bri_client::explosion_shapes::ExplosionShapes::load(&content.weapons.pack, &paths.weapons)
-        .unwrap();
+    bri_client::explosion_shapes::ExplosionShapes::load(
+        &content.weapons.pack,
+        &paths.root,
+        &paths.weapons,
+    )
+    .unwrap();
     // The imported brick is in the brick menu under the category it declares,
     // with its own icon.
     let pad = content
@@ -149,8 +153,12 @@ fn client_loads_imported_packages_beside_the_base_game(f: &ContentRoot) -> anyho
                 .iter()
                 .any(|d| d.id == "vehicle_blocko_car:vehicle/blockocarvehicle")
         );
-        bri_client::vehicles::VehicleAssets::load_with(&paths.vehicles, &paths.vehicle_extras)
-            .unwrap();
+        bri_client::vehicles::VehicleAssets::load_with(
+            &paths.root,
+            &paths.vehicles,
+            &paths.vehicle_extras,
+        )
+        .unwrap();
     }
     Ok(())
 }

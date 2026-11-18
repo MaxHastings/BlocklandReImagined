@@ -97,7 +97,11 @@ impl App {
         let weather = crate::weather::ClientWeather::load(&content.paths.weather, &mut saved)?;
         let graphics = crate::graphics::Graphics::from_settings(&saved);
         let mut audio = crate::audio::ClientAudio::load(&content.paths.audio, &mut saved, output)?;
-        audio.set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
+        audio.set_pack_sounds(
+            &content.weapons.pack,
+            &content.paths.root,
+            &content.paths.weapons,
+        );
         let mut brick_debris = crate::brick_debris::BrickDebris::new();
         brick_debris.set_audio_policy(content.weapons.pack.effects.brick_debris_audio.as_ref());
         let voice = crate::voice::VoiceClient::new(&saved)?;

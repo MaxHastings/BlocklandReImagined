@@ -138,7 +138,7 @@ fn composed_body_parts_and_grips_follow_the_same_pose_and_shared_models_keep_the
     pack.definitions.push(sibling.clone());
     pack.validate()?;
     std::fs::write(path, serde_json::to_vec(&pack)?)?;
-    let mut assets = VehicleAssets::load(dir.path())?;
+    let mut assets = VehicleAssets::load(dir.path(), dir.path())?;
     let d = assets.definition(&car.id).unwrap().clone();
     let mut client = ClientVehicles {
         clock: 60.,

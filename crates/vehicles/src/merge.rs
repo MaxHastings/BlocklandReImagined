@@ -5,12 +5,13 @@ use bri_package::health::{Kind, Problem, package_folder};
 use std::path::{Path, PathBuf};
 
 /// The directory an asset's `path` is relative to: its package's, when the
-/// pack was merged, else the pack's own `root`. Base packages sit directly
-/// under the content root, so a package directory resolves beside `root`.
-pub fn asset_root(root: &Path, asset: &Asset) -> PathBuf {
+/// pack was merged (content-root-relative), else the base pack's own root.
+/// Base packs sit under the content root's `default-pack`, so a package
+/// directory resolves against the content root, not beside the base root.
+pub fn asset_root(content_root: &Path, base_root: &Path, asset: &Asset) -> PathBuf {
     match &asset.package {
-        Some(dir) => root.parent().unwrap_or(root).join(dir),
-        None => root.to_path_buf(),
+        Some(dir) => content_root.join(dir),
+        None => base_root.to_path_buf(),
     }
 }
 

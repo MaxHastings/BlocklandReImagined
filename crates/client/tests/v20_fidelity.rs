@@ -32,7 +32,8 @@ fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
         &mut bri_ui::api::Settings::default(),
         OutputKind::Offline,
     )?;
-    audio.set_pack_sounds(&weapons, &content("weapons"));
+    let content_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    audio.set_pack_sounds(&weapons, &content_root, &content("weapons"));
     let mut gaps = Vec::new();
     let mut sound = |owner: &str, name: &str| {
         if !name.is_empty() && !audio.has_sound(name) {

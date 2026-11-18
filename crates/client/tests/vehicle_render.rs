@@ -88,7 +88,7 @@ fn render(
 }
 
 fn vehicles_render_with_wheels_and_paint(f: &VehicleFixture) -> Result<()> {
-    let mut assets = VehicleAssets::load(&f.dir)?;
+    let mut assets = VehicleAssets::load(&f.dir, &f.dir)?;
     let gpu = gpu::turn().context("offscreen vehicle adapter")?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let out = &f.out;
@@ -188,7 +188,7 @@ fn vehicles_render_with_wheels_and_paint(f: &VehicleFixture) -> Result<()> {
 }
 
 fn riders_tilt_with_a_car_on_a_slope(f: &VehicleFixture) -> Result<()> {
-    let assets = VehicleAssets::load(&f.dir)?;
+    let assets = VehicleAssets::load(&f.dir, &f.dir)?;
     let definition = f.car.as_str();
     let wheels = assets.definition(definition).context("car")?.wheels.len();
     let info = VehicleInfo {
@@ -267,7 +267,7 @@ fn the_stock_weapons_have_six_debris_explosions() -> Result<()> {
 }
 
 fn every_explosion_debris_model_is_in_the_vehicle_pack(f: &VehicleFixture) -> Result<()> {
-    let assets = VehicleAssets::load(&f.dir)?;
+    let assets = VehicleAssets::load(&f.dir, &f.dir)?;
     let debris = bri_weapons::debris::explosion_debris(&f.weapons);
     ensure!(!debris.is_empty(), "no debris explosions");
     for (explosion, spec) in debris {
@@ -292,7 +292,7 @@ fn authored_vehicle_presentation_offscreen() -> Result<()> {
     );
     let f = VehicleFixture::synthetic()?;
     let source_dir = path.to_string_lossy().into_owned();
-    let mut assets = VehicleAssets::load_with(&f.dir, &[(source_dir, path)])?;
+    let mut assets = VehicleAssets::load_with(&f.dir, &f.dir, &[(source_dir, path)])?;
     let d = assets
         .pack()
         .definitions

@@ -295,7 +295,11 @@ mod tests {
             "v20/add-ons/map_kitchendark/kitchendark.mis",
         ] {
             let native =
-                bri_sim::map::NativeMap::load(&content.join("map-bundle-017"), id).unwrap();
+                bri_sim::map::NativeMap::load(
+                    &content.join("default-pack/map-bundle-017"),
+                    id,
+                )
+                .unwrap();
             let ear = native
                 .scene
                 .nodes

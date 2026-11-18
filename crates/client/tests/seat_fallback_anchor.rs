@@ -190,7 +190,7 @@ fn vehicle() -> Result<(
         (Quat::from_rotation_y(0.6) * Quat::from_rotation_z(0.2)).to_array();
     pack.validate()?;
     std::fs::write(dir.path().join("vehicles.json"), serde_json::to_vec(&pack)?)?;
-    let assets = VehicleAssets::load(dir.path())?;
+    let assets = VehicleAssets::load(dir.path(), dir.path())?;
     let info = VehicleInfo {
         id: 1,
         definition: bri_vehicles::testing::CAR.into(),

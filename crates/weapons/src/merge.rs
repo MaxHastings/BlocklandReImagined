@@ -7,21 +7,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The directory a sound's `file` is relative to, as [`resource_root`].
-pub fn sound_root(root: &Path, sound: &SoundDef) -> PathBuf {
+pub fn sound_root(content_root: &Path, base_root: &Path, sound: &SoundDef) -> PathBuf {
     match &sound.package {
-        Some(dir) => root.parent().unwrap_or(root).join(dir),
-        None => root.to_path_buf(),
+        Some(dir) => content_root.join(dir),
+        None => base_root.to_path_buf(),
     }
 }
 
 /// The directory a resource's `native_file` is relative to: its package's,
-/// when the pack was merged, else the pack's own `root`. Base packages sit
-/// directly under the content root, so a package directory resolves beside
-/// `root`.
-pub fn resource_root(root: &Path, resource: &Resource) -> PathBuf {
+/// when the pack was merged (content-root-relative), else the base pack's
+/// own root. Base packs sit under the content root's `default-pack`, so a
+/// package directory resolves against the content root, not beside the
+/// base root.
+pub fn resource_root(content_root: &Path, base_root: &Path, resource: &Resource) -> PathBuf {
     match &resource.package {
-        Some(dir) => root.parent().unwrap_or(root).join(dir),
-        None => root.to_path_buf(),
+        Some(dir) => content_root.join(dir),
+        None => base_root.to_path_buf(),
     }
 }
 

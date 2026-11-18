@@ -59,7 +59,7 @@ fn native_mixed_shading_scene() -> Result<()> {
 fn mixed_scene(avatar: AvatarFixture, car: VehicleFixture) -> Result<()> {
     let gpu = gpu::turn()?;
     let out = avatar.out("sky-shading-mixed")?;
-    let mut assets = VehicleAssets::load(&car.dir)?;
+    let mut assets = VehicleAssets::load(&car.dir, &car.dir)?;
     let wheels = assets.definition(&car.car).context("car")?.wheels.len();
     let infos = BTreeMap::from([(
         1,

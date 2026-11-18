@@ -38,24 +38,34 @@ pub fn look_clip<'a>(clips: &'a [Animation], shape: &'a Shape) -> Option<&'a Ani
 }
 
 /// Every `look` clip in the pack.
-pub fn look_clips(pack: &Pack, root: &Path) -> Result<Vec<Animation>> {
+pub fn look_clips(
+    pack: &Pack,
+    content_root: &Path,
+    base_root: &Path,
+) -> Result<Vec<Animation>> {
     let mut out = Vec::new();
     for asset in pack.assets.iter().filter(|a| {
         a.kind == "animation" && a.virtual_path.to_ascii_lowercase().ends_with("look.dsq")
     }) {
-        let clips: ClipSet = serde_json::from_slice(&read(root, asset, 8 << 20)?)?;
+        let clips: ClipSet =
+            serde_json::from_slice(&read(content_root, base_root, asset, 8 << 20)?)?;
         out.extend(clips.animations.into_iter().filter(|a| a.name == "look"));
     }
     Ok(out)
 }
 
-fn read(root: &Path, asset: &Asset, limit: u64) -> Result<Vec<u8>> {
+fn read(
+    content_root: &Path,
+    base_root: &Path,
+    asset: &Asset,
+    limit: u64,
+) -> Result<Vec<u8>> {
     let path = Path::new(&asset.path);
     ensure!(
         !path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_))),
         "unsafe vehicle asset path"
     );
-    let path = crate::asset_root(root, asset).join(path);
+    let path = crate::asset_root(content_root, base_root, asset).join(path);
     ensure!(
         std::fs::metadata(&path)?.len() < limit,
         "vehicle asset too large"
@@ -69,10 +79,11 @@ fn read(root: &Path, asset: &Asset, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// The model behind a vehicle asset: older packs ship JSON shapes; current
-/// ones GLBs, lowered with the same conversion as what renders them.
+/// The model behind a vehicle asset of one unmerged pack (its `root`):
+/// older packs ship JSON shapes; current ones GLBs, lowered with the same
+/// conversion as what renders them.
 fn shape_of(root: &Path, asset: &Asset) -> Result<Shape> {
-    let bytes = read(root, asset, 32 << 20)?;
+    let bytes = read(root, root, asset, 32 << 20)?;
     let shape: Shape = if asset.path.to_ascii_lowercase().ends_with(".glb") {
         bri_gltf::lower(&bytes, &asset.virtual_path)?.shape
     } else {
@@ -199,7 +210,7 @@ impl Pack {
         if self.definitions.iter().all(|d| d.weapon.is_none()) {
             return Ok(());
         }
-        let clips = look_clips(self, root)?;
+        let clips = look_clips(self, root, root)?;
         for i in 0..self.definitions.len() {
             let d = &self.definitions[i];
             if d.weapon.is_none() {
@@ -274,7 +285,7 @@ mod tests {
     #[ignore = "requires the converted native vehicle pack"]
     fn shots_leave_the_posed_barrel_mouth_at_every_pitch() -> Result<()> {
         let (pack, root) = pack();
-        let clips = look_clips(&pack, &root)?;
+        let clips = look_clips(&pack, &root, &root)?;
         for id in [
             "v20.vehicle.tankvehicle",
             "v20.vehicle.tankturretplayer",

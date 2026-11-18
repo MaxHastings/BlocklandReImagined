@@ -241,13 +241,18 @@ fn posed<'a>(
 
 impl VehicleAssets {
     /// Load every declared model with its folder-local material textures.
-    pub fn load(root: &Path) -> Result<Self> {
-        Self::load_with(root, &[])
+    pub fn load(content_root: &Path, base_root: &Path) -> Result<Self> {
+        Self::load_with(content_root, base_root, &[])
     }
     /// [`Self::load`] for the base pack merged with other packages' vehicles
-    /// (`content_identity::kind_providers`).
-    pub fn load_with(root: &Path, extras: &[(String, std::path::PathBuf)]) -> Result<Self> {
-        let root = root.canonicalize()?;
+    /// (`content_identity::kind_providers`): a merged package's assets resolve
+    /// against `content_root`, its directory content-root-relative.
+    pub fn load_with(
+        content_root: &Path,
+        base_root: &Path,
+        extras: &[(String, std::path::PathBuf)],
+    ) -> Result<Self> {
+        let root = base_root.canonicalize()?;
         let mut parts = Vec::new();
         for (dir, abs) in extras {
             let part = Pack::load(abs.join("vehicles.json")).with_context(|| {
@@ -265,7 +270,7 @@ impl VehicleAssets {
             match &asset.package {
                 Some(dir) => {
                     let label = bri_package::library::add_on_label(
-                        &bri_vehicles::asset_root(&root, asset),
+                        &bri_vehicles::asset_root(content_root, &root, asset),
                         dir,
                     );
                     crate::cosmetic::add_on_fault(&label, &asset.path, format!("{error:#}"));
@@ -277,7 +282,7 @@ impl VehicleAssets {
         let mut textures: BTreeMap<String, SceneImage> = BTreeMap::new();
         for asset in pack.assets.iter().filter(|a| a.kind == "texture") {
             let image = crate::items::checked_read(
-                &bri_vehicles::asset_root(&root, asset),
+                &bri_vehicles::asset_root(content_root, &root, asset),
                 &asset.path,
                 &asset.sha256,
                 16 << 20,
@@ -308,7 +313,7 @@ impl VehicleAssets {
             .context("Vehicle pack has no blank paint texture")?;
         // Gunners pitch their barrel with a `look` clip, as
         // `Player::updateLookAnimation` does from the head pitch.
-        let look_clips = bri_vehicles::muzzle::look_clips(&pack, &root)?;
+        let look_clips = bri_vehicles::muzzle::look_clips(&pack, content_root, &root)?;
         let gunner_models: Vec<String> = pack
             .definitions
             .iter()
@@ -326,7 +331,7 @@ impl VehicleAssets {
             // older packs its .shape.json.
             let glb = asset.path.to_ascii_lowercase().ends_with(".glb");
             let shape = crate::items::checked_read(
-                &bri_vehicles::asset_root(&root, asset),
+                &bri_vehicles::asset_root(content_root, &root, asset),
                 &asset.path,
                 &asset.sha256,
                 32 << 20,
@@ -2059,7 +2064,7 @@ pub(crate) mod tests {
         use bri_vehicles::{OwnerId, Spawn, Transform, VehicleId, VehiclesWorld};
         let dir = crate::testing::ScratchDir::new("seat-scale")?;
         crate::testing::vehicles::write_pack(dir.path())?;
-        let mut assets = VehicleAssets::load(dir.path())?;
+        let mut assets = VehicleAssets::load(dir.path(), dir.path())?;
         let index = assets.index[bri_vehicles::testing::CAR];
         let seat = &mut assets.pack.definitions[index].seats[1];
         seat.transform.position = [0.5, 1.2, 0.8];
@@ -2183,7 +2188,7 @@ pub(crate) mod tests {
         };
         let dir = crate::testing::ScratchDir::new("turret-seat-scale")?;
         crate::testing::vehicles::write_pack(dir.path())?;
-        let assets = VehicleAssets::load(dir.path())?;
+        let assets = VehicleAssets::load(dir.path(), dir.path())?;
         let d = assets
             .definition(bri_vehicles::testing::TANK)
             .context("tank")?;
@@ -2353,7 +2358,7 @@ pub(crate) mod tests {
     #[test]
     fn drawn_vehicle_scale_preserves_world_space_suspension_extension() -> Result<()> {
         let fixture = Gunners::synthetic()?;
-        let mut assets = VehicleAssets::load(&fixture.root)?;
+        let mut assets = VehicleAssets::load(&fixture.root, &fixture.root)?;
         let d = assets
             .pack
             .definitions
@@ -2402,7 +2407,7 @@ pub(crate) mod tests {
     #[test]
     fn named_grip_nodes_follow_attachment_animation_aim_sway_and_scale() -> Result<()> {
         let fixture = Gunners::synthetic()?;
-        let mut assets = VehicleAssets::load(&fixture.root)?;
+        let mut assets = VehicleAssets::load(&fixture.root, &fixture.root)?;
         let d = fixture
             .gunners
             .iter()
@@ -2490,7 +2495,7 @@ pub(crate) mod tests {
     fn skinned_guns_keep_independent_poses_and_retire_removed_instances() -> Result<()> {
         use bri_content::shape::{Influence, Skin};
         let fixture = Gunners::synthetic()?;
-        let mut assets = VehicleAssets::load(&fixture.root)?;
+        let mut assets = VehicleAssets::load(&fixture.root, &fixture.root)?;
         let d = fixture
             .gunners
             .iter()
@@ -2620,7 +2625,7 @@ pub(crate) mod tests {
     /// carried it. Once broken it is no longer drawn on the hull, and its
     /// gunner sits on the hull's fallback seat, where the host put them.
     fn a_broken_turret_leaves_the_hull_and_its_gunner_sits_on_the_hull(fx: &Gunners) -> Result<()> {
-        let mut assets = VehicleAssets::load(&fx.root)?;
+        let mut assets = VehicleAssets::load(&fx.root, &fx.root)?;
         let d = fx
             .gunners
             .iter()
@@ -2679,7 +2684,7 @@ pub(crate) mod tests {
     ) -> Result<()> {
         use bri_content::passage::Passage;
         use bri_vehicles::{OwnerId, Spawn, Transform, VehicleId, VehiclesWorld};
-        let mut assets = VehicleAssets::load(&fx.root)?;
+        let mut assets = VehicleAssets::load(&fx.root, &fx.root)?;
         let d = assets
             .pack
             .definitions
@@ -2767,7 +2772,7 @@ pub(crate) mod tests {
         Ok(())
     }
     fn gunner_barrels_follow_the_pitch_to_the_muzzle(fx: &Gunners) -> Result<()> {
-        let assets = VehicleAssets::load(&fx.root)?;
+        let assets = VehicleAssets::load(&fx.root, &fx.root)?;
         for id in &fx.gunners {
             let d = assets.definition(id).unwrap().clone();
             let model = d.attachment_model.clone().unwrap_or(d.model.clone());
@@ -2831,7 +2836,7 @@ pub(crate) mod tests {
     fn a_destroyed_vehicle_is_drawn_black_without_its_tires() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../vehicles/tests/fixtures/stand-in-plane/assets");
-        let mut assets = VehicleAssets::load(&root)?;
+        let mut assets = VehicleAssets::load(&root, &root)?;
         let d = assets.pack.definitions[0].clone();
         ensure!(d.family == bri_vehicles::Family::Wheeled && d.wheels.len() == 3);
         let draw = |assets: &mut VehicleAssets, destroyed: bool| {
@@ -2890,7 +2895,7 @@ pub(crate) mod tests {
     fn a_live_vehicle_updates_its_draw_tint_without_a_new_pose_or_identity() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../vehicles/tests/fixtures/stand-in-plane/assets");
-        let mut assets = VehicleAssets::load(&root)?;
+        let mut assets = VehicleAssets::load(&root, &root)?;
         let d = assets.pack.definitions[0].clone();
         let mut infos = BTreeMap::from([(
             1,
@@ -3440,7 +3445,7 @@ pub(crate) mod tests {
         pack.validate()?;
         std::fs::write(&pack_path, serde_json::to_vec_pretty(&pack)?)?;
 
-        let mut assets = VehicleAssets::load(dir.path())?;
+        let mut assets = VehicleAssets::load(dir.path(), dir.path())?;
         let car_id = bri_vehicles::testing::CAR.to_string();
         let model_key = assets.definition(&car_id).context("car")?.model.clone();
         // Each named object gets its own off/on pair, keyed by lower-case name.

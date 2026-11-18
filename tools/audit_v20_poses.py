@@ -116,8 +116,10 @@ def main():
     ap.add_argument('--v20', required=True, type=pathlib.Path)
     ap.add_argument('--content', required=True, type=pathlib.Path)
     ap.add_argument('--core', type=pathlib.Path, default=CORE)
-    ap.add_argument('--weapons', default='weapons-pack-009')
-    ap.add_argument('--presentation', default='item-presentation-pack-010')
+    ap.add_argument('--weapons', default='default-pack/weapons-pack-009')
+    ap.add_argument(
+        '--presentation', default='default-pack/item-presentation-pack-010-v043-r2'
+    )
     args = ap.parse_args()
 
     raw = {}

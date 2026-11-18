@@ -64,8 +64,8 @@ Preserve them in settings/behavior documentation for playtest feedback.
 
 ```
 cargo test -p bri-ui -p bri-ui-import
-cargo run -p bri-ui --bin ui_runtime_probe -- content/ui-pack-004 artifacts/native-ui-runtime
-cargo run -p bri-ui-import -- --v20 "<v20-install>" --decompiled .research/v20-dso --stock-defaults .research/bl-decompiled/v20/client/defaults.cs --brick-catalog content/stock-catalog-004/stock-catalog.json --out content/ui-pack-NEW
+cargo run -p bri-ui --bin ui_runtime_probe -- content/default-pack/ui-pack-005 artifacts/native-ui-runtime
+cargo run -p bri-ui-import -- --v20 "<v20-install>" --decompiled .research/v20-dso --stock-defaults .research/bl-decompiled/v20/client/defaults.cs --brick-catalog content/default-pack/stock-catalog-004/stock-catalog.json --out content/ui-pack-NEW
 ```
 
 Output directories must be new and outside the original install. The current UI pack

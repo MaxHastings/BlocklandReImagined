@@ -629,7 +629,7 @@ impl ClientContent {
         }
         let item_physics = paths.item_physics(&weapons)?;
         let mut schema = load_ui_schema(&paths.ui_pack)?;
-        install_death_icons(&mut schema, &weapons.pack, &paths.weapons)?;
+        install_death_icons(&mut schema, &weapons.pack, &paths.root, &paths.weapons)?;
         let paint = palette(&schema)?;
         let bundle = load_bundle(&paths.map_bundle)?;
         let mut maps = Vec::new();
@@ -1146,6 +1146,7 @@ fn validate_catalog(paths: &ContentPaths) -> Result<Catalog> {
 fn install_death_icons(
     schema: &mut UiPack,
     weapons: &bri_weapons::Pack,
+    content_root: &Path,
     root: &Path,
 ) -> Result<()> {
     for (key, id) in weapons
@@ -1166,7 +1167,7 @@ fn install_death_icons(
                 .and_then(|r| Some((r, r.native_file.as_deref()?)))
                 .with_context(|| format!("Weapon pack lacks death icon {id}"))?;
             let path = file(
-                &bri_weapons::resource_root(root, resource),
+                &bri_weapons::resource_root(content_root, root, resource),
                 native,
                 INDEX_LIMIT,
             )?;
@@ -1201,7 +1202,7 @@ fn install_death_icons(
             .and_then(|r| {
                 let dir = r.package.as_ref()?;
                 Some(bri_package::library::add_on_label(
-                    &bri_weapons::resource_root(root, r),
+                    &bri_weapons::resource_root(content_root, root, r),
                     dir,
                 ))
             })

@@ -352,7 +352,10 @@ fn check_in(folder: &Path, scope: Option<&Path>) -> Report {
         // (A `stock` sound is the installed game's copy, not the Add-On's.)
         for (profile, def) in pack.sounds.iter().filter(|(_, d)| !d.stock) {
             let loaded =
-                bri_package::path::inside(&bri_weapons::sound_root(&assets, def), &def.file)
+                bri_package::path::inside(
+                    &bri_weapons::sound_root(&parent, &assets, def),
+                    &def.file,
+                )
                     .and_then(|path| {
                         if def.music {
                             bri_audio::bank::SoundAsset::music_file(profile, &path)

@@ -115,7 +115,11 @@ fn sounds_merge_with_their_package_and_bad_states_are_refused() {
     merged.validate().unwrap();
     let shot = merged.sound("sample-commando-rifle:shot").unwrap();
     assert_eq!(
-        sound_root(Path::new("/content/weapons-pack-009"), shot),
+        sound_root(
+            Path::new("/content"),
+            Path::new("/content/weapons-pack-009"),
+            shot
+        ),
         Path::new("/content/sample-commando-rifle/assets")
     );
     let mut bad = rifle_pack();

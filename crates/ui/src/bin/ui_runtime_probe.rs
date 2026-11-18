@@ -57,7 +57,8 @@ fn click(ui: &mut Ui, screen: ScreenId, name: &str) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let pack_path = PathBuf::from(args.first().map_or("content/ui-pack-004", String::as_str));
+    let pack_path =
+        PathBuf::from(args.first().map_or("content/default-pack/ui-pack-005", String::as_str));
     let out = PathBuf::from(
         args.get(1)
             .map_or("artifacts/native-ui-runtime", String::as_str),
@@ -68,7 +69,7 @@ fn main() -> Result<()> {
     ensure!(!(voice_review && minigame_review), "select one review flow");
     let pack = Rc::new(Pack::load(&pack_path)?);
     let catalog: Catalog = serde_json::from_slice(&std::fs::read(
-        "content/stock-catalog-004/stock-catalog.json",
+        "content/default-pack/stock-catalog-004/stock-catalog.json",
     )?)?;
     let bricks: Vec<_> = catalog
         .bricks

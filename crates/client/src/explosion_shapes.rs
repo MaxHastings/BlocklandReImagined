@@ -36,8 +36,12 @@ pub struct ExplosionShapes {
 }
 
 impl ExplosionShapes {
-    pub fn load(pack: &bri_weapons::Pack, root: &Path) -> Result<Self> {
-        let root = root.canonicalize()?;
+    pub fn load(
+        pack: &bri_weapons::Pack,
+        content_root: &Path,
+        base_root: &Path,
+    ) -> Result<Self> {
+        let root = base_root.canonicalize()?;
         let mut models = BTreeMap::new();
         // The model of the shape at `path`, as `resource` provides it.
         let model = |explosion: &bri_weapons::ExplosionInfo,
@@ -46,7 +50,7 @@ impl ExplosionShapes {
                      file: &str|
          -> Result<Model> {
             let bytes = crate::materials::read_resource(
-                &bri_weapons::resource_root(&root, resource),
+                &bri_weapons::resource_root(content_root, &root, resource),
                 file,
                 32 << 20,
             )?;
@@ -97,7 +101,7 @@ impl ExplosionShapes {
                     anyhow::bail!("Missing explosion texture {path}");
                 };
                 let bytes = crate::items::checked_read(
-                    &bri_weapons::resource_root(&root, texture),
+                    &bri_weapons::resource_root(content_root, &root, texture),
                     texture.native_file.as_deref().context("Unstored texture")?,
                     &texture.sha256,
                     16 << 20,
@@ -172,7 +176,7 @@ impl ExplosionShapes {
                     .as_ref()
                     .map(|dir| {
                         bri_package::library::add_on_label(
-                            &bri_weapons::resource_root(&root, resource),
+                            &bri_weapons::resource_root(content_root, &root, resource),
                             dir,
                         )
                     })
@@ -401,7 +405,7 @@ mod tests {
             bindings: Vec::new(),
         };
         let root = tempfile::tempdir()?;
-        let shapes = ExplosionShapes::load(&pack, root.path())?;
+        let shapes = ExplosionShapes::load(&pack, root.path(), root.path())?;
         assert!(
             shapes.models.is_empty(),
             "the game's own sphere is not here"
@@ -437,7 +441,7 @@ mod tests {
         grenade.name = "hegrenadeExplosion".into();
         grenade.shape = "Add-Ons/Weapon_Rocket Launcher/explosionSphere1.dts".into();
         pack.explosions.insert("hegrenadeexplosion".into(), grenade);
-        let shapes = ExplosionShapes::load(&pack, scratch.path())?;
+        let shapes = ExplosionShapes::load(&pack, scratch.path(), scratch.path())?;
         let model = &shapes.models["hegrenadeexplosion"];
         assert!(!model.data.vertices.is_empty(), "it draws the sphere");
         assert_eq!(model.scales.len(), 4, "and plays the sphere's ambient");
@@ -476,7 +480,8 @@ mod tests {
     fn rocket_explosion_sphere_expands_and_fades(fx: &Blast) -> Result<()> {
         let root = &fx.root;
         let pack = bri_weapons::Pack::from_json(&std::fs::read(root.join("weapons.json"))?)?;
-        let mut shapes = ExplosionShapes::load(&pack, root)?;
+        // A single unmerged pack: its own directory is both roots.
+        let mut shapes = ExplosionShapes::load(&pack, root, root)?;
         shapes.cue(&Cue {
             id: 1,
             tick: 1,

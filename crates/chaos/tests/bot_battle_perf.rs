@@ -644,7 +644,7 @@ fn brick_damage() -> bool {
 }
 
 fn saved_world(root: &std::path::Path, wanted: &str) -> Result<Option<World>> {
-    let worlds = root.join("worlds-pass-006");
+    let worlds = root.join("default-pack/worlds-pass-006");
     if !worlds.is_dir() {
         return Ok(None);
     }
@@ -840,7 +840,7 @@ fn profile_sixteen_bots_in_the_real_bedroom() -> Result<()> {
     }
     for name in ["Beta City 16", "ACM City"] {
         if let Some(city) = saved_world(&root, name)? {
-            eprintln!("loading {name} converted save read-only from worlds-pass-006");
+            eprintln!("loading {name} converted save read-only from default-pack/worlds-pass-006");
             for reload in 0..reloads {
                 eprintln!("world={name} session_construction_repeat={reload}");
                 run_battle(

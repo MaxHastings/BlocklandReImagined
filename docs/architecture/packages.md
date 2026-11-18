@@ -93,9 +93,9 @@ following the base list as it changes.
 {
   "schema_version": 1,
   "packages": [
-    { "id": "v20-weapons", "version": "9.0.0", "side": "shared", "dir": "weapons-pack-009", "role": "weapons" },
-    { "id": "v20-ui", "version": "4.0.0", "side": "client", "dir": "ui-pack-004", "role": "ui_pack" },
-    { "id": "v20-worlds", "version": "6.0.0", "side": "server", "dir": "worlds-pass-006", "role": "worlds" },
+    { "id": "v20-weapons", "version": "9.0.0", "side": "shared", "dir": "default-pack/weapons-pack-009", "role": "weapons" },
+    { "id": "v20-ui", "version": "4.0.0", "side": "client", "dir": "default-pack/ui-pack-005", "role": "ui_pack" },
+    { "id": "v20-worlds", "version": "6.0.0", "side": "server", "dir": "default-pack/worlds-pass-006", "role": "worlds" },
     { "id": "creeper", "version": "1.0.0", "side": "shared", "dir": "creeper" }
   ]
 }

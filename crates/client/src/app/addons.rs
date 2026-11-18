@@ -931,8 +931,12 @@ impl PreparedPackages {
                 .extend(crate::packages::world_maps(catalog, &content.maps));
         }
         let code = crate::client_code::ClientCode::load(root, set);
-        let sounds =
-            crate::audio::PreparedSounds::load(bank, &content.weapons.pack, &content.paths.weapons);
+        let sounds = crate::audio::PreparedSounds::load(
+            bank,
+            &content.weapons.pack,
+            &content.paths.root,
+            &content.paths.weapons,
+        );
         let mut health_problems = problems.clone();
         health_problems.extend(
             left_out

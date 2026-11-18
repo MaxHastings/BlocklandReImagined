@@ -288,8 +288,11 @@ impl ContentParts {
         icon_cache: &Path,
     ) -> Result<Self> {
         let weapon_pack = Arc::new(content.weapons.pack.clone());
-        let explosion_shapes =
-            crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
+        let explosion_shapes = crate::explosion_shapes::ExplosionShapes::load(
+            &weapon_pack,
+            &content.paths.root,
+            &content.paths.weapons,
+        )?;
         let explosion_debris = crate::explosion_debris::ExplosionDebris::new(&weapon_pack);
         // Items first: an Add-On's particle textures are among theirs.
         let mut item_assets = crate::items::ItemAssets::load_with(
@@ -366,6 +369,7 @@ impl ContentParts {
             &content.ui_pack,
         )?;
         let vehicle_assets = crate::vehicles::VehicleAssets::load_with(
+            &content.paths.root,
             &content.paths.vehicles,
             &content.paths.vehicle_extras,
         )?;
