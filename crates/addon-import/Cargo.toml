@@ -35,6 +35,13 @@ path = "src/bin/convert-map-interiors.rs"
 name = "backfill-glb-textures"
 path = "src/bin/backfill-glb-textures.rs"
 
+# TEMPORARY: one-shot backfill that bakes a brick's authored colours into real
+# glTF materials (baseColorFactor, BLEND where transparent) so Blender matches
+# the game; delete this entry (and the file) once content is done.
+[[bin]]
+name = "backfill-brick-materials"
+path = "src/bin/backfill-brick-materials.rs"
+
 [dependencies]
 bri-console = { path = "../console" }
 anyhow.workspace = true
