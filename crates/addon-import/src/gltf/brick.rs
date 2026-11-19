@@ -140,7 +140,7 @@ pub(super) fn write(opts: &Options, id: &str, converted: Converted) -> Result<Re
         display_name: name.clone(),
         category: CATEGORY.into(),
         subcategory: SUBCATEGORY.into(),
-        mesh_id,
+        mesh_id: mesh_id.clone(),
         collision_source: None,
         icon_source: String::new(),
         print_aspect_ratio: None,
@@ -165,10 +165,13 @@ pub(super) fn write(opts: &Options, id: &str, converted: Converted) -> Result<Re
     };
     let dir = "assets/brick-catalog";
     // The brick as a .glb: the game lowers it back to this very brick (faces,
-    // surfaces and collision in its extras); Blender sees a plain mesh.
+    // surfaces and collision in its extras); Blender sees a plain mesh. One
+    // copy per shape: the mesh ships beside the package's content.json
+    // registration (`assets/bricks/`), where `Definitions::load_with_geometry`
+    // resolves each binding — not beside the catalog JSON.
     let mesh_file = format!("{id}.glb");
     put(
-        &format!("{dir}/{mesh_file}"),
+        &format!("assets/bricks/{mesh_file}"),
         crate::gltf::export_brick(&mesh)?,
     )?;
     put(
@@ -207,6 +210,19 @@ pub(super) fn write(opts: &Options, id: &str, converted: Converted) -> Result<Re
             { "kind": "bricks", "id": format!("{ns}:bricks/main"), "file": format!("{dir}/stock-catalog.json") },
         ],
     });
+    // The asset index, as the main importer writes it: the mesh's identity
+    // is bound here so the shared geometry pool and `bri-addon-check` find it.
+    put(
+        "assets/content.json",
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "content": [{
+                "kind": "brick_geometry",
+                "id": mesh_id.clone(),
+                "file": format!("assets/bricks/{mesh_file}"),
+            }],
+        }))?,
+    )?;
     put("package.json", serde_json::to_vec_pretty(&manifest)?)?;
     report.id = ns;
     report.model = brick_id;

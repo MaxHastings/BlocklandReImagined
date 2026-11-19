@@ -37,6 +37,11 @@ pub struct Reference {
     pub installed: bool,
     /// The installed game's own bricks, by lower-case datablock name.
     pub base_bricks: std::collections::BTreeSet<String>,
+    /// Mesh paths of the installed base brick catalog, lower-cased
+    /// (`add-ons/brick_halloween/pumpkin_ascii.blb`): geometry that ships
+    /// with the base content. A re-import lends it by mesh id instead of
+    /// shipping a duplicate copy.
+    pub base_brick_meshes: std::collections::BTreeSet<String>,
     /// Lower-case datablock name.
     pub datablocks: BTreeMap<String, Owned>,
     /// Lower-case `$DamageType::` names.
@@ -817,11 +822,13 @@ impl Reference {
             ) else {
                 continue;
             };
-            self.files.insert(mesh.to_ascii_lowercase());
+            let mesh = mesh.to_ascii_lowercase();
+            self.files.insert(mesh.clone());
+            self.base_brick_meshes.insert(mesh.clone());
             self.base_bricks.insert(name.to_ascii_lowercase());
-            let addon = addon_of_source(mesh);
+            let addon = addon_of_source(&mesh);
             let mut fields = BTreeMap::new();
-            fields.insert("brickfile".into(), quoted(mesh));
+            fields.insert("brickfile".into(), quoted(&mesh));
             fields.insert("uiname".into(), quoted(&b.display_name));
             fields.insert("category".into(), quoted(&b.category));
             fields.insert("subcategory".into(), quoted(&b.subcategory));
@@ -846,7 +853,7 @@ impl Reference {
                 u8::from(b.indestructible).to_string(),
             );
             fields.extend(b.other_properties);
-            self.installed_datablock(&addon, mesh, "fxDTSBrickData".into(), name, None, fields);
+            self.installed_datablock(&addon, &mesh, "fxDTSBrickData".into(), name, None, fields);
         }
         Ok(())
     }

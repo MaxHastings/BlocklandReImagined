@@ -2062,6 +2062,23 @@ fn convert_files(cx: &mut Ctx, dsq: &DsqPlan) -> Result<()> {
                 );
             }
             "brick_geometry" => {
+                // The base game's brick catalog already ships this shape
+                // (its geometry role dir): re-importing would only duplicate
+                // it. The game lends the base copy by its mesh id, so no .glb.
+                let key = f.path.replace('\\', "/").to_ascii_lowercase();
+                if cx.reference.base_brick_meshes.contains(&key) {
+                    set_asset(
+                        cx,
+                        &f.path,
+                        "skipped",
+                        None,
+                        None,
+                        Some(format!(
+                            "geometry ships with base content (v20/{key}); the game lends it by mesh id"
+                        )),
+                    );
+                    continue;
+                }
                 let id = content_id(&cx.ns, "brick_geometry", &member);
                 match bri_convert::brick::read(&f.bytes, id.clone()) {
                     Ok((brick, provenance)) => {
@@ -3830,8 +3847,13 @@ fn door_swap(b: &bri_content::brick::CatalogEntry) -> Option<bri_content::brick:
 }
 
 /// Converts another Add-On's brick geometry at `path` into this package
-/// (once) and gives its mesh id; empty when it does not convert.
+/// (once) and gives its mesh id; empty when it does not convert. Geometry the
+/// base game's brick catalog already ships is lent by its v20 mesh id instead.
 fn borrow_brick(cx: &mut Ctx, path: &str, bytes: &[u8]) -> String {
+    let key = path.replace('\\', "/").to_ascii_lowercase();
+    if cx.reference.base_brick_meshes.contains(&key) {
+        return format!("v20/{key}");
+    }
     let id = content_id(&cx.ns, "brick_geometry", path);
     if cx.borrowed.contains_key(&id) {
         return id;
@@ -3863,7 +3885,13 @@ fn borrow_brick(cx: &mut Ctx, path: &str, bytes: &[u8]) -> String {
 
 /// Copy a declared dependency's validated native conversion into this
 /// package, retaining the original source and installed-conversion hashes.
+/// Geometry the base game's brick catalog already ships is lent by its v20
+/// mesh id instead.
 fn borrow_native_brick(cx: &mut Ctx, path: &str, mut native: reference::NativeBrick) -> String {
+    let key = path.replace('\\', "/").to_ascii_lowercase();
+    if cx.reference.base_brick_meshes.contains(&key) {
+        return format!("v20/{key}");
+    }
     let id = content_id(&cx.ns, "brick_geometry", path);
     if cx.borrowed.contains_key(&id) {
         return id;
@@ -3911,7 +3939,11 @@ fn borrow_native_brick(cx: &mut Ctx, path: &str, mut native: reference::NativeBr
 /// The bricks whose geometry converted, in the base game's brick catalog
 /// layout under `assets/brick-catalog/`, so `Definitions::load` reads them
 /// like the stock catalog: `stock-catalog.json`, `catalog-audit.json` (mesh
-/// bindings), `native-collisions.json` and the mesh files beside them.
+/// bindings) and `native-collisions.json`. The mesh files themselves stay in
+/// `assets/bricks/`, where content.json registers them as brick_geometry
+/// assets; each binding names one of those files, and the runtime resolves
+/// it against that directory. One copy per shape: no duplicate beside the
+/// catalog.
 fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result<()> {
     let meshes: BTreeMap<String, String> = cx
         .outputs
@@ -3967,8 +3999,9 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
                 continue;
             }
         }
+        // The mesh stays where content.json registered it (`bricks/`);
+        // the binding names it and the runtime resolves it there.
         let file = rel.trim_start_matches("bricks/").to_owned();
-        cx.write(&format!("assets/brick-catalog/{file}"), &bytes)?;
         resolved.push(json!({ "id": entry.id, "native_mesh": file }));
         // The brick menu's icon, stored beside the catalog.
         let icon = entry.icon_source.clone();

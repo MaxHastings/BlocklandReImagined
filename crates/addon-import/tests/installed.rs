@@ -724,3 +724,66 @@ fn an_unmatched_door_copy_keeps_its_support_requirement() {
         "ported"
     );
 }
+
+/// Brick geometry the installed base catalog already ships is not re-shipped
+/// by a re-import: its member converts to nothing, and a brick naming it
+/// lends the base copy by its v20 mesh id instead of binding a local file.
+#[test]
+fn base_catalog_geometry_is_lent_not_copied() {
+    let root = temp("lent");
+    write(
+        &root.join("packages.json"),
+        r#"{ "schema_version": 1, "packages": [
+             { "id": "v20-bricks", "version": "4.0.0", "side": "shared", "dir": "bricks", "role": "brick_catalog" } ] }"#,
+    );
+    // The stock 1x1 the test brick inherits from, plus the base game's own
+    // copy of this Add-On's shape: the re-import must lend it rather than
+    // ship a second one.
+    let stock = serde_json::json!({
+        "id": "v20/brick/brick1x1data", "display_name": "1x1", "category": "Bricks",
+        "subcategory": "1x", "mesh_id": "v20/base/data/bricks/bricks/1x1.blb",
+        "collision_source": null, "icon_source": "base/client/ui/brickicons/1x1",
+        "print_aspect_ratio": null, "orientation_fix": 0, "can_cover": true,
+        "indestructible": false, "special_kind": null, "other_properties": {}
+    });
+    let base_dirt = serde_json::json!({
+        "id": "v20/brick/brickDirtBaseData", "display_name": "Dirt", "category": "Bricks",
+        "subcategory": "1x", "mesh_id": "v20/add-ons/brick_test_dirt/dirt.blb",
+        "collision_source": null, "icon_source": "",
+        "print_aspect_ratio": null, "orientation_fix": 0, "can_cover": true,
+        "indestructible": false, "special_kind": null, "other_properties": {}
+    });
+    write(
+        &root.join("bricks/stock-catalog.json"),
+        &serde_json::json!({ "schema_version": 1, "bricks": [stock, base_dirt] }).to_string(),
+    );
+    let out = temp("lent-out").join("out");
+    let report = import(&Options {
+        input: addon(),
+        out: out.clone(),
+        installed: Some(root),
+        ..Default::default()
+    })
+    .unwrap();
+    let r = serde_json::to_value(&report).unwrap();
+    // The member is not converted or shipped.
+    let asset = r["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["source"].to_string().contains("Dirt.blb"))
+        .expect("the Add-On's own brick member")
+        .clone();
+    assert_eq!(asset["status"], "skipped", "{asset}");
+    assert!(asset["output"].is_null(), "{asset}");
+    let bricks_dir = out.join("assets/bricks");
+    if bricks_dir.exists() {
+        assert!(std::fs::read_dir(&bricks_dir).unwrap().next().is_none());
+    }
+    // The brick naming it keeps loading: the base copy, by its v20 mesh id.
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/bricks.json")).unwrap()).unwrap();
+    assert_eq!(
+        catalog["bricks"][0]["mesh_id"], "v20/add-ons/brick_test_dirt/dirt.blb"
+    );
+}

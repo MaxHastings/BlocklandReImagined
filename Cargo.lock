@@ -823,6 +823,7 @@ dependencies = [
  "bri-audio",
  "bri-console",
  "bri-content",
+ "bri-gltf",
  "bri-package",
  "bri-weapons",
  "rhai",

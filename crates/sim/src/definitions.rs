@@ -207,9 +207,12 @@ impl Definitions {
             .get(id)
             .with_context(|| format!("Missing native definition {id}"))
     }
-    /// [`Self::load`] plus other packages' brick catalogs, each a directory in
-    /// the stock catalog layout holding its own meshes (as `bri-import-addon`
-    /// writes to `assets/brick-catalog/`). A package brick whose mesh binding
+    /// [`Self::load`] plus other packages' brick catalogs. Each extra is a
+    /// directory in the stock catalog layout (`stock-catalog.json`,
+    /// `catalog-audit.json`, `native-collisions.json` and icons, as
+    /// `bri-import-addon` writes to `assets/brick-catalog/`); its mesh files
+    /// live beside the package's content.json registration in
+    /// `assets/bricks/`, where each binding resolves. A package brick whose mesh binding
     /// names no file reuses the shape (mesh and, unless the package bakes
     /// its own, collision) of a brick already loaded with the same `mesh_id`:
     /// an Add-On brick built on a base game brick, as a v20 datablock
@@ -270,7 +273,14 @@ impl Definitions {
         let mut out = Self::load(catalog_dir, content)?;
         shared.entries.extend(out.entries.clone());
         for (dir, catalog) in extras {
-            for (id, definition) in Self::load_on(catalog, catalog, &shared)?.entries {
+            // The pack's geometry directory: the meshes ship beside its
+            // content.json registration (`assets/bricks/`), not beside the
+            // catalog JSON, as the base game's geometry role does.
+            let geometry = catalog
+                .parent()
+                .map(|p| p.join("bricks"))
+                .unwrap_or_else(|| catalog.clone());
+            for (id, definition) in Self::load_on(catalog, &geometry, &shared)?.entries {
                 ensure!(
                     !out.entries.contains_key(&id),
                     "{dir}: brick {id} is already defined"

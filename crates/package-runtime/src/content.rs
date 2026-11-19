@@ -39,8 +39,9 @@ pub enum Kind {
     Weapons,
     /// A vehicles pack (`vehicles.json`), merged the same way.
     Vehicles,
-    /// A brick catalog (`brick-catalog/stock-catalog.json` with its meshes
-    /// and collisions beside it), merged the same way.
+    /// A brick catalog (`brick-catalog/stock-catalog.json`; its mesh files
+    /// ship in the package's `bricks/` directory, with its collision recipes
+    /// beside the catalog JSON), merged the same way.
     Bricks,
     /// Bot kinds a Vehicle Spawn brick can hold (`bots.json`): the name the
     /// list shows and how the engine's bot brain plays. Read by the engine

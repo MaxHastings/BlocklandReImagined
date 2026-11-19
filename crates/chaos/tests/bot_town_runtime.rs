@@ -19,7 +19,7 @@ async fn imported_town_bricks_plant_collide_save_and_reach_a_late_joiner() -> an
         std::env::var_os("BRI_BOT_TOWN_OUTPUT").expect("BRI_BOT_TOWN_OUTPUT"),
     );
     let dir = root.join("assets/brick-catalog");
-    let imported = Definitions::load(&dir, &dir)?;
+    let imported = Definitions::load(&dir, &root.join("assets/bricks"))?;
     assert_eq!(imported.entries.len(), 8);
     let synthetic = bri_chaos::fixture::synthetic_simulation(&[])?;
     let mut definitions = synthetic.definitions.clone();
@@ -140,7 +140,9 @@ async fn imported_town_bricks_plant_collide_save_and_reach_a_late_joiner() -> an
                 .find(|p| p.package.id == "bot_town")
                 .expect("the actual Bot_Town package was fetched");
             let catalog = town.dir.join("assets/brick-catalog");
-            loaded_count = Definitions::load(&catalog, &catalog)?.entries.len();
+            loaded_count = Definitions::load(&catalog, &town.dir.join("assets/bricks"))?
+                .entries
+                .len();
             Ok(fetched.iter().map(|p| p.package.clone()).collect())
         },
     )

@@ -11,6 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 bri-package = { path = "../package" }
 bri-content = { path = "../content" }
+bri-gltf = { path = "../gltf" }
 bri-weapons = { path = "../weapons" }
 bri-audio = { path = "../audio" }
 sha2.workspace = true

@@ -33,7 +33,7 @@ fn an_installed_native_folder_is_not_a_conflicting_legacy_source() {
     .unwrap();
     let dir = out.join("assets/brick-catalog");
     assert_eq!(
-        bri_sim::definitions::Definitions::load(&dir, &dir)
+        bri_sim::definitions::Definitions::load(&dir, &out.join("assets/bricks"))
             .unwrap()
             .entries
             .len(),
@@ -93,7 +93,8 @@ fn supplied_bot_town_catalog_loads_all_eight_native_shapes() {
     let dir = root.join("assets/brick-catalog");
     let catalog: bri_content::brick::Catalog =
         serde_json::from_slice(&std::fs::read(dir.join("stock-catalog.json")).unwrap()).unwrap();
-    let defs = bri_sim::definitions::Definitions::load(&dir, &dir).unwrap();
+    let defs = bri_sim::definitions::Definitions::load(&dir, &root.join("assets/bricks"))
+        .unwrap();
     assert_eq!(catalog.bricks.len(), 8);
     assert_eq!(defs.entries.len(), 8);
     for entry in &catalog.bricks {
@@ -150,7 +151,7 @@ fn a_declared_dependency_can_lend_its_installed_native_brick_geometry() {
     })
     .unwrap();
     let dir = out.join("assets/brick-catalog");
-    let defs = bri_sim::definitions::Definitions::load(&dir, &dir)
+    let defs = bri_sim::definitions::Definitions::load(&dir, &out.join("assets/bricks"))
         .expect("the dependent native shape and collision load");
     assert!(
         defs.entries
@@ -330,7 +331,8 @@ fn borrowed_identical_brick_bytes_keep_each_authored_mesh_binding_loadable() {
         "distinct authored paths retain distinct stable IDs"
     );
     // Load this package by itself: neither lender contributes a native catalog.
-    let definitions = bri_sim::definitions::Definitions::load(&catalog_dir, &catalog_dir).unwrap();
+    let definitions =
+        bri_sim::definitions::Definitions::load(&catalog_dir, &out.join("assets/bricks")).unwrap();
     for brick in &catalog.bricks {
         let definition = &definitions.entries[&brick.id];
         assert_eq!(
@@ -372,10 +374,13 @@ fn refreshed_creature_bundle_catalogs_load_without_lender_geometry() {
             "{package}: expected authored hole catalog"
         );
         // Load each independently: the lender's catalog is deliberately absent.
-        let definitions = bri_sim::definitions::Definitions::load(&catalog_dir, &catalog_dir)
-            .unwrap_or_else(|error| {
-                panic!("{package}: actual native geometry load failed: {error:#}")
-            });
+        let definitions = bri_sim::definitions::Definitions::load(
+            &catalog_dir,
+            &bundle.join("addons").join(package).join("assets/bricks"),
+        )
+        .unwrap_or_else(|error| {
+            panic!("{package}: actual native geometry load failed: {error:#}")
+        });
         assert_eq!(definitions.entries.len(), catalog.bricks.len());
         for entry in &catalog.bricks {
             let definition = &definitions.entries[&entry.id];

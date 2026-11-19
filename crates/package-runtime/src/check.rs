@@ -579,11 +579,15 @@ fn imported_brick_problems(folder: &Path, id: &str) -> Vec<Diagnostic> {
         else {
             return false;
         };
-        let mesh = bri_package::path::inside(&dir, file)
+        // The mesh ships beside the package's content.json registration
+        // (`assets/bricks/`), not beside the catalog JSON.
+        let bricks = folder.join("assets/bricks");
+        let mesh = bri_package::path::inside(&bricks, file)
             .ok()
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("glb"))
             .and_then(|p| std::fs::read(p).ok())
-            .and_then(|b| serde_json::from_slice::<bri_content::brick::Brick>(&b).ok());
-        mesh.is_some_and(|m| m.id == entry.mesh_id && m.validate().is_ok())
+            .and_then(|b| bri_gltf::brick_from_glb(&b, &entry.mesh_id).ok());
+        mesh.is_some_and(|m| m.validate().is_ok())
             && collisions
                 .bodies
                 .iter()

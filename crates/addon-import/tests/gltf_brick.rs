@@ -32,7 +32,8 @@ fn a_gltf_model_becomes_a_brick_the_engine_loads() {
     let out = dir.join("table");
     gltf::import(&Options::new(&glb, &out, Kind::Brick)).unwrap();
     let catalog = out.join("assets/brick-catalog");
-    let definitions = bri_sim::definitions::Definitions::load(&catalog, &catalog).unwrap();
+    let definitions =
+        bri_sim::definitions::Definitions::load(&catalog, &out.join("assets/bricks")).unwrap();
     let table = definitions.by_id("table:brick/table").unwrap();
     // 1 unit is 2 studs wide and deep and 5 plates tall.
     assert_eq!(table.mesh.footprint_studs, [2, 2]);

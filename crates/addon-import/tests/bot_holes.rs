@@ -122,7 +122,7 @@ fn the_shark_port_makes_a_swimmer_that_bites_and_dies_on_land() {
     // brick uses Bot_Hole's pad shape; the package carries a copy, so its
     // bricks load on their own, with Bot_Hole off or on.
     let catalog = out.join("assets/brick-catalog");
-    let bricks = bri_sim::definitions::Definitions::load(&catalog, &catalog)
+    let bricks = bri_sim::definitions::Definitions::load(&catalog, &out.join("assets/bricks"))
         .expect("its bricks load without Bot_Hole");
     assert!(
         bricks

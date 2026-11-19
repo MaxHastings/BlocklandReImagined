@@ -16,7 +16,9 @@ const USAGE: &str = "Usage:
 Converts one legacy Blockland Add-On into a native package directory and writes
 import-report.json and IMPORT-REPORT.md into it. Never executes scripts.
 `--installed` names the game's content folder: base datablocks the Add-On
-inherits from or names (a brick's parent, a sound) are read from it.
+inherits from or names (a brick's parent, a sound) are read from it, and
+brick geometry the base catalog already ships is lent by mesh id instead of
+re-shipped as a copy.
 
 `port` sets up a folder for porting the Add-On's scripts natively: the import,
 the original scripts, a drafted port, checks of what v20 does, stubs and an
