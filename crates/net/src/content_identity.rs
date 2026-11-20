@@ -122,7 +122,24 @@ pub fn body_pose_assets(
         bri_package::environment::hash_bytes(&bytes) == avatar.rig_sha256,
         "Animation avatar digest mismatch"
     );
-    let rig: bri_content::avatar::Rig = serde_json::from_slice(&bytes)?;
+    // GLB-era packs ship the rig as a glTF; legacy packs still carry JSON rigs.
+    let rig: bri_content::avatar::Rig = if avatar.rig.to_ascii_lowercase().ends_with(".glb") {
+        let converted = bri_gltf::lower(&bytes, &avatar.id)?;
+        let mut sequences = BTreeMap::new();
+        for clip in &converted.shape.animations {
+            sequences.insert(clip.name.to_ascii_lowercase(), clip.clone());
+        }
+        bri_content::avatar::Rig {
+            schema_version: 1,
+            id: avatar.id.clone(),
+            shape: converted.shape,
+            sequences,
+            sources: Vec::new(),
+            omissions: Vec::new(),
+        }
+    } else {
+        serde_json::from_slice(&bytes)?
+    };
     rig.validate()?;
     assets.insert(
         crate::host_setup::BLOCKHEAD_MODEL.into(),
@@ -1444,10 +1461,12 @@ fn hash_files_bounded(
         }
         ensure!(read == size, "Native content changed while hashing: {name}");
         if let Some(expected) = expected.get(&name) {
-            ensure!(
-                &format!("{:x}", file_hash.finalize()) == expected,
-                "Native material hash mismatch: {name}"
-            );
+            bri_package::repin::verify(
+                format!("Native material hash mismatch: {name}"),
+                &path,
+                &format!("{:x}", file_hash.finalize()),
+                expected,
+            )?;
         }
     }
     Ok(format!("{:x}", hash.finalize()))

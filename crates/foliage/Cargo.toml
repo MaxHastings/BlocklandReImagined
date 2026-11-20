@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 bri-console = { path = "../console" }
 anyhow.workspace = true
+bri-package = { path = "../package" }
 bri-render = { path = "../render", optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -21,7 +22,6 @@ default = ["gpu"]
 gpu = ["dep:bri-render", "dep:bytemuck", "dep:wgpu"]
 
 [dev-dependencies]
-bri-package = { path = "../package" }
 bri-content = { path = "../content" }
 pollster.workspace = true
 bri-physics = { path = "../physics" }

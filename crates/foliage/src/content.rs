@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, ensure};
+use bri_package::repin;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
@@ -360,12 +361,14 @@ impl FoliagePack {
                     std::fs::metadata(root.as_ref().join(path))?.len() <= 16 * 1024 * 1024,
                     "oversized image file"
                 );
-                let bytes =
-                    std::fs::read(root.as_ref().join(path)).context("foliage image missing")?;
-                ensure!(
-                    format!("{:x}", Sha256::digest(&bytes)) == t.sha256,
-                    "foliage image hash mismatch"
-                );
+                let file = root.as_ref().join(path);
+                let bytes = std::fs::read(&file).context("foliage image missing")?;
+                repin::verify(
+                    "foliage image hash mismatch",
+                    &file,
+                    &format!("{:x}", Sha256::digest(&bytes)),
+                    &t.sha256,
+                )?;
                 let dimensions = image::ImageReader::new(std::io::Cursor::new(&bytes))
                     .with_guessed_format()?
                     .into_dimensions()?;

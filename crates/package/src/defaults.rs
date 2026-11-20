@@ -217,7 +217,9 @@ pub fn installed(root: &Path) -> Vec<PackageEntry> {
 /// checkout's `content/`: the folder beside it holds [`LIST_FILE`]. None
 /// for a release, whose content was installed when it was packaged.
 pub fn checkout_packages(content_root: &Path) -> Option<PathBuf> {
-    let absolute = std::path::absolute(content_root).ok()?;
+    // Canonicalize so a symlinked content root (a release dir's `content`
+    // link into the checkout) still finds the checkout beside it.
+    let absolute = std::fs::canonicalize(content_root).ok()?;
     let packages = absolute.parent()?.join("packages");
     packages.join(LIST_FILE).is_file().then_some(packages)
 }

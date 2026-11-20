@@ -132,7 +132,29 @@ impl AnimationAssets {
                 "Animation resource digest mismatch"
             );
             let rig = if asset.rig {
-                let rig: Rig = serde_json::from_slice(&asset.bytes)?;
+                // GLB-era packs ship the rig as a glTF (lowered exactly as the
+                // client draws one); legacy packs still carry JSON rigs.
+                let rig: Rig = if asset.bytes.starts_with(b"glTF") {
+                    let converted = bri_gltf::lower(&asset.bytes, &asset.resource)?;
+                    let mut sequences = BTreeMap::new();
+                    for animation in &converted.shape.animations {
+                        let name = animation.name.to_ascii_lowercase();
+                        ensure!(
+                            !name.is_empty() && sequences.insert(name, animation.clone()).is_none(),
+                            "Ambiguous animation alias"
+                        );
+                    }
+                    Rig {
+                        schema_version: 1,
+                        id: asset.resource.clone(),
+                        shape: converted.shape,
+                        sequences,
+                        sources: vec![],
+                        omissions: vec![],
+                    }
+                } else {
+                    serde_json::from_slice(&asset.bytes)?
+                };
                 rig.validate()?;
                 rig
             } else {

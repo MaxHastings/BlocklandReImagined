@@ -7,8 +7,11 @@
 //! with signed paint offsets riding in a `bri_brick.paint_offsets` marker.
 //! This tool migrates every file that still carries a legacy dump: it lowers
 //! the brick with `brick_from_glb` (which reads pre-migration files through
-//! the documented fallback) and re-exports it with `export_brick`, which
-//! writes the channels, adds the markers where needed, and drops the dump.
+//! the documented fallback) and re-exports it with
+//! `export_brick_with_surfaces`, which writes the channels, adds the markers
+//! where needed, drops the dump, and gives runtime-coloured surfaces their
+//! per-surface placeholder materials referencing the installed shared stock
+//! surface pictures by relative URI from the file's own folder.
 //! The file is replaced only where the bytes change; a brick whose colours
 //! are all plain player paint carries no dump at all and is left alone.
 //!
@@ -32,7 +35,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail, ensure};
-use bri_gltf::{brick_from_glb, export_brick};
+use bri_addon_import::installed_brick_surfaces;
+use bri_gltf::{brick_from_glb, export_brick_with_surfaces, SurfaceTextures};
 use serde_json::{Value, json};
 
 struct Args {
@@ -211,6 +215,19 @@ fn run(args: &Args) -> Result<Report> {
     let apply = args.apply;
     let skip = &args.skip;
 
+    // The stock surface pictures the placeholders will carry, once for every
+    // file (the bundle lives under the content root; absent: plain factors).
+    let surfaces = match installed_brick_surfaces(root) {
+        Some(s) => s,
+        None => {
+            eprintln!(
+                "backfill-brick-materials: no brick-materials bundle found under {}; placeholders will ship plain",
+                root.display()
+            );
+            SurfaceTextures::default()
+        }
+    };
+
     let mut report = Report {
         mode: if apply { "apply" } else { "dry-run" },
         root: root.display().to_string(),
@@ -290,7 +307,9 @@ fn run(args: &Args) -> Result<Report> {
                 continue;
             }
         };
-        let packed = match export_brick(&brick) {
+        // The file's own folder under the content root, so its placeholders
+        // reference the shared pictures by path from there.
+        let packed = match export_brick_with_surfaces(&brick, &surfaces, rel.parent()) {
             Ok(b) => b,
             Err(error) => {
                 report.failed += 1;

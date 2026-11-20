@@ -8,6 +8,7 @@ use crate::schema::{Asset, Definition, Family, Pack};
 use anyhow::{Context, Result, ensure};
 use bri_console::Clamp;
 use bri_content::shape::{Animation, ClipSet, Shape};
+use bri_package::repin;
 use glam::{Quat, Vec3};
 use sha2::{Digest, Sha256};
 use std::path::{Component, Path};
@@ -71,11 +72,12 @@ fn read(
         "vehicle asset too large"
     );
     let bytes = std::fs::read(&path)?;
-    ensure!(
-        format!("{:x}", Sha256::digest(&bytes)) == asset.sha256,
-        "vehicle asset hash mismatch: {}",
-        asset.path
-    );
+    repin::verify(
+        format!("vehicle asset hash mismatch: {}", asset.path),
+        &path,
+        &format!("{:x}", Sha256::digest(&bytes)),
+        &asset.sha256,
+    )?;
     Ok(bytes)
 }
 

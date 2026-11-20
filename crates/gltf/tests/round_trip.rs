@@ -865,3 +865,176 @@ fn vertex_colours_are_a_paint_mask_for_posed_models() {
     // The colourless primitive takes white: no modulation.
     assert_eq!(&mesh.colors[3..], &[[255u8; 4]; 3]);
 }
+
+/// A clip this crate's exporter wrote carries its full Blockland semantics in
+/// `extras.bri_clip`; lowering such a file must restore every field exactly —
+/// name, length, layering, triggers and per-frame motion (bit-exact: exported
+/// shapes carry unit node scales, so the re-import's scale bookkeeping is an
+/// identity). Covers the three shapes of clip the exporter now keeps: an
+/// additive overlay with custom priority and a non-default interpolation, an
+/// absolute clip whose length no fps-30 guess would find (triggers and object
+/// frames included), and an empty placeholder.
+#[test]
+fn exporter_written_clips_round_trip_field_for_field() {
+    use bri_content::shape::{ObjectTrack, RotationInterpolation, Trigger};
+
+    let mut shape = bri_content::testing::rigid_shape(
+        "clip_test",
+        &[("root", None, [0.0; 3]), ("arm", Some(0), [0.5, 0.8, 0.1])],
+        &[(
+            0,
+            [0.0, 0.0, 0.0],
+            [0.1, 0.2, 0.3],
+            bri_content::testing::plain(0),
+        )],
+        vec![bri_content::testing::material("tex", "opaque")],
+    );
+
+    // An additive overlay: non-looping, custom priority and parent-frame
+    // translations, a non-default rotation interpolation, four frames of
+    // motion on `arm`.
+    let additive = bri_content::shape::Animation {
+        name: "additive_layer".into(),
+        frames: 4,
+        duration: 0.8,
+        looping: false,
+        additive: true,
+        parent_translations: true,
+        priority: 64,
+        rotation_interpolation: RotationInterpolation::NormalizedLinear,
+        nodes: vec![bri_content::shape::NodeTrack {
+            node: "arm".into(),
+            rotations: vec![[0.0, 0.0, 0.0, 1.0]; 4],
+            translations: vec![
+                [0.1, 0.2, 0.3],
+                [0.4, -0.5, 0.6],
+                [-0.7, 0.8, -0.9],
+                [0.0, 0.0, 0.0],
+            ],
+            scales: vec![[1.0; 3], [1.5, 1.0, 1.0], [1.0, 2.0, 1.0], [0.5, 0.5, 0.5]],
+            scale_rotations: Vec::new(),
+        }],
+        objects: Vec::new(),
+        ground_translations: Vec::new(),
+        ground_rotations: Vec::new(),
+        triggers: Vec::new(),
+    };
+
+    // An absolute clip: odd frame count, a length no fps-30 derivation would
+    // find, two triggers and an object's material-frame track.
+    let triggered = bri_content::shape::Animation {
+        name: "triggered_walk".into(),
+        frames: 3,
+        duration: 0.5,
+        looping: true,
+        additive: false,
+        parent_translations: false,
+        priority: 7,
+        rotation_interpolation: RotationInterpolation::Spherical,
+        nodes: vec![bri_content::shape::NodeTrack {
+            node: "root".into(),
+            rotations: Vec::new(),
+            translations: vec![[0.1, 0.0, 0.2], [0.3, 0.4, 0.5], [0.6, -0.7, 0.8]],
+            scales: Vec::new(),
+            scale_rotations: Vec::new(),
+        }],
+        objects: vec![ObjectTrack {
+            object: 0,
+            visibility: vec![1.0, 0.5, 0.0],
+            frames: vec![0, 1, 2],
+            material_frames: vec![2, 7, 9],
+        }],
+        ground_translations: Vec::new(),
+        ground_rotations: Vec::new(),
+        triggers: vec![
+            Trigger { state: 2_147_483_650, position: 0.6315779 },
+            Trigger { state: 42, position: 0.1 },
+        ],
+    };
+
+    // An empty placeholder clip (zero tracks), as `land` and `root` ride in a
+    // real rig.
+    let empty = bri_content::shape::Animation {
+        name: "empty_placeholder".into(),
+        frames: 2,
+        duration: 0.0667,
+        looping: false,
+        additive: true,
+        parent_translations: false,
+        priority: 128,
+        rotation_interpolation: RotationInterpolation::Spherical,
+        nodes: Vec::new(),
+        objects: Vec::new(),
+        ground_translations: Vec::new(),
+        ground_rotations: Vec::new(),
+        triggers: Vec::new(),
+    };
+
+    shape.animations.extend([additive.clone(), triggered.clone(), empty.clone()]);
+    let (lowered, _notes) = export_and_lower(&shape).unwrap();
+    assert_eq!(lowered.animations.len(), 3);
+
+    // The scalar semantics come back field for field.
+    for (orig, low) in [additive, triggered, empty].into_iter().zip(lowered.animations.iter()) {
+        assert_eq!(low.name, orig.name);
+        assert_eq!(low.frames, orig.frames);
+        assert_eq!(low.duration.to_bits(), orig.duration.to_bits());
+        assert_eq!(low.looping, orig.looping);
+        assert_eq!(low.additive, orig.additive);
+        assert_eq!(low.priority, orig.priority);
+        assert_eq!(low.parent_translations, orig.parent_translations);
+        assert_eq!(low.rotation_interpolation, orig.rotation_interpolation);
+        assert_eq!(low.ground_translations.len(), orig.ground_translations.len());
+        assert_eq!(low.ground_rotations.len(), orig.ground_rotations.len());
+        assert_eq!(low.triggers.len(), orig.triggers.len());
+        for (o, l) in orig.triggers.iter().zip(low.triggers.iter()) {
+            assert_eq!(l.state, o.state);
+            assert_eq!(l.position.to_bits(), o.position.to_bits());
+        }
+    }
+
+    // The additive overlay's per-frame motion comes back bit-exact, scales raw.
+    let a = &lowered.animations[0];
+    let track = a.nodes.iter().find(|t| t.node == "arm").expect("the arm's track");
+    assert_eq!(track.translations.len(), 4);
+    for (i, v) in [
+        [0.1f32, 0.2, 0.3],
+        [0.4, -0.5, 0.6],
+        [-0.7, 0.8, -0.9],
+        [0.0, 0.0, 0.0],
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(track.translations[i].to_vec().into_iter().map(f32::to_bits).collect::<Vec<_>>(), v.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+    }
+    assert_eq!(track.rotations, vec![[0.0f32, 0.0, 0.0, 1.0]; 4]);
+    for (i, want) in [[1.0f32; 3], [1.5, 1.0, 1.0], [1.0, 2.0, 1.0], [0.5, 0.5, 0.5]]
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(track.scales[i].to_vec().into_iter().map(f32::to_bits).collect::<Vec<_>>(), want.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+    }
+
+    // The absolute clip's translation-only track keeps only that path.
+    let b = &lowered.animations[1];
+    let track = b.nodes.iter().find(|t| t.node == "root").expect("the root's track");
+    assert_eq!(track.translations.len(), 3);
+    for (i, want) in [[0.1f32, 0.0, 0.2], [0.3, 0.4, 0.5], [0.6, -0.7, 0.8]]
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(track.translations[i].to_vec().into_iter().map(f32::to_bits).collect::<Vec<_>>(), want.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+    }
+    assert!(track.rotations.is_empty());
+    assert!(track.scales.is_empty());
+    // The object's per-frame tracks ride along.
+    assert_eq!(b.objects.len(), 1);
+    assert_eq!(b.objects[0].object, 0);
+    assert_eq!(b.objects[0].visibility, vec![1.0f32, 0.5, 0.0]);
+    assert_eq!(b.objects[0].frames, vec![0u32, 1, 2]);
+    assert_eq!(b.objects[0].material_frames, vec![2u32, 7, 9]);
+
+    // The placeholder clip rides with no tracks at all.
+    assert!(lowered.animations[2].nodes.is_empty());
+}

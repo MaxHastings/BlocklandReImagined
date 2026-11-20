@@ -2,7 +2,7 @@
 //! meshes and clips, and [`character`] is an original rigged figure laid out
 //! the way the authoring guide asks (sockets, role clips, a scaled
 //! armature, textures), so tests need no third-party model.
-pub use super::write::{Channel, Gltf};
+pub use super::write::{Channel, Gltf, MaterialImage};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::json;
 
@@ -212,13 +212,13 @@ pub fn detailed_character(with_eye: bool, subdivisions: u32) -> Figure {
     let skin_tex = g.material(
         "Skin Tone",
         [1.0, 1.0, 1.0, 1.0],
-        Some((
+        Some(MaterialImage::Png((
             2,
             2,
             vec![
                 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
             ],
-        )),
+        ))),
         json!({ "normalTexture": { "index": 0 } }),
     );
     let boots = g.material("Boots", [0.2, 0.1, 0.05, 1.0], None, json!({}));
@@ -483,13 +483,13 @@ pub fn room_with(col_floor: bool, floor: &str, extra: impl FnOnce(&mut Gltf)) ->
     let wood = g.material(
         "Wood",
         [1.0, 1.0, 1.0, 1.0],
-        Some((
+        Some(MaterialImage::Png((
             2,
             2,
             [[150u8, 100, 60, 255], [120, 80, 50, 255]]
                 .repeat(2)
                 .concat(),
-        )),
+        ))),
         json!({ "extras": { "bri_surface": "dirt" } }),
     );
     let paint = g.material(

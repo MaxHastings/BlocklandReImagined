@@ -23,7 +23,10 @@ pub mod testing;
 mod vertex_lights;
 mod write;
 
-pub use brick_export::{brick_from_glb, export_brick};
+pub use brick_export::{
+    brick_from_glb, export_brick, export_brick_with_surfaces, relative_uri, SurfacePicture,
+    SurfaceTextures,
+};
 pub use read::Document;
 pub use shape_export::export as export_shape;
 pub use write::{Channel, Gltf};
@@ -32,7 +35,7 @@ use anyhow::{Context, Result, bail, ensure};
 use bri_console::Clamp;
 use bri_content::shape::{
     Animation, Detail, Influence, LayerBlend, Material, Mesh, Metal, Node, NodeTrack, Object,
-    Primitive, Shape, Skin, Surface,
+    ObjectTrack, Primitive, RotationInterpolation, Shape, Skin, Surface, Trigger,
 };
 use glam::{Mat4, Quat, Vec3};
 use read::array;
@@ -370,6 +373,12 @@ const EYE: &[&str] = &["socket_eye"];
 pub fn point(v: Vec3) -> Vec3 {
     Vec3::new(-v.x, v.y, -v.z)
 }
+/// A mirrored zero keeps its sign; fold it back so round trips stay bit-exact
+/// (a rest translation the exporter omits comes back as default zeros).
+fn canonicalize(v: Vec3) -> Vec3 {
+    let z = |x: f32| if x == 0.0 { 0.0 } else { x };
+    Vec3::new(z(v.x), z(v.y), z(v.z))
+}
 fn turn(q: Quat) -> Quat {
     Quat::from_xyzw(-q.x, q.y, -q.z, q.w).normalize()
 }
@@ -656,7 +665,7 @@ pub fn convert(
         .map(|(k, &n)| Node {
             name: names[k].clone(),
             parent: nodes[n].parent.map(|p| new_index[p]),
-            translation: point(nodes[n].t * parent_sigma(n)).to_array(),
+            translation: canonicalize(point(nodes[n].t * parent_sigma(n))).to_array(),
             rotation: turn(nodes[n].r).to_array(),
         })
         .collect();
@@ -2340,6 +2349,15 @@ fn round(v: f32) -> f32 {
     (v * 1000.0).round() / 1000.0
 }
 
+/// One channel of a glTF animation, resolved against its document.
+struct ClipChannel {
+    node: usize,
+    path: &'static str,
+    times: Vec<f32>,
+    values: Vec<Vec<f32>>,
+    interpolation: String,
+}
+
 /// One glTF animation as a native clip, with its report line and, for a
 /// loop, how far its root drifts. `None` when nothing it animates is kept.
 #[allow(clippy::too_many_arguments)]
@@ -2353,13 +2371,6 @@ fn sample_clip(
     sigma: &[f32],
     opts: &Options,
 ) -> Result<Option<(Animation, Clip, Option<f32>)>> {
-    struct Channel {
-        node: usize,
-        path: &'static str,
-        times: Vec<f32>,
-        values: Vec<Vec<f32>>,
-        interpolation: String,
-    }
     let mut channels = Vec::new();
     for c in array(a, "channels") {
         let Some(node) = c["target"]["node"].as_u64().map(|n| n as usize) else {
@@ -2396,13 +2407,23 @@ fn sample_clip(
             !times.is_empty() && values.len() == times.len() * per,
             "`{source}` has a sampler whose times and values do not match"
         );
-        channels.push(Channel {
+        channels.push(ClipChannel {
             node,
             path,
             times,
             values,
             interpolation,
         });
+    }
+    // A file this crate's exporter wrote carries the clip's Blockland
+    // semantics in `extras.bri_clip`; those decide its name, length, looping
+    // and layering outright (the channels only supply per-node motion). A
+    // clip with no channels at all still rides there. Without it the legacy
+    // derivation below stands.
+    if let Some(extra) = a["extras"]["bri_clip"].as_object() {
+        return Ok(Some(bri_clip(
+            extra, source, &channels, nodes, new_index, shape_nodes, sigma,
+        )?));
     }
     if channels.is_empty() {
         return Ok(None);
@@ -2562,6 +2583,269 @@ fn sample_clip(
     Ok(Some((animation, clip, root_drift.filter(|_| looping))))
 }
 
+/// A clip this crate's exporter wrote: its `extras.bri_clip` decides the
+/// name, length, looping and layering outright (the channels only supply
+/// per-node motion), so a round trip keeps what the game drew. The frame
+/// times are the importer's own formula at the exported length — for a file
+/// this crate wrote they land exactly on its keys, so every value comes back
+/// as it was authored. An additive clip's scales stay raw (no rest-scale
+/// division, no magnitudes), as the game applies them to the layer below.
+fn bri_clip(
+    extra: &serde_json::Map<String, Value>,
+    source: &str,
+    channels: &[ClipChannel],
+    nodes: &[GNode],
+    new_index: &[usize],
+    shape_nodes: &[Node],
+    sigma: &[f32],
+) -> Result<(Animation, Clip, Option<f32>)> {
+    let name = extra.get("name").and_then(Value::as_str)
+        .with_context(|| format!("`{source}`'s bri_clip has no name"))?
+        .to_string();
+    let frames = extra.get("frames").and_then(Value::as_u64)
+        .with_context(|| format!("`{source}`'s bri_clip has no frame count"))? as usize;
+    ensure!(
+        (1..=100_000).contains(&frames),
+        "`{source}`'s bri_clip names an impossible clip length"
+    );
+    let duration = extra.get("duration").and_then(Value::as_f64)
+        .with_context(|| format!("`{source}`'s bri_clip has no duration"))? as f32;
+    ensure!(
+        duration.is_finite() && duration >= 0.0,
+        "`{source}`'s bri_clip has a bad duration"
+    );
+    let looping = extra.get("looping").and_then(Value::as_bool)
+        .with_context(|| format!("`{source}`'s bri_clip has no looping flag"))?;
+    let additive = extra.get("additive").and_then(Value::as_bool)
+        .with_context(|| format!("`{source}`'s bri_clip has no additive flag"))?;
+    let priority = extra.get("priority").and_then(Value::as_i64)
+        .with_context(|| format!("`{source}`'s bri_clip has no priority"))? as i32;
+    // The exporter always writes these two; a missing one means an older or
+    // foreign file, and the defaults are what it would have written.
+    let parent_translations = extra.get("parent_translations").and_then(Value::as_bool).unwrap_or(false);
+    let rotation_interpolation = match extra.get("rotation_interpolation").and_then(Value::as_str) {
+        None | Some("spherical") => RotationInterpolation::Spherical,
+        Some("normalized_linear") => RotationInterpolation::NormalizedLinear,
+        Some(other) => bail!(
+            "`{source}`'s bri_clip names an unknown rotation interpolation `{other}`"
+        ),
+    };
+
+    // The clip's extra tracks, by row.
+    let mut triggers = Vec::new();
+    if let Some(list) = extra.get("triggers").and_then(Value::as_array) {
+        for (i, t) in list.iter().enumerate() {
+            let cols = t.as_array().with_context(|| format!("`{source}`'s bri_clip has a bad trigger {i}"))?;
+            ensure!(cols.len() == 2, "`{source}`'s bri_clip trigger {i} needs [state, position]");
+            triggers.push(Trigger {
+                state: cols[0].as_u64().with_context(|| format!("`{source}`'s bri_clip has a bad trigger state {i}"))? as u32,
+                position: cols[1].as_f64().with_context(|| format!("`{source}`'s bri_clip has a bad trigger position {i}"))? as f32,
+            });
+        }
+    }
+    let rows_of = |key: &str| -> Result<Vec<Vec<f32>>> {
+        Ok(extra
+            .get(key)
+            .and_then(Value::as_array)
+            .map_or_else(|| Ok(Vec::new()), |rows| {
+                rows.iter()
+                    .enumerate()
+                    .map(|(i, row)| {
+                        let cols = row.as_array().with_context(|| format!("`{source}`'s bri_clip has a bad {key} row {i}"))?;
+                        cols.iter()
+                            .map(|v| v.as_f64().with_context(|| format!("`{source}`'s bri_clip has a non-number in its {key}")).map(|x| x as f32))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })?)
+    };
+    let ground_translations: Vec<[f32; 3]> = rows_of("ground_translations")?
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            ensure!(v.len() == 3, "`{source}`'s bri_clip ground translation row {i} needs 3 numbers");
+            Ok([v[0], v[1], v[2]])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let ground_rotations: Vec<[f32; 4]> = rows_of("ground_rotations")?
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            ensure!(v.len() == 4, "`{source}`'s bri_clip ground rotation row {i} needs 4 numbers");
+            Ok([v[0], v[1], v[2], v[3]])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut objects = Vec::new();
+    if let Some(list) = extra.get("objects").and_then(Value::as_array) {
+        for (i, o) in list.iter().enumerate() {
+            let object = o["object"]
+                .as_u64()
+                .with_context(|| format!("`{source}`'s bri_clip has a bad object track {i}"))? as usize;
+            let floats_of = |key: &str| -> Result<Vec<f32>> {
+                Ok(o.get(key)
+                    .and_then(Value::as_array)
+                    .map_or_else(|| Ok(Vec::new()), |a| {
+                        a.iter()
+                            .map(|v| v.as_f64().with_context(|| format!("`{source}`'s bri_clip has a non-number in object track {i} ({key})")).map(|x| x as f32))
+                            .collect::<Result<Vec<_>>>()
+                    })?)
+            };
+            let ints_of = |key: &str| -> Result<Vec<u32>> {
+                Ok(o.get(key)
+                    .and_then(Value::as_array)
+                    .map_or_else(|| Ok(Vec::new()), |a| {
+                        a.iter()
+                            .map(|v| {
+                                let n = v.as_u64().with_context(|| format!("`{source}`'s bri_clip has a non-integer in object track {i} ({key})"))?;
+                                u32::try_from(n).with_context(|| format!("`{source}`'s bri_clip has an out-of-range integer in object track {i} ({key})"))
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })?)
+            };
+            objects.push(ObjectTrack {
+                object,
+                visibility: floats_of("visibility")?,
+                frames: ints_of("frames")?,
+                material_frames: ints_of("material_frames")?,
+            });
+        }
+    }
+
+    // Each animated node's local transform at every frame, rest where a path
+    // is not animated. The times are the exporter's own key positions.
+    let start = if channels.is_empty() {
+        0.0
+    } else {
+        channels.iter().map(|c| c.times[0]).fold(f32::MAX, f32::min)
+    };
+    let end = if channels.is_empty() {
+        0.0
+    } else {
+        channels
+            .iter()
+            .map(|c| *c.times.last().unwrap())
+            .fold(f32::MIN, f32::max)
+    };
+    let time = |i: usize| {
+        if frames == 1 || channels.is_empty() {
+            start
+        } else if looping {
+            start + duration * i as f32 / frames as f32
+        } else {
+            start + duration * i as f32 / (frames - 1) as f32
+        }
+    };
+    let animated: BTreeSet<usize> = channels.iter().map(|c| c.node).collect();
+    let mut tracks = Vec::new();
+    let mut root_drift = None;
+    for node in animated {
+        let g = &nodes[node];
+        let mut t = vec![g.t; frames];
+        let mut r = vec![g.r; frames];
+        let mut s = vec![g.s; frames];
+        let mut paths = BTreeSet::new();
+        for c in channels.iter().filter(|c| c.node == node) {
+            paths.insert(c.path);
+            for i in 0..frames {
+                let v = sample(
+                    c.times.as_slice(),
+                    &c.values,
+                    &c.interpolation,
+                    c.path == "rotation",
+                    time(i),
+                );
+                match c.path {
+                    "translation" => t[i] = Vec3::new(v[0], v[1], v[2]),
+                    "rotation" => r[i] = Quat::from_xyzw(v[0], v[1], v[2], v[3]).normalize(),
+                    _ => s[i] = Vec3::new(v[0], v[1], v[2]),
+                }
+            }
+            if looping
+                && c.path == "translation"
+                && g.parent.is_none_or(|p| nodes[p].parent.is_none())
+            {
+                let first = sample(&c.times, &c.values, &c.interpolation, false, start);
+                let last = sample(&c.times, &c.values, &c.interpolation, false, end);
+                let d = Vec3::new(last[0] - first[0], 0.0, last[2] - first[2]).length()
+                    * g.parent.map_or(1.0, |p| sigma[p]);
+                if d > 0.05 {
+                    root_drift = Some(root_drift.unwrap_or(0.0f32).max(d));
+                }
+            }
+        }
+        let k = new_index[node];
+        let parent = g.parent.map_or(1.0, |p| sigma[p]);
+        let nt: Vec<Vec3> = t.iter().map(|t| point(*t * parent)).collect();
+        let nr: Vec<Quat> = r.iter().map(|r| turn(*r)).collect();
+        let mut track = NodeTrack {
+            node: shape_nodes[k].name.clone(),
+            rotations: Vec::new(),
+            translations: Vec::new(),
+            scales: Vec::new(),
+            scale_rotations: Vec::new(),
+        };
+        if additive {
+            // The game adds these to the layer below as authored; store them
+            // raw, with no rest-scale division and no magnitudes.
+            if paths.contains("translation") {
+                track.translations = nt.iter().map(|v| v.to_array()).collect();
+            }
+            if paths.contains("rotation") {
+                track.rotations = nr.iter().map(|q| q.to_array()).collect();
+            }
+            if paths.contains("scale") {
+                track.scales = s.iter().map(|v| v.to_array()).collect();
+            }
+        } else {
+            // Every channel the clip has is an override, even one that holds
+            // the rest pose: an aim clip keeping an arm still must stop the
+            // run below it swinging that arm. Bones without a channel are
+            // left to the layer below.
+            if paths.contains("translation") {
+                track.translations = nt.iter().map(|v| v.to_array()).collect();
+            }
+            if paths.contains("rotation") {
+                track.rotations = nr.iter().map(|q| q.to_array()).collect();
+            }
+            if paths.contains("scale") {
+                track.scales = s
+                    .iter()
+                    .map(|v| (*v / g.s.max(Vec3::splat(1e-6))).abs().to_array())
+                    .collect();
+            }
+        }
+        if !(track.rotations.is_empty() && track.translations.is_empty() && track.scales.is_empty())
+        {
+            tracks.push(track);
+        }
+    }
+    let animation = Animation {
+        name: name.clone(),
+        frames,
+        duration,
+        looping,
+        additive,
+        parent_translations,
+        priority,
+        nodes: tracks,
+        objects,
+        rotation_interpolation,
+        ground_translations,
+        ground_rotations,
+        triggers,
+    };
+    let clip = Clip {
+        source: source.into(),
+        name: name.clone(),
+        role: role(&name).map(|r| r.0.to_string()),
+        frames,
+        duration,
+        looping,
+        additive,
+    };
+    Ok((animation, clip, root_drift.filter(|_| looping)))
+}
+
 /// A sampler's value at `t`, clamped to its keys.
 fn sample(
     times: &[f32],
@@ -2589,6 +2873,14 @@ fn sample(
     let (t0, t1) = (times[k], times[k + 1]);
     let dt = t1 - t0;
     let u = if dt > 0.0 { (t - t0) / dt } else { 0.0 };
+    // An exact key hit is that key: interpolating it would only add float
+    // noise (and signed-zero drift on constant channels).
+    if u == 0.0 {
+        return value(k);
+    }
+    if u == 1.0 {
+        return value(k + 1);
+    }
     let (a, b) = (value(k), value(k + 1));
     let out: Vec<f32> = match interpolation {
         "STEP" => a,
@@ -2866,16 +3158,27 @@ pub fn make_material(
             .unwrap_or(1.0) as f32)
             .clamped(0.0, 16.0),
     });
-    let metal = pbr["metallicFactor"]
-        .as_f64()
-        .filter(|f| *f >= 0.5 && !unlit && surface.is_none())
-        .map(|_| Metal {
-            color: [1.0; 3],
-            roughness,
-            detail: None,
-            detail_scale: 1.0,
-            detail_strength: 1.0,
-        });
+    // A re-exported native shape carries its exact metal in bri_legacy;
+    // third-party files fall back to the stated PBR factor.
+    let legacy_metal = m["extras"]["bri_legacy"]["metal"]
+        .as_object()
+        .map(|v| {
+            serde_json::from_value::<Metal>(Value::Object(v.clone()))
+                .with_context(|| format!("material `{source}` has a bad bri_legacy.metal"))
+        })
+        .transpose()?;
+    let metal = legacy_metal.or_else(|| {
+        pbr["metallicFactor"]
+            .as_f64()
+            .filter(|f| *f >= 0.5 && !unlit && surface.is_none())
+            .map(|_| Metal {
+                color: [1.0; 3],
+                roughness,
+                detail: None,
+                detail_scale: 1.0,
+                detail_strength: 1.0,
+            })
+    });
     let uv_motion = if m["extras"]["bri_uv_motion"].is_null() {
         None
     } else {

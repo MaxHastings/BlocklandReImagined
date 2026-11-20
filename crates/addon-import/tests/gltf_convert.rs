@@ -763,7 +763,7 @@ fn scatter_layer(dir: &std::path::Path, fade: Option<[f32; 2]>) -> PathBuf {
     let leaf = g.material(
         "Leaf",
         [1.0; 4],
-        Some((1, 1, vec![40, 200, 40, 255])),
+        Some(gltf::testing::MaterialImage::Png((1, 1, vec![40, 200, 40, 255]))),
         json!({}),
     );
     let mesh = g.mesh(
@@ -876,7 +876,7 @@ fn backdrop_model(dir: &std::path::Path, eye: Option<[f32; 3]>) -> PathBuf {
     let sky = g.material(
         "Sky",
         [1.0; 4],
-        Some((1, 1, vec![90, 140, 220, 255])),
+        Some(gltf::testing::MaterialImage::Png((1, 1, vec![90, 140, 220, 255]))),
         json!({}),
     );
     let mesh = g.mesh(
@@ -1139,13 +1139,13 @@ fn vertex_lit_import(mask: &str) -> Vec<[f32; 4]> {
     g.material(
         "sand",
         [1.0; 4],
-        Some((2, 2, [200, 180, 120, 255].repeat(4))),
+        Some(gltf::testing::MaterialImage::Png((2, 2, [200, 180, 120, 255].repeat(4)))),
         json!({}),
     );
     g.material(
         "weights",
         [1.0; 4],
-        Some((2, 2, [255, 0, 0, 255].repeat(4))),
+        Some(gltf::testing::MaterialImage::Png((2, 2, [255, 0, 0, 255].repeat(4)))),
         json!({}),
     );
     let base = g.material(
@@ -1566,7 +1566,12 @@ fn a_layer_blend_material_becomes_a_weighted_layer_pass_the_renderer_draws() {
         )
     };
     let texture_of = |g: &mut gltf::testing::Gltf, name: &str, rgb| {
-        g.material(name, [1.0; 4], Some(tile(rgb)), json!({}));
+        g.material(
+            name,
+            [1.0; 4],
+            Some(gltf::testing::MaterialImage::Png(tile(rgb))),
+            json!({}),
+        );
         g.json["textures"].as_array().unwrap().len() - 1
     };
     let (sand, rock, snow, weights_a, weights_b) = (

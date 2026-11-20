@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use bri_addon_import::source::hash;
+use bri_addon_import::{source::hash, installed_brick_surfaces};
 use bri_content::brick::Brick;
 use bri_content::shape::Shape;
 use serde_json::Value;
@@ -168,6 +168,20 @@ impl Report {
 fn run(args: &Args) -> Result<Report> {
     let root = &args.root;
     let apply = args.apply;
+
+    // The stock surface pictures converted bricks' runtime-coloured
+    // placeholders carry (the bundle lives under the content root; absent:
+    // plain factors).
+    let surfaces = match installed_brick_surfaces(root) {
+        Some(s) => s,
+        None => {
+            eprintln!(
+                "migrate-content: no brick-materials bundle found under {}; brick placeholders will ship plain",
+                root.display()
+            );
+            bri_gltf::SurfaceTextures::default()
+        }
+    };
 
     // --- Discover ---------------------------------------------------------
     let all_files = walk(root);
@@ -447,7 +461,10 @@ fn run(args: &Args) -> Result<Report> {
                         continue;
                     }
                 };
-                let glb_bytes = match bri_gltf::export_brick(&brick) {
+                // The file's own folder under the content root, so its
+                // placeholders reference the shared pictures by path from there.
+                let glb_dir = f.parent().and_then(|d| d.strip_prefix(root).ok());
+                let glb_bytes = match bri_gltf::export_brick_with_surfaces(&brick, &surfaces, glb_dir) {
                     Ok(b) => b,
                     Err(e) => {
                         pr.failures

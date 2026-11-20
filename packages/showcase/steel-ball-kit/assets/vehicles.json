@@ -4,7 +4,7 @@
     {
       "kind": "model",
       "path": "models/steel-ball.glb",
-      "sha256": "cf2267c7cb01dac6d63af5d1994073a043f834b0dc067cf90a95528862724de3",
+      "sha256": "ec2998f2cd4afe7d942cb4a97ca3ed43c7a3e896db1d80b6bce7d3ad724907c5",
       "source_sha256": "bacc0621438e88cc575cf5203a957735aa5b49c658f67327d923ed4f83c0fcb9",
       "virtual_path": "Add-Ons/Vehicle_SteelBall/steel-ball.dts"
     },

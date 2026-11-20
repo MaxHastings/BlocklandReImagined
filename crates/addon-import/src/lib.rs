@@ -200,6 +200,85 @@ struct Owned {
     fields: BTreeMap<String, String>,
 }
 
+/// The installed shared stock brick-surface pictures for exported bricks'
+/// placeholder materials: the pre-composited-over-white copies beside the
+/// `brick-materials` bundle under the content root (written by the temporary
+/// `gen-brick-surface-pictures` tool) — what a
+/// default-painted brick shows in game, stored once and referenced by every
+/// brick's placeholders instead of embedded in each. The raw masks are never
+/// referenced: they are decal alpha pictures and would show transparent or
+/// black in an editor, not painted. `None` where no bundle is found; absent
+/// pictures leave their placeholder plain.
+pub fn installed_brick_surfaces(content_root: &Path) -> Option<gltf::SurfaceTextures> {
+    let manifest = find_bundle_manifest(content_root, 0)?;
+    let dir = manifest.parent()?;
+    // Canonical both sides so the relative path survives a symlinked root.
+    let root = content_root.canonicalize().ok()?;
+    let dir = dir.canonicalize().ok()?;
+    let rel_dir = dir.strip_prefix(&root).ok()?.to_path_buf();
+    let picture = |name: &str| -> Option<String> {
+        if dir.join("surfaces-composited").join(format!("{name}.png")).is_file() {
+            Some(
+                rel_dir
+                    .join("surfaces-composited")
+                    .join(format!("{name}.png"))
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        } else {
+            None
+        }
+    };
+    Some(gltf::SurfaceTextures {
+        top: picture("top"),
+        side: picture("side"),
+        bottom_edge: picture("bottom_edge"),
+        bottom_loop: picture("bottom_loop"),
+        ramp: picture("ramp"),
+    })
+}
+/// The bundle's manifest, at most three directories deep (role dirs look
+/// like `<pack>/brick-materials-NNN/`).
+pub fn find_bundle_manifest(dir: &Path, depth: u32) -> Option<PathBuf> {
+    if depth > 3 {
+        return None;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return None;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_file() && p.file_name().and_then(|n| n.to_str()) == Some("brick-materials.json") {
+            return Some(p);
+        }
+        if p.is_dir()
+            && !p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'))
+        {
+            if let Some(m) = find_bundle_manifest(&p, depth + 1) {
+                return Some(m);
+            }
+        }
+    }
+    None
+}
+/// A decal composited over white at full opacity: exactly what a default-
+/// painted brick shows in game (`mix(paint, tex.rgb, tex.a)` with paint
+/// white). The shared-picture tools write the result beside the bundle.
+pub fn composite_over_white(rgba: image::RgbaImage) -> gltf::SurfacePicture {
+    let (w, h) = (rgba.width(), rgba.height());
+    let mut out = vec![0u8; w as usize * h as usize * 4];
+    for (o, p) in out.chunks_exact_mut(4).zip(rgba.pixels()) {
+        let a = p[3] as f32 / 255.0;
+        o[0] = (p[0] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+        o[1] = (p[1] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+        o[2] = (p[2] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+        o[3] = 255;
+    }
+    (w, h, out)
+}
 struct Ctx<'a> {
     src: &'a Source,
     reference: &'a Reference,
@@ -231,6 +310,13 @@ struct Ctx<'a> {
     embedded_textures: BTreeSet<String>,
     /// Output paths claimed by name, so original names never collide.
     names: Names,
+    /// Shared stock brick-surface pictures for exported bricks' placeholder
+    /// materials (from `--installed`; empty where none was given or found).
+    brick_surfaces: gltf::SurfaceTextures,
+    /// This package's folder relative to the content root (`--installed`),
+    /// so a brick `.glb` can reference the shared pictures by path from its
+    /// own folder; `None` where the output sits outside the installed content.
+    brick_uri_base: Option<PathBuf>,
 }
 
 impl Ctx<'_> {
@@ -603,6 +689,21 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         borrowed: BTreeMap::new(),
         embedded_textures: BTreeSet::new(),
         names: Names::default(),
+        brick_surfaces: opts
+            .installed
+            .as_deref()
+            .and_then(installed_brick_surfaces)
+            .unwrap_or_default(),
+        brick_uri_base: match &opts.installed {
+            Some(installed) => match (
+                installed.canonicalize(),
+                std::fs::canonicalize(&opts.out),
+            ) {
+                (Ok(root), Ok(out)) => out.strip_prefix(&root).ok().map(PathBuf::from),
+                _ => None,
+            },
+            None => None,
+        },
     };
     metadata(&mut cx);
     let mut scripts = read_scripts(&mut cx);
@@ -2084,8 +2185,19 @@ fn convert_files(cx: &mut Ctx, dsq: &DsqPlan) -> Result<()> {
                     Ok((brick, provenance)) => {
                         // One brick file per BLB: a .glb the game lowers back
                         // to this very brick (faces, surfaces and collision in
-                        // its extras); Blender sees a plain mesh. No legacy JSON.
-                        let glb = match gltf::export_brick(&brick) {
+                        // its extras); paintable surfaces ride placeholder
+                        // materials carrying their stock decals. No legacy JSON.
+                        // The file's own folder under the content root, so its
+                        // placeholders can reference the shared stock pictures.
+                        let glb_dir = cx
+                            .brick_uri_base
+                            .as_ref()
+                            .map(|base| base.join("assets/bricks"));
+                        let glb = match gltf::export_brick_with_surfaces(
+                            &brick,
+                            &cx.brick_surfaces,
+                            glb_dir.as_deref(),
+                        ) {
                             Ok(glb) => glb,
                             Err(e) => {
                                 set_asset(
@@ -3866,7 +3978,13 @@ fn borrow_brick(cx: &mut Ctx, path: &str, bytes: &[u8]) -> String {
     // The geometry as a .glb (the game lowers it back to this brick), so a
     // borrowed brick matches the format this package's own bricks ship in.
     let written = bri_convert::brick::read(bytes, id.clone())
-        .and_then(|(brick, _)| gltf::export_brick(&brick))
+        .and_then(|(brick, _)| {
+            let glb_dir = cx
+                .brick_uri_base
+                .as_ref()
+                .map(|base| base.join("assets/bricks"));
+            gltf::export_brick_with_surfaces(&brick, &cx.brick_surfaces, glb_dir.as_deref())
+        })
         .and_then(|glb| cx.write(&format!("assets/{rel}"), &glb));
     match written {
         Ok(()) => {
@@ -3905,8 +4023,12 @@ fn borrow_native_brick(cx: &mut Ctx, path: &str, mut native: reference::NativeBr
     native.mesh.id = id.clone();
     // Normalized to this package's .glb: the installed conversion may be a
     // legacy .brick.json, but what ships here is the brick as glTF.
-    let written =
-        gltf::export_brick(&native.mesh).and_then(|glb| cx.write(&format!("assets/{rel}"), &glb));
+    let glb_dir = cx
+        .brick_uri_base
+        .as_ref()
+        .map(|base| base.join("assets/bricks"));
+    let written = gltf::export_brick_with_surfaces(&native.mesh, &cx.brick_surfaces, glb_dir.as_deref())
+        .and_then(|glb| cx.write(&format!("assets/{rel}"), &glb));
     match written {
         Ok(()) => {
             cx.id("brick_geometry", path, path, &format!("assets/{rel}"));

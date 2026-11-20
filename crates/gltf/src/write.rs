@@ -7,6 +7,17 @@ use serde_json::{Value, json};
 /// One animation channel: node, path, interpolation, key times, values.
 pub type Channel<'a> = (usize, &'a str, &'a str, &'a [f32], &'a [f32]);
 
+/// A material's base-colour picture: an embedded PNG or an external image
+/// named by a relative URI (resolved against the `.glb`'s folder, as glTF 2.0
+/// allows for binary assets).
+pub enum MaterialImage {
+    /// RGBA rows stored in the GLB binary as a PNG bufferView.
+    Png((u32, u32, Vec<u8>)),
+    /// A picture beside the file: `uri` relative to the `.glb`'s folder, for
+    /// shared assets that must not be duplicated into every file.
+    Uri(String),
+}
+
 #[derive(Default)]
 pub struct Gltf {
     pub json: Value,
@@ -133,29 +144,51 @@ impl Gltf {
         i
     }
 
-    /// A material, textured with a PNG of `pixels` (RGBA rows) if given.
+    /// A material, textured with a PNG of `pixels` (RGBA rows) or an external
+    /// image by relative URI if given.
     pub fn material(
         &mut self,
         name: &str,
         factor: [f32; 4],
-        pixels: Option<(u32, u32, Vec<u8>)>,
+        picture: Option<MaterialImage>,
         extra: Value,
     ) -> usize {
-        let mut m = json!({ "name": name, "pbrMetallicRoughness": { "baseColorFactor": factor } });
-        if let Some((w, h, rgba)) = pixels {
-            let mut png = Vec::new();
-            image::RgbaImage::from_raw(w, h, rgba)
-                .expect("pixels")
-                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-                .unwrap();
-            let view = self.view(&png);
-            let image = self.push(
-                "images",
-                json!({ "bufferView": view, "mimeType": "image/png" }),
-            );
-            let sampler = self.push("samplers", json!({ "wrapS": 33071, "wrapT": 10497 }));
-            let texture = self.push("textures", json!({ "source": image, "sampler": sampler }));
-            m["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": texture });
+        // Explicit factors: glTF defaults an omitted metallicFactor to 1.0
+        // (fully metallic), which editors render as flat white metal.
+        let mut m = json!({
+            "name": name,
+            "pbrMetallicRoughness": {
+                "baseColorFactor": factor,
+                "metallicFactor": 0.0,
+                "roughnessFactor": 1.0
+            }
+        });
+        match picture {
+            Some(MaterialImage::Png((w, h, rgba))) => {
+                let mut png = Vec::new();
+                image::RgbaImage::from_raw(w, h, rgba)
+                    .expect("pixels")
+                    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                    .unwrap();
+                let view = self.view(&png);
+                let image = self.push(
+                    "images",
+                    json!({ "bufferView": view, "mimeType": "image/png" }),
+                );
+                let sampler = self.push("samplers", json!({ "wrapS": 33071, "wrapT": 10497 }));
+                let texture = self.push("textures", json!({ "source": image, "sampler": sampler }));
+                m["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": texture });
+            }
+            Some(MaterialImage::Uri(uri)) => {
+                let image = self.push(
+                    "images",
+                    json!({ "uri": uri, "mimeType": "image/png" }),
+                );
+                let sampler = self.push("samplers", json!({ "wrapS": 33071, "wrapT": 10497 }));
+                let texture = self.push("textures", json!({ "source": image, "sampler": sampler }));
+                m["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": texture });
+            }
+            None => {}
         }
         if let Value::Object(extra) = extra {
             for (k, v) in extra {
@@ -181,8 +214,9 @@ impl Gltf {
         )
     }
 
-    /// A clip: `(node, path, interpolation, times, values)` channels.
-    pub fn animation(&mut self, name: &str, channels: &[Channel]) -> usize {
+    /// A clip's `(node, path, interpolation, times, values)` channels as
+    /// glTF samplers and channels.
+    fn build_channels(&mut self, channels: &[Channel]) -> (Vec<Value>, Vec<Value>) {
         let mut samplers = Vec::new();
         let mut out = Vec::new();
         for (i, (node, path, interpolation, times, values)) in channels.iter().enumerate() {
@@ -193,9 +227,32 @@ impl Gltf {
                 .push(json!({ "input": input, "output": output, "interpolation": interpolation }));
             out.push(json!({ "sampler": i, "target": { "node": node, "path": path } }));
         }
+        (samplers, out)
+    }
+
+    /// A clip: `(node, path, interpolation, times, values)` channels.
+    pub fn animation(&mut self, name: &str, channels: &[Channel]) -> usize {
+        let (samplers, out) = self.build_channels(channels);
         self.push(
             "animations",
             json!({ "name": name, "samplers": samplers, "channels": out }),
+        )
+    }
+
+    /// A clip whose Blockland semantics the glTF schema has no word for: the
+    /// object `clip` rides in the animation's `extras.bri_clip`, and an
+    /// importer that knows it takes its name, length, looping, layering,
+    /// triggers and ground motion from there instead of guessing.
+    pub fn animation_extras(&mut self, name: &str, channels: &[Channel], clip: Value) -> usize {
+        let (samplers, out) = self.build_channels(channels);
+        self.push(
+            "animations",
+            json!({
+                "name": name,
+                "samplers": samplers,
+                "channels": out,
+                "extras": { "bri_clip": clip },
+            }),
         )
     }
 

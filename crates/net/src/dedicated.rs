@@ -206,7 +206,24 @@ fn load_packages_in(
             &avatar.rig_sha256,
         )?;
     }
-    let rig: bri_content::avatar::Rig = serde_json::from_slice(&bytes)?;
+    // GLB-era packs ship the rig as a glTF; legacy packs still carry JSON rigs.
+    let rig: bri_content::avatar::Rig = if avatar.rig.to_ascii_lowercase().ends_with(".glb") {
+        let converted = bri_gltf::lower(&bytes, &avatar.id)?;
+        let mut sequences = std::collections::BTreeMap::new();
+        for clip in &converted.shape.animations {
+            sequences.insert(clip.name.to_ascii_lowercase(), clip.clone());
+        }
+        bri_content::avatar::Rig {
+            schema_version: 1,
+            id: avatar.id.clone(),
+            shape: converted.shape,
+            sequences,
+            sources: Vec::new(),
+            omissions: Vec::new(),
+        }
+    } else {
+        serde_json::from_slice(&bytes)?
+    };
     rig.validate()?;
     let body_mounts = bri_sim::session::shape_mount_points(&rig.shape);
     let body_grips = bri_sim::session::shape_grips(&rig, &[]);

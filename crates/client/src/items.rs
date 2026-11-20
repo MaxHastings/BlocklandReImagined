@@ -4015,8 +4015,11 @@ mod metal_tests {
     #[test]
     fn the_steel_ball_model_is_bare_metal_with_linear_detail() -> Result<()> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packages/showcase/steel-ball-kit/assets/models/steel-ball.shape.json");
-        let shape: Shape = serde_json::from_slice(&std::fs::read(path)?)?;
+            .join("../../packages/showcase/steel-ball-kit/assets/models/steel-ball.glb");
+        // The kit's model is a GLB now; lower it the way the game does. Its
+        // bare-metal look must survive that trip (extras.bri_legacy.metal).
+        let (_, converted) = lower_glb_bytes(&std::fs::read(path)?, "steelball")?;
+        let shape = converted.shape;
         shape.validate()?;
         let (steel, detail) = (image("steel"), image("steel-detail"));
         let pose = bri_content::animation::sample(&shape, None, 0.0)?;

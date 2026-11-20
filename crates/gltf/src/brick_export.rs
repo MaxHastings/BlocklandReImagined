@@ -8,12 +8,20 @@
 //! is exactly what the game will draw. What glTF has no word for rides in the
 //! extras: signed paint offsets (a surface recoloured relative to the player's
 //! paint) as a per-quad `bri_brick.paint_offsets` marker, and on pre-migration
-//! files only, the legacy `bri_brick.colors` dump. Plain-paint surfaces stay
-//! material-less on purpose.
+//! files only, the legacy `bri_brick.colors` dump. Runtime-coloured quads
+//! (plain player paint and signed offsets) ride a placeholder `blank`
+//! material — one per surface — so an editor sees every surface as the game
+//! draws it default-painted; where [`SurfaceTextures`] names the installed
+//! shared stock picture for that surface, the placeholder references it by
+//! relative URI (the pre-composited-over-white copy beside the brick-materials
+//! bundle) instead of embedding a copy in every file. The marker tells the
+//! lowering to ignore the factor and texture and keep the colour dynamic.
+
+use std::path::Path;
 
 use super::read::{Document, array};
 use super::shape_export::point as mirror;
-use super::write::Gltf;
+use super::write::{Gltf, MaterialImage};
 use anyhow::{Context, Result, ensure};
 use bri_content::brick::{
     BRICK_SCHEMA, Brick, CollisionBox, Coverage, Face, Quad, Surface, Vertex,
@@ -82,6 +90,119 @@ fn paint_offset(colors: Option<[[f32; 4]; 4]>) -> Option<[f32; 3]> {
 fn irregular_colors(colors: Option<[[f32; 4]; 4]>) -> bool {
     colors.is_some() && paint_offset(colors).is_none() && bake_quad(colors).is_none()
 }
+/// A run of quads as one primitive's payloads: interleaved positions, normals
+/// and UVs (each quad keeps its own four vertices unshared), the two-triangle
+/// index list, and each quad's four vertex indices within the primitive —
+/// what [`brick_from_glb`] pairs back on without guessing.
+fn quad_payload(brick: &Brick, quad_idx: &[usize]) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>, Value) {
+    let positions: Vec<f32> = quad_idx
+        .iter()
+        .flat_map(|&i| brick.quads[i].vertices.iter().flat_map(|v| mirror(v.position)))
+        .collect();
+    let normals: Vec<f32> = quad_idx
+        .iter()
+        .flat_map(|&i| brick.quads[i].vertices.iter().flat_map(|v| mirror(v.normal)))
+        .collect();
+    let uvs: Vec<f32> = quad_idx
+        .iter()
+        .flat_map(|&i| brick.quads[i].vertices.iter().flat_map(|v| v.uv))
+        .collect();
+    let indices: Vec<u32> = (0..quad_idx.len())
+        .flat_map(|k| {
+            let b = 4 * k as u32;
+            [b, b + 1, b + 2, b, b + 2, b + 3]
+        })
+        .collect();
+    // The quads' vertex indices within this primitive (four per quad), so the
+    // lowering rebuilds each quad without guessing pairings.
+    let quads: Value = Value::Array(
+        (0..quad_idx.len())
+            .map(|k| {
+                json!([
+                    4 * k as u32,
+                    4 * k as u32 + 1,
+                    4 * k as u32 + 2,
+                    4 * k as u32 + 3
+                ])
+            })
+            .collect(),
+    );
+    (positions, normals, uvs, indices, quads)
+}
+/// A decoded stock brick-surface picture for a placeholder material:
+/// `(width, height, RGBA8 rows)` — what the shared-picture tools composite
+/// over white before writing the files [`SurfaceTextures`] names.
+pub type SurfacePicture = (u32, u32, Vec<u8>);
+/// The installed shared stock brick-surface pictures an exported brick's
+/// runtime-coloured placeholders reference in editors: pre-composited-over-
+/// white copies of what the game decal-composites over a default-painted
+/// brick, stored once beside the `brick-materials` bundle. Each field is the
+/// picture's path relative to the content root; absent pictures leave their
+/// placeholder plain — [`export_brick`] is the all-absent case. `Print`
+/// never carries one: its decal is chosen per placed brick at runtime
+/// (unprinted draws bare paint).
+#[derive(Default, Clone)]
+pub struct SurfaceTextures {
+    pub top: Option<String>,
+    pub side: Option<String>,
+    pub bottom_edge: Option<String>,
+    pub bottom_loop: Option<String>,
+    pub ramp: Option<String>,
+}
+impl SurfaceTextures {
+    /// The shared picture a runtime-coloured quad of `surface` shows in
+    /// editors, relative to the content root.
+    pub fn for_surface(&self, surface: &Surface) -> Option<&str> {
+        match surface {
+            Surface::Top => self.top.as_deref(),
+            Surface::Side => self.side.as_deref(),
+            Surface::BottomEdge => self.bottom_edge.as_deref(),
+            Surface::BottomLoop => self.bottom_loop.as_deref(),
+            Surface::Ramp => self.ramp.as_deref(),
+            // Prints are chosen per placed brick at runtime.
+            Surface::Print => None,
+        }
+    }
+}
+/// A glTF image URI from the folder of a `.glb` being written (`from_dir`,
+/// relative to the content root) to a shared picture (`target`, likewise):
+/// enough `..` segments to climb out of the file's folder, then down. Pure
+/// path math — no filesystem access; both arguments are forward-slash paths
+/// under one root and `from_dir` names a directory only.
+pub fn relative_uri(from_dir: &Path, target: &str) -> String {
+    let from: Vec<String> = from_dir
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .filter(|s| *s != ".")
+        .collect();
+    let to: Vec<&str> = target.split('/').filter(|s| !s.is_empty()).collect();
+    // The shared prefix counts directory components only, never the file.
+    let dirs = to.len().saturating_sub(1);
+    let common = from
+        .iter()
+        .zip(to.iter().take(dirs))
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut out = String::new();
+    for _ in common..from.len() {
+        out.push_str("../");
+    }
+    out.push_str(&to[common..].join("/"));
+    out
+}
+/// The placeholder material name for a runtime-coloured surface: `blank` on
+/// the top (Blockland's word for a paintable face), suffixed elsewhere so an
+/// editor sees which stock surface decal rides it.
+fn blank_name(surface: &Surface) -> &'static str {
+    match surface {
+        Surface::Top => "blank",
+        Surface::Side => "blank-side",
+        Surface::BottomEdge => "blank-bottom-edge",
+        Surface::BottomLoop => "blank-bottom-loop",
+        Surface::Ramp => "blank-ramp",
+        Surface::Print => "blank-print",
+    }
+}
 /// The brick as a `.glb`. One mesh of triangle primitives grouped by the
 /// quad's (face, surface, baked colour); every quad keeps its own four
 /// vertices unshared so [`brick_from_glb`] rebuilds it exactly. What glTF has
@@ -90,12 +211,29 @@ fn irregular_colors(colors: Option<[[f32; 4]; 4]>) -> bool {
 /// [`brick_from_glb`] and compared to the input, so an exported brick always
 /// reads back as itself.
 pub fn export_brick(brick: &Brick) -> Result<Vec<u8>> {
+    export_brick_with_surfaces(brick, &SurfaceTextures::default(), None)
+}
+/// The brick as a `.glb`, its runtime-coloured placeholders referencing the
+/// installed shared stock surface pictures where `surfaces` names them (see
+/// [`export_brick`] for the rest of the contract). `glb_dir` is this file's
+/// own folder relative to the content root: with it, each named picture is
+/// referenced by a relative URI from the file's folder; without it — or
+/// where a surface has no installed picture — the placeholder ships plain.
+pub fn export_brick_with_surfaces(
+    brick: &Brick,
+    surfaces: &SurfaceTextures,
+    glb_dir: Option<&Path>,
+) -> Result<Vec<u8>> {
     let mut g = Gltf::new();
 
     // Group the quads by (face, surface, baked colour); within a group each
     // quad keeps its own four vertices so the lowering can pair them back.
-    // The signature decides whether the primitive carries a glTF material at
-    // all: painted and paint-offset surfaces stay material-less on purpose.
+    // The baked colour decides the primitive's glTF channel; runtime-coloured
+    // groups (plain paint, offsets) carry a placeholder `blank` material plus
+    // the marker that keeps the game from baking it. Interior panels both-wound
+    // back toward the brick's centroid are no exception: they ride their
+    // surface's group like any other quad, so an editor sees exactly what the
+    // lowering reads.
     let mut groups: Vec<(Face, Surface, Option<Baked>, Vec<usize>)> = Vec::new();
     for (i, q) in brick.quads.iter().enumerate() {
         let baked = bake_quad(q.colors);
@@ -113,49 +251,12 @@ pub fn export_brick(brick: &Brick) -> Result<Vec<u8>> {
     // a file holds at most a handful); transparent ones get BLEND so Blender
     // matches the game's alpha.
     let mut materials: Vec<([f32; 4], usize)> = Vec::new();
+    // Placeholder materials for runtime-coloured groups, one per surface so
+    // each shows its own stock decal (kept out of the colour dedup on purpose).
+    let mut blanks: Vec<(Surface, usize)> = Vec::new();
     let mut primitives = Vec::new();
     for (face, surface, baked, quad_idx) in &groups {
-        let positions: Vec<f32> = quad_idx
-            .iter()
-            .flat_map(|&i| {
-                brick.quads[i]
-                    .vertices
-                    .iter()
-                    .flat_map(|v| mirror(v.position))
-            })
-            .collect();
-        let normals: Vec<f32> = quad_idx
-            .iter()
-            .flat_map(|&i| {
-                brick.quads[i]
-                    .vertices
-                    .iter()
-                    .flat_map(|v| mirror(v.normal))
-            })
-            .collect();
-        let uvs: Vec<f32> = quad_idx
-            .iter()
-            .flat_map(|&i| brick.quads[i].vertices.iter().flat_map(|v| v.uv))
-            .collect();
-        let indices: Vec<u32> = (0..quad_idx.len())
-            .flat_map(|k| {
-                let b = 4 * k as u32;
-                [b, b + 1, b + 2, b, b + 2, b + 3]
-            })
-            .collect();
-
-        // The quads' vertex indices within this primitive (four per quad), so
-        // the lowering rebuilds each quad without guessing pairings.
-        let quads: Vec<Value> = (0..quad_idx.len())
-            .map(|k| {
-                json!([
-                    4 * k as u32,
-                    4 * k as u32 + 1,
-                    4 * k as u32 + 2,
-                    4 * k as u32 + 3
-                ])
-            })
-            .collect();
+        let (positions, normals, uvs, indices, quads) = quad_payload(brick, quad_idx);
         let mut extra = json!({
             "bri_brick": {
                 "face": face,
@@ -163,7 +264,13 @@ pub fn export_brick(brick: &Brick) -> Result<Vec<u8>> {
                 "quads": quads,
             }
         });
-        if quad_idx.iter().any(|&i| paint_offset(brick.quads[i].colors).is_some()) {
+        let runtime = baked.is_none()
+            && quad_idx.iter().all(|&i| {
+                brick.quads[i].colors.is_none() || paint_offset(brick.quads[i].colors).is_some()
+            });
+        if runtime
+            || quad_idx.iter().any(|&i| paint_offset(brick.quads[i].colors).is_some())
+        {
             // glTF has no word for a signed offset onto the player's paint, so
             // those quads name it here: aligned with `quads`, `[r, g, b]` or null.
             extra["bri_brick"]["paint_offsets"] = Value::Array(
@@ -203,10 +310,33 @@ pub fn export_brick(brick: &Brick) -> Result<Vec<u8>> {
             },
             "indices": g.indices(&indices),
         });
-        // Authored colours are the glTF channels themselves; plain-paint and
-        // paint-offset surfaces stay material-less on purpose.
+        // Authored colours are the glTF channels themselves; runtime-coloured
+        // groups carry a placeholder `blank` material so editors see the
+        // surface — the marker keeps the game from baking it as a literal.
         match baked {
-            None => {}
+            None if !runtime => {}
+            None => {
+                let index = match blanks.iter().find(|(s, _)| *s == *surface) {
+                    Some((_, i)) => *i,
+                    None => {
+                        // The shared picture by relative URI from this file's
+                        // folder; plain where either side is missing.
+                        let picture = surfaces
+                            .for_surface(surface)
+                            .zip(glb_dir)
+                            .map(|(target, dir)| MaterialImage::Uri(relative_uri(dir, target)));
+                        let i = g.material(
+                            blank_name(surface),
+                            [1.0, 1.0, 1.0, 1.0],
+                            picture,
+                            json!({}),
+                        );
+                        blanks.push((*surface, i));
+                        i
+                    }
+                };
+                prim["material"] = json!(index);
+            }
             Some(Baked::Uniform(color)) => {
                 let index = match materials.iter().find(|(c, _)| *c == *color) {
                     Some((_, i)) => *i,
@@ -389,6 +519,11 @@ pub fn brick_from_glb(bytes: &[u8], id: &str) -> Result<Brick> {
                 Some(Value::Array(c)) => Some(c.clone()),
                 _ => None,
             };
+            // Legacy-only: pre-migration files may carry `bri_brick.void`
+            // primitives (the old exporter's black placeholder for interior
+            // panels); their factor never wins as an authored colour. New
+            // exports do not write the marker.
+            let void = extra.get("void").and_then(Value::as_bool).unwrap_or(false);
             for (k, quad) in array(extra, "quads").iter().enumerate() {
                 let idx: Vec<usize> = quad
                     .as_array()
@@ -451,8 +586,14 @@ pub fn brick_from_glb(bytes: &[u8], id: &str) -> Result<Brick> {
                             Some(out)
                         },
                         // Uniform authored colour: the material's factor as-is, so a
-                        // hand edit in Blender is exactly what the game draws.
-                        None if factor.is_some() => Some([factor.unwrap(); 4]),
+                        // hand edit in Blender is exactly what the game draws. A
+                        // marker present means runtime-coloured (the `blank`
+                        // placeholder or an offset), where the factor never wins; a
+                        // legacy void primitive's black placeholder likewise never
+                        // does.
+                        None if !void && factor.is_some() && offsets.as_ref().is_none() => {
+                            Some([factor.unwrap(); 4])
+                        }
                         None => match offsets.as_ref() {
                             // The marker is authoritative where present: null means
                             // plain paint, not "look elsewhere".
@@ -626,44 +767,93 @@ mod tests {
         let back = brick_from_glb(&glb, "test:brick/one").expect("lower back");
         assert_eq!(back, brick);
 
-        // The painted quad bakes to exactly one material; the unpainted quads
-        // stay material-less so the player's paint can show.
+        // The painted quad bakes to one material; each runtime-coloured
+        // surface (plain paint and offset) carries its own per-surface
+        // placeholder so an editor sees every surface, with the marker
+        // keeping them dynamic.
         let doc = Document::from_bytes(&glb, None).expect("parse the glb");
         let mats = &doc.json["materials"];
-        assert_eq!(mats.as_array().unwrap().len(), 1);
-        assert_eq!(mats[0]["name"].as_str(), Some("brick-FF0000"));
+        assert_eq!(mats.as_array().unwrap().len(), 4);
+        let by_name = |name: &str| -> &Value {
+            mats.as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["name"] == json!(name))
+                .unwrap_or_else(|| panic!("no material named {name}"))
+        };
         assert_eq!(
-            mats[0]["pbrMetallicRoughness"]["baseColorFactor"],
+            by_name("brick-FF0000")["pbrMetallicRoughness"]["baseColorFactor"],
             json!([1.0, 0.0, 0.0, 1.0])
         );
+        // One placeholder per runtime-coloured surface: top, side and print.
+        for name in ["blank", "blank-side", "blank-print"] {
+            let blank_mat = by_name(name);
+            assert_eq!(
+                blank_mat["pbrMetallicRoughness"]["baseColorFactor"],
+                json!([1.0, 1.0, 1.0, 1.0])
+            );
+            assert!(blank_mat.get("alphaMode").is_none());
+        }
+        // Every material carries explicit PBR factors: an omitted
+        // metallicFactor defaults to 1.0 per the glTF spec, which editors
+        // render as flat white metal.
+        for m in mats.as_array().unwrap() {
+            assert_eq!(m["pbrMetallicRoughness"]["metallicFactor"], json!(0.0));
+            assert_eq!(m["pbrMetallicRoughness"]["roughnessFactor"], json!(1.0));
+        }
         let prims = &doc.json["meshes"][0]["primitives"];
         assert_eq!(prims.as_array().unwrap().len(), 4);
+        // Every primitive now carries a material: the painted one its colour,
+        // the three runtime-coloured ones the placeholder.
         let with_material = prims
             .as_array()
             .unwrap()
             .iter()
             .filter(|p| p.get("material").is_some())
             .count();
-        assert_eq!(with_material, 1);
+        assert_eq!(with_material, 4);
 
-        // The offset quad rides in the marker: no material, no colour dump.
-        let offset_prim = prims
+        // The marker rides every runtime-coloured primitive: null for plain
+        // paint, [r, g, b] for the offset. No colour dump anywhere.
+        let with_marker = prims
             .as_array()
             .unwrap()
             .iter()
-            .find(|p| p["extras"]["bri_brick"].get("paint_offsets").is_some())
-            .expect("the offset primitive carries the marker");
+            .filter(|p| p["extras"]["bri_brick"].get("paint_offsets").is_some())
+            .count();
+        assert_eq!(with_marker, 3);
+        for p in prims.as_array().unwrap() {
+            assert!(
+                p["extras"]["bri_brick"].get("colors").is_none(),
+                "no primitive keeps a legacy colour dump"
+            );
+        }
+
+        let by_face_prim = |face: &str| -> &Value {
+            prims.as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["extras"]["bri_brick"]["face"].as_str() == Some(face))
+                .unwrap_or_else(|| panic!("no primitive for face {face}"))
+        };
+        // The plain-paint top quad: placeholder material, all-null marker.
+        let top_prim = by_face_prim("top");
+        assert_eq!(
+            top_prim["extras"]["bri_brick"]["paint_offsets"],
+            json!([Value::Null])
+        );
+        // The offset quad rides in the marker alongside the placeholder.
         // The marker holds f32 values; expect them exactly as serialized.
+        let offset_prim = by_face_prim("south");
         assert_eq!(
             offset_prim["extras"]["bri_brick"]["paint_offsets"],
             json!([[0.2f32 as f64, -0.1f32 as f64, 0.3f32 as f64]])
         );
-        assert!(offset_prim.get("material").is_none());
     }
 
     /// The colour policy the game uses decides what bakes: literal colours
     /// become materials (transparent ones BLEND, out-of-range values clamp),
-    /// signed paint offsets stay material-less.
+    /// and runtime-coloured quads ride the `blank` placeholder plus marker.
     #[test]
     fn baked_materials_follow_the_colour_semantics() {
         let quad = |face: Face, surface: Surface, x: f32| Quad {
@@ -723,8 +913,8 @@ mod tests {
 
         let doc = Document::from_bytes(&glb, None).expect("parse the glb");
         let mats = &doc.json["materials"];
-        // Glass (BLEND) and hot (clamped); the offset quad gets no material.
-        assert_eq!(mats.as_array().unwrap().len(), 2);
+        // Glass (BLEND), hot (clamped) and the placeholder for the offset quad.
+        assert_eq!(mats.as_array().unwrap().len(), 3);
         let by_name = |name: &str| -> &Value {
             mats.as_array()
                 .unwrap()
@@ -744,6 +934,12 @@ mod tests {
             hot_mat["pbrMetallicRoughness"]["baseColorFactor"],
             json!([1.0, 1.0, 0.0, 1.0])
         );
+        // The offset quad's surface is a side: its placeholder is suffixed.
+        let blank_mat = by_name("blank-side");
+        assert_eq!(
+            blank_mat["pbrMetallicRoughness"]["baseColorFactor"],
+            json!([1.0, 1.0, 1.0, 1.0])
+        );
 
         let prims = &doc.json["meshes"][0]["primitives"];
         assert_eq!(prims.as_array().unwrap().len(), 3);
@@ -753,9 +949,10 @@ mod tests {
             .iter()
             .filter(|p| p.get("material").is_some())
             .count();
-        assert_eq!(with_material, 2);
+        assert_eq!(with_material, 3);
 
-        // The offset quad rides in the marker; no primitive keeps a legacy dump.
+        // The offset quad rides in the marker alongside its placeholder; no
+        // primitive keeps a legacy dump.
         let with_marker = prims
             .as_array()
             .unwrap()
@@ -843,7 +1040,9 @@ mod tests {
         let north = back.quads.iter().find(|q| q.face == Face::North).unwrap();
         assert_eq!(north.colors, Some([[0.0, 0.0, 1.0, 1.0]; 4]));
         let south = back.quads.iter().find(|q| q.face == Face::South).unwrap();
-        assert_eq!(south.colors, None); // plain paint stays plain paint
+        // The placeholder material plus its all-null marker still lower to
+        // plain paint: the marker wins over the factor.
+        assert_eq!(south.colors, None);
     }
 
     /// Pre-migration files still carry the legacy `bri_brick.colors` dump with
@@ -916,6 +1115,144 @@ mod tests {
         assert_eq!(by_face(Face::East).colors, Some([[2.0, 1.5, -0.5, 1.0]; 4]));
     }
 
+    /// Runtime-coloured surfaces each carry their own placeholder material,
+    /// named per surface, showing its installed stock decal where one is
+    /// given; Print never carries a picture (its decal is chosen at runtime).
+    #[test]
+    fn runtime_surfaces_carry_their_own_placeholders() {
+        let quad = |face: Face, surface: Surface| Quad {
+            face,
+            surface,
+            vertices: [
+                Vertex { position: [-0.5, 0.0, -1.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
+                Vertex { position: [0.0, 0.0, -1.0], normal: [0.0, 1.0, 0.0], uv: [1.0, 0.0] },
+                Vertex { position: [0.0, 0.0, -0.5], normal: [0.0, 1.0, 0.0], uv: [1.0, 1.0] },
+                Vertex { position: [-0.5, 0.0, -0.5], normal: [0.0, 1.0, 0.0], uv: [0.0, 1.0] },
+            ],
+            colors: None,
+        };
+        let brick = Brick {
+            schema_version: BRICK_SCHEMA,
+            id: "test:brick/surfaces".into(),
+            footprint_studs: [2, 2],
+            height_plates: 3,
+            attachment_rows: vec![
+                "uu".into(),
+                "ux".into(),
+                "xu".into(),
+                "xx".into(),
+                "dx".into(),
+                "dd".into(),
+            ],
+            collision_boxes: vec![],
+            needs_external_collision: false,
+            coverage: None,
+            quads: vec![
+                quad(Face::Top, Surface::Top),
+                quad(Face::North, Surface::Side),
+                quad(Face::Omni, Surface::Print),
+            ],
+        };
+        brick.validate().expect("fixture validates");
+
+        let surfaces = SurfaceTextures {
+            top: Some("pack/brick-materials-002/surfaces-composited/top.png".into()),
+            side: Some("pack/brick-materials-002/surfaces-composited/side.png".into()),
+            ..Default::default()
+        };
+        let glb = export_brick_with_surfaces(
+            &brick,
+            &surfaces,
+            Some(Path::new("addons/one/assets/bricks")),
+        )
+        .expect("export");
+        // The pictures never leak into the lowering: it still reads back as
+        // plain paint.
+        assert_eq!(
+            brick_from_glb(&glb, "test:brick/surfaces").expect("lower back"),
+            brick
+        );
+
+        let doc = Document::from_bytes(&glb, None).expect("parse the glb");
+        let mats = &doc.json["materials"];
+        let by_name = |name: &str| -> &Value {
+            mats.as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["name"] == json!(name))
+                .unwrap_or_else(|| panic!("no material named {name}"))
+        };
+        // Top and Side reference their shared pictures by relative URI from
+        // the file's folder; Print stays plain.
+        let uri_of = |material: &str| -> String {
+            let texture_index = by_name(material)["pbrMetallicRoughness"]["baseColorTexture"]
+                ["index"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("no base colour texture on {material}")) as usize;
+            let source = doc.json["textures"][texture_index]["source"].as_u64().unwrap() as usize;
+            doc.json["images"][source]["uri"]
+                .as_str()
+                .expect("the picture is a URI, not an embedded bufferView")
+                .to_owned()
+        };
+        assert_eq!(
+            uri_of("blank"),
+            "../../../../pack/brick-materials-002/surfaces-composited/top.png"
+        );
+        assert_eq!(
+            uri_of("blank-side"),
+            "../../../../pack/brick-materials-002/surfaces-composited/side.png"
+        );
+        let print = by_name("blank-print");
+        assert!(print["pbrMetallicRoughness"].get("baseColorTexture").is_none());
+        assert_eq!(
+            print["pbrMetallicRoughness"]["baseColorFactor"],
+            json!([1.0, 1.0, 1.0, 1.0])
+        );
+
+        // No file folder: the same surfaces ship plain instead of dangling.
+        let glb = export_brick_with_surfaces(&brick, &surfaces, None).expect("export");
+        let doc = Document::from_bytes(&glb, None).expect("parse the glb");
+        for name in ["blank", "blank-side"] {
+            assert!(doc.json["materials"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["name"] == json!(name))
+                .unwrap()["pbrMetallicRoughness"]
+                .get("baseColorTexture")
+                .is_none());
+        }
+    }
+
+    /// The shared-picture URI climbs out of the file's folder by exactly as
+    /// many levels as it has, sharing what it can with the target.
+    #[test]
+    fn relative_uri_climbs_and_shares() {
+        assert_eq!(
+            relative_uri(Path::new("addons/one/assets/bricks"), "default-pack/x/top.png"),
+            "../../../../default-pack/x/top.png"
+        );
+        // A deeper file climbs deeper.
+        assert_eq!(
+            relative_uri(
+                Path::new("addons/deep/content/assets/bricks"),
+                "default-pack/x/top.png"
+            ),
+            "../../../../../default-pack/x/top.png"
+        );
+        // A file under the same top-level pack shares that component.
+        assert_eq!(
+            relative_uri(
+                Path::new("default-pack/maps-pass-008/assets/bricks"),
+                "default-pack/brick-materials-002/surfaces-composited/top.png"
+            ),
+            "../../../brick-materials-002/surfaces-composited/top.png"
+        );
+        // A file at the root climbs nowhere.
+        assert_eq!(relative_uri(Path::new(""), "default-pack/x/top.png"), "default-pack/x/top.png");
+    }
+
     /// A plain shape mesh is not a brick: its primitives carry no
     /// `bri_brick` extra and the asset has no `bri_brick_meta`.
     #[test]
@@ -933,5 +1270,175 @@ mod tests {
         node["mesh"] = json!(mesh);
         g.node(node, None);
         assert!(brick_from_glb(&g.glb(), "x").is_err());
+    }
+
+    /// Interior panels both-wound back toward the brick's centroid are plain
+    /// runtime-coloured quads: they ride their surface's placeholder like any
+    /// other (no black material, no void marker), so an editor sees exactly
+    /// what the game lowers and the round trip stays exact. Outward hulls keep
+    /// their authored colours untouched.
+    #[test]
+    fn interior_quads_ride_their_surface_placeholders() {
+        let quad = |face: Face,
+                    surface: Surface,
+                    verts: [[f32; 3]; 4],
+                    normal: [f32; 3]| Quad {
+            face,
+            surface,
+            vertices: verts.map(|p| Vertex { position: p, normal, uv: [0.0, 0.0] }),
+            colors: None,
+        };
+        // A unit-cube hull wound front-outward (the brick's centroid is the
+        // origin), plus two interior panels both-wound back toward it — one
+        // plain-paint, one carrying a signed paint offset.
+        let mut north = quad(
+            Face::North,
+            Surface::Side,
+            [[-1.0, 1.0, -1.0], [1.0, 1.0, -1.0], [1.0, -1.0, -1.0], [-1.0, -1.0, -1.0]],
+            [0.0, 0.0, -1.0],
+        );
+        north.colors = Some([[1.0, 0.0, 0.0, 1.0]; 4]); // authored trim
+        let mut east = quad(
+            Face::East,
+            Surface::Side,
+            [[1.0, -1.0, -1.0], [1.0, 1.0, -1.0], [1.0, 1.0, 1.0], [1.0, -1.0, 1.0]],
+            [1.0, 0.0, 0.0],
+        );
+        east.colors = Some([[0.0, 1.0, 0.0, 1.0]; 4]);
+        let mut west = quad(
+            Face::West,
+            Surface::Side,
+            [[-1.0, -1.0, 1.0], [-1.0, 1.0, 1.0], [-1.0, 1.0, -1.0], [-1.0, -1.0, -1.0]],
+            [-1.0, 0.0, 0.0],
+        );
+        west.colors = Some([[0.0, 0.0, 1.0, 1.0]; 4]);
+        let mut bottom = quad(
+            Face::Bottom,
+            Surface::Top,
+            [[-1.0, -1.0, -1.0], [1.0, -1.0, -1.0], [1.0, -1.0, 1.0], [-1.0, -1.0, 1.0]],
+            [0.0, -1.0, 0.0],
+        );
+        bottom.colors = Some([[1.0, 1.0, 0.0, 1.0]; 4]);
+        let mut interior_b = quad(
+            Face::Omni,
+            Surface::Side,
+            [[-0.2, 0.2, 0.5], [0.2, 0.2, 0.5], [0.2, -0.2, 0.5], [-0.2, -0.2, 0.5]],
+            [0.0, 0.0, -1.0], // geometric normal points at the centroid
+        );
+        interior_b.colors = Some([[0.1, 0.2, 0.3, -1.0]; 4]); // signed paint offset
+        let brick = Brick {
+            schema_version: BRICK_SCHEMA,
+            id: "test:brick/interior".into(),
+            footprint_studs: [2, 2],
+            height_plates: 3,
+            attachment_rows: vec![
+                "uu".into(),
+                "ux".into(),
+                "xu".into(),
+                "xx".into(),
+                "dx".into(),
+                "dd".into(),
+            ],
+            collision_boxes: vec![],
+            needs_external_collision: false,
+            coverage: None,
+            quads: vec![
+                quad(
+                    Face::Top,
+                    Surface::Top,
+                    [[-1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, -1.0], [-1.0, 1.0, -1.0]],
+                    [0.0, 1.0, 0.0],
+                ),
+                north,
+                quad(
+                    Face::South,
+                    Surface::Side,
+                    [[-1.0, -1.0, 1.0], [1.0, -1.0, 1.0], [1.0, 1.0, 1.0], [-1.0, 1.0, 1.0]],
+                    [0.0, 0.0, 1.0],
+                ),
+                east,
+                west,
+                bottom,
+                quad(
+                    Face::Omni,
+                    Surface::Side,
+                    [[-0.2, -0.2, -0.5], [0.2, -0.2, -0.5], [0.2, 0.2, -0.5], [-0.2, 0.2, -0.5]],
+                    [0.0, 0.0, 1.0], // geometric normal points at the centroid
+                ),
+                interior_b,
+            ],
+        };
+        brick.validate().expect("fixture validates");
+
+        let glb = export_brick(&brick).expect("export");
+        // The interior panels lower back verbatim like any runtime-coloured
+        // quad: plain paint and the offset both dynamic, hull colours intact.
+        let back = brick_from_glb(&glb, "test:brick/interior").expect("lower back");
+        assert_eq!(back, brick);
+        let by_face = |f: Face| back.quads.iter().find(|q| q.face == f).unwrap();
+        assert_eq!(by_face(Face::North).colors, Some([[1.0, 0.0, 0.0, 1.0]; 4]));
+        let omnis = back
+            .quads
+            .iter()
+            .filter(|q| q.face == Face::Omni)
+            .collect::<Vec<_>>();
+        assert_eq!(omnis[0].colors, None);
+        assert_eq!(omnis[1].colors, Some([[0.1, 0.2, 0.3, -1.0]; 4]));
+
+        let doc = Document::from_bytes(&glb, None).expect("parse the glb");
+        let mats = &doc.json["materials"];
+        // Two placeholders and four authored colours — no void-black anywhere.
+        assert_eq!(mats.as_array().unwrap().len(), 6);
+        let by_name = |name: &str| -> (&Value, usize) {
+            let (i, m) = mats
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, m)| m["name"] == json!(name))
+                .unwrap_or_else(|| panic!("no material named {name}"));
+            (m, i)
+        };
+        for name in [
+            "blank",
+            "brick-FF0000",
+            "blank-side",
+            "brick-00FF00",
+            "brick-0000FF",
+            "brick-FFFF00",
+        ] {
+            let (m, _) = by_name(name);
+            assert_eq!(m["pbrMetallicRoughness"]["metallicFactor"], json!(0.0));
+            assert_eq!(m["pbrMetallicRoughness"]["roughnessFactor"], json!(1.0));
+        }
+
+        let prims = &doc.json["meshes"][0]["primitives"];
+        // One primitive per (face, surface, colour) group: the two interior
+        // panels share their surface's placeholder with no void marker.
+        assert_eq!(prims.as_array().unwrap().len(), 7);
+        assert!(
+            prims
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["extras"]["bri_brick"].get("void").is_none()),
+            "no primitive carries the legacy void marker"
+        );
+        // The interior panels ride one shared side placeholder, their offsets
+        // in the usual marker: null for plain paint, [r, g, b] for the signed
+        // offset.
+        let omni_prim = prims
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["extras"]["bri_brick"]["face"] == json!("omni"))
+            .expect("the interior panels keep their primitive");
+        assert_eq!(omni_prim["extras"]["bri_brick"]["surface"], json!("side"));
+        assert_eq!(omni_prim["material"].as_u64(), Some(by_name("blank-side").1 as u64));
+        assert_eq!(omni_prim["extras"]["bri_brick"]["quads"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            omni_prim["extras"]["bri_brick"]["paint_offsets"],
+            json!([Value::Null, [0.1f32 as f64, 0.2f32 as f64, 0.3f32 as f64]])
+        );
     }
 }

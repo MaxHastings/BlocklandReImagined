@@ -9,15 +9,17 @@
 //! translations mirrored in x and z; quaternions to (-x, y, -z, w); inverse
 //! bind matrices conjugated through the same mirror. Each is the importer's
 //! own undo formula, so a round trip lands back exactly where it started.
-//! What glTF has no word for (additive clips, object visibility frames,
-//! triggers, ground motion) is left out with a note in [`export`]'s `notes`.
+//! What glTF has no word for (a clip's true name and length, looping,
+//! additive layering, object visibility frames, triggers, ground motion)
+//! rides in each animation's `extras.bri_clip`, which this crate's importer
+//! reads back as authoritative.
 //! Before returning, [`export`] reads its own output back the way the game
 //! lowers it and fails when the result would not draw there (a shape with no
 //! visible mesh), so an exported `.glb` always loads.
 
 use super::write::{Channel, Gltf};
 use anyhow::{Context, Result, ensure};
-use bri_content::shape::{Mesh, RotationInterpolation, Shape};
+use bri_content::shape::{Animation, Mesh, RotationInterpolation, Shape};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -59,6 +61,69 @@ fn collision_named(name: &str) -> bool {
 fn is_uniform(s: &[f32; 3]) -> bool {
     let m = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
     (s[0] - s[1]).abs() <= 1e-4 * m && (s[1] - s[2]).abs() <= 1e-4 * m
+}
+
+/// The Blockland semantics of a clip that glTF has no word for, as its
+/// animation's `extras.bri_clip`: an importer that knows this table takes
+/// the name, length, looping, layering and triggers from it instead of the
+/// channels (which carry only per-node motion). Arrays ride only when they
+/// are not empty.
+fn clip_extras(a: &Animation) -> Value {
+    let mut v = json!({
+        "name": a.name,
+        "frames": u64::try_from(a.frames).unwrap_or(u64::MAX),
+        "duration": f64::from(a.duration),
+        "looping": a.looping,
+        "additive": a.additive,
+        "priority": a.priority,
+        "parent_translations": a.parent_translations,
+        "rotation_interpolation": match a.rotation_interpolation {
+            RotationInterpolation::Spherical => "spherical",
+            RotationInterpolation::NormalizedLinear => "normalized_linear",
+        },
+    });
+    if !a.triggers.is_empty() {
+        v["triggers"] = Value::Array(
+            a.triggers
+                .iter()
+                .map(|t| json!([u64::from(t.state), f64::from(t.position)]))
+                .collect(),
+        );
+    }
+    if !a.ground_translations.is_empty() {
+        v["ground_translations"] = Value::Array(
+            a.ground_translations
+                .iter()
+                .map(|g| g.iter().copied().map(f64::from).collect::<Vec<_>>())
+                .map(Value::from)
+                .collect(),
+        );
+    }
+    if !a.ground_rotations.is_empty() {
+        v["ground_rotations"] = Value::Array(
+            a.ground_rotations
+                .iter()
+                .map(|g| g.iter().copied().map(f64::from).collect::<Vec<_>>())
+                .map(Value::from)
+                .collect(),
+        );
+    }
+    if !a.objects.is_empty() {
+        v["objects"] = Value::Array(
+            a.objects
+                .iter()
+                .map(|o| {
+                    json!({
+                        "object": u64::try_from(o.object).unwrap_or(u64::MAX),
+                        "visibility": o.visibility.iter().copied().map(f64::from).collect::<Vec<_>>(),
+                        "frames": o.frames.iter().copied().map(u64::from).collect::<Vec<_>>(),
+                        "material_frames": o.material_frames.iter().copied().map(u64::from).collect::<Vec<_>>(),
+                    })
+                })
+                .collect(),
+        );
+    }
+    v
 }
 
 /// Node names, case-insensitively unique on export so the importer's own
@@ -225,6 +290,18 @@ impl<'a> Builder<'a> {
             )),
             None => {}
         }
+        // Bare-metal materials keep their look: the PBR factors say how metal
+        // it is (so Blender shows real metal), and the native fields ride in
+        // bri_legacy so a re-import draws exactly what the shape said.
+        if let Some(metal) = &m.metal {
+            mat["pbrMetallicRoughness"]["metallicFactor"] = json!(1.0);
+            mat["pbrMetallicRoughness"]["roughnessFactor"] = json!(metal.roughness);
+            if textured.is_none() && m.color.is_none() {
+                // The reflectance colour is linear, like glTF's factor.
+                mat["pbrMetallicRoughness"]["baseColorFactor"] =
+                    json!([metal.color[0], metal.color[1], metal.color[2], 1.0]);
+            }
+        }
         // Blend: opaque needs nothing, alpha BLENDs (or MASKs where the game
         // cuts solid geometry out of it); additive and subtractive have no
         // glTF equivalent.
@@ -283,6 +360,12 @@ impl<'a> Builder<'a> {
         // Always present (null where the shape says none), so a re-import can
         // tell "the shape had no overlay" from glTF's default.
         legacy["paint_overlay"] = m.paint_overlay.map(Value::Bool).unwrap_or(Value::Null);
+        if let Some(metal) = &m.metal {
+            // The detail is a material index; this export writes the
+            // materials in native order, so it survives the round trip.
+            legacy["metal"] = serde_json::to_value(metal)
+                .map_err(|e| anyhow::anyhow!("material {} has an unserialisable metal {e}", m.name))?;
+        }
         mat["extras"] = json!({ "bri_legacy": legacy });
         let idx = push(self.g, "materials", mat);
         self.material_of.insert(i, idx);
@@ -890,41 +973,25 @@ pub fn export(
         *name_counts.entry(lower).or_insert(0) += 1;
     }
     let mut taken_clips: BTreeSet<String> = BTreeSet::new();
-    let mut additive_dropped = 0usize;
-    let mut object_tracks = 0usize;
-    let mut triggers = 0usize;
-    let mut ground_motions = 0usize;
-    let mut nlerp_clips = 0usize;
     let mut missing_nodes = 0usize;
     let mut negative_scales = 0usize;
     for a in &shape.animations {
-        if a.additive {
-            additive_dropped += 1;
-            continue; // glTF has no additive clips.
-        }
-        object_tracks += a.objects.len();
-        triggers += a.triggers.len();
-        ground_motions += a.ground_translations.len() + a.ground_rotations.len();
         let f = a.frames;
-        if f <= 1 || a.duration < 1e-6 {
+        if a.duration < 1e-6 {
             b.notes.push(format!(
                 "clip `{}` ({} frame(s), {:.4}s) holds no motion; left out",
                 a.name, f, a.duration
             ));
             continue;
         }
-        if matches!(
-            a.rotation_interpolation,
-            RotationInterpolation::NormalizedLinear
-        ) {
-            nlerp_clips += 1;
-        }
 
         // Key times: one per frame, and for loops a seam key at the end that
         // repeats frame 0, so the re-import measures exactly this duration.
         let d = a.duration;
         let mut times = Vec::with_capacity(f + 1);
-        if a.looping {
+        if f == 1 {
+            times.push(0.0);
+        } else if a.looping {
             for i in 0..f {
                 times.push(d * i as f32 / f as f32);
             }
@@ -984,7 +1051,9 @@ pub fn export(
                 channels.push((gi, "rotation", values));
             }
             if !t.scales.is_empty() {
-                if t.scales.iter().any(|s| s.iter().any(|x| *x < 0.0)) {
+                // An additive clip's scales are stored raw by the re-import,
+                // so a mirror there is no loss; only an absolute one loses it.
+                if !a.additive && t.scales.iter().any(|s| s.iter().any(|x| *x < 0.0)) {
                     negative_scales += 1;
                 }
                 let mut values = Vec::with_capacity(3 * times.len());
@@ -1000,43 +1069,16 @@ pub fn export(
                 a.name
             ));
         }
-        if channels.is_empty() {
-            b.notes.push(format!(
-                "clip `{}` animates nothing glTF keeps; left out",
-                a.name
-            ));
-            continue;
-        }
         let name = unique_clip(&a.name, &mut taken_clips);
         let chans: Vec<Channel> = channels
             .iter()
             .map(|(n, p, v)| (*n, *p, "LINEAR", times.as_slice(), v.as_slice()))
             .collect();
-        b.g.animation(&name, &chans);
-    }
-    if additive_dropped > 0 {
-        b.notes.push(format!(
-            "{additive_dropped} clip(s) are additive, which glTF has no word for; left out"
-        ));
-    }
-    if object_tracks > 0 {
-        b.notes.push(format!(
-            "{object_tracks} object track(s) (animated visibility and texture frames) have no place in glTF; left out"
-        ));
-    }
-    if triggers > 0 {
-        b.notes
-            .push(format!("{triggers} animation trigger(s) were left out"));
-    }
-    if ground_motions > 0 {
-        b.notes.push(format!(
-            "{ground_motions} frame(s) of ground motion were left out"
-        ));
-    }
-    if nlerp_clips > 0 {
-        b.notes.push(format!(
-            "{nlerp_clips} clip(s) use normalized-linear rotation interpolation; the re-import slerps them"
-        ));
+        // The clip's Blockland semantics (its true name and length, looping,
+        // layering, triggers) ride in extras.bri_clip; the re-import takes
+        // them as authoritative over what the channels alone can say. A clip
+        // whose nodes are all missing still rides with empty channels.
+        b.g.animation_extras(&name, &chans, clip_extras(a));
     }
     if negative_scales > 0 {
         b.notes.push(format!(

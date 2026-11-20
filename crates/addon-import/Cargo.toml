@@ -42,6 +42,52 @@ path = "src/bin/backfill-glb-textures.rs"
 name = "backfill-brick-materials"
 path = "src/bin/backfill-brick-materials.rs"
 
+# TEMPORARY: one-shot backfill that gives a brick's runtime-coloured surfaces
+# (plain paint, offsets) a placeholder `blank` material plus the full
+# paint_offsets marker so editors see every surface; delete this entry (and
+# the file) once content is done.
+[[bin]]
+name = "backfill-blank-materials"
+path = "src/bin/backfill-blank-materials.rs"
+
+# TEMPORARY: one-shot writer of the shared pre-composited brick surface
+# pictures that brick placeholders reference by relative URI (stored once
+# beside the brick-materials bundle, not embedded per file); delete this entry
+# (and the file) once content is done.
+[[bin]]
+name = "gen-brick-surface-pictures"
+path = "src/bin/gen-brick-surface-pictures.rs"
+
+# TEMPORARY: one-shot migrator that retires a brick's legacy void primitives
+# and bakes its fully-clamped paint offsets to literal materials so the GLB
+# carries exactly what the game draws; delete this entry (and the file) once
+# content is done.
+[[bin]]
+name = "normalize-brick-glbs"
+path = "src/bin/normalize-brick-glbs.rs"
+
+# TEMPORARY: one-shot migrator that rewrites a JSON avatar rig bundle to a
+# self-contained GLB (every sequence inside the file's animations); delete
+# this entry (and the file) once content is done.
+[[bin]]
+name = "avatar-to-glb"
+path = "src/bin/avatar-to-glb.rs"
+
+# TEMPORARY: one-shot migrator that bakes the last .clips.json sequences into
+# their vehicle models' GLBs and rewrites the weapon-debris JSON shapes to
+# self-contained GLBs; delete this entry (and the file) once content is done.
+[[bin]]
+name = "clips-to-glb"
+path = "src/bin/clips-to-glb.rs"
+
+# TEMPORARY: one-shot re-exporter that regenerates a single .shape.json as a
+# self-contained GLB with the current exporter (used to rebuild steel-ball.glb
+# once bare-metal materials learned to ride through glTF); delete this entry
+# (and the file) when no more JSON shapes need regenerating.
+[[bin]]
+name = "shape-json-to-glb"
+path = "src/bin/shape-json-to-glb.rs"
+
 [dependencies]
 bri-console = { path = "../console" }
 anyhow.workspace = true

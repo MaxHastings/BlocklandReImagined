@@ -1,5 +1,6 @@
 //! Native v20 vehicle data. No legacy reader or script execution is linked here.
 use anyhow::{Result, ensure};
+use bri_package::repin;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
@@ -16,7 +17,10 @@ pub struct Pack {
     pub assets: Vec<Asset>,
     pub evidence: Vec<Evidence>,
     pub unresolved: Vec<String>,
-    /// Keys are native vehicle ID + :: + authored sequence alias; values are native clips assets.
+    /// Keys are native vehicle ID + :: + authored sequence alias. Values name
+    /// the alias's sequence: a GLB-era pack bakes its sequences into the
+    /// vehicle model and gives each one's name; a legacy pack points at the
+    /// clip asset (a path) that holds it.
     pub animation_aliases: BTreeMap<String, String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2119,12 +2123,14 @@ impl Pack {
                 std::fs::metadata(root.as_ref().join(p))?.len() < 64 * 1024 * 1024,
                 "asset too large"
             );
-            let bytes = std::fs::read(root.as_ref().join(p))?;
-            ensure!(
-                format!("{:x}", Sha256::digest(bytes)) == asset.sha256,
-                "asset hash mismatch: {}",
-                asset.path
-            );
+            let path = root.as_ref().join(p);
+            let bytes = std::fs::read(&path)?;
+            repin::verify(
+                format!("asset hash mismatch: {}", asset.path),
+                &path,
+                &format!("{:x}", Sha256::digest(&bytes)),
+                &asset.sha256,
+            )?;
         }
         Ok(())
     }

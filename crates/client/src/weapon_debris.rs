@@ -273,7 +273,14 @@ impl WeaponDebrisAssets {
                     &resource.native_sha256,
                 )?;
             }
-            let shape: Shape = serde_json::from_slice(&bytes)?;
+            // GLB-era packs ship the models as glTF (lowered exactly as the
+            // client draws them, textures embedded); legacy packs still carry
+            // JSON shapes.
+            let shape: Shape = if resource.file.to_ascii_lowercase().ends_with(".glb") {
+                crate::items::lower_glb_bytes(&bytes, &resource.id)?.1.shape
+            } else {
+                serde_json::from_slice(&bytes)?
+            };
             shape.validate()?;
             vertex_budget += shape
                 .meshes

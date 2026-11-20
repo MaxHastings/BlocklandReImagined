@@ -248,6 +248,23 @@ fn lower_names(rig: &Rig) -> Vec<String> {
         .map(|o| o.name.to_ascii_lowercase())
         .collect()
 }
+/// The surface key a rig material binds. A glTF loader uniques repeated
+/// material names — one surface drawn with a second blend mode arrives as
+/// `<name>_1` — and such a duplicate binds its base surface, as the legacy
+/// rig's repeated names did.
+fn bind_key<'a>(surfaces: &BTreeMap<String, String>, name: &'a str) -> &'a str {
+    if surfaces.contains_key(name) {
+        return name;
+    }
+    match name.rsplit_once('_') {
+        Some((base, suffix))
+            if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            if surfaces.contains_key(base) { base } else { name }
+        }
+        _ => name,
+    }
+}
 impl AvatarAssets {
     pub fn load(root: &Path) -> Result<Self> {
         let root = root.canonicalize()?;
@@ -265,7 +282,25 @@ impl AvatarAssets {
                 &package.rig_sha256,
             )?;
         }
-        let rig: Rig = serde_json::from_slice(&bytes)?;
+        // GLB-era packs ship the rig as a glTF (lowered exactly as the
+        // vehicle renderer draws one); legacy packs still carry JSON rigs.
+        let rig: Rig = if package.rig.to_ascii_lowercase().ends_with(".glb") {
+            let converted = crate::items::lower_glb_bytes(&bytes, &package.id)?.1;
+            let mut sequences = BTreeMap::new();
+            for clip in &converted.shape.animations {
+                sequences.insert(clip.name.to_ascii_lowercase(), clip.clone());
+            }
+            Rig {
+                schema_version: 1,
+                id: package.id.clone(),
+                shape: converted.shape,
+                sequences,
+                sources: Vec::new(),
+                omissions: Vec::new(),
+            }
+        } else {
+            serde_json::from_slice(&bytes)?
+        };
         rig.validate()?;
         ensure!(
             package
@@ -369,20 +404,50 @@ impl AvatarAssets {
         };
         shape.validate()?;
         let mut sequences = BTreeMap::new();
-        for (key, clips) in &pack.animation_aliases {
+        for (key, value) in &pack.animation_aliases {
             let Some(alias) = key.strip_prefix(&format!("{HORSE}::")) else {
                 continue;
             };
-            let clips = asset(clips)?;
-            let set: bri_content::shape::ClipSet = serde_json::from_slice(
-                &crate::items::checked_read(&root, &clips.path, &clips.sha256, 8 << 20)?,
-            )?;
-            // Each alias names one authored `.dsq`, holding its one sequence.
-            let mut clip = set
-                .animations
-                .into_iter()
-                .next()
-                .with_context(|| format!("Empty horse clip {alias}"))?;
+            // GLB-era packs bake the horse's sequences into its model and name
+            // each alias after one of them; legacy packs still point at a clip
+            // file (a path, or a `.clips.json`), holding the authored sequence.
+            let mut clip = if value.contains('/')
+                || value.to_ascii_lowercase().ends_with(".clips.json")
+            {
+                let clips = asset(value)?;
+                let set: bri_content::shape::ClipSet = serde_json::from_slice(
+                    &crate::items::checked_read(&root, &clips.path, &clips.sha256, 8 << 20)?,
+                )?;
+                // Each alias names one authored `.dsq`, holding its one sequence.
+                set.animations
+                    .into_iter()
+                    .next()
+                    .with_context(|| format!("Empty horse clip {alias}"))?
+            } else {
+                // A sequence with no tracks cannot ride in glTF (the import
+                // drops empty clips); its absence is the rest pose, exactly as
+                // the legacy clip file's empty first sequence posed nothing.
+                shape
+                    .animations
+                    .iter()
+                    .find(|a| a.name.eq_ignore_ascii_case(value))
+                    .cloned()
+                    .unwrap_or(bri_content::shape::Animation {
+                        name: value.to_string(),
+                        frames: 0,
+                        duration: 0.0,
+                        looping: false,
+                        additive: false,
+                        parent_translations: false,
+                        priority: 0,
+                        rotation_interpolation: Default::default(),
+                        nodes: Vec::new(),
+                        objects: Vec::new(),
+                        ground_translations: Vec::new(),
+                        ground_rotations: Vec::new(),
+                        triggers: Vec::new(),
+                    })
+            };
             // horse.dts fills the Blockhead's arm, head and action sequences
             // with copies of `h_root.dsq`: they must pose nothing, layered
             // like the Blockhead's own sequence of that name.
@@ -889,13 +954,16 @@ impl AvatarAssets {
         let mut materials = Vec::new();
         for source in &self.rig.shape.materials {
             let name = source.name.to_ascii_lowercase();
-            let id = match name.as_str() {
+            // A duplicate the glTF loader suffixed (`<name>_1`) binds its
+            // base surface, as the legacy rig's repeated names did.
+            let key = bind_key(&self.package.surfaces, &name);
+            let id = match key {
                 "face" => &outfit.face,
                 "decal" => &outfit.decal,
                 _ => self
                     .package
                     .surfaces
-                    .get(&name)
+                    .get(key)
                     .with_context(|| format!("Unbound avatar material {name}"))?,
             };
             let image = *images.entry(id.clone()).or_insert_with(|| {
@@ -916,7 +984,7 @@ impl AvatarAssets {
             if appearance
                 .unlit
                 .iter()
-                .any(|u| u.eq_ignore_ascii_case(&name))
+                .any(|u| u.eq_ignore_ascii_case(key))
             {
                 material.kind = bri_render::scene::MaterialKind::Unlit;
                 material.untinted = true;
@@ -7148,5 +7216,44 @@ mod tests {
         }
         ensure!(problems.is_empty(), "{problems:#?}");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod bind_key_tests {
+    use super::*;
+
+    fn surfaces() -> BTreeMap<String, String> {
+        [
+            ("brickside", "x"),
+            ("black25", "y"),
+            ("face_1", "z"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn an_exact_surface_name_wins_over_any_fallback() {
+        let s = surfaces();
+        assert_eq!(bind_key(&s, "brickside"), "brickside");
+        // A real surface that merely ends in `_1` keeps its own name.
+        assert_eq!(bind_key(&s, "face_1"), "face_1");
+    }
+
+    #[test]
+    fn a_loader_suffixed_duplicate_binds_its_base_surface() {
+        let s = surfaces();
+        assert_eq!(bind_key(&s, "brickside_1"), "brickside");
+        assert_eq!(bind_key(&s, "brickside_2"), "brickside");
+    }
+
+    #[test]
+    fn a_suffix_with_no_base_surface_keeps_the_name_so_it_fails_loudly() {
+        let s = surfaces();
+        assert_eq!(bind_key(&s, "ghost_1"), "ghost_1");
+        // A non-numeric suffix is no dedup mark.
+        assert_eq!(bind_key(&s, "face_x"), "face_x");
     }
 }
