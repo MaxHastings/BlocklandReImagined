@@ -248,6 +248,14 @@ fn lower_names(rig: &Rig) -> Vec<String> {
         .map(|o| o.name.to_ascii_lowercase())
         .collect()
 }
+/// A glTF loader's unique name back to the node it was named after: a
+/// trailing `_N` is dropped (the loader renames a repeated node `X_2`).
+fn base_name(name: &str) -> &str {
+    match name.rsplit_once('_') {
+        Some((b, s)) if !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()) => b,
+        _ => name,
+    }
+}
 /// The surface key a rig material binds. A glTF loader uniques repeated
 /// material names — one surface drawn with a second blend mode arrives as
 /// `<name>_1` — and such a duplicate binds its base surface, as the legacy
@@ -427,6 +435,9 @@ impl AvatarAssets {
                 // A sequence with no tracks cannot ride in glTF (the import
                 // drops empty clips); its absence is the rest pose, exactly as
                 // the legacy clip file's empty first sequence posed nothing.
+                // One frame keeps it valid (`Rig::validate` rejects a zero-
+                // length clip) while posing nothing: sampling treats one-frame
+                // clips as still.
                 shape
                     .animations
                     .iter()
@@ -434,7 +445,7 @@ impl AvatarAssets {
                     .cloned()
                     .unwrap_or(bri_content::shape::Animation {
                         name: value.to_string(),
-                        frames: 0,
+                        frames: 1,
                         duration: 0.0,
                         looping: false,
                         additive: false,
@@ -775,11 +786,19 @@ impl AvatarAssets {
             .with_context(|| format!("Body {model} is not loaded"))?;
         let nodes = if model == HORSE_SHAPE {
             let chest = appearance.colors.get("chest").copied().unwrap_or([1.0; 4]);
-            [
-                ("body".into(), chest),
-                ("head".into(), [0.0, 0.0, 0.0, 1.0]),
-            ]
-            .into()
+            // The glTF loader uniques repeated node names — a GLB-era horse's
+            // objects arrive as `body_2`, `head_2` (legacy JSON shapes had
+            // exactly `body`, `head`) — so paint each object by its base name,
+            // and leave the ski nodes hidden.
+            horse
+                .object_names
+                .iter()
+                .filter_map(|name| match base_name(name) {
+                    "body" => Some((name.clone(), chest)),
+                    "head" => Some((name.clone(), [0.0, 0.0, 0.0, 1.0])),
+                    _ => None,
+                })
+                .collect()
         } else {
             let selected = self.package.resolve(&appearance)?;
             // An object named as a Blockhead part or colour slot is that
@@ -3741,6 +3760,73 @@ mod tests {
             },
         )?;
         assert_eq!(mesh.mode, "death1", "death overrides the swim loop");
+        Ok(())
+    }
+
+    /// A GLB-era horse: the glTF loader uniques repeated node names, so its
+    /// objects arrive as `body_2`, `head_2`; the outfit must paint them by
+    /// base name — an object with no colour is skipped at draw time, and a
+    /// whole body of unpainted ones draws as nothing.
+    #[test]
+    fn a_glb_horse_paints_suffixed_objects() -> Result<()> {
+        let mut assets = crate::testing::avatar::assets()?;
+        let root = crate::testing::ScratchDir::new("glb-horse")?;
+        let dir = root.path().join("addons/horse2");
+        std::fs::create_dir_all(dir.join("assets"))?;
+        // The made-up Blockhead rig, with its objects renamed the way a glTF
+        // export names repeated node names (`body` becomes `body_2`).
+        let mut shape = crate::testing::avatar::rig().shape.clone();
+        for object in &mut shape.objects {
+            match object.name.as_str() {
+                "chest" => object.name = "body_2".into(),
+                "headskin" => object.name = "head_2".into(),
+                "rski" => object.name = "rski_2".into(),
+                "lski" => object.name = "lski_2".into(),
+                _ => {}
+            }
+        }
+        std::fs::write(
+            dir.join("assets/horse.shape.json"),
+            serde_json::to_vec(&shape)?,
+        )?;
+        let mut content = Vec::new();
+        for material in &shape.materials {
+            let png = format!("assets/{}.png", material.name);
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])).save(dir.join(&png))?;
+            content.push(serde_json::json!({
+                "kind": "asset",
+                "id": format!("{HORSE_SHAPE}:asset/{}.png", material.name),
+                "file": png
+            }));
+        }
+        std::fs::write(
+            dir.join("assets/content.json"),
+            serde_json::to_vec(&serde_json::json!({ "content": content }))?,
+        )?;
+        // The body is offered under the horse's own model name, as
+        // `load_horse` keys it.
+        std::fs::write(
+            dir.join("package.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "id": "horse2",
+                "provides": [{ "kind": "body", "id": HORSE_SHAPE, "file": "assets/horse.shape.json" }]
+            }))?,
+        )?;
+        let packages: bri_package::packages::PackageSet =
+            serde_json::from_value(serde_json::json!({ "schema_version": 1, "packages": [
+                { "id": "horse2", "version": "1.0.0", "side": "shared", "dir": "addons/horse2" }]}))?;
+        assert!(!assets.has_body(HORSE_SHAPE));
+        assets.load_bodies(root.path(), &packages);
+        assert!(assets.has_body(HORSE_SHAPE), "the package's body loaded");
+        let mut appearance = assets.package.defaults.clone();
+        appearance.colors.insert("chest".into(), [0.1, 0.2, 0.3, 1.0]);
+        let mesh = assets.body_mesh(HORSE_SHAPE, appearance)?;
+        assert_eq!(mesh.outfit.nodes.get("body_2"), Some(&[0.1, 0.2, 0.3, 1.0]));
+        assert_eq!(mesh.outfit.nodes.get("head_2"), Some(&[0.0, 0.0, 0.0, 1.0]));
+        // The ski nodes stay hidden.
+        assert!(!mesh.outfit.nodes.contains_key("rski_2"));
+        assert!(!mesh.outfit.nodes.contains_key("lski_2"));
         Ok(())
     }
 
