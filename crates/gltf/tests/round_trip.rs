@@ -793,6 +793,76 @@ fn the_default_white_factor_is_no_colour() {
     assert_eq!(lowered.shape.materials[0].color, None);
 }
 
+/// A file whose `bri_legacy.color` carries the functional colour of an opaque
+/// solid material takes it over its solid baseColorFactor on import.
+#[test]
+fn bri_legacy_colour_wins_over_the_solid_factor() {
+    let mut g = bri_gltf::Gltf::new();
+    let positions = g.floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 3);
+    let mesh = g.mesh(
+        "tri",
+        vec![serde_json::json!({ "attributes": { "POSITION": positions } })],
+    );
+    g.material(
+        "blank",
+        [1.0, 1.0, 1.0, 1.0],
+        None,
+        serde_json::json!({ "extras": { "bri_legacy": { "color": [1.0, 1.0, 1.0, 0.0] } } }),
+    );
+    g.node(serde_json::json!({ "mesh": mesh }), None);
+
+    let doc = bri_gltf::Document::from_bytes(&g.glb(), None).unwrap();
+    let opts = bri_gltf::Options::new("", "", bri_gltf::Kind::Item);
+    let lowered = bri_gltf::convert(&doc, None, &opts, "legacy_colour", "").unwrap();
+    assert_eq!(lowered.shape.materials[0].color, Some([1.0, 1.0, 1.0, 0.0]));
+}
+
+/// An opaque solid colour whose alpha carries a paint shift exports its factor
+/// with full alpha (solid in editors) and keeps the functional colour in
+/// `bri_legacy.color`; lowering restores it exactly.
+#[test]
+fn a_shifted_solid_colour_keeps_its_alpha_in_bri_legacy() {
+    let mut shifted = bri_content::testing::material("black50", "opaque");
+    shifted.color = Some([0.0, 0.0, 0.0, 0.5]);
+    let shape = bri_content::testing::rigid_shape(
+        "shift_test",
+        &[("root", None, [0.0; 3])],
+        &[(
+            0,
+            [0.0, 0.0, 0.0],
+            [0.1, 0.2, 0.3],
+            bri_content::testing::Paint { front: 1, rest: 0 },
+        )],
+        vec![bri_content::testing::material("plain", "opaque"), shifted],
+    );
+    let mut notes = Vec::new();
+    let (glb, _embedded) = bri_gltf::export_shape(&shape, &BTreeMap::new(), &mut notes).unwrap();
+
+    // Editors see the part solid: full alpha in the factor...
+    let json = glb_json(&glb);
+    let mat = json["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "black50")
+        .unwrap();
+    assert_eq!(
+        mat["pbrMetallicRoughness"]["baseColorFactor"],
+        serde_json::json!([0.0, 0.0, 0.0, 1.0])
+    );
+    // ...while the functional colour rides in bri_legacy.color.
+    assert_eq!(
+        mat["extras"]["bri_legacy"]["color"],
+        serde_json::json!([0.0, 0.0, 0.0, 0.5])
+    );
+
+    // And a re-import restores it exactly.
+    let doc = bri_gltf::Document::from_bytes(&glb, None).unwrap();
+    let opts = bri_gltf::Options::new("", "", bri_gltf::Kind::Item);
+    let lowered = bri_gltf::convert(&doc, None, &opts, "shift_test", "").unwrap();
+    assert_eq!(lowered.shape.materials[1].color, Some([0.0, 0.0, 0.0, 0.5]));
+}
+
 #[test]
 fn a_solid_colour_survives_the_round_trip_without_a_picture() {
     let mut solid = bri_content::testing::material("solid", "opaque");
@@ -1037,4 +1107,73 @@ fn exporter_written_clips_round_trip_field_for_field() {
 
     // The placeholder clip rides with no tracks at all.
     assert!(lowered.animations[2].nodes.is_empty());
+}
+
+/// A see-through picture on an otherwise-opaque material earns alphaMode BLEND
+/// in the .glb so editors show it transparent the way the game does; a fully-
+/// opaque RGBA picture (the common stock case) does not, and the game's own
+/// blend is kept intact in bri_legacy either way.
+#[test]
+fn a_seethrough_picture_on_an_opaque_material_earns_blend() {
+    use image::{ImageBuffer, Rgba};
+
+    let png = |alpha: u8| -> Vec<u8> {
+        let img = ImageBuffer::from_fn(2, 2, |_, _| Rgba([10u8, 20, 30, alpha]));
+        let mut b = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
+            .unwrap();
+        b
+    };
+
+    // The glTF JSON chunk of an exported .glb.
+    let json_of = |glb: &[u8]| -> Value {
+        assert_eq!(&glb[..4], b"glTF");
+        let mut off = 12;
+        while off < glb.len() {
+            let len = u32::from_le_bytes(glb[off..off + 4].try_into().unwrap()) as usize;
+            let typ = u32::from_le_bytes(glb[off + 4..off + 8].try_into().unwrap());
+            if typ == 0x4E4F534A {
+                return serde_json::from_slice(&glb[off + 8..off + 8 + len]).unwrap();
+            }
+            off += 8 + len;
+        }
+        panic!("no JSON chunk");
+    };
+
+    // A fixture with a used opaque material and a visible mesh; skip where the
+    // corpus is absent, like the other round-trip tests.
+    let Some((shape, mi)) = corpus()
+        .iter()
+        .filter_map(|p| load_shape(p).ok())
+        .find_map(|s| {
+            for m in used_materials(&s).into_iter() {
+                if let Some(i) = m {
+                    if i < s.materials.len() && s.materials[i].blend.as_str() == "opaque" {
+                        return Some((s, i));
+                    }
+                }
+            }
+            None
+        })
+    else {
+        return;
+    };
+
+    // A transparent picture earns BLEND ...
+    let mut tex = BTreeMap::new();
+    tex.insert(mi, Some((format!("mat{mi}.png"), png(128))));
+    let (glb, _) = bri_gltf::export_shape(&shape, &tex, &mut Vec::new()).unwrap();
+    let jm = json_of(&glb);
+    assert_eq!(jm["materials"][mi]["alphaMode"].as_str(), Some("BLEND"));
+    // ... but the game's own blend is untouched.
+    assert_eq!(
+        jm["materials"][mi]["extras"]["bri_legacy"]["blend"].as_str(),
+        Some("opaque")
+    );
+
+    // A fully-opaque RGBA picture does not (the common stock case).
+    let mut tex = BTreeMap::new();
+    tex.insert(mi, Some((format!("mat{mi}.png"), png(255))));
+    let (glb, _) = bri_gltf::export_shape(&shape, &tex, &mut Vec::new()).unwrap();
+    assert!(json_of(&glb)["materials"][mi].get("alphaMode").is_none());
 }

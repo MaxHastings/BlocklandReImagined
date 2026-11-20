@@ -852,7 +852,12 @@ impl ItemAssets {
                 // longer ships), so either recorded pin proves provenance.
                 ensure!(
                     model.sha256 == resource.sha256 || model.source_sha256 == resource.sha256,
-                    "Original/native model provenance mismatch"
+                    "Original/native model provenance mismatch for {}: presentation {} records native {}/source {}, weapon-pack records {}",
+                    resource.path,
+                    model.file,
+                    model.sha256,
+                    model.source_sha256,
+                    resource.sha256
                 );
             }
         }

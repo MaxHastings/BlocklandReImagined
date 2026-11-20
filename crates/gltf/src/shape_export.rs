@@ -237,6 +237,8 @@ struct Builder<'a> {
     node_index: Vec<usize>,
     material_of: BTreeMap<usize, usize>,
     tex_cache: BTreeMap<String, usize>,
+    /// Whether each texture file carries a see-through pixel (checked once).
+    tex_seethrough: BTreeMap<String, bool>,
     unlit: bool,
     /// Notes already given (a mesh several objects draw is built once each).
     noted: BTreeSet<String>,
@@ -261,9 +263,17 @@ impl<'a> Builder<'a> {
         );
         let m = &self.shape.materials[i];
         let textured = self.textures.get(&i).and_then(|t| t.as_ref());
+        // An opaque solid colour whose alpha carries a paint shift (blank,
+        // black50...) writes the factor with full alpha, so editors see the
+        // part solid; the functional colour rides in bri_legacy.color for an
+        // exact re-import.
+        let shifted = textured.is_none()
+            && m.blend == "opaque"
+            && m.color.is_some_and(|c| c[3] < 1.0);
         // A solid-colour material carries its factor (linear, glTF's space);
         // a picture or no colour keeps the default white.
         let base_color_factor = match (textured.is_none(), m.color) {
+            (true, Some(c)) if shifted => json!([c[0], c[1], c[2], 1.0]),
             (true, Some(c)) => json!([c[0], c[1], c[2], c[3]]),
             _ => json!([1.0, 1.0, 1.0, 1.0]),
         };
@@ -304,7 +314,18 @@ impl<'a> Builder<'a> {
         }
         // Blend: opaque needs nothing, alpha BLENDs (or MASKs where the game
         // cuts solid geometry out of it); additive and subtractive have no
-        // glTF equivalent.
+        // glTF equivalent. An otherwise-opaque material whose picture is
+        // see-through earns BLEND so editors show it transparent the way the
+        // game does; the game still keys its own blending off bri_legacy.blend
+        // (and ignores an opaque material's alpha), so in-game drawing is
+        // untouched. Additive and subtractive keep their note above on purpose:
+        // glTF has no add, and flipping them would soften a glow the game draws
+        // from full-alpha pixels.
+        let see_through = !matches!(m.blend.as_str(), "alpha" | "additive" | "subtractive")
+            && match textured {
+                Some((file, bytes)) => self.image_seethrough(file, bytes),
+                None => false,
+            };
         match m.blend.as_str() {
             "alpha" => {
                 if let Some(cutoff) = m.alpha_cutoff {
@@ -318,6 +339,7 @@ impl<'a> Builder<'a> {
                 "material {} blends {}; glTF has no such blend, so the .glb draws it opaque (the game reads the blend back from its extras)",
                 m.name, m.blend
             )),
+            _ if see_through => mat["alphaMode"] = json!("BLEND"),
             _ => {}
         }
         if m.unlit {
@@ -360,6 +382,10 @@ impl<'a> Builder<'a> {
         // Always present (null where the shape says none), so a re-import can
         // tell "the shape had no overlay" from glTF's default.
         legacy["paint_overlay"] = m.paint_overlay.map(Value::Bool).unwrap_or(Value::Null);
+        if shifted {
+            let c = m.color.unwrap();
+            legacy["color"] = json!([c[0], c[1], c[2], c[3]]);
+        }
         if let Some(metal) = &m.metal {
             // The detail is a material index; this export writes the
             // materials in native order, so it survives the round trip.
@@ -416,6 +442,26 @@ impl<'a> Builder<'a> {
         );
         self.tex_cache.insert(file.to_owned(), t);
         Ok(t)
+    }
+
+    /// Whether a picture carries any see-through pixel (alpha below one). Only
+    /// PNGs do here; an all-opaque alpha channel still needs decoding to tell,
+    /// so the fast path rejects non-PNG and channel-less PNGs without decoding.
+    fn image_seethrough(&mut self, file: &str, bytes: &[u8]) -> bool {
+        if let Some(&v) = self.tex_seethrough.get(file) {
+            return v;
+        }
+        let png = bytes.len() >= 26 && bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+        let channel = png && matches!(bytes[25], 4 | 6); // gray+alpha or rgba
+        let v = if !channel {
+            false
+        } else {
+            image::load_from_memory(bytes)
+                .map(|img| img.to_rgba8().pixels().any(|p| p[3] < 255))
+                .unwrap_or(false)
+        };
+        self.tex_seethrough.insert(file.to_owned(), v);
+        v
     }
 }
 
@@ -706,6 +752,7 @@ pub fn export(
         node_index: Vec::new(),
         material_of: BTreeMap::new(),
         tex_cache: BTreeMap::new(),
+        tex_seethrough: BTreeMap::new(),
         unlit: false,
         noted: BTreeSet::new(),
     };

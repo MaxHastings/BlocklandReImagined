@@ -2963,10 +2963,17 @@ pub fn make_material(
         m["alphaMode"]
     );
     let pbr = &m["pbrMetallicRoughness"];
-    let factor: Vec<f32> = pbr["baseColorFactor"]
-        .as_array()
-        .map(|a| a.iter().map(|v| v.as_f64().unwrap_or(1.0) as f32).collect())
-        .unwrap_or_else(|| vec![1.0; 4]);
+    // bri_legacy.color is the functional native colour of an opaque solid
+    // material: its alpha carries the paint shift (blank, black50...), while
+    // baseColorFactor's alpha stays 1 so editors see the part solid. Where it
+    // is present it wins over the factor.
+    let factor: Vec<f32> = match m["extras"]["bri_legacy"]["color"].as_array() {
+        Some(a) if a.len() == 4 => a.iter().map(|v| v.as_f64().unwrap_or(1.0) as f32).collect(),
+        _ => pbr["baseColorFactor"]
+            .as_array()
+            .map(|a| a.iter().map(|v| v.as_f64().unwrap_or(1.0) as f32).collect())
+            .unwrap_or_else(|| vec![1.0; 4]),
+    };
     ensure!(
         factor.len() == 4,
         "material `{source}` has a bad base colour"
