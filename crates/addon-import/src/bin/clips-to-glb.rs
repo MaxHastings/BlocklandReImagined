@@ -568,9 +568,17 @@ fn debris_model(
 fn run(args: &Args) -> Result<Report> {
     let root = args.root.canonicalize()?;
     ensure!(root.is_dir(), "not a directory: {}", root.display());
-    let vehicles = root.join("default-pack/vehicles-pack-012");
-    let debris = root.join("default-pack/weapon-debris-pack-004-v043-r2");
-    ensure!(vehicles.is_dir() && debris.is_dir(), "packs missing under {}", root.display());
+    // The one-time conversion ran against the old single pack; its models now
+    // live in the per-vehicle packs and the debris shapes in weapon_debris_base.
+    let horse_pack = root.join("default-pack/vehicle_horse/assets");
+    let cannon = root.join("default-pack/vehicle_pirate_cannon/assets");
+    let tank = root.join("default-pack/vehicle_tank/assets");
+    let debris = root.join("default-pack/weapon_debris_base");
+    ensure!(
+        horse_pack.is_dir() && cannon.is_dir() && tank.is_dir() && debris.is_dir(),
+        "packs missing under {}",
+        root.display()
+    );
 
     // --- The horse: its eighteen authored sequences, by their new names. --
     // Each entry: (embedded name, the clip file it comes from, and which of
@@ -599,7 +607,7 @@ fn run(args: &Args) -> Result<Report> {
     ];
     let mut horse: Vec<(String, Animation)> = Vec::new();
     for (name, stem) in horse_clips {
-        let set = read_clip(&vehicles.join(format!("models/{stem}.clips.json")))?;
+        let set = read_clip(&horse_pack.join(format!("models/{stem}.clips.json")))?;
         let clip = if name == "death1" {
             set.animations
                 .iter()
@@ -614,8 +622,8 @@ fn run(args: &Args) -> Result<Report> {
     }
 
     // --- The gunners' barrels: each `look` clip rides its own model. ------
-    let cannon_look = read_clip(&vehicles.join("models/Cannon_look.clips.json"))?;
-    let tank_look = read_clip(&vehicles.join("models/t_look.clips.json"))?;
+    let cannon_look = read_clip(&cannon.join("models/Cannon_look.clips.json"))?;
+    let tank_look = read_clip(&tank.join("models/t_look.clips.json"))?;
     ensure!(cannon_look.animations.iter().any(|a| a.name == "look"), "Cannon_look has no look clip");
     ensure!(tank_look.animations.iter().any(|a| a.name == "look"), "t_look has no look clip");
 
@@ -626,15 +634,15 @@ fn run(args: &Args) -> Result<Report> {
         models: Vec::new(),
     };
     for entry in [
-        embed(&vehicles, "models/horse.glb", horse, args.apply),
+        embed(&horse_pack, "models/horse.glb", horse, args.apply),
         embed(
-            &vehicles,
+            &cannon,
             "models/Cannon.glb",
             vec![("look".to_string(), cannon_look.animations.into_iter().find(|a| a.name == "look").unwrap())],
             args.apply,
         ),
         embed(
-            &vehicles,
+            &tank,
             "models/tank_turret.glb",
             vec![("look".to_string(), tank_look.animations.into_iter().find(|a| a.name == "look").unwrap())],
             args.apply,

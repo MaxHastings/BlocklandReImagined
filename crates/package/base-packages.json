@@ -1,24 +1,270 @@
 {
-  "schema_version": 1,
-  "packages": [
-    { "id": "v20-map-bundle", "version": "17.0.0", "side": "shared", "dir": "default-pack/map-bundle-017", "role": "map_bundle" },
-    { "id": "v20-bricks", "version": "4.0.0", "side": "shared", "dir": "default-pack/stock-catalog-004", "role": "brick_catalog" },
-    { "id": "v20-brick-geometry", "version": "8.0.0", "side": "shared", "dir": "default-pack/maps-pass-008", "role": "geometry" },
-    { "id": "v20-effects", "version": "4.0.0", "side": "shared", "dir": "default-pack/effects-pass-004", "role": "effects" },
-    { "id": "v20-brick-materials", "version": "2.0.0", "side": "shared", "dir": "default-pack/brick-materials-002", "role": "brick_materials" },
-    { "id": "v20-avatar", "version": "2.0.0", "side": "shared", "dir": "default-pack/avatar-pack-002", "role": "avatar" },
-    { "id": "v20-audio", "version": "2.0.0", "side": "shared", "dir": "default-pack/audio-pack-002", "role": "audio" },
-    { "id": "v20-weapons", "version": "9.0.0", "side": "shared", "dir": "default-pack/weapons-pack-009", "role": "weapons" },
-    { "id": "v20-item-presentation", "version": "10.0.0", "side": "shared", "dir": "default-pack/item-presentation-pack-010-v043-r2", "role": "item_presentation" },
-    { "id": "v20-vehicles", "version": "12.0.0", "side": "shared", "dir": "default-pack/vehicles-pack-012", "role": "vehicles" },
-    { "id": "v20-events", "version": "2.0.0", "side": "shared", "dir": "default-pack/events-pack-002", "role": "events" },
-    { "id": "v20-ui", "version": "5.0.0", "side": "client", "dir": "default-pack/ui-pack-005", "role": "ui_pack" },
-    { "id": "v20-effects-runtime", "version": "5.0.0", "side": "client", "dir": "default-pack/effects-runtime-pack-005-v043-r2", "role": "effects_runtime" },
-    { "id": "v20-weather", "version": "2.0.0", "side": "client", "dir": "default-pack/weather-pack-002", "role": "weather" },
-    { "id": "v20-foliage", "version": "2.0.0", "side": "client", "dir": "default-pack/foliage-pack-003", "role": "foliage" },
-    { "id": "v20-weapon-debris", "version": "4.0.0", "side": "client", "dir": "default-pack/weapon-debris-pack-004-v043-r2", "role": "weapon_debris" },
-    { "id": "v20-worlds", "version": "6.0.0", "side": "server", "dir": "default-pack/worlds-pass-006", "role": "worlds" },
-    { "id": "v20-tutorial", "version": "3.0.0", "side": "server", "dir": "default-pack/tutorial-pack-003", "role": "tutorial" },
-    { "id": "v20-environments", "version": "1.0.0", "side": "shared", "dir": "default-pack/environments-001", "role": "environments" }
-  ]
+    "schema_version": 1,
+    "packages": [
+        {
+            "id": "v20-map-bundle",
+            "version": "17.0.0",
+            "side": "shared",
+            "dir": "default-pack/map-bundle-017",
+            "role": "map_bundle"
+        },
+        {
+            "id": "v20-bricks",
+            "version": "4.0.0",
+            "side": "shared",
+            "dir": "default-pack/brick_default",
+            "role": "brick_catalog"
+        },
+        {
+            "id": "v20-brick-geometry",
+            "version": "8.0.0",
+            "side": "shared",
+            "dir": "default-pack/brick_geometry_base",
+            "role": "geometry"
+        },
+        {
+            "id": "v20-effects",
+            "version": "4.0.0",
+            "side": "shared",
+            "dir": "default-pack/fx_base",
+            "role": "effects"
+        },
+        {
+            "id": "v20-brick-materials",
+            "version": "2.0.0",
+            "side": "shared",
+            "dir": "default-pack/brick-materials-002",
+            "role": "brick_materials"
+        },
+        {
+            "id": "v20-avatar",
+            "version": "2.0.0",
+            "side": "shared",
+            "dir": "default-pack/player_standard",
+            "role": "avatar"
+        },
+        {
+            "id": "v20-audio",
+            "version": "2.0.0",
+            "side": "shared",
+            "dir": "default-pack/sound_default",
+            "role": "audio"
+        },
+        {
+            "id": "v20-weapons",
+            "version": "9.0.0",
+            "side": "shared",
+            "dir": "default-pack/weapon_default",
+            "role": "weapons"
+        },
+        {
+            "id": "v20-item-presentation",
+            "version": "10.0.0",
+            "side": "shared",
+            "dir": "default-pack/item_default",
+            "role": "item_presentation"
+        },
+        {
+            "id": "v20-vehicles",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_default",
+            "role": "vehicles"
+        },
+        {
+            "id": "v20-vehicle-ball",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_ball"
+        },
+        {
+            "id": "v20-vehicle-horse",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_horse"
+        },
+        {
+            "id": "v20-vehicle-jeep",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_jeep"
+        },
+        {
+            "id": "v20-vehicle-magic_carpet",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_magic_carpet"
+        },
+        {
+            "id": "v20-vehicle-pirate_cannon",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_pirate_cannon"
+        },
+        {
+            "id": "v20-vehicle-rowboat",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_rowboat"
+        },
+        {
+            "id": "v20-vehicle-tank",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_tank"
+        },
+        {
+            "id": "v20-vehicle-ski",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/vehicle_ski"
+        },
+        {
+            "id": "v20-item-key",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/item_key"
+        },
+        {
+            "id": "v20-item-skis",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/item_skis"
+        },
+        {
+            "id": "v20-item-sports",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/item_sports"
+        },
+        {
+            "id": "v20-projectile-gravityrocket",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/projectile_gravityrocket"
+        },
+        {
+            "id": "v20-projectile-pinball",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/projectile_pinball"
+        },
+        {
+            "id": "v20-projectile-pong",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/projectile_pong"
+        },
+        {
+            "id": "v20-projectile-radio-wave",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/projectile_radio_wave"
+        },
+        {
+            "id": "v20-weapon-bow",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/weapon_bow"
+        },
+        {
+            "id": "v20-weapon-gun",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/weapon_gun"
+        },
+        {
+            "id": "v20-weapon-guns-akimbo",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/weapon_guns_akimbo"
+        },
+        {
+            "id": "v20-weapon-push-broom",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/weapon_push_broom"
+        },
+        {
+            "id": "v20-weapon-rocket-launcher",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/weapon_rocket_launcher"
+        },
+        {
+            "id": "v20-weapon-spear",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/weapon_spear"
+        },
+        {
+            "id": "v20-weapon-sword",
+            "version": "12.0.0",
+            "side": "shared",
+            "dir": "default-pack/weapon_sword"
+        },
+        {
+            "id": "v20-events",
+            "version": "2.0.0",
+            "side": "shared",
+            "dir": "default-pack/event_default",
+            "role": "events"
+        },
+        {
+            "id": "v20-ui",
+            "version": "5.0.0",
+            "side": "client",
+            "dir": "default-pack/ui_default",
+            "role": "ui_pack"
+        },
+        {
+            "id": "v20-effects-runtime",
+            "version": "5.0.0",
+            "side": "client",
+            "dir": "default-pack/fx_runtime",
+            "role": "effects_runtime"
+        },
+        {
+            "id": "v20-weather",
+            "version": "2.0.0",
+            "side": "client",
+            "dir": "default-pack/weather_default",
+            "role": "weather"
+        },
+        {
+            "id": "v20-foliage",
+            "version": "2.0.0",
+            "side": "client",
+            "dir": "default-pack/foliage_default",
+            "role": "foliage"
+        },
+        {
+            "id": "v20-weapon-debris",
+            "version": "4.0.0",
+            "side": "client",
+            "dir": "default-pack/weapon_debris_base",
+            "role": "weapon_debris"
+        },
+        {
+            "id": "v20-worlds",
+            "version": "6.0.0",
+            "side": "server",
+            "dir": "default-pack/world_legacy",
+            "role": "worlds"
+        },
+        {
+            "id": "v20-tutorial",
+            "version": "3.0.0",
+            "side": "server",
+            "dir": "default-pack/tutorial_default",
+            "role": "tutorial"
+        },
+        {
+            "id": "v20-environments",
+            "version": "1.0.0",
+            "side": "shared",
+            "dir": "default-pack/environment_default",
+            "role": "environments"
+        }
+    ]
 }

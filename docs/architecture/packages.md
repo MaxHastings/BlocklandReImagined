@@ -93,9 +93,9 @@ following the base list as it changes.
 {
   "schema_version": 1,
   "packages": [
-    { "id": "v20-weapons", "version": "9.0.0", "side": "shared", "dir": "default-pack/weapons-pack-009", "role": "weapons" },
-    { "id": "v20-ui", "version": "4.0.0", "side": "client", "dir": "default-pack/ui-pack-005", "role": "ui_pack" },
-    { "id": "v20-worlds", "version": "6.0.0", "side": "server", "dir": "default-pack/worlds-pass-006", "role": "worlds" },
+    { "id": "v20-weapons", "version": "9.0.0", "side": "shared", "dir": "default-pack/weapon_default", "role": "weapons" },
+    { "id": "v20-ui", "version": "5.0.0", "side": "client", "dir": "default-pack/ui_default", "role": "ui_pack" },
+    { "id": "v20-worlds", "version": "6.0.0", "side": "server", "dir": "default-pack/world_legacy", "role": "worlds" },
     { "id": "creeper", "version": "1.0.0", "side": "shared", "dir": "creeper" }
   ]
 }
@@ -104,7 +104,7 @@ following the base list as it changes.
 | Field | Rule |
 |---|---|
 | `id` | Package id (namespace rules above). Unique. |
-| `version` | `major.minor.patch`. Base packages use their generation number as the major version (`weapons-pack-009` is `9.0.0`). |
+| `version` | `major.minor.patch`. Base packages use their content-generation number as the major version (`v20-weapons`, in `default-pack/weapon_default`, is `9.0.0`). Directory names are stable, human-readable; only the version tracks regeneration. |
 | `side` | `server`: only the server loads it; never compared or sent. `shared`: both simulate with it; must match to join. `client`: presentation only; a difference is reported but does not refuse the join. |
 | `dir` | Directory under the content root; plain relative path, no `..`, must stay inside the root. |
 | `role` | Optional. The engine system that reads the package directly (`map_bundle`, `brick_catalog`, `geometry`, `effects`, `brick_materials`, `avatar`, `audio`, `weapons`, `item_presentation`, `vehicles`, `events`, `ui_pack`, `effects_runtime`, `weather`, `foliage`, `weapon_debris`, `worlds`, `tutorial`). At most one package per role: it is that kind's *base* package. Packages without a role are still loaded, hashed and agreed on, and add to a kind when they provide it (below). |

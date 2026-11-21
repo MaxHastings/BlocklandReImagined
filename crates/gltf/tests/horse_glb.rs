@@ -7,7 +7,7 @@
 #[test]
 fn the_horse_glb_draws_paintable_objects() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/default-pack/vehicles-pack-012/models/horse.glb");
+        .join("../../content/default-pack/vehicle_horse/assets/models/horse.glb");
     if !path.is_file() {
         eprintln!("skipping: no horse.glb at {}", path.display());
         return;

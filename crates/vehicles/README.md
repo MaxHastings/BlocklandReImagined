@@ -2,29 +2,44 @@
 
 `bri-vehicles` implements server-side vehicle state on the **host's shared Rapier world**. It never creates or steps an invisible world. `bri-vehicles-import` is a separate one-time ZIP/datablock/native-model converter; no runtime dependency points back to it. Both crates are root-workspace members. The host session adapter is `crates/sim/src/session/vehicles.rs`; the client renders vehicles in `crates/client/src/vehicles.rs`.
 
-Generated content: the vehicles pack `crates/package/base-packages.json` lists (currently `content/vehicles-pack-012/vehicles.json`; the schema is `SCHEMA_VERSION` in `src/schema.rs`). Earlier packs are superseded development iterations. Eleven definitions cover the eight vehicle packages, the independently spawnable Tank Turret and hidden Item_Skis ski/tumble dependencies. All 20 package DTS models and 21 DSQ native clip assets are copied from the geometry pack; original package images are copied byte-for-byte into the indexed texture directory. The pack has 77 model/clip/texture asset records, source file SHA-256 and declaration-line evidence for 80 source datablocks. It validates/hash-checks without opening the reference installation at runtime. No required vehicle model is unresolved. Material names, animation node names and source authored metadata remain in native JSON.
+Generated content (schema `SCHEMA_VERSION` in `src/schema.rs`), split one pack per V20 vehicle Add-On under `content/default-pack/`, mirroring the addon folder convention:
+
+- `vehicle_default/vehicles.json` holds the `v20-vehicles` role but no definitions: it keeps every shared texture as a **single physical copy** in its own `textures/` directory, alias texture entries for exporter-artifact material names (below), and all 80 source-declaration evidence records plus the pack-level unresolved notes.
+- The eight per-vehicle packs (`vehicle_ball`, `vehicle_horse`, `vehicle_jeep`, `vehicle_magic_carpet`, `vehicle_pirate_cannon`, `vehicle_rowboat`, `vehicle_tank`, `vehicle_ski`) each hold their models in `assets/models/` and their definitions in `assets/vehicles.json`; the Horse pack also carries all 39 animation aliases. Jeep keeps both `jeepvehicle` and `flyingwheeledjeepvehicle` (V20's flying-jeep Add-On reused the same model), Tank keeps `tankvehicle` plus the independently spawnable `tankturretplayer`, and Skis keeps the hidden `skivehicle`/`deathvehicle` tumble pair.
+
+Host, client and dedicated server all load base + extras identically (`content_identity::kind_providers` finds every role-less package whose directory holds `assets/vehicles.json`; `Pack::merge` unions definitions first-wins by id, extends assets with their owning package recorded on each asset, concatenates evidence and prefixes unresolved notes). Asset paths stay relative to their own pack's `assets` directory (the base pack's root), so a split is transparent at runtime.
+
+Texture resolution (`bri_client::vehicles::material_texture`) matches a GLB material against lower-cased virtual paths: `{model folder}/{name}` then with `.png`, `.jpg`, `.jpeg` appended, beside the model first and anywhere in the merged packs by path suffix after. Stock material names are exporter artifacts — some bare (`black25`), some extension-bearing (`Gray.png`), some mangled (`gray_png`) — so a physical file may carry several texture entries under different virtual basenames (aliases), all keeping the file's SHA-256: Cannon's `gray_png`/`blank_png`/`bblack_png` and Tank turret's `blank_png`/`black_png` resolve through aliases beside the originals their sibling models use. When a model's material name matches no texture basename, add an alias entry in `vehicle_default` rather than renaming inside the GLB.
 
 ## Reproduce
 
 From repository root, with the original installation read-only:
 
 ```powershell
-cargo run --manifest-path crates/vehicles-import/Cargo.toml -- "E:\Downloads\B4v21Launcher\versions\Blockland v20" content/maps-pass-008 content/vehicles-pack-012
 cargo test --manifest-path crates/vehicles/Cargo.toml
-cargo test --manifest-path crates/vehicles-import/Cargo.toml
 cargo clippy --manifest-path crates/vehicles/Cargo.toml --all-targets -- -D warnings
-cargo clippy --manifest-path crates/vehicles-import/Cargo.toml --all-targets -- -D warnings
-cargo run --manifest-path crates/vehicles/Cargo.toml --bin vehicle_probe -- content/vehicles-pack-012/vehicles.json artifacts/native-vehicles/probe.json
+# Per-pack asset verification (files + SHA-256) and a Rapier simulation of its definitions:
+for p in vehicle_ball vehicle_horse vehicle_jeep vehicle_magic_carpet vehicle_pirate_cannon vehicle_rowboat vehicle_tank vehicle_ski; do cargo run --manifest-path crates/vehicles/Cargo.toml --bin vehicle_probe -- content/default-pack/$p/assets/vehicles.json artifacts/native-vehicles/probe-$p.json; done
+cargo run --manifest-path crates/vehicles/Cargo.toml --bin vehicle_probe -- content/default-pack/vehicle_default/vehicles.json artifacts/native-vehicles/probe-base.json
 ```
 
-The converter refuses an existing destination. Tests deliberately load `vehicles-pack-012` and do not silently skip missing content. Tests need no original installation, graphics device, visible window, input automation or audio device. Original assets/recovered scripts remain ignored and must not be committed.
+The one-time `crates/vehicles-import` converter (ZIP/datablock/native-model) ran against the pre-split single pack and is kept for provenance only; it refuses an existing destination.
+
+Tests use self-contained fixture packs under `tests/fixtures` and need no original installation, graphics device, visible window, input automation or audio device. The shipped-content check lives in `crates/gltf/tests/horse_glb.rs`, which loads the real Horse GLB from its pack and skips where the content is absent. Original assets/recovered scripts remain ignored and must not be committed.
 
 ## Shared host integration
 
 ```rust,ignore
 use bri_vehicles::*;
-let pack = Pack::load("content/vehicles-pack-012/vehicles.json")?;
-pack.verify_assets("content/vehicles-pack-012")?;
+// Base role pack + every Add-On's extras, merged exactly as the client loads them.
+let mut pack = Pack::load("content/default-pack/vehicle_default/vehicles.json")?;
+pack.verify_assets("content/default-pack/vehicle_default")?;
+for (dir, assets) in content_identity::kind_providers(&content_root, &packages, "vehicles.json")? {
+    let part = Pack::load(assets.join("vehicles.json"))?;
+    part.verify_assets(&assets)?;
+    let (merged, _notes) = pack.merge(vec![(dir, part)]);
+    pack = merged;
+}
 let mut vehicles = VehiclesWorld::new(pack)?;
 // physics below is bri_sim's existing bri_physics::new_world(), not a second world.
 vehicles.spawn(&mut physics, Spawn {
