@@ -19,12 +19,17 @@
 //! 5. `bundle.json` `assets` map keys (virtual paths) -> values
 //! 6. audio inventory `audio_files[]` (`sha256` + `virtual_path`)
 //! 7. a hash-named `.json`'s own top-level `id` field (sharded model files)
-//! 8. content-hash match against the Blockland v20 reference installation
+//! 8. content-hash match against the Blockland V20/V21 reference
+//!    installations (loose files and zip members)
 //!
 //! Unmapped files are left untouched and listed in RENAME-REPORT.json.
 //! `.downloads/` is excluded entirely (sealed download cache).
 //!
-//! Usage: `rename-content CONTENT_ROOT [--apply] [--ref REF_DIR]`
+//! Usage: `rename-content CONTENT_ROOT [--apply] [--ref DIR]...`
+//!
+//! `--ref` may be given repeatedly (or comma-separated) to index several
+//! reference installations; without it the sibling `.research/reference/`
+//! of the content root is probed for `Blockland V20` / `Blockland V21`.
 //!
 //! Dry-run by default: computes and reports every rename without touching any
 //! file (except writing RENAME-REPORT.json into the root). Pass `--apply` to
@@ -45,13 +50,13 @@ use serde_json::Value;
 struct Args {
     root: PathBuf,
     apply: bool,
-    ref_dir: Option<PathBuf>,
+    ref_dirs: Vec<PathBuf>,
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Ok(args) = parse_args(&args) else {
-        eprintln!("usage: rename-content CONTENT_ROOT [--apply] [--ref REF_DIR]");
+        eprintln!("usage: rename-content CONTENT_ROOT [--apply] [--ref DIR]...");
         return ExitCode::from(2);
     };
     match run(&args) {
@@ -82,13 +87,16 @@ fn main() -> ExitCode {
 fn parse_args(args: &[String]) -> Result<Args> {
     let mut root = None;
     let mut apply = false;
-    let mut ref_dir = None;
+    let mut ref_dirs: Vec<PathBuf> = Vec::new();
     for a in args {
         if a == "--apply" {
             apply = true;
         } else if let Some(r) = a.strip_prefix("--ref=") {
-            anyhow::ensure!(ref_dir.is_none(), "duplicate --ref");
-            ref_dir = Some(PathBuf::from(r));
+            for part in r.split(',') {
+                if !part.trim().is_empty() {
+                    ref_dirs.push(PathBuf::from(part.trim()));
+                }
+            }
         } else if !a.starts_with('-') {
             anyhow::ensure!(root.is_none(), "unexpected argument: {a}");
             root = Some(PathBuf::from(a));
@@ -103,7 +111,7 @@ fn parse_args(args: &[String]) -> Result<Args> {
     Ok(Args {
         root,
         apply,
-        ref_dir,
+        ref_dirs,
     })
 }
 
@@ -190,6 +198,34 @@ fn run(args: &Args) -> Result<Report> {
         }
         map.insert(target.to_path_buf(), (new_base, source));
         *by_source.entry(source.to_string()).or_insert(0) += 1;
+    }
+
+    // --- S0: curated overrides -------------------------------------------------
+    // A handful of old-pipeline map scene files carry no recorded name in any
+    // manifest (their imports were "retained" with empty asset lists). Their
+    // original names are the .mis stems from each package's provenance notes,
+    // matching the convention used by default-pack/map-bundle-017
+    // (`<mapstem>.scene.json`).
+    const OVERRIDES: &[(&str, &str)] = &[
+        ("nyc/map/nycday/2005629d47cc893138be9ce9d8d3960747ffc639bff1ac3a568efbc7ceeab0e9.scene.json", "nycday.scene.json"),
+        ("nyc/map/nycnight/4ab21609f041db4a4662cf582d72953ed571ab9dd351ddaa5c04223c5e5c11fd.scene.json", "nycnight.scene.json"),
+        ("map_paradise/map/gsf_paradise/29dd5da1e16de72ad890cdca1bb2c83515d5349c5c59ccd22c44fbabe8565819.scene.json", "gsf_paradise.scene.json"),
+        ("map_paradise/map/gsf_paradise_night/4f3f16620331dddfe8f951ce822a089a5363735c02d1170cacd5a415498d3154.scene.json", "gsf_paradise_night.scene.json"),
+        ("map_forest/map/forest/f3b7280895e208bf1aa35989fe6b91aa1689da60af58bb09434188d2b8ea8a8e.scene.json", "forest.scene.json"),
+        ("map_forest/map/forestnight/3a5cf86112891a780608b2dddc2aa98d85a58e22ac16dd105ff927a6a293218b.scene.json", "forestnight.scene.json"),
+        ("map_arcticchallenge3/map/9ab6eb7d483dfe5f4ebe7eb757e13ec79687e26fdb5ed8839966d7d668cd2f75.scene.json", "arcticchallenge3.scene.json"),
+    ];
+    for (rel, new_base) in OVERRIDES {
+        let target = root.join(rel);
+        if candidates.contains(&target) {
+            assign(
+                &mut map,
+                &mut by_source,
+                &target,
+                (*new_base).to_string(),
+                "curated",
+            );
+        }
     }
 
     // --- S1: import-report.json assets[] ----------------------------------
@@ -478,30 +514,103 @@ fn run(args: &Args) -> Result<Report> {
         );
     }
 
-    // --- S8: v20 reference content-hash fallback -----------------------------
-    let ref_dir = args.ref_dir.clone().or_else(|| {
+    // --- S8: reference content-hash fallback ---------------------------------
+    // Last resort for files no manifest names (old-pipeline map textures): a
+    // byte-identical file in the Blockland V20/V21 reference installation
+    // carries its original name. Loose files and zip members both count — the
+    // reference Add-Ons ship as zips. Explicit --ref dirs win; otherwise the
+    // sibling `.research/reference/` of the content root is probed.
+    let ref_dirs: Vec<PathBuf> = if args.ref_dirs.is_empty() {
         root.parent()
-            .map(|p| p.join(".research/reference/Blockland v20"))
-    });
-    let mut ref_used = false;
-    if let Some(rd) = &ref_dir
-        && rd.is_dir()
-    {
-        let mut index: BTreeMap<String, String> = BTreeMap::new();
-        for f in walk_skip_downloads(rd).0 {
-            if let Ok(bytes) = fs::read(&f)
-                && let Some(name) = f.file_name().and_then(|n| n.to_str())
-            {
-                index.insert(hash(&bytes), name.to_string());
+            .map(|p| p.join(".research/reference"))
+            .and_then(|base| {
+                Some(
+                    ["Blockland V20", "Blockland V21"]
+                        .iter()
+                        .map(|v| base.join(v))
+                        .filter(|d| d.is_dir())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        args.ref_dirs.clone()
+    };
+    let ref_used = ref_dirs.iter().any(|d| d.is_dir());
+    if ref_used {
+        // sha256 -> every original basename seen under that hash.
+        let mut index: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for rd in &ref_dirs {
+            if !rd.is_dir() {
+                continue;
+            }
+            for f in walk_skip_downloads(rd).0 {
+                let b = base_name(&f);
+                if b.to_ascii_lowercase().ends_with(".zip") {
+                    let Ok(bytes) = fs::read(&f) else { continue };
+                    let Ok(mut zip) =
+                        zip::ZipArchive::new(std::io::Cursor::new(bytes))
+                    else {
+                        continue;
+                    };
+                    for i in 0..zip.len() {
+                        let Ok(mut entry) = zip.by_index(i) else { continue };
+                        if entry.is_dir() {
+                            continue;
+                        }
+                        let name = entry
+                            .name()
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("")
+                            .to_string();
+                        if name.is_empty() || split_hash(&name).is_some() {
+                            continue; // hash-named members carry no original name
+                        }
+                        let mut data = Vec::new();
+                        if std::io::Read::read_to_end(&mut entry, &mut data).is_ok() {
+                            index.entry(hash(&data)).or_default().push(name);
+                        }
+                    }
+                } else if split_hash(&b).is_none() {
+                    let Ok(bytes) = fs::read(&f) else { continue };
+                    index.entry(hash(&bytes)).or_default().push(b.clone());
+                }
             }
         }
-        ref_used = true;
         for c in candidates.iter() {
             if map.contains_key(c) {
                 continue;
             }
             let Ok(bytes) = fs::read(c) else { continue };
-            let Some(name) = index.get(&hash(&bytes)) else {
+            let Some(names) = index.get(&hash(&bytes)) else {
+                continue;
+            };
+            // Several originals can share one hash (shared textures): prefer a
+            // descriptive name — not "Unnamed", not a bare number, longer over
+            // shorter — deterministically.
+            let named: Vec<&String> = names
+                .iter()
+                .filter(|n| !n.to_ascii_lowercase().starts_with("unnamed"))
+                .collect();
+            let mut pool: Vec<&String> = if named.is_empty() {
+                names.iter().collect()
+            } else {
+                named
+            };
+            pool.sort_by(|a, b| {
+                let numeric_stem = |s: &&String| {
+                    s.rsplit('.').next().unwrap_or("")
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_digit())
+                };
+                numeric_stem(a)
+                    .cmp(&numeric_stem(b))
+                    .then_with(|| b.len().cmp(&a.len()))
+                    .then_with(|| a.cmp(b))
+            });
+            let Some(name) = pool.first() else {
                 continue;
             };
             let stem = file_stem_of(name).unwrap_or_default();
@@ -514,7 +623,7 @@ fn run(args: &Args) -> Result<Report> {
                 &mut by_source,
                 c,
                 format!("{stem}{rest}"),
-                "v20-sha",
+                "ref-sha",
             );
         }
     }
@@ -757,6 +866,7 @@ fn run(args: &Args) -> Result<Report> {
         "mode": report.mode,
         "root": &report.root,
         "reference_used": report.ref_used,
+        "references": ref_dirs.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
         "totals": {
             "candidates": report.candidates,
             "renamed": report.mapped,

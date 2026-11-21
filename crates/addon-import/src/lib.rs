@@ -3182,8 +3182,11 @@ fn flat_texture(
     Ok(key.into())
 }
 
-/// A 0.2 unit cube with one white material.
-fn placeholder() -> bri_content::shape::Shape {
+/// A 0.2 unit cube with one white material — the shared stand-in for items
+/// whose model glTF cannot hold (no visible mesh): a `.glb` of its own, one
+/// material with an embedded bitmap. Public so the `export-placeholder` tool
+/// can ship byte-identical copies in migrated content without re-importing.
+pub fn placeholder() -> bri_content::shape::Shape {
     use bri_content::shape::*;
     let mut positions = vec![];
     let mut normals = vec![];

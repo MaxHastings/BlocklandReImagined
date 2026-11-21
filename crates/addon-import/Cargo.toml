@@ -12,6 +12,10 @@ path = "src/main.rs"
 # TEMPORARY: one-shot content migrator; delete this entry (and the file) once
 # all installed content has been converted to GLB.
 [[bin]]
+name = "export-placeholder"
+path = "src/bin/export-placeholder.rs"
+
+[[bin]]
 name = "migrate-content"
 path = "src/bin/migrate-content.rs"
 
