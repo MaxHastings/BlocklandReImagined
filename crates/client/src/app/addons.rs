@@ -914,7 +914,11 @@ impl PreparedPackages {
         let parts = parts?;
         let (avatar_assets, more) = crate::add_on_health::collecting(|| -> Result<_> {
             let mut assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
-            assets.load_horse(&content.paths.vehicles)?;
+            assets.load_horse(
+                &content.paths.root,
+                &content.paths.vehicles,
+                &content.paths.vehicle_extras,
+            )?;
             assets.load_bodies(&content.paths.root, &content.paths.packages);
             Ok(Arc::new(assets))
         });

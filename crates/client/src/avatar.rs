@@ -384,11 +384,25 @@ impl AvatarAssets {
         })
     }
     /// Load `HorseArmor`'s shape, sequence aliases and paint textures from
-    /// the vehicle pack, so a player of that datablock draws as a horse.
-    pub fn load_horse(&mut self, vehicles: &Path) -> Result<()> {
+    /// the base vehicle pack merged with every other package's vehicles
+    /// (`content_identity::kind_providers`), so a player of that datablock
+    /// draws as a horse. A merged asset resolves against its own package's
+    /// directory (see [`bri_vehicles::asset_root`]).
+    pub fn load_horse(
+        &mut self,
+        content_root: &Path,
+        vehicles: &Path,
+        vehicle_extras: &[(String, std::path::PathBuf)],
+    ) -> Result<()> {
         const HORSE: &str = "v20.vehicle.horsearmor";
         let root = vehicles.canonicalize()?;
-        let pack = bri_vehicles::Pack::load(root.join("vehicles.json"))?;
+        let mut parts = Vec::new();
+        for (dir, abs) in vehicle_extras {
+            let part = bri_vehicles::Pack::load(abs.join("vehicles.json"))?;
+            part.verify_assets(abs)?;
+            parts.push((dir.clone(), part));
+        }
+        let pack = bri_vehicles::Pack::load(root.join("vehicles.json"))?.merge(parts).0;
         let definition = pack
             .definitions
             .iter()
@@ -401,7 +415,12 @@ impl AvatarAssets {
                 .with_context(|| format!("Undeclared vehicle asset {path}"))
         };
         let model = asset(&definition.model)?;
-        let bytes = crate::items::checked_read(&root, &model.path, &model.sha256, 32 << 20)?;
+        let bytes = crate::items::checked_read(
+            &bri_vehicles::asset_root(content_root, &root, model),
+            &model.path,
+            &model.sha256,
+            32 << 20,
+        )?;
         // GLB-era packs ship the horse as a glTF (lowered exactly as the
         // vehicle renderer draws it); legacy packs still carry JSON shapes.
         let shape: bri_content::shape::Shape = if model.path.to_ascii_lowercase().ends_with(".glb")
@@ -424,7 +443,12 @@ impl AvatarAssets {
             {
                 let clips = asset(value)?;
                 let set: bri_content::shape::ClipSet = serde_json::from_slice(
-                    &crate::items::checked_read(&root, &clips.path, &clips.sha256, 8 << 20)?,
+                    &crate::items::checked_read(
+                        &bri_vehicles::asset_root(content_root, &root, clips),
+                        &clips.path,
+                        &clips.sha256,
+                        8 << 20,
+                    )?,
                 )?;
                 // Each alias names one authored `.dsq`, holding its one sequence.
                 set.animations
@@ -482,8 +506,12 @@ impl AvatarAssets {
                         .ends_with(&format!("/{name}.png"))
                 })
                 .with_context(|| format!("Missing horse texture {name}"))?;
-            let bytes =
-                crate::items::checked_read(&root, &texture.path, &texture.sha256, 16 << 20)?;
+            let bytes = crate::items::checked_read(
+                &bri_vehicles::asset_root(content_root, &root, texture),
+                &texture.path,
+                &texture.sha256,
+                16 << 20,
+            )?;
             let pixels = image::load_from_memory(&bytes)?.to_rgba8();
             images.insert(
                 name.clone(),

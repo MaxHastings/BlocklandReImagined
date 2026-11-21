@@ -48,7 +48,10 @@ impl Converter {
         let read = |path: PathBuf| std::fs::read(&path).with_context(|| path.display().to_string());
         let audio = read(paths.audio.join("manifest.json"))?;
         let weapons = read(paths.weapons.join("weapons.json"))?;
-        let vehicles = read(paths.vehicles.join("vehicles.json"))?;
+        // The base vehicle pack holds no definitions since the per-vehicle
+        // split, so aliases must see every package's merged set.
+        let vehicles_pack = content.paths.vehicle_pack()?;
+        let vehicles = serde_json::to_vec(&vehicles_pack)?;
         let aliases = Aliases::from_packs(
             &serde_json::from_slice(&audio)?,
             &serde_json::from_slice(&weapons)?,

@@ -84,7 +84,11 @@ impl App {
         content_problems
             .extend(weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)));
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
-        avatar_assets.load_horse(&content.paths.vehicles)?;
+        avatar_assets.load_horse(
+            &content.paths.root,
+            &content.paths.vehicles,
+            &content.paths.vehicle_extras,
+        )?;
         let ((), more) = crate::add_on_health::collecting(|| {
             avatar_assets.load_bodies(&content.paths.root, &content.paths.packages)
         });

@@ -57,8 +57,18 @@ fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
     for e in weapons.explosions.values() {
         sound(&e.name, &e.sound);
     }
-    let vehicles = bri_vehicles::Pack::load(content("vehicles").join("vehicles.json"))?;
-    for d in &vehicles.definitions {
+    // The base pack merged with every Add-On's vehicle extras, exactly as the
+    // client loads it: weapon-bearing definitions (Cannon, Tank) live in the
+    // per-vehicle packs beside the empty role-holding base.
+    let packages = bri_package::packages::PackageSet::load_root(&content_root)?;
+    let mut parts = Vec::new();
+    for (dir, assets) in
+        bri_net::content_identity::kind_providers(&content_root, &packages, "vehicles.json")?
+    {
+        parts.push((dir, bri_vehicles::Pack::load(assets.join("vehicles.json"))?));
+    }
+    let vehicles = bri_vehicles::Pack::load(content("vehicles").join("vehicles.json"))?.merge(parts);
+    for d in &vehicles.0.definitions {
         if let Some(w) = &d.weapon {
             sound(&d.id, &w.sound);
         }
@@ -107,7 +117,7 @@ fn every_stock_cue_resolves_to_a_sound_or_effect() -> Result<()> {
             effect(&format!("{explosion} debris"), trail);
         }
     }
-    for d in &vehicles.definitions {
+    for d in &vehicles.0.definitions {
         if let Some(w) = &d.weapon
             && !weapons
                 .images

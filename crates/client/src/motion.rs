@@ -1627,17 +1627,45 @@ mod tests {
     /// no checkout holds.
     fn pack_for(definition: &str) -> Option<bri_vehicles::Pack> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let path = if definition.starts_with("test_plane:") {
-            root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json")
-        } else {
-            if !root.join("content").is_dir() {
-                return None;
-            }
-            bri_package::testing::pack_dir(&root.join("content"), "vehicles").join("vehicles.json")
-        };
-        Some(
-            bri_vehicles::Pack::load(&path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display())),
+        if definition.starts_with("test_plane:") {
+            let path =
+                root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json");
+            return Some(bri_vehicles::Pack::load(&path).unwrap_or_else(|e| {
+                panic!("{}: {e:#}", path.display())
+            }));
+        }
+        let content = root.join("content");
+        if !content.is_dir() {
+            return None;
+        }
+        // Since the per-vehicle split no single file holds every definition,
+        // so merge as the game does (ContentPaths::merged_vehicles): the base
+        // role pack plus each other package's assets/vehicles.json. As in
+        // load_leaving_out_broken, a listed package whose folder is missing
+        // is left out rather than stopping the test.
+        let mut packages = bri_package::packages::PackageSet::load_root(&content)
+            .unwrap_or_else(|e| panic!("content under {}: {e:#}", content.display()));
+        packages.packages.retain(|p| content.join(&p.dir).is_dir());
+        let base_dir = packages
+            .role_dir(&content, "vehicles")
+            .unwrap_or_else(|e| panic!("content role vehicles: {e:#}"));
+        let providers = bri_net::content_identity::kind_providers(
+            &content,
+            &packages,
+            "vehicles.json",
         )
+        .unwrap_or_else(|e| panic!("vehicle providers: {e:#}"));
+        let mut parts = Vec::new();
+        for (dir, abs) in providers {
+            let part = bri_vehicles::Pack::load(abs.join("vehicles.json"))
+                .unwrap_or_else(|e| panic!("{dir}: {e:#}"));
+            part.verify_assets(&abs).unwrap_or_else(|e| panic!("{dir}: {e:#}"));
+            parts.push((dir, part));
+        }
+        let (pack, _problems) = bri_vehicles::Pack::load(base_dir.join("vehicles.json"))
+            .unwrap_or_else(|e| panic!("{}: {e:#}", base_dir.display()))
+            .merge(parts);
+        Some(pack)
     }
     #[test]
     fn ordinary_mounted_portal_prediction_keeps_the_drawn_centre_and_look_together() -> Result<()> {
