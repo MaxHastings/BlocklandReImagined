@@ -663,6 +663,7 @@ mod local_view_skin_tests {
         let assets = Arc::new(ItemAssets::load_with(
             &item_dir,
             &weapon_dir,
+            &f.root,
             &[("local-skin-test".into(), weapon_dir.clone())],
         )?);
         assert!(assets.skin(gun).is_some(), "actual authored skin admission");

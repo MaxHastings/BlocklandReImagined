@@ -14,7 +14,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use support::{gpu, item_fixture::ItemFixture};
 
 fn packs(f: &ItemFixture) -> Result<(Arc<ItemAssets>, Arc<bri_weapons::Pack>)> {
-    let assets = ItemAssets::load(&f.presentation, &f.weapons)?;
+    let assets = ItemAssets::load(&f.presentation, &f.weapons, &f.root)?;
     let weapons = bri_weapons::Pack::from_json(&std::fs::read(f.weapons.join("weapons.json"))?)?;
     Ok((Arc::new(assets), Arc::new(weapons)))
 }

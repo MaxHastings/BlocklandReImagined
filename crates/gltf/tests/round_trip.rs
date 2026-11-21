@@ -1177,3 +1177,87 @@ fn a_seethrough_picture_on_an_opaque_material_earns_blend() {
     let (glb, _) = bri_gltf::export_shape(&shape, &tex, &mut Vec::new()).unwrap();
     assert!(json_of(&glb)["materials"][mi].get("alphaMode").is_none());
 }
+
+/// A re-exported native shape names its see-through blend in `bri_legacy` even
+/// though glTF has no words for it and leaves `alphaMode` at the OPAQUE default
+/// (the exporter's contract for additive/subtractive pictures). Lowering must
+/// keep the picture's alpha so an additive flame fades the way the original
+/// did instead of drawing as a solid cone.
+#[test]
+fn an_additive_note_without_an_alpha_mode_keeps_the_pictures_alpha() {
+    // A 2x2 gradient: bright core to near-transparent edge, like a v20 flame.
+    let rgba = vec![
+        255u8, 240, 160, 255,
+        255, 190, 60, 128,
+        255, 130, 20, 64,
+        255, 80, 0, 16,
+    ];
+
+    let mut g = bri_gltf::Gltf::new();
+    let positions = g.floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 3);
+    let mesh = g.mesh(
+        "flame",
+        vec![serde_json::json!({
+            "attributes": { "POSITION": positions },
+            "material": 0,
+        })],
+    );
+    g.material(
+        "rocketCone",
+        [1.0; 4],
+        Some(bri_gltf::testing::MaterialImage::Png((2, 2, rgba))),
+        serde_json::json!({ "extras": { "bri_legacy": { "blend": "additive" } } }),
+    );
+    g.node(serde_json::json!({ "mesh": mesh }), None);
+
+    let doc = bri_gltf::Document::from_bytes(&g.glb(), None).unwrap();
+    let opts = bri_gltf::Options::new("", "", bri_gltf::Kind::Item);
+    let lowered = bri_gltf::convert(&doc, None, &opts, "flame_test", "").unwrap();
+
+    // The blend comes back ...
+    assert_eq!(lowered.shape.materials[0].blend.as_str(), "additive");
+    // ... and the picture keeps its falloff instead of flattening to solid.
+    let png = lowered.textures.get("rocketcone").expect("the material's texture");
+    let img = image::load_from_memory(png).unwrap().to_rgba8();
+    let alphas: Vec<u8> = img.pixels().map(|p| p[3]).collect();
+    assert_eq!(alphas, vec![255u8, 128, 64, 16]);
+}
+
+/// The same picture on a material whose note says opaque still flattens to
+/// solid: the see-through escape hatch is only for blends that need it.
+#[test]
+fn an_opaque_note_without_an_alpha_mode_still_flattens() {
+    let rgba = vec![
+        255u8, 240, 160, 255,
+        255, 190, 60, 128,
+        255, 130, 20, 64,
+        255, 80, 0, 16,
+    ];
+
+    let mut g = bri_gltf::Gltf::new();
+    let positions = g.floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 3);
+    let mesh = g.mesh(
+        "solid",
+        vec![serde_json::json!({
+            "attributes": { "POSITION": positions },
+            "material": 0,
+        })],
+    );
+    g.material(
+        "plainTex",
+        [1.0; 4],
+        Some(bri_gltf::testing::MaterialImage::Png((2, 2, rgba))),
+        serde_json::json!({ "extras": { "bri_legacy": { "blend": "opaque" } } }),
+    );
+    g.node(serde_json::json!({ "mesh": mesh }), None);
+
+    let doc = bri_gltf::Document::from_bytes(&g.glb(), None).unwrap();
+    let opts = bri_gltf::Options::new("", "", bri_gltf::Kind::Item);
+    let lowered = bri_gltf::convert(&doc, None, &opts, "opaque_test", "").unwrap();
+
+    assert_eq!(lowered.shape.materials[0].blend.as_str(), "opaque");
+    let png = lowered.textures.get("plaintex").expect("the material's texture");
+    let img = image::load_from_memory(png).unwrap().to_rgba8();
+    let alphas: Vec<u8> = img.pixels().map(|p| p[3]).collect();
+    assert_eq!(alphas, vec![255u8; 4]);
+}

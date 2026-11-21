@@ -93,6 +93,7 @@ fn client_loads_imported_packages_beside_the_base_game(f: &ContentRoot) -> anyho
     let items = bri_client::items::ItemAssets::load_with(
         &paths.item_presentation,
         &paths.weapons,
+        &f.root,
         &paths.weapon_extras,
     )
     .unwrap();

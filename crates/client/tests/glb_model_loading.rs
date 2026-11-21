@@ -32,7 +32,7 @@ fn a_legacy_shape_json_model_is_a_fault_that_draws_nothing() -> Result<()> {
     pres["models"][GUN_MODEL]["file"] = serde_json::json!(format!("models/{stem}.shape.json"));
     std::fs::write(&pres_path, serde_json::to_vec(&pres)?)?;
 
-    let assets = ItemAssets::load(&packs.presentation, &packs.weapons)?;
+    let assets = ItemAssets::load(&packs.presentation, &packs.weapons, &packs.root)?;
     assert!(
         assets
             .faults
@@ -109,6 +109,7 @@ fn broken_glb_is_a_fault_that_draws_nothing() -> Result<()> {
     let assets = ItemAssets::load_with(
         &packs.presentation,
         &packs.weapons,
+        &packs.root,
         &[("glbtest".into(), dir.path().to_path_buf())],
     )?;
     assert!(
@@ -202,6 +203,7 @@ fn a_manifest_named_glb_loads_and_a_corrupt_one_is_a_fault() -> Result<()> {
     let assets = ItemAssets::load_with(
         &packs.presentation,
         &packs.weapons,
+        &packs.root,
         &[("glbtest".into(), dir.path().to_path_buf())],
     )?;
     assert!(

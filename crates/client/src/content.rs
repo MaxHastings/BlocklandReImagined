@@ -444,6 +444,7 @@ impl ContentPaths {
     ) -> Result<bri_net::content_identity::ItemPhysicsContent> {
         bri_net::content_identity::ItemPhysicsContent::load_with(
             &self.item_presentation,
+            &self.root,
             weapons,
             &self.weapon_extras,
         )

@@ -522,7 +522,7 @@ fn current_exact_two_image_policies_keep_tp_reflections_and_scope_lifecycle_sepa
     use glam::{Mat4, Vec3};
     use std::{collections::BTreeMap, sync::Arc};
     let f = support::item_fixture::ItemFixture::synthetic()?;
-    let assets = Arc::new(ItemAssets::load(&f.presentation, &f.weapons)?);
+    let assets = Arc::new(ItemAssets::load(&f.presentation, &f.weapons, &f.root)?);
     let mut pack = bri_weapons::Pack::from_json(&std::fs::read(f.weapons.join("weapons.json"))?)?;
     let policy = |fov, scale| bri_weapons::FirstPersonView {
         horizontal_fov: fov,

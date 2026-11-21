@@ -93,7 +93,7 @@ fn stock_images<'a>(assets: &'a ItemAssets, raw: &Raw) -> Vec<(&'a str, String)>
 #[ignore = "requires generated v20 content"]
 fn first_person_items_sit_where_their_v20_eye_offset_places_them() -> Result<()> {
     let f = ItemFixture::content()?;
-    let assets = ItemAssets::load(&f.presentation, &f.weapons)?;
+    let assets = ItemAssets::load(&f.presentation, &f.weapons, &f.root)?;
     let raw = Raw::load(&f)?;
     let mut checked = 0;
     for (id, name) in stock_images(&assets, &raw) {
@@ -118,7 +118,7 @@ fn first_person_items_sit_where_their_v20_eye_offset_places_them() -> Result<()>
 #[ignore = "requires generated v20 content"]
 fn hand_items_use_their_v20_mount_points_and_stay_in_the_hand_in_first_person() -> Result<()> {
     let f = ItemFixture::content()?;
-    let assets = ItemAssets::load(&f.presentation, &f.weapons)?;
+    let assets = ItemAssets::load(&f.presentation, &f.weapons, &f.root)?;
     let raw = Raw::load(&f)?;
     // An image with `eyeOffset = 0` (and no eye rotation) is held in the
     // hand in first person too, at its datablock's `mountPoint`.
@@ -148,7 +148,7 @@ fn hand_items_use_their_v20_mount_points_and_stay_in_the_hand_in_first_person() 
 fn first_person_eye_offset_images_move_with_the_arms_actions_as_they_do_in_the_hand(
     f: &ItemFixture,
 ) -> Result<()> {
-    let assets = ItemAssets::load(&f.presentation, &f.weapons)?;
+    let assets = ItemAssets::load(&f.presentation, &f.weapons, &f.root)?;
     let eye = Mat4::from_rotation_translation(
         glam::Quat::from_rotation_y(0.4) * glam::Quat::from_rotation_x(-0.3),
         Vec3::new(1.0, 2.0, 3.0),

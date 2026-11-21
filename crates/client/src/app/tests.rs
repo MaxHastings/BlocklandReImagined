@@ -2476,6 +2476,7 @@ fn scope_state_eligibility_follows_ordinary_authority_without_releasing_rmb() ->
         "probe:scope".into(),
         crate::items::TextureResource {
             file: "probe-scope.png".into(),
+            package: None,
             sha256: crate::testing::sha256(&overlay),
             width: 16,
             height: 16,

@@ -414,7 +414,8 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
     let extras = kind_providers(client_root.path(), &joined, "weapons.json")?;
     assert_eq!(extras.len(), 4);
     let weapons = WeaponContent::load_with(&base.weapons, &extras)?;
-    let physics = ItemPhysicsContent::load_with(&base.items, &weapons, &extras)?;
+    let physics =
+        ItemPhysicsContent::load_with(&base.items, client_root.path(), &weapons, &extras)?;
     // Every weapon has drop bounds, so the wrench can put any of them on a
     // brick: none of these Add-Ons ships item physics. A stock model lends
     // its box; an item with no art gets the stand-in box.
@@ -446,7 +447,8 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
         ..Default::default()
     });
     spawners.validate_edit(&world, 1, &edit)?;
-    let assets = ItemAssets::load_with(&base.items, &base.weapons, &extras)?;
+    let assets =
+        ItemAssets::load_with(&base.items, &base.weapons, client_root.path(), &extras)?;
     let ui = ItemUi::new(&assets, &weapons.item_choices, &letters()?)?;
     let catalog = ui.catalog();
     assert_eq!(weapons.item_choices.len(), 7);
@@ -598,7 +600,8 @@ async fn joining_downloads_the_servers_add_ons_and_loads_bad_art_with_stand_ins(
         !names.contains(&"Toy Gun"),
         "their own Add-On sits out: {names:?}"
     );
-    let assets = ItemAssets::load_with(&stale_base.items, &stale_base.weapons, &extras)?;
+    let assets =
+        ItemAssets::load_with(&stale_base.items, &stale_base.weapons, stale_root.path(), &extras)?;
     let ui = ItemUi::new(&assets, &weapons.item_choices, &letters()?)?;
     assert_eq!(ui.catalog().len(), weapons.item_choices.len());
     server.stop().await?;

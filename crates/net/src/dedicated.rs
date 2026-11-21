@@ -127,6 +127,7 @@ fn load_packages_in(
     let weapons = content_identity::WeaponContent::load_with(&weapons_dir, &weapon_extras)?;
     let item_physics = content_identity::ItemPhysicsContent::load_with(
         &item_presentation_dir,
+        content_root,
         &weapons,
         &weapon_extras,
     )?;

@@ -6,12 +6,16 @@
 
 use super::files::{png, repo_root, scratch, write, write_json};
 use anyhow::{Context, Result};
+use bri_content::shape::Shape;
 use bri_content::testing::{material, plain, rigid_shape};
 use glam::Vec3;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 pub struct ItemFixture {
+    /// The content root the pack dirs sit under (where a model's
+    /// `package` borrows resolve).
+    pub root: PathBuf,
     /// The folder holding `presentation.json`.
     pub presentation: PathBuf,
     /// The folder holding `weapons.json`.
@@ -101,6 +105,7 @@ impl ItemFixture {
             arrow: "v20.projectile.arrowprojectile".into(),
             no_muzzle_image: image("brickimage"),
             out: root.join("artifacts"),
+            root: root.join("content"),
             _scratch: None,
         })
     }
@@ -135,6 +140,7 @@ impl ItemFixture {
             arrow: format!("{NS}:projectile/pellet"),
             no_muzzle_image: image("hammer"),
             out: PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("item-rendering-synthetic"),
+            root: dir.path().to_path_buf(),
             _scratch: Some(dir),
         })
     }
@@ -183,7 +189,7 @@ impl Model {
     }
     /// The model as a native shape (`bri_content::testing::rigid_shape`'s
     /// boxes), with its animations.
-    fn shape(&self) -> Result<Value> {
+    fn shape(&self) -> Result<Shape> {
         let parts: Vec<_> = self
             .parts
             .iter()
@@ -199,7 +205,7 @@ impl Model {
                 .collect(),
         );
         shape.animations = serde_json::from_value(self.animations.clone())?;
-        Ok(serde_json::to_value(shape)?)
+        Ok(shape)
     }
 }
 
@@ -535,8 +541,17 @@ fn write_synthetic(weapons_dir: &Path, items_dir: &Path) -> Result<()> {
             );
             keys.push(key);
         }
-        let file = format!("models/{}.json", m.name);
-        let sha = write_json(&items_dir.join(&file), &m.shape()?)?;
+        // The model ships as a .glb: the game draws item models from glTF
+        // only, and this pack's textures stay beside it as files.
+        let shape = m.shape()?;
+        let (glb, _embedded) =
+            bri_gltf::export_shape(
+                &shape,
+                &std::collections::BTreeMap::new(),
+                &mut Vec::new(),
+            )?;
+        let file = format!("models/{}.glb", m.name);
+        let sha = write(&items_dir.join(&file), &glb)?;
         let (min, max) = m.bounds();
         bounds.insert(model(m.name), (min, max));
         model_entries.insert(

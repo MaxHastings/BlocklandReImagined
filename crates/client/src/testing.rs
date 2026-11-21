@@ -230,6 +230,9 @@ pub mod items {
 
     /// The written packs, removed when dropped.
     pub struct ItemPacks {
+        /// The content root the packs sit in (a model's `package` resolves
+        /// against it).
+        pub root: PathBuf,
         /// The folder holding `presentation.json` and `item-physics.json`.
         pub presentation: PathBuf,
         /// The folder holding `weapons.json`.
@@ -244,6 +247,7 @@ pub mod items {
         let weapons = scratch.path().join("weapons");
         write(&presentation, &weapons)?;
         Ok(ItemPacks {
+            root: scratch.path().to_path_buf(),
             presentation,
             weapons,
             _scratch: scratch,
@@ -327,7 +331,8 @@ pub mod items {
         #[test]
         fn every_made_up_casing_model_is_drawn() -> anyhow::Result<()> {
             let packs = super::write_packs()?;
-            let assets = crate::items::ItemAssets::load(&packs.presentation, &packs.weapons)?;
+            let assets =
+                crate::items::ItemAssets::load(&packs.presentation, &packs.weapons, &packs.root)?;
             let mut debris = crate::weapon_debris::WeaponDebris::new(
                 crate::weapon_debris::WeaponDebrisAssets::stock_for_test(),
                 Default::default(),

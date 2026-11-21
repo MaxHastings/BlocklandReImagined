@@ -385,6 +385,7 @@ mod tests {
         let assets = crate::items::ItemAssets::load_with(
             &fx.items.presentation,
             &fx.items.weapons,
+            &fx.items.root,
             &extras,
         )?;
         let ui = ItemUi::new(&assets, &weapons.item_choices, &fx.ui)?;

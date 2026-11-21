@@ -133,8 +133,11 @@ fn main() -> Result<()> {
     let simulation = loaded.simulation;
 
     let weapons = bri_net::content_identity::WeaponContent::load(&paths.weapons)?;
-    let item_physics =
-        bri_net::content_identity::ItemPhysicsContent::load(&paths.item_presentation, &weapons)?;
+    let item_physics = bri_net::content_identity::ItemPhysicsContent::load(
+        &paths.item_presentation,
+        &paths.root,
+        &weapons,
+    )?;
     let mut session = Session::new(simulation);
     let mut catalog = ToolCatalog {
         vehicles: VEHICLES
@@ -149,9 +152,16 @@ fn main() -> Result<()> {
     session.set_tool_catalog(catalog)?;
     session.set_weapon_pack(weapons.pack.clone())?;
     session.set_item_bounds(item_physics.bounds)?;
+    // Base pack merged with every Add-On's vehicle extras, as the app loads it.
+    let mut parts = Vec::new();
+    for (dir, assets) in &paths.vehicle_extras {
+        parts.push((dir.clone(), bri_vehicles::Pack::load(assets.join("vehicles.json"))?));
+    }
+    let (vehicle_pack, _notes) =
+        bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))?.merge(parts);
     // Bots come from the Blockhead Bot Add-On, on or off.
     session.set_vehicle_pack(
-        bri_vehicles::Pack::load(paths.vehicles.join("vehicles.json"))?,
+        vehicle_pack,
         bri_sim::bot_kind::BotPack::from_json(include_bytes!(
             "../../../../packages/blockhead_bot/assets/bots.json"
         ))?

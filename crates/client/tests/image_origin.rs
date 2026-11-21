@@ -64,6 +64,7 @@ fn image_origin_native_addon_lowers_to_exact_identity_eye_without_host_or_correc
     let mut assets = ItemAssets::load_with(
         &packs.presentation,
         &packs.weapons,
+        &packs.root,
         &[("invented".into(), dir.path().to_path_buf())],
     )?;
     let image = assets
@@ -112,7 +113,7 @@ fn image_origin_native_presentation_identity_must_agree() -> Result<()> {
     manifest["images"][&id]["eye_rotation_degrees"] = serde_json::json!([0., 0., 0.]);
     manifest["images"][&id]["follow_arm"] = false.into();
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest)?)?;
-    let mismatch = ItemAssets::load_with(&packs.presentation, &packs.weapons, &[])
+    let mismatch = ItemAssets::load_with(&packs.presentation, &packs.weapons, &packs.root, &[])
         .err()
         .context("must reject different origins")?;
     assert!(
@@ -121,7 +122,7 @@ fn image_origin_native_presentation_identity_must_agree() -> Result<()> {
     );
     manifest["images"][&id]["first_person_origin"] = "eye".into();
     std::fs::write(manifest_path, serde_json::to_vec(&manifest)?)?;
-    let mut assets = ItemAssets::load_with(&packs.presentation, &packs.weapons, &[])?;
+    let mut assets = ItemAssets::load_with(&packs.presentation, &packs.weapons, &packs.root, &[])?;
     assert_eq!(
         assets.presentation.images[&id].first_person_origin,
         Some(FirstPersonOrigin::Eye)
@@ -188,7 +189,7 @@ fn image_origin_addon_presentation_conflict_is_reported_and_native_lowering_reta
     let path = dir.path().join("presentation.json");
     let extras = [("invented".into(), dir.path().to_path_buf())];
     std::fs::write(&path, serde_json::to_vec(&presentation)?)?;
-    let rejected = ItemAssets::load_with(&packs.presentation, &packs.weapons, &extras)?;
+    let rejected = ItemAssets::load_with(&packs.presentation, &packs.weapons, &packs.root, &extras)?;
     assert!(
         rejected
             .faults
@@ -203,7 +204,7 @@ fn image_origin_addon_presentation_conflict_is_reported_and_native_lowering_reta
     );
     presentation["images"][id]["first_person_origin"] = "eye".into();
     std::fs::write(path, serde_json::to_vec(&presentation)?)?;
-    let accepted = ItemAssets::load_with(&packs.presentation, &packs.weapons, &extras)?;
+    let accepted = ItemAssets::load_with(&packs.presentation, &packs.weapons, &packs.root, &extras)?;
     assert!(
         !accepted
             .faults

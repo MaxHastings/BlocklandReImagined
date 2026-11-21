@@ -3026,10 +3026,20 @@ pub fn make_material(
         Some("BLEND") => "alpha",
         Some("MASK") => "opaque",
         _ => {
-            for p in pixels.pixels_mut() {
-                p.0[3] = 255;
+            // No explicit alphaMode (glTF's OPAQUE default). A re-exported
+            // native shape may still name its true blend in bri_legacy, which
+            // glTF has no words for; a see-through one keeps the picture's
+            // alpha so it fades the way the original did. Only a truly opaque
+            // material flattens to solid.
+            match m["extras"]["bri_legacy"].get("blend").and_then(Value::as_str) {
+                Some(b) if matches!(b, "alpha" | "additive" | "subtractive") => b,
+                _ => {
+                    for p in pixels.pixels_mut() {
+                        p.0[3] = 255;
+                    }
+                    "opaque"
+                }
             }
-            "opaque"
         }
     };
     // Glow: emissiveFactor times KHR_materials_emissive_strength, linear.

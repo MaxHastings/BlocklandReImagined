@@ -298,6 +298,7 @@ impl ContentParts {
         let mut item_assets = crate::items::ItemAssets::load_with(
             &content.paths.item_presentation,
             &content.paths.weapons,
+            &content.paths.root,
             &content.paths.weapon_extras,
         )?;
         item_assets.draw_icons(Some(icon_cache));

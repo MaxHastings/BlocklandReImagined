@@ -109,7 +109,7 @@ fn an_add_ons_scope_picture_reaches_the_play_screen() -> Result<()> {
     let dir = scoped_add_on(root.path(), "scope/lens", Some((128, 64)))?;
     let extras = vec![("scope-test/assets".to_string(), dir)];
     let weapons = WeaponContent::load_with(&weapons_root, &extras)?;
-    let assets = ItemAssets::load_with(&items_root, &weapons_root, &extras)?;
+    let assets = ItemAssets::load_with(&items_root, &weapons_root, root.path(), &extras)?;
     let overlay = assets.presentation.images[IMAGE]
         .overlay
         .as_deref()
@@ -138,7 +138,7 @@ fn a_missing_scope_picture_aims_without_one() -> Result<()> {
     let (weapons_root, items_root) = base_game(root.path())?;
     let dir = scoped_add_on(root.path(), "scope/lens", None)?;
     let extras = vec![("scope-test/assets".to_string(), dir)];
-    let assets = ItemAssets::load_with(&items_root, &weapons_root, &extras)?;
+    let assets = ItemAssets::load_with(&items_root, &weapons_root, root.path(), &extras)?;
     assert!(assets.presentation.images[IMAGE].overlay.is_none());
     assert!(
         assets

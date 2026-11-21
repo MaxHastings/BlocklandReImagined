@@ -1153,6 +1153,10 @@ struct PhysicsManifest {
 #[derive(serde::Deserialize)]
 struct PhysicsModel {
     file: String,
+    /// The content-root-relative directory of the package holding `file`
+    /// when it borrows its model from another base pack.
+    #[serde(default)]
+    package: Option<String>,
     sha256: String,
     source_sha256: String,
     bounds_min: [f32; 3],
@@ -1161,6 +1165,10 @@ struct PhysicsModel {
 #[derive(serde::Deserialize)]
 struct PhysicsTexture {
     file: String,
+    /// The content-root-relative directory of the package holding `file`
+    /// when it borrows a shared texture from another base pack.
+    #[serde(default)]
+    package: Option<String>,
     sha256: String,
 }
 #[derive(serde::Deserialize)]
@@ -1200,10 +1208,11 @@ impl ItemPhysicsContent {
     /// `weapons.json`; a package without these files keeps no drop bounds.
     pub fn load_with(
         root: &Path,
+        content_root: &Path,
         weapons: &WeaponContent,
         extras: &[(String, PathBuf)],
     ) -> Result<Self> {
-        let (mut content, models) = Self::load_models(root, weapons)?;
+        let (mut content, models) = Self::load_models(root, content_root, weapons)?;
         let mut hash = Sha256::new();
         hash.update(&content.fingerprint);
         for (dir, abs) in extras {
@@ -1261,15 +1270,17 @@ impl ItemPhysicsContent {
         }
         Ok(content)
     }
-    pub fn load(root: &Path, weapons: &WeaponContent) -> Result<Self> {
-        Ok(Self::load_models(root, weapons)?.0)
+    pub fn load(root: &Path, content_root: &Path, weapons: &WeaponContent) -> Result<Self> {
+        Ok(Self::load_models(root, content_root, weapons)?.0)
     }
     /// [`Self::load`] and the bounds of every stock model it presents.
     fn load_models(
         root: &Path,
+        content_root: &Path,
         weapons: &WeaponContent,
     ) -> Result<(Self, BTreeMap<String, bri_weapons::ItemBounds>)> {
         let root = root.canonicalize()?;
+        let content_root = content_root.canonicalize()?;
         let manifest_path = contained(&root, "presentation.json")?;
         let physics_path = contained(&root, "item-physics.json")?;
         let manifest_bytes = bounded_bytes(&manifest_path, WEAPON_INDEX_LIMIT)?;
@@ -1346,26 +1357,46 @@ impl ItemPhysicsContent {
             }
             .validate()?;
         }
-        for (name, checksum) in manifest
+        // A model or texture may borrow its file from another package
+        // (`package`, content-root-relative).
+        let entries = manifest
             .models
             .values()
-            .map(|r| (&r.file, &r.sha256))
-            .chain(manifest.textures.values().map(|r| (&r.file, &r.sha256)))
-        {
-            ensure!(valid_sha256(checksum), "Invalid native item resource hash");
+            .map(|m| {
+                Ok((
+                    borrowed_base(&root, &content_root, m.package.as_deref())?,
+                    m.file.clone(),
+                    m.sha256.clone(),
+                ))
+            })
+            .chain(
+                manifest
+                    .textures
+                    .values()
+                    .map(|t| {
+                        Ok((
+                            borrowed_base(&root, &content_root, t.package.as_deref())?,
+                            t.file.clone(),
+                            t.sha256.clone(),
+                        ))
+                    }),
+            )
+            .collect::<Result<Vec<_>>>()?;
+        for (base, name, checksum) in entries {
+            ensure!(valid_sha256(&checksum), "Invalid native item resource hash");
             ensure!(
                 name != "presentation.json" && name != "item-physics.json",
                 "Reserved item resource filename"
             );
-            if let Some(previous) = expected.get(name) {
+            if let Some(previous) = expected.get(&name) {
                 ensure!(
-                    previous == checksum,
+                    previous == &checksum,
                     "Conflicting native item resource hash"
                 );
                 continue;
             }
-            files.insert(name.clone(), contained(&root, name)?);
-            expected.insert(name.clone(), checksum.clone());
+            files.insert(name.clone(), contained(&base, &name)?);
+            expected.insert(name, checksum);
         }
         let fingerprint = hash_files_bounded(
             b"BRI_ITEM_PRESENTATION_PHYSICS_V1\0",
@@ -1416,6 +1447,28 @@ fn contained(root: &Path, relative: &str) -> Result<PathBuf> {
         "Native resource escapes package: {relative}"
     );
     Ok(path)
+}
+/// The folder a resource borrows its file from (`PhysicsModel::package` or
+/// `PhysicsTexture::package`, content-root-relative), validated to stay
+/// inside the content root; a resource without one lives in the
+/// presentation's own `root`.
+fn borrowed_base(root: &Path, content_root: &Path, dir: Option<&str>) -> Result<PathBuf> {
+    let Some(dir) = dir else {
+        return Ok(root.to_path_buf());
+    };
+    ensure!(
+        bri_content::brick_materials::safe_relative(dir),
+        "Unsafe native content path: {dir}"
+    );
+    let base = content_root
+        .join(dir)
+        .canonicalize()
+        .with_context(|| format!("Missing native package directory {dir}"))?;
+    ensure!(
+        base.starts_with(content_root),
+        "Native item resource package escapes the content root: {dir}"
+    );
+    Ok(base)
 }
 
 fn hash_files_bounded(
@@ -2124,16 +2177,16 @@ mod tests {
     #[test]
     fn item_physics_pins_bounds_catalog_and_resources_into_identity_nine() {
         let (root, weapons, mut manifest, mut physics) = physics_fixture();
-        let before = ItemPhysicsContent::load(&root, &weapons).unwrap();
+        let before = ItemPhysicsContent::load(&root, &root, &weapons).unwrap();
         assert_eq!(before.bounds.len(), 4);
         before
-            .ensure_same(&ItemPhysicsContent::load(&root, &weapons).unwrap())
+            .ensure_same(&ItemPhysicsContent::load(&root, &root, &weapons).unwrap())
             .unwrap();
         // A changed bound must be re-certified by the matching model metadata.
         physics["items"][bri_weapons::HAMMER]["min"][0] = serde_json::json!(-0.5);
         write_physics(&root, &manifest, &physics);
         assert!(
-            ItemPhysicsContent::load(&root, &weapons)
+            ItemPhysicsContent::load(&root, &root, &weapons)
                 .err()
                 .unwrap()
                 .to_string()
@@ -2144,13 +2197,13 @@ mod tests {
         }
         manifest["models"]["source.dts"]["bounds_min"][0] = serde_json::json!(-0.5);
         write_physics(&root, &manifest, &physics);
-        let after = ItemPhysicsContent::load(&root, &weapons).unwrap();
+        let after = ItemPhysicsContent::load(&root, &root, &weapons).unwrap();
         assert!(before.ensure_same(&after).is_err());
         std::fs::write(root.join("shape.json"), b"corrupted native shape").unwrap();
-        assert!(ItemPhysicsContent::load(&root, &weapons).is_err());
+        assert!(ItemPhysicsContent::load(&root, &root, &weapons).is_err());
         std::fs::write(root.join("shape.json"), b"native shape bytes").unwrap();
         std::fs::write(root.join("texture.png"), b"corrupted texture").unwrap();
-        assert!(ItemPhysicsContent::load(&root, &weapons).is_err());
+        assert!(ItemPhysicsContent::load(&root, &root, &weapons).is_err());
     }
     #[test]
     fn item_physics_rejects_stale_pins_incomplete_catalog_and_invalid_bounds() {
@@ -2159,7 +2212,7 @@ mod tests {
         invalid["weapons_sha256"] = serde_json::json!("0".repeat(64));
         write_physics(&root, &invalid, &physics);
         assert!(
-            ItemPhysicsContent::load(&root, &weapons)
+            ItemPhysicsContent::load(&root, &root, &weapons)
                 .err()
                 .unwrap()
                 .to_string()
@@ -2172,7 +2225,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            ItemPhysicsContent::load(&root, &weapons)
+            ItemPhysicsContent::load(&root, &root, &weapons)
                 .err()
                 .unwrap()
                 .to_string()
@@ -2199,7 +2252,7 @@ mod tests {
                 _ => invalid["schema_version"] = serde_json::json!(2),
             }
             write_physics(&root, &manifest, &invalid);
-            assert!(ItemPhysicsContent::load(&root, &weapons).is_err());
+            assert!(ItemPhysicsContent::load(&root, &root, &weapons).is_err());
         }
     }
     #[test]
@@ -2209,13 +2262,13 @@ mod tests {
             let mut invalid = manifest.clone();
             invalid["models"]["source.dts"]["file"] = serde_json::json!(name);
             write_physics(&root, &invalid, &physics);
-            assert!(ItemPhysicsContent::load(&root, &weapons).is_err());
+            assert!(ItemPhysicsContent::load(&root, &root, &weapons).is_err());
         }
         let mut invalid = manifest.clone();
         invalid["textures"]["texture"]["file"] = serde_json::json!("shape.json");
         write_physics(&root, &invalid, &physics);
         assert!(
-            ItemPhysicsContent::load(&root, &weapons)
+            ItemPhysicsContent::load(&root, &root, &weapons)
                 .err()
                 .unwrap()
                 .to_string()
@@ -2227,7 +2280,7 @@ mod tests {
             .set_len(WEAPON_RESOURCE_LIMIT + 1)
             .unwrap();
         assert!(
-            ItemPhysicsContent::load(&root, &weapons)
+            ItemPhysicsContent::load(&root, &root, &weapons)
                 .err()
                 .unwrap()
                 .to_string()
@@ -2239,7 +2292,7 @@ mod tests {
             .set_len(2 * 1024 * 1024 + 1)
             .unwrap();
         assert!(
-            ItemPhysicsContent::load(&root, &weapons)
+            ItemPhysicsContent::load(&root, &root, &weapons)
                 .err()
                 .unwrap()
                 .to_string()
@@ -2247,10 +2300,58 @@ mod tests {
         );
         std::fs::File::create(root.join("item-physics.json")).unwrap();
     }
+    #[test]
+    fn item_physics_model_borrows_file_from_named_package() {
+        let (root, weapons, manifest, physics) = physics_fixture();
+        // The model borrows its file from a sibling folder under the
+        // content root; both copies start byte-identical.
+        std::fs::create_dir(root.join("shared")).unwrap();
+        std::fs::write(
+            root.join("shared").join("shape.json"),
+            b"native shape bytes",
+        )
+        .unwrap();
+        let mut borrowed = manifest.clone();
+        borrowed["models"]["source.dts"]["package"] = serde_json::json!("shared");
+        write_physics(&root, &borrowed, &physics);
+
+        // It loads from the borrowed copy: corrupting the pack's own twin is
+        // harmless while the shared one stands.
+        std::fs::write(root.join("shape.json"), b"corrupted native shape").unwrap();
+        let before = ItemPhysicsContent::load(&root, &root, &weapons).unwrap();
+        assert_eq!(before.bounds.len(), 4);
+        before
+            .ensure_same(&ItemPhysicsContent::load(&root, &root, &weapons).unwrap())
+            .unwrap();
+
+        // ...and the borrowed file is what gets hashed: corrupting it breaks
+        // the load.
+        std::fs::write(root.join("shape.json"), b"native shape bytes").unwrap();
+        std::fs::write(
+            root.join("shared").join("shape.json"),
+            b"corrupted shared shape",
+        )
+        .unwrap();
+        assert!(ItemPhysicsContent::load(&root, &root, &weapons).is_err());
+
+        // A package directory that escapes the content root or is missing
+        // fails.
+        std::fs::write(
+            root.join("shared").join("shape.json"),
+            b"native shape bytes",
+        )
+        .unwrap();
+        for dir in ["../escape", "missing"] {
+            let mut invalid = manifest.clone();
+            invalid["models"]["source.dts"]["package"] = serde_json::json!(dir);
+            write_physics(&root, &invalid, &physics);
+            assert!(ItemPhysicsContent::load(&root, &root, &weapons).is_err());
+        }
+    }
     /// The presentation pack at `root` pins valid bounds for every item
     /// choice of `weapons`. Returns how many.
     fn item_physics_covers_every_item(root: &Path, weapons: &WeaponContent) -> usize {
-        let physics = ItemPhysicsContent::load(root, weapons).unwrap();
+        let physics = ItemPhysicsContent::load(root, root, weapons).unwrap();
         assert_eq!(physics.bounds.len(), weapons.item_choices.len());
         for bounds in physics.bounds.values() {
             bounds.validate().unwrap();

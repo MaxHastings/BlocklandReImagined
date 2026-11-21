@@ -17,6 +17,11 @@ use std::{collections::BTreeMap, path::Path};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TextureResource {
     pub file: String,
+    /// The content-root-relative directory of the package holding this
+    /// texture's file when it borrows a shared swatch from another base
+    /// pack; absent for files in its own folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     pub sha256: String,
     pub width: u32,
     pub height: u32,
@@ -25,6 +30,11 @@ pub struct TextureResource {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ModelResource {
     pub file: String,
+    /// The content-root-relative directory of the package holding this
+    /// model's file when it borrows it from another base pack (the weapon
+    /// shapes); absent for files in its own folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     pub sha256: String,
     pub source: String,
     pub source_sha256: String,
@@ -418,6 +428,25 @@ pub(crate) fn checked_read(root: &Path, file: &str, expected: &str, limit: u64) 
     }
     Ok(bytes)
 }
+/// The folder a model or texture borrows its file from
+/// (`ModelResource::package` / `TextureResource::package`,
+/// content-root-relative): validated to stay inside the content root, as
+/// [`crate::materials::read_resource`] validates the file against it.
+fn package_base(content_root: &Path, dir: &str) -> Result<std::path::PathBuf> {
+    ensure!(
+        bri_content::brick_materials::safe_relative(dir),
+        "Unsafe borrowed resource package path: {dir}"
+    );
+    let base = content_root
+        .join(dir)
+        .canonicalize()
+        .with_context(|| format!("Missing borrowed resource package {}", dir))?;
+    ensure!(
+        base.starts_with(content_root),
+        "Borrowed resource package escapes the content root: {dir}"
+    );
+    Ok(base)
+}
 /// A `.glb`'s bytes as a native shape with the PNGs its materials carry, in
 /// the file's own material order (its `convert` does), plus the input size
 /// for the budgets. Used on the manifest's own model files and other packs'
@@ -764,8 +793,8 @@ impl ItemAssets {
         self.presentation.item_appearance(item)
     }
     /// Both directories are native generated content. No source field is interpreted.
-    pub fn load(root: &Path, weapons_root: &Path) -> Result<Self> {
-        Self::load_with(root, weapons_root, &[])
+    pub fn load(root: &Path, weapons_root: &Path, content_root: &Path) -> Result<Self> {
+        Self::load_with(root, weapons_root, content_root, &[])
     }
     /// [`Self::load`] plus the presentation other weapon packages provide in
     /// `assets/presentation.json` (see `content_identity::kind_providers`).
@@ -773,13 +802,17 @@ impl ItemAssets {
     /// model key another package already provides is shared. Every item,
     /// image and projectile of their weapons packs is presented: a gap or a
     /// broken file becomes a stand-in listed in `faults`, never an error.
+    /// A model that names a `package` borrows its file from that other base
+    /// pack (`content_root`-relative), checksum still proving it is the right one.
     pub fn load_with(
         root: &Path,
         weapons_root: &Path,
+        content_root: &Path,
         extras: &[(String, std::path::PathBuf)],
     ) -> Result<Self> {
         let root = root.canonicalize()?;
         let weapons_root = weapons_root.canonicalize()?;
+        let content_root = content_root.canonicalize()?;
         let bytes = crate::materials::read_resource(&root, "presentation.json", 8 * 1024 * 1024)?;
         let manifest: Presentation = serde_json::from_slice(&bytes)?;
         ensure!(
@@ -1001,8 +1034,15 @@ impl ItemAssets {
                     pixels + u64::from(t.width) * u64::from(t.height) * 4 <= 256 * 1024 * 1024,
                     "Item aggregate image budget exceeded"
                 );
+                // Its own PNG in its own folder — or a shared swatch
+                // borrowed from the package it names: either way the
+                // checksum proves it.
+                let base = match &t.package {
+                    Some(dir) => package_base(&content_root, dir)?,
+                    None => file_root("texture", id),
+                };
                 let bytes = checked_read(
-                    &file_root("texture", id),
+                    &base,
                     &t.file,
                     &t.sha256,
                     16 * 1024 * 1024,
@@ -1067,13 +1107,14 @@ impl ItemAssets {
                 continue;
             }
             let mut load = || -> Result<(Shape, BTreeMap<String, SceneImage>)> {
+                // Its own .glb in its own folder — or a twin borrowed from
+                // the package it names: either way the checksum proves it.
+                let base = match &m.package {
+                    Some(dir) => package_base(&content_root, dir)?,
+                    None => file_root("model", id),
+                };
                 // The manifest's own .glb: its real checksum.
-                let bytes = checked_read(
-                    &file_root("model", id),
-                    &m.file,
-                    &m.sha256,
-                    32 * 1024 * 1024,
-                )?;
+                let bytes = checked_read(&base, &m.file, &m.sha256, 32 * 1024 * 1024)?;
                 let (input_len, converted) = lower_glb_bytes(&bytes, id)?;
                 ensure!(
                     input_bytes + input_len <= 256 * 1024 * 1024,
@@ -2385,6 +2426,7 @@ fn own_picture(
         );
         Ok(TextureResource {
             file: file.clone(),
+            package: None,
             sha256: hash(&bytes),
             width,
             height,
@@ -2483,6 +2525,7 @@ fn own_model(
         let sha256 = hash(&bytes);
         Ok(ModelResource {
             file: file.clone(),
+            package: None,
             sha256: sha256.clone(),
             source: format!("{dir}/{file}"),
             source_sha256: sha256,
@@ -2538,6 +2581,7 @@ fn own_texture(dir: &str, abs: &Path, file: &str) -> Result<TextureResource> {
     );
     Ok(TextureResource {
         file: file.to_string(),
+        package: None,
         sha256: hash(&bytes),
         width,
         height,
@@ -3057,6 +3101,7 @@ mod add_on_icon_tests {
         let assets = ItemAssets::load(
             &bri_package::testing::pack_dir(&root, "item_presentation"),
             &bri_package::testing::pack_dir(&root, "weapons"),
+            &root,
         )?;
         let presentation = &assets.presentation;
         let mut differed = 0;
@@ -3252,7 +3297,7 @@ mod add_on_icon_tests {
             "addons/gravity-gun-tool/assets".to_string(),
             manifest.join("../../packages/showcase/gravity-gun-tool/assets"),
         )];
-        let load = || ItemAssets::load_with(&fx.presentation, &fx.weapons, &extras);
+        let load = || ItemAssets::load_with(&fx.presentation, &fx.weapons, &fx.root, &extras);
         let cache = tempfile::tempdir()?;
         let gun = "gravity-gun-tool:weapon/gravitygun";
         // First run: nothing kept, so it is drawn on a thread of its own and
@@ -3444,7 +3489,8 @@ mod own_model_icon_tests {
             "addons/tool/assets".to_string(),
             add_on_icon_tests::own_model_tool(dir.path())?,
         )];
-        let mut assets = ItemAssets::load_with(&fx.presentation, &fx.weapons, &extras)?;
+        let mut assets =
+            ItemAssets::load_with(&fx.presentation, &fx.weapons, &fx.root, &extras)?;
         assert!(assets.faults.is_empty(), "{:?}", assets.faults);
         let pick = "tool:weapon/pick";
         // Drawn from its model, off the load path (`ItemAssets::draw_icons`).
@@ -3704,7 +3750,7 @@ mod bounds_tests {
     }
     fn translucent_spray_can_keeps_a_clear_colored_body_and_solid_trim(fx: &Items) -> Result<()> {
         let (presentation, weapons) = &fx.spray_packs;
-        let assets = ItemAssets::load(presentation, weapons)?;
+        let assets = ItemAssets::load(presentation, weapons, &fx.root)?;
         let (model, body, trims) = &fx.clear_can;
         let model = model.as_str();
         let scene = assets.model_scene(model, [0.2, 0.4, 1., 0.5], Mat4::IDENTITY, None, 0.)?;
@@ -3771,7 +3817,7 @@ mod bounds_tests {
             .into();
             std::fs::write(fixture.join("item-physics.json"), bytes)?;
             std::fs::write(fixture.join("presentation.json"), serde_json::to_vec(&m)?)?;
-            let error = match ItemAssets::load(&fixture, weapons) {
+            let error = match ItemAssets::load(&fixture, weapons, &fixture) {
                 Ok(_) => anyhow::bail!("Accepted corrupt bounds mode{mode}"),
                 Err(e) => format!("{e:#}"),
             };
@@ -4076,6 +4122,9 @@ pub(crate) mod fixture {
     use std::path::PathBuf;
 
     pub(crate) struct Items {
+        /// The content root the packs sit in (a model's `package` resolves
+        /// against it).
+        pub root: PathBuf,
         /// The folders holding `presentation.json` and `weapons.json`.
         pub presentation: PathBuf,
         pub weapons: PathBuf,
@@ -4100,6 +4149,7 @@ pub(crate) mod fixture {
             let packs = made_up::write_packs()?;
             let strings = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             Ok(Self {
+                root: packs.root.clone(),
                 presentation: packs.presentation.clone(),
                 weapons: packs.weapons.clone(),
                 swung_images: strings(&made_up::SWUNG_IMAGES),
@@ -4124,6 +4174,7 @@ pub(crate) mod fixture {
             let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
             let strings = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             Ok(Self {
+                root: content.clone(),
                 presentation: bri_package::testing::pack_dir(&content, "item_presentation"),
                 weapons: bri_package::testing::pack_dir(&content, "weapons"),
                 swung_images: strings(&["v20.image.wrenchimage", "v20.image.hammerimage"]),
@@ -4148,7 +4199,7 @@ pub(crate) mod fixture {
             })
         }
         pub fn assets(&self) -> Result<ItemAssets> {
-            ItemAssets::load(&self.presentation, &self.weapons)
+            ItemAssets::load(&self.presentation, &self.weapons, &self.root)
         }
     }
 }

@@ -449,6 +449,7 @@ fn malformed_base_presentation_still_fails_existing_mandatory_validation() -> Re
     assert!(
         content_identity::ItemPhysicsContent::load_with(
             &packages.role_dir(root.path(), "item_presentation")?,
+            root.path(),
             &weapons,
             &[],
         )

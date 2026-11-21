@@ -13,7 +13,7 @@ use std::path::Path;
 use support::{files::scratch, gpu, item_fixture::ItemFixture};
 
 fn assets(f: &ItemFixture) -> Result<ItemAssets> {
-    ItemAssets::load(&f.presentation, &f.weapons)
+    ItemAssets::load(&f.presentation, &f.weapons, &f.root)
 }
 
 synthetic_and_release_content!(
@@ -157,7 +157,7 @@ fn corrupt_or_oversized_native_resources_reject(f: &ItemFixture) -> Result<()> {
     let original = std::fs::read(&manifest)?;
     let value: serde_json::Value = serde_json::from_slice(&original)?;
     let weapons = &f.weapons;
-    ItemAssets::load(&fixture, weapons)?;
+    ItemAssets::load(&fixture, weapons, scratch.path())?;
     assert_ne!(value["items"][&f.gun_item]["model"], f.other_model.as_str());
     for mode in 0..6 {
         let mut bad = value.clone();
@@ -200,10 +200,25 @@ fn corrupt_or_oversized_native_resources_reject(f: &ItemFixture) -> Result<()> {
             }
         }
         std::fs::write(&manifest, serde_json::to_vec(&bad)?)?;
-        assert!(
-            ItemAssets::load(&fixture, weapons).is_err(),
-            "Accepted corruption mode{mode}"
-        );
+        if mode == 0 {
+            // A legacy (non-GLB) model file no longer stops the load: it is
+            // reported as an Add-On problem and drawn with a stand-in.
+            let (assets, problems) = bri_client::add_on_health::collecting(|| {
+                ItemAssets::load(&fixture, weapons, scratch.path())
+            });
+            assets?;
+            assert!(
+                problems.iter().any(|p| {
+                    p.reference == "../outside.json" && p.effect.contains("legacy model file")
+                }),
+                "mode 0 did not report the legacy model file: {problems:?}"
+            );
+        } else {
+            assert!(
+                ItemAssets::load(&fixture, weapons, scratch.path()).is_err(),
+                "Accepted corruption mode{mode}"
+            );
+        }
     }
     std::fs::write(&manifest, original)?;
     let texture = value["textures"]
@@ -215,7 +230,7 @@ fn corrupt_or_oversized_native_resources_reject(f: &ItemFixture) -> Result<()> {
         .as_str()
         .unwrap();
     std::fs::write(fixture.join(texture), [0u8; 16])?;
-    assert!(ItemAssets::load(&fixture, weapons).is_err());
+    assert!(ItemAssets::load(&fixture, weapons, scratch.path()).is_err());
     Ok(())
 }
 
