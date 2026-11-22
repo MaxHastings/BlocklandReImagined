@@ -134,7 +134,10 @@ impl TargetCollision {
     }
 }
 
-/// Read one of the pack's target shapes.
+/// Read one of the pack's target shapes. The targets are self-contained
+/// `.glb` models (the legacy JSON model format is gone); the lowering
+/// validates them and stamps `gltf:{id}`, so the index naming the file —
+/// guarded by its content pin — is what binds a shape to its id.
 pub fn load_target_shape(dir: &Path, index: &PackIndex, id: &str) -> Result<Shape> {
     let file = index
         .shapes
@@ -148,11 +151,7 @@ pub fn load_target_shape(dir: &Path, index: &PackIndex, id: &str) -> Result<Shap
             <= MAX_SHAPE_BYTES,
         "Tutorial target shape too large"
     );
-    let shape: Shape =
-        serde_json::from_slice(&std::fs::read(&path)?).with_context(|| format!("Reading {id}"))?;
-    shape.validate()?;
-    ensure!(shape.id == id, "Tutorial shape {file} is not {id}");
-    Ok(shape)
+    bri_gltf::lower(&std::fs::read(&path)?, id).map(|c| c.shape)
 }
 
 /// The standing targets' collision, from the pack's shapes.

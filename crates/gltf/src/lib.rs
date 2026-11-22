@@ -134,6 +134,11 @@ pub struct Options {
     /// The model is lit as the original engine lights a baked level (set for a map's backdrop when the map has `lighting`): a
     /// surface with a lightmap is lit by it alone, one without is drawn as its picture.
     pub original_lighting: bool,
+    /// The model may name nodes while drawing no visible triangle at all (an
+    /// anchor, an empty vehicle): the lowering keeps its node tree and rides
+    /// on at zero size. Runtime lowering allows it; a CLI import leaves it off
+    /// so a broken export still fails loudly instead of shipping empties.
+    pub allow_node_only: bool,
 }
 impl Options {
     pub fn new(input: impl Into<PathBuf>, out: impl Into<PathBuf>, kind: Kind) -> Self {
@@ -164,6 +169,7 @@ impl Options {
             projector_pictures: None,
             lighting: None,
             original_lighting: false,
+            allow_node_only: false,
         }
     }
 }
@@ -467,10 +473,13 @@ pub fn title(id: &str) -> String {
 
 /// In-memory lowering for runtime use, without touching disk: what the
 /// client renders and samples from an already-verified model byte.
-/// Item-kind options, matching the rendered vehicle/item shapes.
+/// Item-kind options, matching the rendered vehicle/item shapes. A node-only
+/// model (an anchor, an empty vehicle) is legitimate content there.
 pub fn lower(bytes: &[u8], id: &str) -> Result<Converted> {
     let doc = Document::from_bytes(bytes, None)?;
-    convert(&doc, None, &Options::new("", "", Kind::Item), id, "")
+    let mut opts = Options::new("", "", Kind::Item);
+    opts.allow_node_only = true;
+    convert(&doc, None, &opts, id, "")
 }
 
 /// The model in `doc` as a native shape. `prefix` goes before each
@@ -1351,7 +1360,11 @@ pub fn convert(
             visible.push((object, mesh));
         }
     }
-    ensure!(!visible.is_empty(), "the model has no visible mesh");
+    // A node-only model (an anchor, an empty vehicle) draws nothing; its
+    // node tree is the payload. Runtime lowering allows it (`allow_node_only`);
+    // a CLI import still fails loudly on one so a broken export cannot ship.
+    let node_only = visible.is_empty();
+    ensure!(!node_only || opts.allow_node_only, "the model has no visible mesh");
     if opts.kind == Kind::Map && collision.is_empty() {
         // A map with no `col_` meshes is solid where it is drawn.
         collision = visible.clone();
@@ -1482,8 +1495,10 @@ pub fn convert(
     if scale != 1.0 {
         rescale(&mut shape, scale);
     }
-    let (min, max) = bounds(&shape)?;
-    if let Some(height) = opts.height {
+    // A node-only model draws nothing and has no bounds to measure; it rides
+    // on at zero size with its nodes intact.
+    let bounds = if node_only { None } else { Some(bounds(&shape)?) };
+    if let (Some((min, max)), Some(height)) = (&bounds, opts.height) {
         ensure!(
             height.is_finite() && (0.05..=64.0).contains(&height),
             "--height is 0.05 to 64 units"
@@ -1496,10 +1511,14 @@ pub fn convert(
         rescale(&mut shape, height / measured);
         scale *= height / measured;
     }
-    let (min, max) = bounds(&shape)?;
     report.scale = scale;
-    report.height = max.y - min.y.min(0.0);
-    report.width = (max.x - min.x).max(max.z - min.z);
+    // A node-only model has no bounds; the zeros below keep a Body import of
+    // one failing loudly at its box-height check (runtime lowering never does).
+    let (min, max) = bounds.unwrap_or((Vec3::ZERO, Vec3::ZERO));
+    if !node_only {
+        report.height = max.y - min.y.min(0.0);
+        report.width = (max.x - min.x).max(max.z - min.z);
+    }
     if opts.kind == Kind::Body {
         if min.y < -0.05 * report.height || min.y > 0.05 * report.height {
             report.warnings.push(format!(

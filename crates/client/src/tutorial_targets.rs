@@ -47,16 +47,17 @@ impl TutorialTargets {
             let skinnable = shape
                 .materials
                 .iter()
-                .any(|m| m.name.to_ascii_lowercase().starts_with("base."));
+                .any(|m| skin_prefix(m.name.to_ascii_lowercase().as_str()).is_some());
             let skins: &[&'static str] = if skinnable { &TARGET_SKINS } else { &["base"] };
             for skin in skins {
-                // `setSkinName`: `base.` materials take the skin's prefix.
+                // `setSkinName`: `base.` materials take the skin's prefix. GLB lowering
+                // sanitizes dots to underscores, so `base_` names count too.
                 let bound = shape
                     .materials
                     .iter()
                     .map(|m| {
                         let name = m.name.to_ascii_lowercase();
-                        match name.strip_prefix("base.") {
+                        match skin_prefix(name.as_str()) {
                             Some(rest) => image(&format!("{skin}.{rest}")),
                             None => image(&name),
                         }
@@ -160,15 +161,30 @@ impl TutorialTargets {
     }
 }
 
-/// A target texture by the name its material gives, checked against the
-/// SHA-256 its file is named by.
+/// The skin prefix of a material name: legacy shape JSONs keep the retail
+/// `base.` dot; names lowered from `.glb` are sanitized, so `base_` too.
+fn skin_prefix(name: &str) -> Option<&str> {
+    name.strip_prefix("base.").or_else(|| name.strip_prefix("base_"))
+}
+
+/// A target texture by the name its material gives. Names lowered from `.glb`
+/// are sanitized (`gray50.png` becomes `gray50_png`), so a miss falls back to
+/// matching the sanitized form of each indexed name. The pack keeps these under
+/// plain names, so they read without a filename pin.
 fn texture(root: &Path, index: &PackIndex, name: &str) -> Result<SceneImage> {
-    let file = index
-        .textures
-        .get(name)
-        .with_context(|| format!("Tutorial pack lacks target texture {name}"))?;
-    let (sha, _) = file.split_once('.').context("Unnamed target texture")?;
-    let bytes = crate::items::checked_read(root, file, sha, MAX_TEXTURE_BYTES)?;
+    let file = match index.textures.get(name) {
+        Some(file) => Some(file.clone()),
+        None => {
+            let want = bri_gltf::safe_name(name);
+            index
+                .textures
+                .iter()
+                .find(|(key, _)| bri_gltf::safe_name(key) == want)
+                .map(|(_, file)| file.clone())
+        }
+    }
+    .with_context(|| format!("Tutorial pack lacks target texture {name}"))?;
+    let bytes = crate::materials::read_resource(root, &file, MAX_TEXTURE_BYTES)?;
     let image = image::load_from_memory(&bytes)
         .with_context(|| format!("Decoding target texture {name}"))?
         .to_rgba8();

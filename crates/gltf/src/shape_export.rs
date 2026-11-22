@@ -14,8 +14,10 @@
 //! rides in each animation's `extras.bri_clip`, which this crate's importer
 //! reads back as authoritative.
 //! Before returning, [`export`] reads its own output back the way the game
-//! lowers it and fails when the result would not draw there (a shape with no
-//! visible mesh), so an exported `.glb` always loads.
+//! lowers it and fails when the result could not load there, so an exported
+//! `.glb` always loads; a model that names nodes without drawing a visible
+//! triangle (an anchor, an empty vehicle) is one of those — its node tree and
+//! any collision meshes round-trip as-is.
 
 use super::write::{Channel, Gltf};
 use anyhow::{Context, Result, ensure};
@@ -1162,13 +1164,11 @@ pub fn export(
     // while the model can still fall back to its legacy file.
     let doc =
         super::Document::from_bytes(&glb, None).context("the exported glTF does not read back")?;
-    super::convert(
-        &doc,
-        None,
-        &super::Options::new("", "", super::Kind::Item),
-        "export check",
-        "",
-    )
+    // The game's runtime lowering allows a node-only model (an anchor, an
+    // empty vehicle); the check must too.
+    let mut check = super::Options::new("", "", super::Kind::Item);
+    check.allow_node_only = true;
+    super::convert(&doc, None, &check, "export check", "")
     .with_context(|| {
         format!(
             "the exported glTF cannot be re-imported as an item model ({} mesh node(s), {} collision node(s)); the model ships no file and presents as a placeholder cube",

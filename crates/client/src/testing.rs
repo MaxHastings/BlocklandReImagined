@@ -191,9 +191,13 @@ pub mod tutorial {
                 ],
                 vec![material(post, "opaque"), material(face, "opaque")],
             );
-            let bytes = serde_json::to_vec(&shape)?;
-            let file = format!("{}.shape.json", sha256(&bytes));
-            write_file(dir, &file, &bytes)?;
+            // The pack's targets are self-contained `.glb` models, as in the
+            // real content: export them and let the exporter's own read-back
+            // check prove they load.
+            let mut notes = Vec::new();
+            let (glb, _embedded) = bri_gltf::export_shape(&shape, &Default::default(), &mut notes)?;
+            let file = format!("{}.glb", sha256(&glb));
+            write_file(dir, &file, &glb)?;
             shapes.insert(id.to_string(), file);
         }
         let index = PackIndex {

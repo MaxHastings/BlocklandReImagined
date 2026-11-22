@@ -81,6 +81,26 @@ fn run(input: &Path, output: &Path) -> Result<String> {
         tris(&converted.shape)
     );
 
+    // Every skeleton node name must survive (case-insensitively, as the
+    // importer dedupes): for a model with no visible triangles at all — an
+    // anchor or an empty vehicle — its nodes are the whole payload.
+    let lowered_names: std::collections::BTreeSet<String> = converted
+        .shape
+        .nodes
+        .iter()
+        .map(|n| n.name.to_ascii_lowercase())
+        .collect();
+    for n in &shape.nodes {
+        if n.name.trim().is_empty() {
+            continue; // The exporter names empty nodes `node1`, `node2`, ...
+        }
+        ensure!(
+            lowered_names.contains(&n.name.to_ascii_lowercase()),
+            "node `{}` did not survive the round trip",
+            n.name
+        );
+    }
+
     let verts = |s: &Shape| s.meshes.iter().flatten().map(|m| m.positions.len()).sum::<usize>();
     fs::write(output, &glb).with_context(|| format!("writing {}", output.display()))?;
     let metals = shape.materials.iter().filter(|m| m.metal.is_some()).count();

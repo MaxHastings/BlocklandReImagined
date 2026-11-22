@@ -40,7 +40,8 @@ pub struct PackIndex {
     pub targets: Vec<TargetLaunch>,
     /// When the schedule reaches the end of `targetSetup.txt`.
     pub targets_end_ms: u32,
-    /// Native shape file of each of [`TARGET_SHAPES`], by asset id.
+    /// Self-contained `.glb` model file of each of [`TARGET_SHAPES`], by
+    /// asset id (the legacy JSON model format is gone).
     pub shapes: BTreeMap<String, String>,
     /// The target shapes' textures and skins, by lower-case material file
     /// name as the shapes name them (`gray50.png`, `m1.target.png`).
@@ -118,7 +119,7 @@ impl PackIndex {
                 && self
                     .shapes
                     .values()
-                    .all(|f| plain_file(f, &[".shape.json"])),
+                    .all(|f| plain_file(f, &[".glb"])),
             "The tutorial pack needs exactly the four target shapes"
         );
         ensure!(
