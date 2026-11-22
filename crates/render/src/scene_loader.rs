@@ -317,6 +317,19 @@ pub(crate) fn file(root: &Path, name: &str) -> Result<PathBuf> {
 pub(crate) fn read(root: &Path, name: &str) -> Result<Vec<u8>> {
     Ok(std::fs::read(file(root, name)?)?)
 }
+/// A map's static model file: a legacy `.shape.json`, or its self-contained
+/// `.glb` lowered back to the shape the scene draws.
+pub(crate) fn load_shape(
+    root: &Path,
+    id: &str,
+    name: &str,
+) -> Result<bri_content::shape::Shape> {
+    if name.ends_with(".glb") {
+        Ok(bri_gltf::lower(&read(root, name)?, id)?.shape)
+    } else {
+        Ok(bri_content::strict::from_slice(&read(root, name)?)?)
+    }
+}
 fn transform(node: &Node) -> Result<Mat4> {
     ensure!(
         node.transform.iter().all(|v| v.is_finite()),
@@ -952,7 +965,7 @@ fn lit_by_nodes(
         let Some(file) = bundle["assets"][id].as_str() else {
             continue;
         };
-        let shape: bri_content::shape::Shape = bri_content::strict::from_slice(&read(root, file)?)?;
+        let shape = load_shape(root, id, file)?;
         if shape
             .materials
             .iter()
@@ -1137,12 +1150,10 @@ fn load_static_shape(
         .asset
         .as_deref()
         .context("Static model has no native asset")?;
-    let shape: bri_content::shape::Shape = bri_content::strict::from_slice(&read(
-        root,
-        bundle["assets"][id]
-            .as_str()
-            .context("Static model asset missing")?,
-    )?)?;
+    let file_name: &str = bundle["assets"][id]
+        .as_str()
+        .context("Static model asset missing")?;
+    let shape = load_shape(root, id, file_name)?;
     shape.validate()?;
     let detail = shape
         .details

@@ -1,14 +1,15 @@
 //! Temporary in-place content migrator (throwaway tool).
 //!
-//! Converts every native interior file (`*.interior.json`) named by a map
-//! bundle's `assets` to one self-contained `.glb` — geometry, diffuse
-//! textures and lightmap sheets embedded beside each other, authored
-//! collision as position-only primitives — rewrites the bundle so the assets
-//! point at the `.glb`, and deletes the old JSON once the new file reads back
-//! identically. While it is in a package it also gives the hash-named baked
-//! lightmaps structural names (`{scene}-node{N}-slot{S}.png`) from their
-//! lighting records, which carry full provenance (scene id, node index and
-//! slot).
+//! Converts every native model file named by a map bundle's `assets` — the
+//! interior files (`*.interior.json`) and the static shape files
+//! (`*.shape.json`) — to one self-contained `.glb`: geometry, diffuse
+//! textures embedded beside each other, authored collision as position-only
+//! primitives (a shape's collider block masks ride in extras) — rewrites the
+//! bundle so the assets point at the `.glb`, and deletes the old JSON once
+//! the new file reads back identically. While it is in a package it also
+//! gives the hash-named baked lightmaps structural names
+//! (`{scene}-node{N}-slot{S}.png`) from their lighting records, which carry
+//! full provenance (scene id, node index and slot).
 //!
 //! Terrain files stay JSON on purpose: they are procedural data the runtime
 //! reads as such. Texture files are never deleted — terrain bindings still
@@ -19,19 +20,22 @@
 //! Dry-run by default: computes and reports every change without touching any
 //! file (except writing INTERIOR-MIGRATION-REPORT.json into the root). Pass
 //! `--apply` to write the `.glb`s, rename the lightmaps, rewrite the bundles
-//! and delete the old JSONs. An interior whose drawn materials do not all
-//! resolve to a texture is left as JSON with its reason in the report.
+//! and delete the old JSONs. A model that cannot ride in one `.glb` (a drawn
+//! material resolves to no texture, or a shape's skins bind different
+//! pictures to one material slot) is left as JSON with its reason in the
+//! report.
 //!
 //! TEMPORARY TOOL: once all content is converted, delete this file and its
 //! `[[bin]]` entry from Cargo.toml.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail, ensure};
 use bri_content::interior::{Detail, Interior};
+use bri_content::shape::Shape;
 use serde_json::{Value, json};
 
 const MAX_TEXTURE: u64 = 64 * 1024 * 1024;
@@ -134,9 +138,21 @@ struct InteriorPlan {
     notes: Vec<String>,
 }
 
+struct ShapePlan {
+    asset: String,
+    file: String,
+    glb: String,
+    materials: usize,
+    visible_triangles: usize,
+    collision_triangles: usize,
+    embedded_textures: Vec<String>,
+    notes: Vec<String>,
+}
+
 struct PackageReport {
     dir: String,
     interiors: Vec<InteriorPlan>,
+    shapes: Vec<ShapePlan>,
     renamed_lightmaps: usize,
     copied_lightmaps: usize,
     failures: Vec<(String, String)>,
@@ -148,6 +164,7 @@ struct Report {
     packages: Vec<PackageReport>,
     failed: usize,
     converted: usize,
+    shapes: usize,
     renamed: usize,
     copied: usize,
 }
@@ -155,8 +172,8 @@ struct Report {
 impl Report {
     fn summary_line(&self) -> String {
         format!(
-            "{}: {} interior(s) to .glb, {} baked lightmap(s) renamed ({} copied), {} failure(s)",
-            self.mode, self.converted, self.renamed, self.copied, self.failed
+            "{}: {} interior(s) + {} shape(s) to .glb, {} baked lightmap(s) renamed ({} copied), {} failure(s)",
+            self.mode, self.converted, self.shapes, self.renamed, self.copied, self.failed
         )
     }
 }
@@ -178,6 +195,7 @@ fn run(args: &Args) -> Result<Report> {
         packages: Vec::new(),
         failed: 0,
         converted: 0,
+        shapes: 0,
         renamed: 0,
         copied: 0,
     };
@@ -210,6 +228,19 @@ fn run(args: &Args) -> Result<Report> {
             }
             match convert_interior(dir, asset, file, &bindings, apply) {
                 Ok(plan) => interiors.push(plan),
+                Err(error) => failures.push((asset.clone(), format!("{error:#}"))),
+            }
+        }
+
+        // --- The static shape files -------------------------------------------
+        let mut shapes = Vec::new();
+        for (asset, file) in &assets {
+            let Some(file) = file.as_str() else { continue };
+            if !file.ends_with(".shape.json") {
+                continue; // Already converted, or not a shape.
+            }
+            match convert_shape(dir, asset, file, &bindings, apply) {
+                Ok(plan) => shapes.push(plan),
                 Err(error) => failures.push((asset.clone(), format!("{error:#}"))),
             }
         }
@@ -260,7 +291,7 @@ fn run(args: &Args) -> Result<Report> {
         }
 
         // --- Commit the package ------------------------------------------------
-        if apply && (!interiors.is_empty() || !renames.is_empty() || !copies.is_empty()) {
+        if apply && (!interiors.is_empty() || !shapes.is_empty() || !renames.is_empty() || !copies.is_empty()) {
             // Copies first: a shared bake is copied out before its one rename
             // moves the source away.
             for (old, new) in &copies {
@@ -273,14 +304,16 @@ fn run(args: &Args) -> Result<Report> {
                     format!("cannot rename {} to {}", old, new)
                 })?;
             }
-            let converted: BTreeSet<&str> = interiors.iter().map(|p| p.asset.as_str()).collect();
+            let converted_interiors: BTreeSet<&str> = interiors.iter().map(|p| p.asset.as_str()).collect();
+            let converted_shapes: BTreeSet<&str> = shapes.iter().map(|p| p.asset.as_str()).collect();
             for (asset, file) in &assets {
-                if let Some(f) = file.as_str()
-                    && f.ends_with(".interior.json")
-                    && converted.contains(asset.as_str())
-                {
-                    bundle["assets"][asset.as_str()] = json!(f.trim_end_matches(".json").to_string() + ".glb");
-                    fs::remove_file(dir.join(f)).with_context(|| format!("cannot delete {f}"))?;
+                if let Some(f) = file.as_str() {
+                    let done = (f.ends_with(".interior.json") && converted_interiors.contains(asset.as_str()))
+                        || (f.ends_with(".shape.json") && converted_shapes.contains(asset.as_str()));
+                    if done {
+                        bundle["assets"][asset.as_str()] = json!(f.trim_end_matches(".json").to_string() + ".glb");
+                        fs::remove_file(dir.join(f)).with_context(|| format!("cannot delete {f}"))?;
+                    }
                 }
             }
             let text = serde_json::to_vec_pretty(&bundle)?;
@@ -289,12 +322,14 @@ fn run(args: &Args) -> Result<Report> {
         }
 
         report.converted += interiors.len();
+        report.shapes += shapes.len();
         report.renamed += renames.len();
         report.copied += copies.len();
         report.failed += failures.len();
         report.packages.push(PackageReport {
             dir: dir.strip_prefix(root).unwrap_or(dir).display().to_string(),
             interiors,
+            shapes,
             renamed_lightmaps: renames.len(),
             copied_lightmaps: copies.len(),
             failures,
@@ -315,6 +350,16 @@ fn run(args: &Args) -> Result<Report> {
                 "lightmaps": i.lightmaps,
                 "embedded_textures": i.embedded_textures,
                 "notes": i.notes,
+            })).collect::<Vec<_>>(),
+            "shapes": p.shapes.iter().map(|s| json!({
+                "asset": s.asset,
+                "file": s.file,
+                "glb": s.glb,
+                "materials": s.materials,
+                "visible_triangles": s.visible_triangles,
+                "collision_triangles": s.collision_triangles,
+                "embedded_textures": s.embedded_textures,
+                "notes": s.notes,
             })).collect::<Vec<_>>(),
             "renamed_lightmaps": p.renamed_lightmaps,
             "copied_lightmaps": p.copied_lightmaps,
@@ -498,4 +543,121 @@ fn check_detail(a: &Detail, b: &Detail) -> Result<()> {
         "detail lighting did not survive"
     );
     Ok(())
+}
+
+/// One static shape JSON to its `.glb`: resolve the texture each material
+/// slot draws (one per slot across every skin the bundle binds), export, and
+/// read the result back exactly as the client will — the material slots must
+/// survive positionally (the bundle binds them by index) and every collider
+/// triangle the physics builds today must still be there. When applying, the
+/// `.glb` is written beside its JSON.
+fn convert_shape(
+    dir: &Path,
+    asset: &str,
+    file: &str,
+    bindings: &[Value],
+    apply: bool,
+) -> Result<ShapePlan> {
+    let shape: Shape = serde_json::from_slice(&fs::read(dir.join(file)).with_context(|| {
+        format!("{} does not read", dir.join(file).display())
+    })?)?;
+    shape.validate()?;
+
+    // The game binds each material slot to exactly one texture per skin a
+    // placement uses; a `.glb` carries one picture per slot, so every skin of
+    // a slot must name the same file or the shape keeps its JSON.
+    let mut textures: BTreeMap<usize, Option<(String, Vec<u8>)>> = BTreeMap::new();
+    for (slot, _material) in shape.materials.iter().enumerate() {
+        let files: BTreeSet<String> = bindings
+            .iter()
+            .filter(|b| {
+                b["asset"].as_str() == Some(asset)
+                    && b["shape_material"].as_u64() == Some(slot as u64)
+            })
+            .filter_map(|b| b["texture"].as_str())
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect();
+        match files.iter().next() {
+            None => {
+                textures.insert(slot, None);
+            }
+            Some(name) if files.len() == 1 => {
+                let path = dir.join(name);
+                let bytes = fs::read(&path)
+                    .with_context(|| format!("texture {} does not read", path.display()))?;
+                ensure!(
+                    (bytes.len() as u64) <= MAX_TEXTURE,
+                    "texture {name} is larger than 64 MB"
+                );
+                textures.insert(slot, Some((name.clone(), bytes)));
+            }
+            _ => bail!(
+                "material slot {slot} is bound to {} different texture files across skins; a .glb carries one per slot",
+                files.len()
+            ),
+        }
+    }
+
+    let mut notes = Vec::new();
+    let (glb, embedded) = bri_gltf::export_shape(&shape, &textures, &mut notes)?;
+    let glb_name = file.trim_end_matches(".json").to_string() + ".glb";
+
+    // Read the bytes back exactly as the client will.
+    let back = bri_gltf::lower(&glb, asset)?.shape;
+    back.validate()?;
+    ensure!(
+        back.materials.len() == shape.materials.len(),
+        "material slots did not survive ({} -> {})",
+        shape.materials.len(),
+        back.materials.len()
+    );
+
+    // The triangles the physics builds from each side's collision details.
+    let collision_triangles = |s: &Shape| -> Result<usize> {
+        let mut pose = bri_content::animation::sample(s, None, 0.0)?;
+        pose.visibility.fill(1.0);
+        Ok(s
+            .details
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.collision)
+            .map(|(i, _)| {
+                bri_content::animation::triangles(s, &pose, i, |_| true)
+                    .map(|t| t.len())
+            })
+            .collect::<Result<Vec<_>>>()?
+            .iter()
+            .sum())
+    };
+    let before = collision_triangles(&shape)?;
+    let after = collision_triangles(&back)?;
+    ensure!(before == after, "collision triangles did not survive ({before} -> {after})");
+
+    if apply {
+        fs::write(dir.join(&glb_name), &glb).with_context(|| {
+            format!("cannot write {}", dir.join(&glb_name).display())
+        })?;
+    }
+
+    // What the scene draws: its first non-collision detail.
+    let mut pose = bri_content::animation::sample(&shape, None, 0.0)?;
+    pose.visibility.fill(1.0);
+    let visible_triangles = shape
+        .details
+        .iter()
+        .position(|d| !d.collision && d.pixel_threshold >= 0.0)
+        .map(|i| bri_content::animation::triangles(&shape, &pose, i, |_| true).unwrap_or_default().len())
+        .unwrap_or(0);
+
+    Ok(ShapePlan {
+        asset: asset.to_owned(),
+        file: file.to_owned(),
+        glb: glb_name,
+        materials: shape.materials.len(),
+        visible_triangles,
+        collision_triangles: before,
+        embedded_textures: embedded.into_iter().collect(),
+        notes,
+    })
 }

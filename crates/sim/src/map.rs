@@ -383,6 +383,20 @@ fn native_file(root: &Path, name: &str) -> Result<PathBuf> {
     );
     Ok(root.join(name))
 }
+/// A map's static model file: a legacy `.shape.json`, or its self-contained
+/// `.glb` lowered back to the shape the game draws and collides from.
+fn load_shape_file(
+    root: &Path,
+    id: &str,
+    name: &str,
+) -> Result<bri_content::shape::Shape> {
+    let path = native_file(root, name)?;
+    if name.ends_with(".glb") {
+        Ok(bri_gltf::lower(&std::fs::read(path)?, id)?.shape)
+    } else {
+        Ok(bri_content::strict::from_slice(&std::fs::read(path)?)?)
+    }
+}
 impl NativeMap {
     /// Permanently loaded terrain around every authored spawn region, so
     /// spawn selection and newly joined players always stand on collision.
@@ -531,14 +545,13 @@ impl NativeMap {
                     // the session can move it.
                     let def = mover_defs[&index].clone();
                     let id = node.asset.as_ref().context("Missing mover asset")?;
-                    let path = native_file(
+                    let shape = load_shape_file(
                         root,
+                        id,
                         bundle["assets"][id]
                             .as_str()
                             .context("Missing mover model file")?,
                     )?;
-                    let shape: bri_content::shape::Shape =
-                        bri_content::strict::from_slice(&std::fs::read(path)?)?;
                     let first = colliders.len();
                     if def.collide {
                         for (collider, materials, shot) in
@@ -583,14 +596,13 @@ impl NativeMap {
                 }
                 Kind::StaticModel | Kind::DatablockModel if node.asset.is_some() => {
                     let id = node.asset.as_ref().context("Missing static model asset")?;
-                    let path = native_file(
+                    let shape = load_shape_file(
                         root,
+                        id,
                         bundle["assets"][id]
                             .as_str()
                             .context("Missing static model file")?,
                     )?;
-                    let shape: bri_content::shape::Shape =
-                        bri_content::strict::from_slice(&std::fs::read(path)?)?;
                     let first = colliders.len();
                     // A map Add-On's whole level is one model marked
                     // `surface: level`: bricks may not be buried in it or
