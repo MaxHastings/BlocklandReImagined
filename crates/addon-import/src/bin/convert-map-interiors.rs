@@ -546,11 +546,15 @@ fn check_detail(a: &Detail, b: &Detail) -> Result<()> {
 }
 
 /// One static shape JSON to its `.glb`: resolve the texture each material
-/// slot draws (one per slot across every skin the bundle binds), export, and
-/// read the result back exactly as the client will — the material slots must
-/// survive positionally (the bundle binds them by index) and every collider
-/// triangle the physics builds today must still be there. When applying, the
-/// `.glb` is written beside its JSON.
+/// slot draws, export, and read the result back exactly as the client will —
+/// the material slots must survive positionally (the bundle binds them by
+/// index) and every collider triangle the physics builds today must still be
+/// there. When applying, the `.glb` is written beside its JSON.
+///
+/// A slot several skins bind to different pictures keeps converting: the game
+/// resolves each skin's texture from these bindings at runtime (it never reads
+/// a map shape's embedded images), so the `.glb` embeds what an unskinned
+/// placement draws — editors see the default look, every skin still works.
 fn convert_shape(
     dir: &Path,
     asset: &str,
@@ -564,8 +568,8 @@ fn convert_shape(
     shape.validate()?;
 
     // The game binds each material slot to exactly one texture per skin a
-    // placement uses; a `.glb` carries one picture per slot, so every skin of
-    // a slot must name the same file or the shape keeps its JSON.
+    // placement uses; a `.glb` carries one picture per slot for editors.
+    let mut notes = Vec::new();
     let mut textures: BTreeMap<usize, Option<(String, Vec<u8>)>> = BTreeMap::new();
     for (slot, _material) in shape.materials.iter().enumerate() {
         let files: BTreeSet<String> = bindings
@@ -592,14 +596,37 @@ fn convert_shape(
                 );
                 textures.insert(slot, Some((name.clone(), bytes)));
             }
-            _ => bail!(
-                "material slot {slot} is bound to {} different texture files across skins; a .glb carries one per slot",
-                files.len()
-            ),
+            Some(_) => {
+                // Distinct pictures across skins: embed the unskinned
+                // placement's (or, absent one, the first) and say so.
+                let default = bindings
+                    .iter()
+                    .filter(|b| {
+                        b["asset"].as_str() == Some(asset)
+                            && b["shape_material"].as_u64() == Some(slot as u64)
+                            && b["skin"].as_str().unwrap_or("") == ""
+                    })
+                    .find_map(|b| b["texture"].as_str())
+                    .filter(|name| !name.is_empty());
+                let name = default.unwrap_or_else(|| {
+                    files
+                        .iter()
+                        .next()
+                        .expect("slot has distinct texture names")
+                        .as_str()
+                });
+                notes.push(format!(
+                    "slot {slot} draws {} distinct textures across skins; embedded the default-skin picture ({name}); other skins bind at runtime",
+                    files.len()
+                ));
+                let path = dir.join(name);
+                let bytes = fs::read(&path)
+                    .with_context(|| format!("texture {name} does not read"))?;
+                ensure!((bytes.len() as u64) <= MAX_TEXTURE, "texture {name} is larger than 64 MB");
+                textures.insert(slot, Some((name.to_owned(), bytes)));
+            }
         }
     }
-
-    let mut notes = Vec::new();
     let (glb, embedded) = bri_gltf::export_shape(&shape, &textures, &mut notes)?;
     let glb_name = file.trim_end_matches(".json").to_string() + ".glb";
 
