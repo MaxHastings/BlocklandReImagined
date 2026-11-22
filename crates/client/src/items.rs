@@ -1812,10 +1812,17 @@ fn read_part(
     let bytes = crate::materials::read_resource(abs, "presentation.json", 8 * 1024 * 1024)?;
     let mut part: Presentation = serde_json::from_slice(&bytes)?;
     ensure!(part.schema_version == 2, "unknown item presentation schema");
-    ensure!(
-        part.weapons_sha256 == hash(weapons),
-        "presentation.json does not match weapons.json; rerun the importer"
-    );
+    if part.weapons_sha256 != hash(weapons) {
+        // The same aggregate gap as the strict add-on check: a rewritten
+        // weapons.json leaves this pin stale beside no read that heals.
+        // Re-stamp when self-heal is armed; otherwise the strict error stands.
+        let healed = bri_package::repin::resync_presentation(abs)?;
+        ensure!(healed, "presentation.json does not match weapons.json; rerun the importer");
+        // Every pin below must match disk: read the corrected presentation back.
+        part = serde_json::from_slice(
+            &crate::materials::read_resource(abs, "presentation.json", 8 * 1024 * 1024)?,
+        )?;
+    }
     for (id, image) in &part.images {
         ensure!(
             pack.images

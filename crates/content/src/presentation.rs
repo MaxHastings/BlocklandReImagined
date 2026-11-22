@@ -88,6 +88,8 @@ impl Condition {
 /// A prebuilt object's appearance. None preserves its authored textures;
 /// a color replaces the object's texture without affecting shared materials
 /// on other objects. Visibility can select alternate authored geometry.
+/// Emissive draws the object's own material unlit, so one mesh glows in its
+/// lit state instead of a superimposed cap drawn over it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectAppearance {
@@ -95,6 +97,9 @@ pub struct ObjectAppearance {
     pub color: Option<[u8; 4]>,
     #[serde(default = "visible")]
     pub visible: bool,
+    /// Draw the object's own material unlit (glowing) in this state.
+    #[serde(default)]
+    pub emissive: bool,
 }
 fn visible() -> bool {
     true
@@ -104,6 +109,7 @@ impl Default for ObjectAppearance {
         Self {
             color: None,
             visible: true,
+            emissive: false,
         }
     }
 }

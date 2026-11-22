@@ -90,6 +90,54 @@ pub fn verify(
     Ok(())
 }
 
+/// Whether self-heal is armed in this process (see [`arm`]).
+pub fn armed() -> bool {
+    root().is_some()
+}
+
+/// Re-stamp an add-on's presentation aggregate pins (`weapons_sha256`,
+/// `item_physics_sha256`) to the bytes of the files beside them, when
+/// self-heal is armed and a pin disagrees. Those files are verified only as
+/// aggregates of one another — a strict check beside no read that heals — so
+/// rewriting one outside a healed read (a migration script, a hand edit)
+/// leaves its presentation stale with no [`verify`] to fire; this closes the
+/// gap at the checks' own sites. Returns whether a pin moved; `false` also
+/// means nothing was healable here (self-heal off, pins already in step,
+/// or an unexpected file), and the caller keeps its strict error then.
+pub fn resync_presentation(assets: &Path) -> Result<bool> {
+    if !armed() {
+        return Ok(false);
+    }
+    let manifest = assets.join("presentation.json");
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return Ok(false);
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
+        return Ok(false);
+    };
+    let Some(map) = value.as_object_mut() else {
+        return Ok(false);
+    };
+    let mut touched = false;
+    for (key, file) in [("weapons_sha256", "weapons.json"), ("item_physics_sha256", "item-physics.json")] {
+        let path = assets.join(file);
+        if !path.is_file() {
+            return Ok(false);
+        }
+        let hash = format!("{:x}", Sha256::digest(std::fs::read(&path)?));
+        restamp_slot(map, key, &hash, &mut touched);
+    }
+    if !touched {
+        return Ok(false);
+    }
+    write_manifest(&manifest, &value)?;
+    bri_console::warn(format!(
+        "Self-heal: re-pinned the presentation's aggregate pins in {}",
+        manifest.display()
+    ));
+    Ok(true)
+}
+
 /// Rewrite every stale live pin that references `target` to
 /// `new_sha256_hex`; returns how many manifests changed. Aggregates recording
 /// the bytes of any rewritten manifest (a presentation's `weapons_sha256`) are
@@ -726,6 +774,74 @@ mod tests {
             &hex(b"OLD-GLB"),
         )
         .unwrap();
+        set_state(None);
+    }
+
+    /// A presentation whose aggregate pins went stale because a sibling was
+    /// rewritten outside any healed read is re-stamped at its own check site
+    /// when armed, and stays strict when off.
+    #[test]
+    fn resync_presentation_heals_stale_aggregate_pins() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        let physics: Vec<u8> = b"{\"schema_version\": 1, \"items\": {}}".to_vec();
+        std::fs::write(root.join("assets/item-physics.json"), &physics).unwrap();
+        // Stale on purpose: the pin records an earlier weapons.json.
+        let before = format!(
+            r#"{{ "item_physics_sha256": "{}", "weapons_sha256": "{}" }}"#,
+            hex(&physics),
+            hex(b"OLD-WEAPONS")
+        );
+        std::fs::write(root.join("assets/presentation.json"), &before).unwrap();
+
+        set_state(None);
+        assert!(!resync_presentation(&root.join("assets")).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(root.join("assets/presentation.json")).unwrap(),
+            before
+        );
+
+        // The rewrite that left the pin stale, landed outside a healed read.
+        let weapons_v2: Vec<u8> = b"{\"items\": [1]}".to_vec();
+        std::fs::write(root.join("assets/weapons.json"), &weapons_v2).unwrap();
+
+        set_state(Some(root.clone()));
+        assert!(resync_presentation(&root.join("assets")).unwrap());
+        let pres: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("assets/presentation.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pres["weapons_sha256"], hex(&weapons_v2));
+        // The in-step item-physics pin is untouched.
+        assert_eq!(pres["item_physics_sha256"], hex(&physics));
+
+        // Idempotent: a second pass finds nothing stale and rewrites nothing.
+        let after = std::fs::read_to_string(root.join("assets/presentation.json")).unwrap();
+        assert!(!resync_presentation(&root.join("assets")).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(root.join("assets/presentation.json")).unwrap(),
+            after
+        );
+        set_state(None);
+    }
+
+    #[test]
+    fn resync_presentation_refuses_without_both_siblings() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/weapons.json"), b"{}").unwrap();
+        // No item-physics.json: nothing is healable, even armed.
+        std::fs::write(
+            root.join("assets/presentation.json"),
+            r#"{ "weapons_sha256": "00" }"#,
+        )
+        .unwrap();
+        set_state(Some(root.clone()));
+        assert!(!resync_presentation(&root.join("assets")).unwrap());
         set_state(None);
     }
 

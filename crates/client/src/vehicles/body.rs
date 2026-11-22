@@ -61,7 +61,7 @@ impl BodyRig {
         look: Option<&Animation>,
         pack: &Pack,
         images: &[SceneImage],
-        insert: &mut impl FnMut(String, &Pose, &[&SceneImage]) -> Result<()>,
+        insert: &mut impl FnMut(String, &Pose, &[&SceneImage], &Shape) -> Result<()>,
     ) -> Result<Self> {
         const MAX_APPEARANCE_STATES: usize = 256;
         let states = pack
@@ -78,7 +78,7 @@ impl BodyRig {
         let rest = bri_content::animation::sample(shape, None, 0.)?;
         let refs: Vec<_> = images.iter().collect();
         // Keep the complete source model available for debris and other consumers.
-        insert(model.to_string(), &rest, &refs)?;
+        insert(model.to_string(), &rest, &refs, shape)?;
         let mut steering = BTreeMap::new();
         let mut bound_objects = BTreeSet::new();
         for d in pack.definitions.iter().filter(|d| d.model == model) {
@@ -206,7 +206,7 @@ impl BodyRig {
                 inverse: node.map_or(Mat4::IDENTITY, |n| rest.nodes[n].inverse()),
             };
             let pose = rig.part_pose(&rest, &part);
-            insert(part.on.clone(), &pose, &refs)?;
+            insert(part.on.clone(), &pose, &refs, shape)?;
             if let Some(name) = &part.object_state {
                 for d in pack.definitions.iter().filter(|d| d.model == model) {
                     let Some(binding) = d
@@ -223,31 +223,45 @@ impl BodyRig {
                         }
                         let key = format!("{model}#visual-{}-{name}-{state}", d.id);
                         let mut pictures = images.to_vec();
+                        let used: BTreeSet<usize> = part
+                            .objects
+                            .iter()
+                            .flat_map(|i| shape.objects[*i].meshes.iter().copied())
+                            .filter_map(|m| shape.meshes.get(m).and_then(Option::as_ref))
+                            .flat_map(|mesh| mesh.primitives.iter().filter_map(|p| p.material))
+                            .collect();
                         if let Some(color) = appearance.color {
-                            for i in &part.objects {
-                                for mesh in shape.objects[*i]
-                                    .meshes
-                                    .iter()
-                                    .filter_map(|m| shape.meshes.get(*m).and_then(Option::as_ref))
-                                {
-                                    for primitive in &mesh.primitives {
-                                        if let Some(image) = primitive
-                                            .material
-                                            .and_then(|slot| pictures.get_mut(slot))
-                                        {
-                                            *image = SceneImage {
-                                                label: "object appearance".into(),
-                                                width: 1,
-                                                height: 1,
-                                                rgba: color.to_vec(),
-                                                srgb: false,
-                                            };
-                                        }
-                                    }
+                            for slot in &used {
+                                if let Some(image) = pictures.get_mut(*slot) {
+                                    *image = SceneImage {
+                                        label: "object appearance".into(),
+                                        width: 1,
+                                        height: 1,
+                                        rgba: color.to_vec(),
+                                        srgb: false,
+                                    };
                                 }
                             }
                         }
-                        insert(key.clone(), &pose, &pictures.iter().collect::<Vec<_>>())?;
+                        // Emissive states draw the part's own material unlit, so one
+                        // mesh glows in its lit state instead of a superimposed cap.
+                        let variant = if appearance.emissive {
+                            let mut glowing = shape.clone();
+                            for slot in &used {
+                                if let Some(material) = glowing.materials.get_mut(*slot) {
+                                    material.unlit = true;
+                                }
+                            }
+                            Some(glowing)
+                        } else {
+                            None
+                        };
+                        insert(
+                            key.clone(),
+                            &pose,
+                            &pictures.iter().collect::<Vec<_>>(),
+                            variant.as_ref().unwrap_or(shape),
+                        )?;
                         keys[state] = Some(key);
                     }
                     part.variants.insert(d.id.clone(), keys);

@@ -1206,6 +1206,8 @@ impl ItemPhysicsContent {
     /// `assets/item-physics.json`, bound to their own `weapons.json` by the
     /// `presentation.json` beside it. `extras` are [`kind_providers`] of
     /// `weapons.json`; a package without these files keeps no drop bounds.
+    /// In a source checkout, stale aggregate pins are re-stamped on load
+    /// (self-heal) instead of faulting.
     pub fn load_with(
         root: &Path,
         content_root: &Path,
@@ -1220,7 +1222,7 @@ impl ItemPhysicsContent {
             if !abs.join("item-physics.json").is_file() {
                 continue;
             }
-            let manifest_bytes =
+            let mut manifest_bytes =
                 bounded_bytes(&contained(&abs, "presentation.json")?, WEAPON_INDEX_LIMIT)?;
             let physics_bytes =
                 bounded_bytes(&contained(&abs, "item-physics.json")?, 2 * 1024 * 1024)?;
@@ -1228,15 +1230,31 @@ impl ItemPhysicsContent {
                 bounded_bytes(&contained(&abs, "weapons.json")?, WEAPON_INDEX_LIMIT)?;
             let manifest: PhysicsManifest = serde_json::from_slice(&manifest_bytes)?;
             let physics: PhysicsCatalog = serde_json::from_slice(&physics_bytes)?;
-            ensure!(
-                manifest.schema_version == 2
+            let in_step = manifest.schema_version == 2
+                && physics.schema_version == 1
+                && manifest.weapons_sha256 == format!("{:x}", Sha256::digest(&weapons_bytes))
+                && manifest.item_physics_sha256
+                    == format!("{:x}", Sha256::digest(&physics_bytes));
+            if !in_step {
+                // The presentation pins its siblings' bytes as aggregates, beside no read
+                // that heals them: a rewritten weapons.json (a migration, a hand edit)
+                // leaves it stale with no `repin::verify` to fire. Re-stamp the pins at
+                // this check's own site when self-heal is armed; otherwise the strict
+                // error stands as before.
+                let healed = manifest.schema_version == 2
                     && physics.schema_version == 1
-                    && manifest.weapons_sha256 == format!("{:x}", Sha256::digest(&weapons_bytes))
-                    && manifest.item_physics_sha256
-                        == format!("{:x}", Sha256::digest(&physics_bytes)),
-                "Add-On {}: item-physics.json does not match weapons.json; run the Add-On importer again",
-                bri_package::library::add_on_label(&abs, dir)
-            );
+                    && bri_package::repin::resync_presentation(&abs)?;
+                ensure!(
+                    healed,
+                    "Add-On {}: item-physics.json does not match weapons.json; run the Add-On importer again",
+                    bri_package::library::add_on_label(&abs, dir)
+                );
+                // The fingerprint below must record the re-stamped manifest's bytes.
+                manifest_bytes = bounded_bytes(
+                    &contained(&abs, "presentation.json")?,
+                    WEAPON_INDEX_LIMIT,
+                )?;
+            }
             for (id, bounds) in physics.items {
                 bounds.validate()?;
                 ensure!(

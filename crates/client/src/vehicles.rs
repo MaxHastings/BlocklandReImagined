@@ -455,11 +455,12 @@ impl VehicleAssets {
                 .flatten();
             let mut insert = |key: String,
                               pose: &bri_content::animation::Pose,
-                              textures: &[&SceneImage]|
+                              textures: &[&SceneImage],
+                              shape: &Shape|
              -> Result<()> {
                 let data = native_shape_scene(
                     &key,
-                    &shape,
+                    shape,
                     textures,
                     [1.0; 4],
                     false,
@@ -496,14 +497,14 @@ impl VehicleAssets {
             }
             let Some(look) = look else {
                 let rest = bri_content::animation::sample(&shape, None, 0.0)?;
-                insert(asset.path.clone(), &rest, &refs)?;
+                insert(asset.path.clone(), &rest, &refs, &shape)?;
                 continue;
             };
             // Objects on nodes the clip moves are drawn apart and posed each
             // frame; everything else is baked once.
             let pose = bri_content::animation::sample(&shape, Some(look), 0.0)?;
             if shape.meshes.iter().flatten().any(|m| m.skin.is_some()) {
-                insert(asset.path.clone(), &pose, &refs)?;
+                insert(asset.path.clone(), &pose, &refs, &shape)?;
                 looks.insert(
                     asset.path.clone(),
                     LookRig {
@@ -548,6 +549,7 @@ impl VehicleAssets {
                 asset.path.clone(),
                 &only(&|i| !moving.iter().any(|(_, o)| *o == i))?,
                 &refs,
+                &shape,
             )?;
             let mut parts = Vec::new();
             let nodes: std::collections::BTreeSet<usize> = moving.iter().map(|(n, _)| *n).collect();
@@ -557,6 +559,7 @@ impl VehicleAssets {
                     key.clone(),
                     &only(&|i| shape.objects[i].node == Some(node))?,
                     &refs,
+                    &shape,
                 )?;
                 parts.push((key, node, pose.nodes[node].inverse()));
             }

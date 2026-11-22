@@ -39,6 +39,14 @@ path = "src/bin/convert-map-interiors.rs"
 name = "backfill-glb-textures"
 path = "src/bin/backfill-glb-textures.rs"
 
+# TEMPORARY: one-shot backfill that bakes a material's same-named picture into
+# its .glb (a solid colour as baseColorFactor, a patterned picture embedded)
+# for models whose presentation table never named their textures; delete this
+# entry (and the file) once content is done.
+[[bin]]
+name = "backfill-named-textures"
+path = "src/bin/backfill-named-textures.rs"
+
 # TEMPORARY: one-shot backfill that bakes a brick's authored colours into real
 # glTF materials (baseColorFactor, BLEND where transparent) so Blender matches
 # the game; delete this entry (and the file) once content is done.
@@ -91,6 +99,13 @@ path = "src/bin/clips-to-glb.rs"
 [[bin]]
 name = "shape-json-to-glb"
 path = "src/bin/shape-json-to-glb.rs"
+
+# TEMPORARY: one-shot de-duper that removes loose texture files a pack's GLBs
+# no longer draw (their colours/pictures live in the .glb now) and strips the
+# dead manifest entries; delete this entry (and the file) once content is done.
+[[bin]]
+name = "dedup-pack-textures"
+path = "src/bin/dedup-pack-textures.rs"
 
 [dependencies]
 bri-console = { path = "../console" }
