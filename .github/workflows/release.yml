@@ -216,6 +216,9 @@ jobs:
     if: github.event_name == 'push' || github.event.inputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v5
       - name: Publish the GitHub Release
@@ -224,3 +227,4 @@ jobs:
         run: |
           notes="docs/releases/$BRI_VERSION.md"
           python3 tools/publish_release.py --version "$BRI_VERSION" --sha "$GITHUB_SHA" --run "$GITHUB_RUN_ID" --notes "$notes"
+          gh workflow run sync-release-record.yml --ref main

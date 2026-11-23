@@ -5,9 +5,11 @@ import pathlib
 import re
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 import publish_release
 import release
+import sync_release_record
 
 PACKS = {'map-bundle-017', 'weapons-pack-009'}
 
@@ -87,6 +89,35 @@ class NotesTests(unittest.TestCase):
             text = publish_release.notes_text('v1', notes)
             self.assertTrue(text.startswith('## What changed\n\n**Windows:**'))
             self.assertTrue(publish_release.notes_text('v1', pathlib.Path(temp) / 'none.md').startswith('**Windows:**'))
+
+
+class ReleaseRecordTests(unittest.TestCase):
+    def test_record_resolves_the_public_tag_and_preserves_editorial_status(self):
+        repo = 'owner/game'
+        sha = 'a' * 40
+        latest = {'tag_name': 'v1.0.0', 'published_at': '2026-11-23T22:36:19Z',
+                  'draft': False, 'prerelease': False, 'assets': [{'name': 'SHA256SUMS'}]}
+        with patch('sync_release_record.gh_json', side_effect=[latest, {'sha': sha}]) as api:
+            version, record = sync_release_record.release_record(repo)
+        self.assertEqual(version, 'v1.0.0')
+        self.assertEqual([call.args for call in api.call_args_list], [
+            ('api', 'repos/owner/game/releases/latest'),
+            ('api', 'repos/owner/game/commits/v1.0.0'),
+        ])
+        self.assertIn(f'https://github.com/{repo}/commit/{sha}', record)
+        self.assertIn('https://github.com/owner/game/releases/download/v1.0.0/SHA256SUMS', record)
+        start, end = sync_release_record.START, sync_release_record.END
+        status = f'# Status\n\n{start}Earlier release\n{end}\n\nManual decisions\n'
+        updated = sync_release_record.replace_record(status, record)
+        self.assertEqual(updated, f'# Status\n\n{start}{record}{end}\n\nManual decisions\n')
+        self.assertEqual(sync_release_record.replace_record(updated, record), updated)
+
+    def test_record_refuses_missing_or_reversed_markers(self):
+        with self.assertRaises(ValueError):
+            sync_release_record.replace_record('# Status', 'Release\n')
+        start, end = sync_release_record.START, sync_release_record.END
+        with self.assertRaises(ValueError):
+            sync_release_record.replace_record(f'{end}\n{start}', 'Release\n')
 
 
 class BundleInputTests(unittest.TestCase):
