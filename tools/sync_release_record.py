@@ -74,11 +74,17 @@ def check_commit(repo, branch, sha):
     endpoint = f'repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&event=workflow_dispatch'
     for _ in range(20):
         for run in gh_json('api', endpoint)['workflow_runs']:
-            if run['head_branch'] == branch:
-                return subprocess.run(
+            if run['head_branch'] == branch and run['head_sha'] == sha:
+                result = subprocess.run(
                     ['gh', 'run', 'watch', str(run['id']), '--repo', repo,
                      '--exit-status', '--interval', '10'], timeout=900,
-                ).returncode == 0
+                )
+                if result.returncode:
+                    return None
+                jobs = gh_json('api', f"repos/{repo}/actions/runs/{run['id']}/jobs")['jobs']
+                return next((job['html_url'] for job in jobs
+                             if job['name'] == 'check' and job['head_sha'] == sha
+                             and job['conclusion'] == 'success'), None)
         time.sleep(3)
     raise RuntimeError(f'CI run did not appear for {branch} at {sha}')
 
@@ -107,12 +113,17 @@ def sync(repo):
         print(f'Checking release record {sha} for {version}.', flush=True)
         git('push', 'origin', f'HEAD:refs/heads/{branch}')
         try:
-            passed = check_commit(repo, branch, sha)
+            check_url = check_commit(repo, branch, sha)
             if release_record(repo) != (version, record):
                 print('Latest release changed during CI. Refreshing the record.')
                 continue
-            if not passed:
+            if not check_url:
                 raise RuntimeError(f'CI failed for release record commit {sha}')
+            # Branch protection does not count the job from a workflow_dispatch
+            # run. Attach its verified result directly to the same commit.
+            gh('api', '--method', 'POST', f'repos/{repo}/statuses/{sha}',
+               '-f', 'context=check', '-f', 'state=success',
+               '-f', 'description=Release record CI passed', '-f', f'target_url={check_url}')
             if subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/main']).returncode == 0:
                 print(f'main now records {version} at {sha}')
                 return

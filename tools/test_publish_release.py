@@ -3,6 +3,7 @@
 import json
 import pathlib
 import re
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -118,6 +119,20 @@ class ReleaseRecordTests(unittest.TestCase):
         start, end = sync_release_record.START, sync_release_record.END
         with self.assertRaises(ValueError):
             sync_release_record.replace_record(f'{end}\n{start}', 'Release\n')
+
+    def test_dispatched_ci_must_report_the_required_job_at_the_exact_commit(self):
+        run = {'id': 42, 'head_branch': 'staging', 'head_sha': 'expected'}
+        job = {'name': 'check', 'head_sha': 'expected', 'conclusion': 'success',
+               'html_url': 'https://github.com/owner/game/actions/runs/42/job/1'}
+        for candidate, expected in ((job, job['html_url']),
+                                    ({**job, 'head_sha': 'other'}, None),
+                                    ({**job, 'conclusion': 'skipped'}, None)):
+            with self.subTest(job=candidate):
+                with patch('sync_release_record.gh'), patch(
+                    'sync_release_record.gh_json',
+                    side_effect=[{'workflow_runs': [run]}, {'jobs': [candidate]}],
+                ), patch('sync_release_record.subprocess.run', return_value=subprocess.CompletedProcess([], 0)):
+                    self.assertEqual(sync_release_record.check_commit('owner/game', 'staging', 'expected'), expected)
 
 
 class BundleInputTests(unittest.TestCase):
