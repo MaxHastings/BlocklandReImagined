@@ -40,3 +40,7 @@ Local evidence before platform CI
   bytes as JSON. The assertion now reads through the model codec and still
   checks both blend modes. All focused targets passed, including the
   body height, sample-map and 19 Playground regressions.
+- The first clean-content bootstrap stopped because the standalone weapon
+  effects converter had not picked up the light cone field from
+  `51798d555`. Stock explosion lights are omnidirectional. Both standalone
+  converters are now checked with their own lockfiles in Windows CI.

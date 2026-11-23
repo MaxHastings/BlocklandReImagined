@@ -103,6 +103,10 @@ jobs:
         run: cargo build --locked --bin bri-client --bin bri-server --bin bri-import-addon --bin bri-addon-check --bin bri-addon-run
       - name: No Visual C++ Redistributable needed
         run: python tools/check_windows_imports.py target/debug/bri-client.exe target/debug/bri-server.exe target/debug/bri-import-addon.exe target/debug/bri-addon-check.exe target/debug/bri-addon-run.exe
+      - name: Check the standalone weapon debris converter
+        run: cargo check --locked --manifest-path docs/research/weapon-debris/importer/Cargo.toml --target-dir target
+      - name: Check the standalone weapon effects converter
+        run: cargo check --locked --manifest-path docs/research/weapon-effects/importer/Cargo.toml --target-dir target
 
   # Serial software-GPU coverage runs past two hours on one hosted Windows
   # runner, so the test targets are split into even shares, one runner
