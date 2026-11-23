@@ -153,6 +153,69 @@ pub fn set_enabled(root: &Path, state: &Path, id: &str, enabled: bool) -> Result
     Ok(view)
 }
 
+pub fn set_category_enabled(
+    root: &Path,
+    state: &Path,
+    category: &str,
+    enabled: bool,
+) -> Result<AddOnsView> {
+    let mut choices = Choices::load(state)?;
+    let mut library = Library::scan(root)?;
+    let imports = bri_package::classic::State::load(root);
+    let ids = crate::add_ons::rows(&library, &imports)
+        .into_iter()
+        .filter(|row| row.category == category && row.can_toggle_in_category())
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
+    ensure!(
+        !ids.is_empty(),
+        "This category has no Add-Ons that can be changed."
+    );
+    let result = library.apply_batch(&ids, enabled)?;
+    if result.accepted.is_empty() && !result.refused.is_empty() {
+        anyhow::bail!(
+            "{}",
+            result
+                .refused
+                .iter()
+                .map(|reason| reason.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    for id in &result.accepted {
+        if let Some(entry) = library.get(id)
+            && !entry.required
+            && library.companion_of(id).is_none()
+        {
+            choices.packages.insert(id.clone(), entry.enabled);
+        }
+    }
+    let unchanged = ids
+        .iter()
+        .filter(|id| library.get(id).is_none_or(|entry| entry.enabled != enabled))
+        .count();
+    let direction = if enabled { "on" } else { "off" };
+    let mut notice = if unchanged == 0 {
+        format!("{category} turned {direction}. Changes apply when you start a game.")
+    } else {
+        format!(
+            "{category}: {} turned {direction}, {unchanged} could not change.",
+            ids.len() - unchanged
+        )
+    };
+    if let Err(error) = choices.save(state) {
+        bri_console::warn(format!(
+            "Saving Add-On choices after changing {category}: {error:#}"
+        ));
+        notice.push_str(" Choices could not be saved for future installations.");
+    }
+    Ok(AddOnsView {
+        rows: crate::add_ons::rows(&library, &imports),
+        notice,
+    })
+}
+
 /// An explicit reset drops old overrides and follows future release defaults.
 pub fn defaults(root: &Path, state: &Path) -> Result<AddOnsView> {
     // Do not overwrite unreadable/corrupt preference data after changing lists.
@@ -195,6 +258,50 @@ mod tests {
             root.join("packages.json"),
             json!({"schema_version": 1, "packages": entries}).to_string(),
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_category_applies_eligible_choices_and_persists_dependency_outcomes() -> Result<()> {
+        let scratch = ScratchDir::new("category-choices")?;
+        let root = scratch.path().join("content");
+        let state = scratch.path().join("user");
+        release(&root, "test", &["broken", "rules", "tool"], &[])?;
+        let path = root.join("addons/test/broken/package.json");
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        manifest["dependencies"] = json!({"unavailable": "*"});
+        fs::write(&path, manifest.to_string())?;
+
+        let view = set_category_enabled(&root, &state, "Other", true)?;
+        assert!(
+            view.rows
+                .iter()
+                .find(|row| row.id == "broken")
+                .unwrap()
+                .category_blocked
+        );
+        let set = bri_package::packages::PackageSet::load_root(&root)?;
+        let ids = set
+            .packages
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["rules", "tool"]);
+        assert_eq!(
+            Choices::load(&state)?.packages,
+            BTreeMap::from([("rules".into(), true), ("tool".into(), true)])
+        );
+
+        set_category_enabled(&root, &state, "Other", false)?;
+        assert!(
+            bri_package::packages::PackageSet::load_root(&root)?
+                .packages
+                .is_empty()
+        );
+        assert_eq!(
+            Choices::load(&state)?.packages,
+            BTreeMap::from([("rules".into(), false), ("tool".into(), false)])
+        );
         Ok(())
     }
 

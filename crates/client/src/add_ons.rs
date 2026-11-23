@@ -777,6 +777,7 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
             .get(id)
             .map_or(id.to_string(), |d| d.name().to_string())
     };
+    let toggle = library.plan(e.id(), !e.enabled);
     AddOnRow {
         id: e.id().into(),
         name: e.name().into(),
@@ -784,6 +785,7 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
         category: category.into(),
         enabled: e.enabled,
         locked: false,
+        category_blocked: !toggle.allowed(),
         runs: match e.package.side {
             Side::Server => "Only on the server you host. Players never download it.",
             Side::Shared => "Everyone in the game. Players download it when they join.",
@@ -813,8 +815,8 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
             .map(|(id, requirement)| format!("{} {requirement}", name_of(id)))
             .collect(),
         needed_by: if e.enabled {
-            library
-                .dependents(e.id())
+            toggle
+                .also
                 .iter()
                 .filter(|i| library.companion_of(i) != Some(e.id()))
                 .map(|i| name_of(i))

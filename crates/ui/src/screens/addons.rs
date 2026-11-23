@@ -8,8 +8,9 @@
 use super::*;
 use crate::api::{AddOnRow, ConnectionState, DownloadState, UiAction};
 use crate::ui::Callback;
-use crate::view::{EventKind, check_cell};
+use crate::view::{EventKind, MIXED_CHECK_CELL, check_cell};
 use bri_console::Clamp;
+use std::collections::BTreeSet;
 
 const LIST: &str = "AO_List";
 const SEARCH: &str = "AO_Search";
@@ -26,9 +27,6 @@ const OPEN_FOLDER: &str = "AO_OpenFolder";
 /// The status line while nothing else needs saying.
 const DROP_HINT: &str =
     "Drop classic Blockland Add-On zips in the Add-Ons folder; they convert by themselves.";
-/// List rows that are group headings, not packages.
-const HEADING: i64 = -1;
-
 fn named(mut c: Control, name: &str) -> Control {
     c.name = Some(name.into());
     c
@@ -59,6 +57,8 @@ pub struct AddOns {
     view: View,
     /// Row index into `core.add_ons.rows` per list item id.
     shown: Vec<usize>,
+    /// Category names indexed by the negative list row IDs.
+    categories: Vec<String>,
     /// Package id of the selected row, kept across refreshes.
     selected: Option<String>,
     requests: Vec<RequestId>,
@@ -171,6 +171,7 @@ impl AddOns {
         let mut s = Self {
             view,
             shown: vec![],
+            categories: vec![],
             selected: None,
             requests: vec![],
             flips: vec![],
@@ -207,9 +208,26 @@ impl AddOns {
             }
         }
         self.shown.clear();
+        self.categories.clear();
         let mut items = Vec::new();
+        let mut sections = Vec::new();
         for category in categories {
-            items.push((format!("\t\t{}", category.to_ascii_uppercase()), HEADING));
+            self.categories.push(category.into());
+            let section = -(self.categories.len() as i64);
+            sections.push(section);
+            let (on, total) = category_members(rows, category).fold((0, 0), |(on, total), row| {
+                (on + usize::from(row.enabled), total + 1)
+            });
+            let check = match (on, total) {
+                (_, 0) => "",
+                (0, _) => check_cell(false, true),
+                (on, total) if on == total => check_cell(true, true),
+                _ => MIXED_CHECK_CELL,
+            };
+            items.push((
+                format!("{check}\t\t{}", category.to_ascii_uppercase()),
+                section,
+            ));
             for (i, r) in rows.iter().enumerate() {
                 if r.category != category || !matches(r) {
                     continue;
@@ -255,6 +273,7 @@ impl AddOns {
         });
         if let Some(n) = self.view.id(LIST) {
             self.view.state(n).items = items;
+            self.view.state(n).section_rows = sections;
             self.view.select(n, selected_item);
         }
         let status = if core.add_ons.notice.is_empty() {
@@ -273,7 +292,7 @@ impl AddOns {
         let text = match &row {
             Some(r) => details(r),
             None if core.add_ons.rows.is_empty() => "Looking for installed add-ons...".into(),
-            None => "Pick an add-on to see what it does.\n\nClick the box beside an add-on to turn it on or off. Changes apply the next time you start a game.".into(),
+            None => "Pick an Add-On for details.\n\nA category checkbox changes all eligible Add-Ons in it, including entries hidden by search. Changes apply when you start a game.".into(),
         };
         let shown = (self.selected.clone(), text);
         if self.details_shown.as_ref() != Some(&shown)
@@ -313,6 +332,39 @@ impl AddOns {
             let id = core.request(UiAction::ImportAddOn { id: row.id });
             self.requests.push(id);
         }
+    }
+
+    fn toggle_category(&mut self, core: &mut Core, index: usize) {
+        let Some(category) = self.categories.get(index) else {
+            return;
+        };
+        let members = category_members(&core.add_ons.rows, category).collect::<Vec<_>>();
+        if members.is_empty() {
+            return;
+        }
+        let enabled = members.iter().any(|row| !row.enabled);
+        let action = UiAction::SetAddOnCategoryEnabled {
+            category: category.clone(),
+            enabled,
+        };
+        if !enabled {
+            let affected = members
+                .iter()
+                .flat_map(|row| row.needed_by.iter().map(String::as_str))
+                .collect::<BTreeSet<_>>();
+            if !affected.is_empty() {
+                core.message_yes_no(
+                    "Turn Off Category?",
+                    &format!(
+                        "Turning off this category also turns off Add-Ons that need it:\n{}\n\nContinue?",
+                        affected.into_iter().collect::<Vec<_>>().join(", ")
+                    ),
+                    Callback::Request(Box::new(action)),
+                );
+                return;
+            }
+        }
+        self.requests.push(core.request(action));
     }
 
     fn toggle(&mut self, core: &mut Core) {
@@ -359,6 +411,14 @@ impl AddOns {
         self.flips.push((request, row.id));
         self.refresh(core);
     }
+}
+
+fn category_members<'a>(
+    rows: &'a [AddOnRow],
+    category: &'a str,
+) -> impl Iterator<Item = &'a AddOnRow> {
+    rows.iter()
+        .filter(move |row| row.category == category && row.can_toggle_in_category())
 }
 
 /// Tick or untick a row as the player sees it, before the host answers.
@@ -509,7 +569,16 @@ impl Screen for AddOns {
             }
             (LIST, EventKind::Changed | EventKind::Submit | EventKind::Toggle) => {
                 let item = self.view.selected(ev.node);
-                match item.filter(|&i| i != HEADING) {
+                if let Some(section) = item.filter(|&i| i < 0) {
+                    // A click on a checkbox emits Changed followed by Toggle.
+                    // Keep the package details and dispatch a section only on Toggle.
+                    if ev.kind == EventKind::Toggle {
+                        self.toggle_category(core, section.unsigned_abs() as usize - 1);
+                        self.refresh(core);
+                    }
+                    return;
+                }
+                match item {
                     Some(i) => {
                         self.selected = self
                             .shown
@@ -518,7 +587,6 @@ impl Screen for AddOns {
                             .map(|r| r.id.clone());
                     }
                     None => {
-                        // Headings are not selectable.
                         self.view.select(ev.node, None);
                         self.selected = None;
                     }
@@ -979,14 +1047,91 @@ mod tests {
             [
                 "\t\tBASE GAME",
                 "[#]\t\tThe base",
-                "\t\tGAME MODES",
+                "[x]\t\tGAME MODES",
                 "[x]\t\tThe lab-world",
-                "\t\tLOOKS & HUD",
+                "[ ]\t\tLOOKS & HUD",
                 "[ ]\t\tThe lab-hud",
-                "\t\tWEAPONS & ITEMS",
+                "[ ]\t\tWEAPONS & ITEMS",
                 "[ ]\t\tThe gun",
             ]
         );
+    }
+
+    fn click_list_row(s: &mut AddOns, ui: &mut Ui, name: &str, x: i32) -> Vec<EventKind> {
+        let list = s.view.id(LIST).unwrap();
+        let row = s
+            .view
+            .node(list)
+            .state
+            .items
+            .iter()
+            .position(|(t, _)| t.ends_with(name))
+            .unwrap() as i32;
+        let r = s.view.node(list).rect;
+        let rh = s.view.node(list).state.row_height.max(16);
+        let mut events = Vec::new();
+        s.view.mouse_down(
+            MouseButton::Left,
+            r.x + x,
+            r.y + row * rh + rh / 2,
+            &ui.core.pack,
+            &mut events,
+        );
+        for event in &events {
+            s.on_event(event, &mut ui.core);
+        }
+        events.into_iter().map(|event| event.kind).collect()
+    }
+
+    #[test]
+    fn category_checkbox_uses_hidden_members_and_confirms_dependency_shutdown() {
+        let mut addons = view();
+        let mut rocket = row("rocket", "Weapons & Items", true);
+        rocket.needed_by = vec!["The lab-world".into()];
+        addons.rows.push(rocket);
+        let mut ui = ui();
+        ui.apply(UiUpdate::AddOns(addons.clone()));
+        let mut screen = AddOns::new(&ui.core);
+        let search = screen.view.id(SEARCH).unwrap();
+        screen.view.set_text(search, "gun");
+        screen.refresh(&ui.core);
+        let list = screen.view.id(LIST).unwrap();
+        let items = &screen.view.node(list).state.items;
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, "[~]\t\tWEAPONS & ITEMS");
+        click_list_row(&mut screen, &mut ui, "WEAPONS & ITEMS", 4);
+        assert_eq!(
+            ui.drain_actions()
+                .into_iter()
+                .map(|(_, action)| action)
+                .collect::<Vec<_>>(),
+            [UiAction::SetAddOnCategoryEnabled {
+                category: "Weapons & Items".into(),
+                enabled: true
+            }]
+        );
+
+        addons
+            .rows
+            .iter_mut()
+            .find(|r| r.id == "gun")
+            .unwrap()
+            .enabled = true;
+        ui.apply(UiUpdate::AddOns(addons));
+        screen.refresh(&ui.core);
+        assert_eq!(
+            screen.view.node(list).state.items[0].0,
+            "[x]\t\tWEAPONS & ITEMS"
+        );
+        click_list_row(&mut screen, &mut ui, "WEAPONS & ITEMS", 4);
+        assert!(ui.drain_actions().is_empty());
+        assert!(ui.core.cmds.iter().any(|cmd| matches!(
+            cmd,
+            crate::ui::StackCmd::Message(message)
+                if message.on_yes == Callback::Request(Box::new(UiAction::SetAddOnCategoryEnabled {
+                    category: "Weapons & Items".into(), enabled: false,
+                }))
+        )));
     }
 
     #[test]
@@ -1054,31 +1199,6 @@ mod tests {
         let mut s = AddOns::new(&ui.core);
         ui.drain_actions();
         let list = s.view.id(LIST).unwrap();
-        let pack = ui.core.pack.clone();
-        let click = |s: &mut AddOns, ui: &mut Ui, name: &str, x: i32| {
-            let row = s
-                .view
-                .node(list)
-                .state
-                .items
-                .iter()
-                .position(|(t, _)| t.ends_with(name))
-                .unwrap() as i32;
-            let r = s.view.node(list).rect;
-            let rh = s.view.node(list).state.row_height.max(16);
-            let mut out = Vec::new();
-            s.view.mouse_down(
-                MouseButton::Left,
-                r.x + x,
-                r.y + row * rh + rh / 2,
-                &pack,
-                &mut out,
-            );
-            for ev in &out {
-                s.on_event(ev, &mut ui.core);
-            }
-            out.into_iter().map(|e| e.kind).collect::<Vec<_>>()
-        };
         let text = |s: &AddOns, name: &str| {
             s.view
                 .node(list)
@@ -1091,11 +1211,11 @@ mod tests {
                 .clone()
         };
         // A click on the name only shows the add-on.
-        click(&mut s, &mut ui, "The gun", 60);
+        click_list_row(&mut s, &mut ui, "The gun", 60);
         assert!(ui.drain_actions().is_empty());
         assert_eq!(s.selected.as_deref(), Some("gun"));
         // One click on the box: asked for, and ticked before any answer.
-        let kinds = click(&mut s, &mut ui, "The gun", 4);
+        let kinds = click_list_row(&mut s, &mut ui, "The gun", 14);
         assert!(kinds.contains(&EventKind::Toggle));
         let actions: Vec<_> = ui.drain_actions();
         assert_eq!(
@@ -1107,7 +1227,7 @@ mod tests {
         );
         assert!(text(&s, "The gun").starts_with("[x]"));
         // The next row's box straight after: its own toggle, no double-click.
-        let kinds = click(&mut s, &mut ui, "The lab-hud", 4);
+        let kinds = click_list_row(&mut s, &mut ui, "The lab-hud", 14);
         assert!(!kinds.contains(&EventKind::Submit));
         let second: Vec<_> = ui.drain_actions();
         assert_eq!(second.len(), 1);
@@ -1274,7 +1394,7 @@ mod tests {
             .iter()
             .map(|(text, _)| text.as_str())
             .collect();
-        assert_eq!(items, ["\t\tOTHER", "[ ]\t\tTownsfolk Bots"]);
+        assert_eq!(items, ["[ ]\t\tOTHER", "[ ]\t\tTownsfolk Bots"]);
         assert_eq!(s.view.node(scroll).state.scroll_y, 0);
         assert_eq!(s.view.node(list).rect.y, s.view.node(scroll).rect.y);
     }
@@ -1306,7 +1426,7 @@ mod tests {
             .iter()
             .map(|(t, _)| t.clone())
             .collect();
-        assert_eq!(items, ["\t\tLOOKS & HUD", "[ ]\t!\tThe lab-hud"]);
+        assert_eq!(items, ["[ ]\t\tLOOKS & HUD", "[ ]\t!\tThe lab-hud"]);
         select(&mut s, &mut ui, "The lab-hud");
         let text = s.view.text_of(s.view.id(DETAILS).unwrap());
         assert!(

@@ -1103,6 +1103,16 @@ impl App {
                 enabled,
             )
             .map(|view| self.add_ons_listed(view)),
+            UiAction::SetAddOnCategoryEnabled {
+                ref category,
+                enabled,
+            } => crate::add_on_choices::set_category_enabled(
+                &self.content.paths.root,
+                &self.state_dir,
+                category,
+                enabled,
+            )
+            .map(|view| self.add_ons_listed(view)),
             UiAction::DefaultAddOns => {
                 crate::add_on_choices::defaults(&self.content.paths.root, &self.state_dir)
                     .map(|view| self.add_ons_listed(view))
