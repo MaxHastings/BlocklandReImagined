@@ -30,12 +30,13 @@ impl Document {
     }
 
     pub fn from_bytes(bytes: &[u8], folder: Option<&Path>) -> Result<Self> {
-        let (json, bin) = if bytes.starts_with(b"glTF") {
+        ensure!(bytes.len() as u64 <= MAX_BYTES, "glTF exceeds 256 MiB");
+        let (json, mut bin) = if bytes.starts_with(b"glTF") {
             glb(bytes)?
         } else {
-            (bytes.to_vec(), None)
+            (bytes, None)
         };
-        let json: Value = serde_json::from_slice(&json).context("the glTF JSON does not read")?;
+        let json: Value = serde_json::from_slice(json).context("the glTF JSON does not read")?;
         let version = json["asset"]["version"].as_str().unwrap_or_default();
         ensure!(
             version.starts_with("2."),
@@ -54,7 +55,8 @@ impl Document {
         for (i, buffer) in array(&json, "buffers").iter().enumerate() {
             let data = match buffer["uri"].as_str() {
                 None => bin
-                    .clone()
+                    .take()
+                    .map(<[u8]>::to_vec)
                     .with_context(|| format!("buffer {i} has no data: export a .glb"))?,
                 Some(uri) => resource(uri, folder).with_context(|| format!("buffer {i}"))?,
             };
@@ -97,6 +99,74 @@ impl Document {
             .get(offset..offset.checked_add(length).context("view overflow")?)
             .with_context(|| format!("buffer view {index} runs past its buffer"))?;
         Ok((bytes, view["byteStride"].as_u64().map(|s| s as usize)))
+    }
+
+    /// A compiled model allocates decoded rows once per authored array.
+    /// Its views are disjoint so aliases cannot amplify a small buffer.
+    pub(crate) fn check_disjoint_packed_views(
+        &self,
+        indices: impl IntoIterator<Item = usize>,
+    ) -> Result<()> {
+        let mut ranges = Vec::new();
+        for index in indices {
+            let view = array(&self.json, "accessors")
+                .get(index)
+                .and_then(|a| a["bufferView"].as_u64())
+                .context("Compiled model accessor has no view")?;
+            let (bytes, _) = self.view(view as usize)?;
+            let start = bytes.as_ptr() as usize;
+            ranges.push((start, start + bytes.len()));
+        }
+        ranges.sort_unstable();
+        ensure!(
+            ranges.windows(2).all(|pair| pair[0].1 <= pair[1].0),
+            "Compiled model has overlapping buffer views"
+        );
+        Ok(())
+    }
+
+    /// Packed accessor emitted by the model compiler. Check the whole range
+    /// before allocating decoded geometry.
+    pub(crate) fn packed_rows(
+        &self,
+        index: usize,
+        component: u64,
+        width: usize,
+        component_size: usize,
+    ) -> Result<std::slice::ChunksExact<'_, u8>> {
+        let accessor = array(&self.json, "accessors")
+            .get(index)
+            .context("Missing accessor")?;
+        let kind = ["SCALAR", "VEC2", "VEC3", "VEC4"][width - 1];
+        ensure!(
+            accessor["type"] == kind && accessor["componentType"] == component,
+            "Compiled model accessor {index} has the wrong layout"
+        );
+        ensure!(
+            accessor.get("sparse").is_none(),
+            "Sparse compiled model accessor"
+        );
+        let offset = accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let view = accessor["bufferView"]
+            .as_u64()
+            .context("Compiled model accessor has no view")?;
+        let count = accessor["count"]
+            .as_u64()
+            .context("Compiled model accessor has no count")?;
+        let (bytes, stride) = self.view(view as usize)?;
+        let row = width * component_size;
+        ensure!(
+            stride.is_none_or(|s| s == row),
+            "Compiled model accessor is interleaved"
+        );
+        let end = usize::try_from(count)?
+            .checked_mul(row)
+            .and_then(|n| n.checked_add(offset))
+            .context("Compiled model accessor overflows")?;
+        let packed = bytes
+            .get(offset..end)
+            .context("Compiled model accessor exceeds its view")?;
+        Ok(packed.chunks_exact(row))
     }
 
     /// Accessor `index` as rows of floats (normalized integers scaled to
@@ -243,21 +313,22 @@ fn component(kind: u64, raw: &[u8]) -> Component {
 }
 
 /// The JSON and binary chunks of a GLB container.
-fn glb(bytes: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
+fn glb(bytes: &[u8]) -> Result<(&[u8], Option<&[u8]>)> {
     let word = |at: usize| -> Result<u32> {
         let b = bytes.get(at..at + 4).context("the .glb is cut short")?;
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     };
     ensure!(word(4)? == 2, "the .glb is not glTF 2.0");
-    let length = (word(8)? as usize).min(bytes.len());
+    let length = word(8)? as usize;
+    ensure!(length == bytes.len(), "GLB length does not match the file");
     let (mut at, mut json, mut bin) = (12, None, None);
     while at + 8 <= length {
         let size = word(at)? as usize;
         let kind = word(at + 4)?;
         let data = bytes
             .get(at + 8..at + 8 + size)
-            .context("a .glb chunk runs past the file")?
-            .to_vec();
+            .filter(|_| size.is_multiple_of(4))
+            .context("a .glb chunk runs past the file or is misaligned")?;
         match kind {
             0x4E4F_534A if json.is_none() => json = Some(data),
             0x004E_4942 if bin.is_none() => bin = Some(data),
@@ -265,6 +336,7 @@ fn glb(bytes: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
         }
         at += 8 + size.div_ceil(4) * 4;
     }
+    ensure!(at == length, "GLB has an incomplete chunk header");
     Ok((json.context("the .glb has no JSON chunk")?, bin))
 }
 

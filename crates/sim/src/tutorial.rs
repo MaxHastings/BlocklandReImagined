@@ -149,7 +149,7 @@ pub fn load_target_shape(dir: &Path, index: &PackIndex, id: &str) -> Result<Shap
         "Tutorial target shape too large"
     );
     let shape: Shape =
-        serde_json::from_slice(&std::fs::read(&path)?).with_context(|| format!("Reading {id}"))?;
+        bri_gltf::read_model(&std::fs::read(&path)?).with_context(|| format!("Reading {id}"))?;
     shape.validate()?;
     ensure!(shape.id == id, "Tutorial shape {file} is not {id}");
     Ok(shape)

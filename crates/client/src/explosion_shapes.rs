@@ -46,7 +46,7 @@ impl ExplosionShapes {
                      resource: &bri_weapons::Resource,
                      file: &str|
          -> Result<Model> {
-            let shape: Shape = serde_json::from_slice(&crate::materials::read_resource(
+            let shape: Shape = bri_gltf::read_model(&crate::materials::read_resource(
                 &bri_weapons::resource_root(&root, resource),
                 file,
                 32 << 20,

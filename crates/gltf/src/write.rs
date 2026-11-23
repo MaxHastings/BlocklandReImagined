@@ -59,13 +59,14 @@ impl Gltf {
         };
         let mut accessor = json!({ "bufferView": view, "componentType": 5126, "count": data.len() / width, "type": kind });
         if width == 3 {
-            let rows: Vec<&[f32]> = data.chunks(3).collect();
-            let min: Vec<f32> = (0..3)
-                .map(|i| rows.iter().map(|r| r[i]).fold(f32::MAX, f32::min))
-                .collect();
-            let max: Vec<f32> = (0..3)
-                .map(|i| rows.iter().map(|r| r[i]).fold(f32::MIN, f32::max))
-                .collect();
+            let mut min = [f32::MAX; 3];
+            let mut max = [f32::MIN; 3];
+            for row in data.chunks_exact(3) {
+                for (i, &value) in row.iter().enumerate() {
+                    min[i] = min[i].min(value);
+                    max[i] = max[i].max(value);
+                }
+            }
             accessor["min"] = json!(min);
             accessor["max"] = json!(max);
         }
@@ -89,6 +90,17 @@ impl Gltf {
         self.push(
             "accessors",
             json!({ "bufferView": view, "componentType": kind, "count": data.len() / width, "type": kind_name }),
+        )
+    }
+
+    pub(crate) fn color_bytes(&mut self, rows: &[[u8; 4]]) -> usize {
+        let view = self.view(rows.as_flattened());
+        self.push(
+            "accessors",
+            json!({
+                "bufferView": view, "componentType": 5121, "normalized": true,
+                "count": rows.len(), "type": "VEC4",
+            }),
         )
     }
 
@@ -203,7 +215,9 @@ impl Gltf {
         while !self.bin.len().is_multiple_of(4) {
             self.bin.push(0);
         }
-        self.json["buffers"] = json!([{ "byteLength": self.bin.len() }]);
+        if !self.bin.is_empty() {
+            self.json["buffers"] = json!([{ "byteLength": self.bin.len() }]);
+        }
         for key in [
             "skins",
             "materials",
@@ -211,6 +225,11 @@ impl Gltf {
             "images",
             "samplers",
             "animations",
+            "accessors",
+            "buffers",
+            "bufferViews",
+            "meshes",
+            "nodes",
         ] {
             if self.json[key].as_array().is_some_and(Vec::is_empty) {
                 self.json.as_object_mut().unwrap().remove(key);
@@ -220,7 +239,14 @@ impl Gltf {
         while !text.len().is_multiple_of(4) {
             text.push(b' ');
         }
-        let total = 12 + 8 + text.len() + 8 + self.bin.len();
+        let total = 12
+            + 8
+            + text.len()
+            + if self.bin.is_empty() {
+                0
+            } else {
+                8 + self.bin.len()
+            };
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(b"glTF");
         out.extend_from_slice(&2u32.to_le_bytes());
@@ -228,9 +254,11 @@ impl Gltf {
         out.extend_from_slice(&(text.len() as u32).to_le_bytes());
         out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
         out.extend_from_slice(&text);
-        out.extend_from_slice(&(self.bin.len() as u32).to_le_bytes());
-        out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
-        out.extend_from_slice(&self.bin);
+        if !self.bin.is_empty() {
+            out.extend_from_slice(&(self.bin.len() as u32).to_le_bytes());
+            out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
+            out.extend_from_slice(&self.bin);
+        }
         out
     }
 }

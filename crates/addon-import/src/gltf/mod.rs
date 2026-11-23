@@ -20,13 +20,11 @@ mod map_regions;
 mod map_scatter;
 mod map_terrain;
 mod map_zones;
-mod read;
 mod static_lighting;
 mod vertex_lights;
-mod write;
-pub use export::{ExportReport, export_map, find_map};
 #[doc(hidden)]
-pub mod testing;
+pub use bri_gltf::testing;
+pub use export::{ExportReport, export_map, find_map};
 
 use anyhow::{Context, Result, bail, ensure};
 use bri_console::Clamp;
@@ -34,9 +32,9 @@ use bri_content::shape::{
     Animation, Detail, Influence, LayerBlend, Material, Mesh, Metal, Node, NodeTrack, Object,
     Primitive, Shape, Skin, Surface,
 };
+pub use bri_gltf::Document;
+use bri_gltf::array;
 use glam::{Mat4, Quat, Vec3};
-pub use read::Document;
-use read::array;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -504,7 +502,7 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
         report.files.push(rel.into());
         Ok(())
     };
-    let shape_bytes = serde_json::to_vec(&shape)?;
+    let shape_bytes = bri_gltf::encode_model(&shape)?;
     match opts.kind {
         Kind::Body => {
             let ns = crate::namespace_for(id)?;
@@ -514,11 +512,7 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
             let model = format!("{ns}:body/{id}");
             report.model = model.clone();
             let mut content = Vec::new();
-            put(
-                &format!("assets/{id}.shape.json"),
-                &shape_bytes,
-                &mut report,
-            )?;
+            put(&format!("assets/{id}.glb"), &shape_bytes, &mut report)?;
             for (name, png) in &textures {
                 put(&format!("assets/{name}.png"), png, &mut report)?;
                 content.push(json!({ "kind": "asset", "id": format!("{ns}:asset/{name}.png"), "file": format!("assets/{name}.png") }));
@@ -555,7 +549,7 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
                 "capabilities": [],
                 "provides": [
                     { "kind": "archetype", "id": format!("{ns}:archetype/{id}"), "file": format!("assets/archetypes/{id}.json") },
-                    { "kind": "body", "id": model, "file": format!("assets/{id}.shape.json") },
+                    { "kind": "body", "id": model, "file": format!("assets/{id}.glb") },
                 ],
             });
             put(
@@ -567,12 +561,8 @@ fn write(opts: &Options, id: &str, converted: Converted) -> Result<Report> {
         Kind::Map | Kind::Brick => unreachable!("maps and bricks are written by their own modules"),
         Kind::Item | Kind::Prop => {
             report.id = id.into();
-            report.model = format!("models/{id}.shape.json");
-            put(
-                &format!("models/{id}.shape.json"),
-                &shape_bytes,
-                &mut report,
-            )?;
+            report.model = format!("models/{id}.glb");
+            put(&format!("models/{id}.glb"), &shape_bytes, &mut report)?;
             for (name, png) in &textures {
                 put(&format!("models/{name}.png"), png, &mut report)?;
             }

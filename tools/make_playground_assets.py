@@ -6,13 +6,13 @@ names them. None of the first three knows the others exist. This script
 writes their generated files:
 
   playground-runner-look/models/runner.json   the Runner's box body
-  playground-rifle/assets/models/carbine.shape.json
+  playground-rifle/assets/models/carbine.glb
                                               the Pulse Carbine, with its
                                               mountPoint, muzzlePoint and
                                               ejectPoint nodes
   playground-rifle/assets/{carbine,pulse}.png its paint
   playground-rifle/assets/sounds/*.wav        shot, equip, reload, empty
-  playground-buggy/assets/models/*.shape.json the Dune Buggy's chassis and tire
+  playground-buggy/assets/models/*.glb the Dune Buggy's chassis and tire
   playground-buggy/assets/textures/*.png      their paint
   playground-buggy/assets/vehicles.json       the buggy's vehicle entry,
                                               pointing at its files by SHA-256
@@ -27,8 +27,7 @@ writes their generated files:
                                               hiss and blast it sounds
 
 Everything here is original and generated; run it again after changing the
-numbers below. Only the Python standard library is used, and the output is
-the same on every run.
+numbers below. The model compiler writes deterministic GLB assets.
 """
 import hashlib
 import json
@@ -38,6 +37,8 @@ import struct
 import wave
 import zlib
 from pathlib import Path
+
+from compile_model import compile_model
 
 ROOT = Path(__file__).resolve().parent.parent / 'packages' / 'playground'
 RATE = 22050
@@ -54,6 +55,10 @@ def write(path, data):
 def write_json(path, value, compact=False):
     text = json.dumps(value, separators=(',', ':')) if compact else json.dumps(value, indent=1)
     return write(path, (text + '\n').encode('utf-8'))
+
+
+def write_model(path, value):
+    return write(path, compile_model(value))
 
 
 def png(width, height, pixel):
@@ -332,9 +337,8 @@ def carbine(root):
     ]
     nodes = [node('root', None, [0, 0, 0]), node('mountPoint', 0, [0, 0, 0]),
              node('muzzlePoint', 0, [0.0, 0.14, -0.88]), node('ejectPoint', 0, [0.07, 0.17, -0.1])]
-    write_json(assets / 'models' / 'carbine.shape.json',
-               shape('playground-rifle:file/models/carbine.shape.json', nodes, ['carbine', 'pulse'], parts),
-               compact=True)
+    write_model(assets / 'models' / 'carbine.glb',
+               shape('playground-rifle:file/models/carbine.shape.json', nodes, ['carbine', 'pulse'], parts))
     write(assets / 'models' / 'carbine.png', flat([70, 78, 88], seed=2))
     write(assets / 'models' / 'pulse.png', flat([60, 220, 255], grain=2, seed=3))
     sounds(assets / 'sounds')
@@ -394,12 +398,12 @@ def buggy(root):
     # deck behind them at the post.
     seats = [[-0.45, 0.9, 0.25], [0.45, 0.9, 0.25], [0.0, 0.85, 1.75]]
     nodes = [node('root', None, [0, 0, 0])] + [node(f'mount{i}', 0, at) for i, at in enumerate(seats)]
-    chassis = write_json(assets / 'models' / 'buggy.shape.json',
+    chassis = write_model(assets / 'models' / 'buggy.glb',
                          shape('playground-buggy:file/models/buggy.shape.json', nodes,
-                               ['buggy_paint', 'buggy_frame', 'buggy_seat'], parts), compact=True)
-    tire = write_json(assets / 'models' / 'tire.shape.json',
+                               ['buggy_paint', 'buggy_frame', 'buggy_seat'], parts))
+    tire = write_model(assets / 'models' / 'tire.glb',
                       shape('playground-buggy:file/models/tire.shape.json', [node('root', None, [0, 0, 0])],
-                            ['buggy_tire'], [(0, prism([0, 0, 0], WHEEL_RADIUS, 0.45, 12))]), compact=True)
+                            ['buggy_tire'], [(0, prism([0, 0, 0], WHEEL_RADIUS, 0.45, 12))]))
     textures = {
         'buggy_paint': write(assets / 'textures' / 'buggy_paint.png', flat([235, 150, 30], seed=4)),
         'buggy_frame': write(assets / 'textures' / 'buggy_frame.png', flat([40, 42, 46], seed=5)),
@@ -422,7 +426,7 @@ def buggy(root):
                 'spring': 7700.0 if rear else 10300.0,
                 'damping': 2600.0, 'rebound_damping': 2400.0, 'anti_sway': 6000.0, 'tire': tire,
                 'steering': -0.35 if rear else 1.0, 'powered': True,
-                'model': 'models/tire.shape.json', 'model_rotation': [0.0, 0.0, 0.0, 1.0]}
+                'model': 'models/tire.glb', 'model_rotation': [0.0, 0.0, 0.0, 1.0]}
 
     # The driver's hands on the steering bar, the gunner's on the gun's
     # back corners (right is +X, facing -Z).
@@ -437,7 +441,7 @@ def buggy(root):
         'energy': {'maximum': 0.0, 'minimum_jet': 0.0, 'drain_per_32ms': 0.0, 'recharge_per_32ms': 0.0,
                    'jet_force': 0.0},
         'flight': None,
-        'model': 'models/buggy.shape.json',
+        'model': 'models/buggy.glb',
         'seats': [
             {'node': f'mount{i}', 'transform': {'position': at, 'rotation': [0.0, 0.0, 0.0, 1.0]},
              'pose': 'sit' if i < 2 else 'root', 'controls': i == 0, 'weapon': i == 2,
@@ -535,9 +539,9 @@ def buggy(root):
         'schema_version': 7,
         'definitions': [definition],
         'assets': [
-            {'virtual_path': base + 'buggy.dts', 'path': 'models/buggy.shape.json', 'sha256': chassis,
+            {'virtual_path': base + 'buggy.dts', 'path': 'models/buggy.glb', 'sha256': chassis,
              'kind': 'model', 'source_sha256': chassis},
-            {'virtual_path': base + 'tire.dts', 'path': 'models/tire.shape.json', 'sha256': tire,
+            {'virtual_path': base + 'tire.dts', 'path': 'models/tire.glb', 'sha256': tire,
              'kind': 'model', 'source_sha256': tire},
         ] + [
             {'virtual_path': base + f'{name}.png', 'path': f'textures/{name}.png', 'sha256': sha,

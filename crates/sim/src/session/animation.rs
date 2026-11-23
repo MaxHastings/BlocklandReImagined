@@ -136,7 +136,7 @@ impl AnimationAssets {
                 rig.validate()?;
                 rig
             } else {
-                let shape: Shape = serde_json::from_slice(&asset.bytes)?;
+                let shape: Shape = bri_gltf::read_model(&asset.bytes)?;
                 shape.validate()?;
                 let mut sequences = BTreeMap::new();
                 for animation in &shape.animations {

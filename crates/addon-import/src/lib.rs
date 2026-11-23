@@ -1616,8 +1616,8 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
             "shape" => {
                 match bri_convert::shape::read_dts(&f.bytes, content_id(&cx.ns, "shape", &member)) {
                     Ok((shape, provenance)) => {
-                        let rel = format!("models/{}.shape.json", &digest[..24]);
-                        cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&shape)?)?;
+                        let rel = format!("models/{}.glb", &digest[..24]);
+                        cx.write(&format!("assets/{rel}"), &bri_gltf::encode_model(&shape)?)?;
                         let id = cx.id("asset", &member, &f.path, &format!("assets/{rel}"));
                         cx.shapes
                             .insert(f.path.to_ascii_lowercase(), (rel.clone(), shape));
@@ -2362,8 +2362,8 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         .collect();
     if !missing.is_empty() {
         let shape = placeholder();
-        let shape_bytes = serde_json::to_vec(&shape)?;
-        let shape_rel = format!("models/{}.shape.json", &hash(&shape_bytes)[..24]);
+        let shape_bytes = bri_gltf::encode_model(&shape)?;
+        let shape_rel = format!("models/{}.glb", &hash(&shape_bytes)[..24]);
         cx.write(&format!("assets/{shape_rel}"), &shape_bytes)?;
         flat_texture(cx, &mut textures, Flat::White)?;
         for key in missing {

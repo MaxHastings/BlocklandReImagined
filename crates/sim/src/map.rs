@@ -528,7 +528,7 @@ impl NativeMap {
                             .context("Missing mover model file")?,
                     )?;
                     let shape: bri_content::shape::Shape =
-                        bri_content::strict::from_slice(&std::fs::read(path)?)?;
+                        bri_gltf::read_model(&std::fs::read(path)?)?;
                     let first = colliders.len();
                     if def.collide {
                         for (collider, materials, shot) in
@@ -580,7 +580,7 @@ impl NativeMap {
                             .context("Missing static model file")?,
                     )?;
                     let shape: bri_content::shape::Shape =
-                        bri_content::strict::from_slice(&std::fs::read(path)?)?;
+                        bri_gltf::read_model(&std::fs::read(path)?)?;
                     let first = colliders.len();
                     // A map Add-On's whole level is one model marked
                     // `surface: level`: bricks may not be buried in it or

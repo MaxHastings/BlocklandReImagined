@@ -13,9 +13,9 @@ PNG (up to 512 pixels a side), named without `.png` relative to
 letter.
 
 An item, image or projectile `model` may also be your own model: a native
-model file (`*.shape.json`, the format of `bri_content::shape`: x right, y
+compiled model file (`*.glb`; native coordinates are x right, y
 up, -z forward) relative to `assets/`, such as
-`"model": "models/pick.shape.json"`. Nodes `muzzlePoint` and
+`"model": "models/pick.glb"`. Nodes `muzzlePoint` and
 `ejectPoint` say where a gun fires and throws its casings. Each material names a PNG
 beside the model (`pick_wood` draws `pick_wood.png`, up to 1,024 pixels a
 side), as a vehicle model's do. A node called `mountPoint` is where the hand

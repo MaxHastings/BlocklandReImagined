@@ -164,7 +164,7 @@ fn barrels() -> BTreeMap<String, [f32; 3]> {
         .iter()
         .map(|(id, image)| {
             let shape: bri_content::shape::Shape =
-                serde_json::from_slice(&std::fs::read(dir.join(&image.model)).unwrap()).unwrap();
+                bri_gltf::read_model(&std::fs::read(dir.join(&image.model)).unwrap()).unwrap();
             let barrel = bri_weapons::muzzle::barrel(
                 image.offset,
                 image.source_rotation_degrees,

@@ -313,9 +313,8 @@ pub fn run(args: Vec<String>) -> Result<()> {
                         bindings.push(serde_json::json!({"asset":id,"detail":detail,"material":material,"texture":texture,"source":reference}));
                     }
                 }
-            } else if file.ends_with(".shape.json") {
-                let shape: Shape = serde_json::from_slice(&std::fs::read(content.join(file))?)?;
-                shape.validate()?;
+            } else if bri_gltf::is_model_file(file) {
+                let shape: Shape = bri_gltf::read_model(&std::fs::read(content.join(file))?)?;
                 let skins: std::collections::BTreeSet<_> = scenes
                     .iter()
                     .flat_map(|(_, s)| &s.nodes)

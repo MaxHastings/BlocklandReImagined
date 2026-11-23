@@ -21,10 +21,17 @@ cargo run -p bri-addon-import --bin bri-import-addon -- gltf buggy.glb buggy-mod
 | `--kind` | Writes | Then |
 |---|---|---|
 | `body` (default) | a whole Add-On: `package.json`, the model and its PNGs under `assets/`, `assets/content.json` and an archetype (`assets/archetypes/<id>.json`) whose `model` is the imported body (`<id>:body/<id>`, provided as `body` content). Everyone draws it, so the Add-On is shared: friends who join download the body and its textures | check it with `bri-addon-check`, adjust the archetype's `movement` (its collision box, sized from the model; see Bodies), name it in a mode or `set_archetype` |
-| `item` | `models/<id>.shape.json` and its PNGs | copy `models/` into your weapon Add-On's `assets/` and name `models/<id>.shape.json` as the item's and image's `model` in `weapons.json` ([Weapons](weapons.md)) |
+| `item` | `models/<id>.glb` and its PNGs | copy `models/` into your weapon Add-On's `assets/` and name `models/<id>.glb` as the item's and image's `model` in `weapons.json` ([Weapons](weapons.md)) |
 | `prop` | the same, for vehicles, wheels, projectiles and props | name it from `vehicles.json`; the report lists the `mount` and `hub` empties' positions for its seats and wheels |
 | `map` | a whole map Add-On: `package.json` and `map/` with the scene, model, PNGs and `bundle.json`; `spawn` empties are spawn points and lights are map lights | turn it on and pick it in Start Game ([Making maps](maps.md)) |
 | `brick` | a brick Add-On: `package.json` and `assets/brick-catalog/` with the brick (`<id>.brick.json`, the format converted v20 bricks use), its catalog entry and its collision | turn it on; the brick is under Special > Models in the brick menu ([Bricks](#bricks)) |
+
+Keep the Blender project or exported glTF as the editable source. Import it
+again to publish a changed model. Items, props and bodies get compiled GLBs
+containing their mesh data and the game's model layout. The source options
+are applied at import, so the compiled model carries the same sockets,
+collision geometry and motion the game checks. PNGs and package manifests
+are generated alongside it and stay in the same package.
 
 Every run writes `IMPORT-REPORT.md` beside the output: size, sockets, each
 clip and how it plays, the animation roles the body has no clip for and
@@ -268,7 +275,7 @@ tracer texture is a PNG under `assets/textures/`, listed in
 `effects` (see `docs/modding/weapons.md`).
 
 **Live digits.** A counter on the gun itself (rounds left on a rifle's
-display) is an object per digit in the converted `.shape.json`, each with
+display) is an object per digit in the converted model, each with
 a `live` block: `{ "value": "rounds", "place": 0 }` for the ones,
 `"place": 1` for the tens. The object's material frame `d` shows digit
 `d`; with `"uv_step": [0.1, 0]` the mesh needs only one set of texture

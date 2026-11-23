@@ -25,6 +25,11 @@ every pack the client loads in dependency order and ends with
 audio device). The v20 path is remembered in `content/_regeneration/`, so later
 runs need no arguments; `BRI_V20` also works.
 
+Model converters publish compiled GLBs and calculate manifest digests over
+the bytes they write. The map, weapon and vehicle builders consume the
+same geometry as the game. Rebuilding content runs these producers
+directly from the v20 inputs.
+
 The pack names come from the base package list,
 `crates/package/base-packages.json`, so the output always matches what the
 client loads. When the client's `--check` reports missing packs, rerunning bootstrap
