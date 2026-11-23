@@ -406,8 +406,29 @@ impl Package {
                 }
                 // Drawn by clients (`bri-client` `AvatarAssets::load_bodies`);
                 // checked here so a broken one is named before anyone joins.
+                // A new import ships the body's own `.glb` (its textures
+                // embedded), which lowers to its native shape exactly as the
+                // client draws it; older packages ship the `.shape.json`
+                // directly.
                 Kind::Body => {
-                    parse::<bri_content::shape::Shape>(asset, &id, |s| s.validate(), out);
+                    if asset.file.to_ascii_lowercase().ends_with(".glb") {
+                        match bri_gltf::lower(&asset.bytes, &id) {
+                            Ok(converted) => {
+                                if let Err(e) = converted.shape.validate() {
+                                    out.push(
+                                        Diagnostic::error("content.body", format!("{e:#}"))
+                                            .at(location(&id, &asset.file)),
+                                    );
+                                }
+                            }
+                            Err(e) => out.push(
+                                Diagnostic::error("content.body", format!("{e:#}"))
+                                    .at(location(&id, &asset.file)),
+                            ),
+                        }
+                    } else {
+                        parse::<bri_content::shape::Shape>(asset, &id, |s| s.validate(), out);
+                    }
                 }
                 // Loaded by the map catalog and map loaders; checked here so
                 // a broken one is named before anyone picks it.
