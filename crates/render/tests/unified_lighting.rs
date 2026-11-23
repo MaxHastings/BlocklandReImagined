@@ -196,3 +196,123 @@ fn map_walls_shade_objects_from_the_sun_with_a_filtered_edge() -> Result<()> {
     assert!(unroofed >= 200 && unroofed <= open + 4, "{unroofed} {open}");
     Ok(())
 }
+
+#[test]
+fn dynamic_window_shadow_softens_when_pcss_is_enabled() -> Result<()> {
+    let (device, queue) = gpu()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (1024u32, 1024u32);
+    let target = color_target(&device, format, width, height);
+    let floor_data = cuboid(Vec3::new(-40.0, -0.3, -40.0), Vec3::new(40.0, 0.0, 40.0));
+    let render =
+        |pcss: bool, camera_height: f32, roof_height: f32, fov: f32| -> Result<(Vec<u8>, Mat4)> {
+            let settings = ShadowSettings {
+                pcss,
+                ..ShadowSettings::LOW
+            };
+            let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(settings));
+            renderer.set_dynamic_lights(&device, &queue, &[])?;
+            let floor = renderer.upload(&device, &queue, &floor_data)?;
+            let roof_data = [
+                (
+                    Vec3::new(-40.0, roof_height, -40.0),
+                    Vec3::new(-2.0, roof_height + 1.0, 40.0),
+                ),
+                (
+                    Vec3::new(2.0, roof_height, -40.0),
+                    Vec3::new(40.0, roof_height + 1.0, 40.0),
+                ),
+                (
+                    Vec3::new(-2.0, roof_height, -40.0),
+                    Vec3::new(2.0, roof_height + 1.0, -2.0),
+                ),
+                (
+                    Vec3::new(-2.0, roof_height, 2.0),
+                    Vec3::new(2.0, roof_height + 1.0, 40.0),
+                ),
+            ]
+            .map(|(min, max)| {
+                let mut data = cuboid(min, max);
+                data.images.push(SceneImage::white());
+                data.materials[0] = Material::surface("window roof", 0, 0);
+                data
+            });
+            let roof = roof_data
+                .iter()
+                .map(|data| renderer.upload(&device, &queue, data))
+                .collect::<Result<Vec<_>>>()?;
+            let mut map: Vec<&GpuScene> = vec![&floor];
+            map.extend(roof.iter());
+            let mut camera = Camera::perspective(
+                [0.0, camera_height, 0.1],
+                [0.0, 0.0, 0.0],
+                1.0,
+                fov,
+                0.05,
+                1000.0,
+            );
+            camera.sun_direction = [0.0, -1.0, 0.0, 0.0];
+            camera.sun_color = [0.6, 0.6, 0.6, 0.0];
+            camera.ambient = [0.2, 0.2, 0.2, 3.0];
+            renderer.update_camera(&queue, &camera);
+            let pixels = render_with_map(
+                &device,
+                &queue,
+                &mut renderer,
+                &target,
+                &[&floor],
+                &[],
+                &[],
+                &map,
+            )?;
+            Ok((pixels, Mat4::from_cols_array(&camera.view_projection)))
+        };
+    let edge_width = |pixels: &[u8], projection: Mat4| {
+        let sample = |x: f32| {
+            let ndc = projection.project_point3(Vec3::new(x, 0.0, 0.0));
+            let px = ((ndc.x * 0.5 + 0.5) * width as f32) as usize;
+            let py = ((0.5 - ndc.y * 0.5) * height as f32) as usize;
+            f32::from(pixels[(py * width as usize + px) * 4 + 1])
+        };
+        let profile: Vec<(f32, f32)> = (0..=400)
+            .map(|i| {
+                let x = 1.0 + i as f32 * 0.01;
+                (x, sample(x))
+            })
+            .collect();
+        let lit = profile[..40].iter().map(|p| p.1).sum::<f32>() / 40.0;
+        let dark = profile[360..].iter().map(|p| p.1).sum::<f32>() / 40.0;
+        let crossing = |fraction: f32| {
+            let level = lit + (dark - lit) * fraction;
+            profile
+                .iter()
+                .find(|p| p.1 <= level)
+                .map_or(f32::NAN, |p| p.0)
+        };
+        let width = crossing(0.9) - crossing(0.1);
+        let max_step = profile
+            .windows(2)
+            .map(|pair| (pair[1].1 - pair[0].1).abs())
+            .fold(0.0, f32::max);
+        (width, max_step)
+    };
+    for (name, camera_height, roof_height, fov) in [
+        ("Bedroom-scale cascade", 22.0, 62.5, 1.4),
+        ("far map", 200.0, 600.0, 0.2),
+    ] {
+        let (hard_pixels, projection) = render(false, camera_height, roof_height, fov)?;
+        let (soft_pixels, _) = render(true, camera_height, roof_height, fov)?;
+        let (hard_width, hard_step) = edge_width(&hard_pixels, projection);
+        let (soft_width, soft_step) = edge_width(&soft_pixels, projection);
+        assert!(hard_width > 0.0, "{name} hard edge width: {hard_width}");
+        assert!(
+            soft_width > hard_width * 2.0,
+            "Dynamic {name} map PCSS should widen the edge ({soft_width} vs {hard_width})"
+        );
+        assert!(
+            soft_step < hard_step * 0.8,
+            "Dynamic {name} map PCSS should reduce edge grain ({soft_step} vs {hard_step})"
+        );
+    }
+    Ok(())
+}

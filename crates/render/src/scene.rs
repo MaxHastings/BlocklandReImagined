@@ -2615,6 +2615,12 @@ pub struct ShadowReach {
     pub spheres: Vec<(Vec3, f32)>,
 }
 
+/// Assemble a scene variant with the shared sun-shadow, color and fog code.
+pub fn scene_shader_source(variant: &str) -> String {
+    let shadows = include_str!("sun_shadows.wgsl");
+    crate::color::shader_source(&format!("{shadows}\n{variant}"))
+}
+
 pub const MAX_POINT_LIGHTS: usize = 256;
 /// The point light uniform's header before the lights: their count, then
 /// the grid's placement (`LightGrid::header`).
@@ -3659,7 +3665,7 @@ impl SceneRenderer {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("world-space scene"),
             source: wgpu::ShaderSource::Wgsl(
-                crate::color::shader_source(include_str!("scene_original.wgsl")).into(),
+                scene_shader_source(include_str!("scene_original.wgsl")).into(),
             ),
         });
         let pipelines = Arc::new(WorldPipelines::new(
@@ -4521,10 +4527,14 @@ impl SceneRenderer {
     /// reach and the skylight fields' projectors. Something outside all of
     /// them and outside every view's frustum shows nowhere, so its mesh need
     /// not be built. Call after `update_camera` and the planes'
-    /// `fit_view_shadows`. Empty with shadows and Soft Shading off.
-    pub fn shadow_reach(&self) -> ShadowReach {
+    /// `fit_view_shadows`. Supply the map geometry used by the shadow passes
+    /// so offscreen casters can be kept for the distant map as well.
+    pub fn shadow_reach(&self, map: ShadowCasters<'_>) -> ShadowReach {
         let mut reach = ShadowReach::default();
         if self.shadows.settings.is_some() {
+            if let Some((matrix, _)) = self.shadows.fit_far_map(world_bounds(map)) {
+                reach.boxes.push(matrix);
+            }
             reach.boxes.extend(
                 self.shadows
                     .every_cascade()
@@ -4681,7 +4691,7 @@ impl SceneRenderer {
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("modern scene"),
                 source: wgpu::ShaderSource::Wgsl(
-                    crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                    scene_shader_source(include_str!("scene.wgsl")).into(),
                 ),
             });
         let modern = Arc::new(WorldPipelines::new(
@@ -5432,11 +5442,31 @@ impl SceneRenderer {
         if player && let Some(queue) = self.queue.borrow().as_ref() {
             let bounds = map_drawn.then(|| world_bounds(map)).flatten();
             if let (Some(matrix), Some(settings)) = (
-                self.shadows.far_map(queue, &map_key, bounds),
+                self.shadows
+                    .far_map(queue, bounds, map_signature, caster_signature),
                 self.shadows.settings,
             ) {
+                // The far layer redraws whenever its content moves (casters,
+                // map or sun) - a still frame keeps what it holds. The first
+                // pass clears it and draws the casters; the second loads that
+                // depth and adds the map surfaces on top: one combined
+                // whole-map shadow for everything past the last cascade
+                // (occluders stay out: they never cast).
+                let far_view = &self.shadows.layer_views[settings.far_layer() as usize];
                 targets.push((
-                    &self.shadows.layer_views[settings.far_layer() as usize],
+                    far_view,
+                    None,
+                    matrix,
+                    casters,
+                    &self.shadows.caster_group,
+                    &self.shadows.pipelines,
+                    crate::shadow::ShadowMaps::far_offset(),
+                    false,
+                    false,
+                ));
+                extras.push(TargetExtra::default());
+                targets.push((
+                    far_view,
                     None,
                     matrix,
                     map,
@@ -5651,14 +5681,16 @@ impl SceneRenderer {
                     kept_layers.insert(layer, key);
                 }
                 // Kept faces share layers with other kept faces: never clear
-                // a whole layer under them.
-                let load =
-                    if clear_tile || (tile.is_some() && cleared.contains(&(view as *const _))) {
-                        wgpu::LoadOp::Load
-                    } else {
-                        cleared.push(view as *const _);
-                        wgpu::LoadOp::Clear(1.0)
-                    };
+                // a whole layer under them. A view already cleared this frame
+                // keeps its content - a later target on the same layer (the
+                // far map's second pass, or another tile of it) loads over
+                // what drew before.
+                let load = if clear_tile || cleared.contains(&(view as *const _)) {
+                    wgpu::LoadOp::Load
+                } else {
+                    cleared.push(view as *const _);
+                    wgpu::LoadOp::Clear(1.0)
+                };
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("shadow map"),
                     color_attachments: &[],
@@ -5983,7 +6015,7 @@ impl SceneRenderer {
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("occlusion exclusion mask"),
                 source: wgpu::ShaderSource::Wgsl(
-                    crate::color::shader_source(include_str!("scene.wgsl")).into(),
+                    scene_shader_source(include_str!("scene.wgsl")).into(),
                 ),
             });
         for double_sided in [false, true] {

@@ -69,7 +69,9 @@
 //! residual is sampled. Geometry changes invalidate the cubes. The nearest
 //! quality-limited lamps additionally receive live brick and moving shadows;
 //! sun cascades read current opaque map geometry including terrain and models.
-//! Past the finite cascade range the sun is unshadowed rather than baked.
+//! Dynamic and Unified receivers blend their fitted sun shadows into the
+//! view-independent far map. The far layer holds map geometry and casters
+//! at lower texel density and is refreshed when their content or the sun moves.
 //!
 //! Bricks hardly ever move, so their lamp faces are kept: a face is drawn
 //! again only when its lamp or view changes, or when the static chunks
@@ -108,6 +110,10 @@ pub(crate) const CASTER_REACH: f32 = 400.0;
 /// Map surfaces this far beyond a cascade toward the sun still shade it
 /// (the map layer): past the stock maps' extent.
 const MAP_REACH: f32 = 10000.0;
+/// The far map deliberately fits the whole-map box into a sub-region of its
+/// layer (twice fewer texels across it), so shadows past the last cascade
+/// read as low quality - present and steady, but visibly cheap.
+const FAR_TEXEL_SCALE: f32 = 2.0;
 /// Caster uniform stride; dynamic offsets must be 256-byte aligned.
 const CASTER_STRIDE: u64 = 256;
 /// Caster uniform: light matrix, then the occluder gap (padded to a vec4).
@@ -139,8 +145,8 @@ const VIEW_SLOTS: usize =
 /// plane views' casters and map layers included).
 const FAR_SLOT: usize = VIEW_SLOTS + 2 * MAX_CASCADES * (FITTED_VIEWS - 1);
 
-/// Sun shadow quality: how many cascades, their square resolution, and how
-/// far from the eye shadows reach before fading out.
+/// Sun shadow quality: the number and square resolution of the fitted
+/// cascades and their distance from the eye.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowSettings {
     pub cascades: u32,
@@ -247,13 +253,7 @@ impl ShadowSettings {
     pub fn cascade_layers(&self) -> u32 {
         self.cascades * 3
     }
-    /// The far map layer: one orthographic sun depth map of the whole map's
-    /// opaque geometry (the map's bounds, so a texel is coarse), drawn once
-    /// per map and sun direction. Receivers past the last cascade read it,
-    /// as engines keep a static far shadow map behind their cascades, so
-    /// the far side of a large interior stays in the shade the walls give
-    /// it instead of turning sunlit where the cascades end. Its layer
-    /// comes after every other.
+    /// The view-independent sun map used past the fitted cascades.
     pub fn far_layer(&self) -> u32 {
         self.cascade_layers() + self.lamp_layers() + self.cube_layers()
     }
@@ -689,10 +689,9 @@ impl CubeCache {
 }
 
 type FarFields = ([f32; 16], [f32; 4]);
-/// The far map layer's state: the map, sun and matrix it was drawn with,
-/// and the receiver fields last written.
+/// The projection and geometry last drawn, and the receiver fields last written.
 struct FarMap {
-    drawn: Option<(Vec<usize>, Vec3, Mat4)>,
+    drawn: Option<(Mat4, u64, u64)>,
     fields: FarFields,
 }
 impl Default for FarMap {
@@ -725,16 +724,29 @@ pub(crate) fn far_fit(bounds: (Vec3, Vec3), sun: Vec3, resolution: u32) -> (Mat4
         max = max.max(light);
     }
     let centre = (min + max) * 0.5;
-    let half = ((max.x - min.x).max(max.y - min.y)) * 0.5 + FAR_MARGIN;
-    let texel = 2.0 * half / resolution.max(1) as f32;
+    // The margin also leaves room for the receiver bias push, which scales
+    // with the coarser texel.
+    let margin = FAR_MARGIN * FAR_TEXEL_SCALE;
+    let half = ((max.x - min.x).max(max.y - min.y)) * 0.5 + margin;
+    // The box fits into a central sub-region of the layer: `FAR_TEXEL_SCALE`
+    // times fewer texels across it, so distant shadows are deliberately
+    // coarse (low quality at range by design).
+    let view_half = half * FAR_TEXEL_SCALE;
+    let texel = 2.0 * half / (resolution.max(1) as f32 / FAR_TEXEL_SCALE);
     // Right-handed view looks down -Z: depth along the sun is -z.
     let projection = glam::camera::rh::proj::directx::orthographic(
-        centre.x - half,
-        centre.x + half,
-        centre.y - half,
-        centre.y + half,
-        -max.z - FAR_MARGIN,
-        -min.z + FAR_MARGIN,
+        centre.x - view_half,
+        centre.x + view_half,
+        centre.y - view_half,
+        centre.y + view_half,
+        // Casters (bricks, players, vehicles) are not part of the map's bounds:
+        // a tall build or a flyer can stand well toward the sun of the map's
+        // highest surface, and would be cut by the near plane and missing from
+        // this layer while still in the cascades - their distant shadow then
+        // faded out over the hand off ramp and never came back. Reach toward
+        // the sun as far as the cascades' casters do.
+        -max.z - margin - CASTER_REACH,
+        -min.z + margin,
     );
     (projection * rotation, texel)
 }
@@ -1500,30 +1512,32 @@ impl ShadowMaps {
         *self.cubes.borrow_mut() = CubeCache::default();
         *self.far.borrow_mut() = FarMap::default();
     }
-    /// The far map layer's draw this frame, if it must be drawn again: the
-    /// map `key` (empty: no map) within `bounds` changed, or the sun
-    /// turned since it was drawn. Writes its matrix for the draw and the
-    /// receivers' far fields (every view's) either way, so the layer is
-    /// read only while it holds the current map from the current sun.
+    pub fn fit_far_map(&self, bounds: Option<(Vec3, Vec3)>) -> Option<(Mat4, f32)> {
+        let settings = self.settings?;
+        bounds.map(|bounds| far_fit(bounds, self.sun, settings.resolution))
+    }
+
+    /// Refresh the fixed distant map when its projection or geometry changes.
     pub fn far_map(
         &self,
         queue: &wgpu::Queue,
-        key: &[usize],
         bounds: Option<(Vec3, Vec3)>,
+        map_sig: u64,
+        casters_sig: u64,
     ) -> Option<Mat4> {
         let mut far = self.far.borrow_mut();
-        let settings = self.settings.filter(|_| !key.is_empty());
-        let fit = settings.and_then(|s| bounds.map(|b| far_fit(b, self.sun, s.resolution)));
-        let current = fit.map(|(matrix, _)| (key.to_vec(), self.sun, matrix));
-        let draw = if current.is_some() && far.drawn != current {
-            fit.map(|(matrix, _)| matrix)
-        } else {
-            None
-        };
+        let fit = self.fit_far_map(bounds);
+        let current = fit.map(|(matrix, _)| (matrix, map_sig, casters_sig));
+        let draw = current
+            .filter(|_| far.drawn != current)
+            .map(|(matrix, _, _)| matrix);
         far.drawn = current;
-        let fields = match (settings, fit) {
-            (Some(s), Some((matrix, texel))) if far.drawn.is_some() => (
+        let fields = match (self.settings, fit) {
+            (Some(s), Some((matrix, texel))) => (
                 matrix.to_cols_array(),
+                // w: one (hardware) texel in map coordinates - the fixed
+                // 4-tap filter keeps its usual width even though the box now
+                // occupies a sub-region of the layer (see `far_fit`).
                 [1.0, s.far_layer() as f32, texel, 1.0 / s.resolution as f32],
             ),
             _ => (Mat4::IDENTITY.to_cols_array(), [0.0; 4]),
@@ -1727,9 +1741,13 @@ mod tests {
                     "{sun:?} {corner:?} -> {clip:?}"
                 );
             }
-            // Square and no coarser than the map's longest side plus margins.
+            // Square and no coarser than the map's longest side plus margins,
+            // times the deliberate far-map coarsening.
             let span = (hi - lo).max_element() * 3f32.sqrt() + 2.0 * FAR_MARGIN;
-            assert!(texel > 0.0 && texel <= span / 2048.0, "{texel}");
+            assert!(
+                texel > 0.0 && texel <= span * FAR_TEXEL_SCALE / 2048.0,
+                "{texel}"
+            );
         }
     }
 

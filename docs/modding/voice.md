@@ -138,7 +138,7 @@ No new audio packet, world or saved-build field is added by these host keys.
 
 ## Optional radio example
 
-`packages/samples/sample-radio` plus its `sample-radio-controls` companion is an optional example, not default-enabled content. Install/enable both. Select a channel with `/radio_channel 1` (1–16), and bind **Transmit radio (with voice activation)** in Controls. Hold it while using ordinary push-to-talk or voice activation. The binding selects a radio route; it never independently enables a microphone. Radio has priority 10 over the default route; unmatched channels/groups are denied during transmission. On release, normal voice returns. Connection and respawn hooks clear the transmit state. Existing focus/input release handling and microphone focus gating still apply.
+`packages/samples/sample-radio` plus its `sample-radio-controls` companion is an optional example. Install and enable both. Select a channel with `/radio_channel 1` (1–16), and bind **Transmit radio (with voice activation)** in Controls. Hold it while using ordinary push-to-talk or voice activation. The binding selects a radio route and relies on the selected microphone mode. Radio has priority 10 over the default route. Unmatched channels and groups are denied during transmission. Releasing the binding or losing window focus releases the radio route. Voice Activation can continue over the normal route while unfocused. Connection and respawn hooks also clear the radio transmit state.
 
 ## Speaking HUD
 

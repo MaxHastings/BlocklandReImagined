@@ -2973,13 +2973,15 @@ impl Screen for Options {
             );
         }
         if let Some(n) = self.view.id("OptVoiceHint") {
-            self.view.set_text(
-                n,
-                format!(
+            let hint = match voice_mode(&self.draft) {
+                VoiceMode::PushToTalk => format!(
                     "Hold {} to talk (change in Controls)",
                     core.key_name("voiceTalk")
                 ),
-            );
+                VoiceMode::VoiceActivity => "Sends speech even when the game is unfocused.".into(),
+                VoiceMode::Disabled => String::new(),
+            };
+            self.view.set_text(n, hint);
         }
         if let Some(meter) = self.view.id(VOICE_METER) {
             let preview = core.voice_preview;
