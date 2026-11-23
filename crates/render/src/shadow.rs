@@ -773,7 +773,13 @@ pub(crate) fn far_fit(bounds: (Vec3, Vec3), sun: Vec3, resolution: u32) -> (Mat4
         centre.x + view_half,
         centre.y - view_half,
         centre.y + view_half,
-        -max.z - margin,
+        // Casters (bricks, players, vehicles) are not part of the map's bounds:
+        // a tall build or a flyer can stand well toward the sun of the map's
+        // highest surface, and would be cut by the near plane and missing from
+        // this layer while still in the cascades - their distant shadow then
+        // faded out over the hand off ramp and never came back. Reach toward
+        // the sun as far as the cascades' casters do.
+        -max.z - margin - CASTER_REACH,
         -min.z + margin,
     );
     (projection * rotation, texel)

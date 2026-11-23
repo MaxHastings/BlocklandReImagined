@@ -576,6 +576,15 @@ fn cascade_lit(c:CascadeCoord)->f32 {
     let wy=vec4<f32>(1.0-t.y,1.0,1.0,t.y);
     return dot(wy,vec4<f32>(dot(rows[0],wx),dot(rows[1],wx),dot(rows[2],wx),dot(rows[3],wx)))/9.0;
 }
+// shadow_lit without the hand off fade: the cascades' own caster shadow.
+// Callers that crossfade onto the far layer (which holds the casters too)
+// blend this against it themselves.
+fn shadow_lit_near(c:ShadowCoord)->f32 {
+    if c.near.cascade<0 || c.strength<=0.0 {return 1.0;}
+    var lit=cascade_lit(c.near);
+    if c.blend>0.0 {lit=mix(lit,cascade_lit(c.far),c.blend);}
+    return mix(1.0,lit,c.strength);
+}
 fn shadow_lit(c:ShadowCoord)->f32 {
     if c.near.cascade<0 {return 1.0;}
     // Faded out at the shadow edge: mix(1.0, lit, 0) == 1.0, so cascade
@@ -893,8 +902,13 @@ fn object_sun(position:vec3<f32>,normal:vec3<f32>,vis:MapVisibility)->f32 {
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
         // The same hand off for the map part without PCSS (strength is 1
         // here, so the cascade result stands in outright inside the distance).
-        if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
-        map=lit;
+        // Combine the near result first (map and casters), then crossfade
+        // that whole result onto the far layer, which already holds both. Fading
+        // the map part up to the far layer and the casters out to unshadowed sun
+        // separately and taking the min of the two left a lit band mid-ramp.
+        var near_lit=min(lit,shadow_lit_near(c));
+        if c.far_blend>0.0 {near_lit=mix(near_lit,far_map_lit(position,n,map),c.far_blend);}
+        return near_lit;
     } else {
         // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
         // layer is not drawn: the coarse fallback stands in for the map part.
@@ -1127,8 +1141,13 @@ fn relit_sun(baked:f32,position:vec3<f32>,n:vec3<f32>)->f32 {
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
         // The same hand off for the map part without PCSS.
-        if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
-        map=lit;
+        // Combine the near result first (map and casters), then crossfade
+        // that whole result onto the far layer, which already holds both. Fading
+        // the map part up to the far layer and the casters out to unshadowed sun
+        // separately and taking the min of the two left a lit band mid-ramp.
+        var near_lit=min(lit,shadow_lit_near(c));
+        if c.far_blend>0.0 {near_lit=mix(near_lit,far_map_lit(position,n,map),c.far_blend);}
+        return near_lit;
     } else {
         // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
         // layer is not drawn: the coarse fallback stands in for the map part.
@@ -1261,8 +1280,13 @@ fn dynamic_sun(position:vec3<f32>,normal:vec3<f32>)->f32 {
         var lit=map_cascade_lit(c.near);
         if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
         // The same hand off for the map part without PCSS.
-        if c.far_blend>0.0 {lit=mix(lit,far_map_lit(position,n,map),c.far_blend);}
-        map=lit;
+        // Combine the near result first (map and casters), then crossfade
+        // that whole result onto the far layer, which already holds both. Fading
+        // the map part up to the far layer and the casters out to unshadowed sun
+        // separately and taking the min of the two left a lit band mid-ramp.
+        var near_lit=min(lit,shadow_lit_near(c));
+        if c.far_blend>0.0 {near_lit=mix(near_lit,far_map_lit(position,n,map),c.far_blend);}
+        return near_lit;
     } else {
         // No cascade, or faded out (shadow_lit returns 1.0 then), or the map
         // layer is not drawn: the unshadowed sun stands in for the map part.
