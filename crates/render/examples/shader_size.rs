@@ -76,15 +76,15 @@ fn report(name: &str, wgsl: &str, modern: bool) {
 }
 
 fn main() {
-    use bri_render::color::shader_source;
+    use bri_render::scene::scene_shader_source;
     report(
         "scene_original.wgsl (classic)",
-        &shader_source(include_str!("../src/scene_original.wgsl")),
+        &scene_shader_source(include_str!("../src/scene_original.wgsl")),
         false,
     );
     report(
         "scene.wgsl (modern)",
-        &shader_source(
+        &scene_shader_source(
             &std::env::var("SHADER_SIZE_MODERN")
                 .map(|p| std::fs::read_to_string(p).unwrap())
                 .unwrap_or_else(|_| include_str!("../src/scene.wgsl").to_string()),
