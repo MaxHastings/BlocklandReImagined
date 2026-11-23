@@ -614,11 +614,17 @@ fn real_community_samples() {
         .find(|b| b.function == "holeZombieInfect")
         .unwrap();
     assert!(infect.blockers.iter().any(|b| b.contains("eval")));
-    assert!(
-        zombie
-            .datablocks
-            .iter()
-            .any(|d| d.recognised_as == "bot" && d.status == "recognised_only")
+    let bots = bri_sim::bot_kind::BotPack::from_json(
+        &std::fs::read(out.join("assets/bots.json")).unwrap(),
+    )
+    .unwrap();
+    let [zombie_kind] = &bots.bots[..] else {
+        panic!("expected one imported zombie kind, got {:?}", bots.bots);
+    };
+    assert_eq!(zombie_kind.id, "bot_zombie:bot/zombieholebot");
+    assert_eq!(
+        zombie_kind.body.as_deref(),
+        Some("bot_zombie:archetype/zombieholebot")
     );
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
 }
