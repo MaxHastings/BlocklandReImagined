@@ -183,6 +183,7 @@ impl VoiceState {
         self.config = config;
         if let Some(chat) = &self.chat {
             chat.apply_settings(self.audio_settings());
+            chat.set_transmit_allowed(self.transmit_allowed());
         }
         if reopen || !self.config.settings.enabled {
             // Closing the devices is the only honest "off".
@@ -208,7 +209,7 @@ impl VoiceState {
         }
         if let Some(chat) = &self.chat {
             chat.apply_settings(self.audio_settings());
-            chat.set_transmit_allowed(focused && self.active && !self.server_blocked);
+            chat.set_transmit_allowed(self.transmit_allowed());
         }
     }
     pub fn set_master_volume(&mut self, volume: f32) {
@@ -380,8 +381,19 @@ impl VoiceState {
     pub fn muted(&self) -> &BTreeSet<OwnerId> {
         &self.muted
     }
+    fn transmit_allowed(&self) -> bool {
+        self.active
+            && self.config.settings.enabled
+            && !self.server_blocked
+            && match self.config.mode {
+                VoiceMode::PushToTalk => self.focused,
+                VoiceMode::VoiceActivity => true,
+                VoiceMode::Disabled => false,
+            }
+    }
+
     fn local_speaking(&self) -> bool {
-        if !self.active || !self.focused || self.server_blocked {
+        if !self.transmit_allowed() {
             return false;
         }
         let Some(chat) = &self.chat else { return false };
@@ -576,6 +588,7 @@ impl VoiceState {
             .filter(|_| link.is_some())
             .map_or_else(bri_net::voice::RouteTable::default, |c| c.routes.clone());
         self.apply_routes(routes);
+        let transmit_allowed = self.transmit_allowed();
         if let Some(chat) = &self.chat {
             chat.set_capture_scope(
                 control
@@ -583,7 +596,7 @@ impl VoiceState {
                     .filter(|_| link.is_some())
                     .map_or(0, |c| c.metadata.source_epoch),
             );
-            chat.set_transmit_allowed(self.active && self.focused && !self.server_blocked);
+            chat.set_transmit_allowed(transmit_allowed);
         }
         // State packets are independent of the audio playback device and
         // carry no audio analysis beyond a boolean, periodically refreshed.
@@ -641,11 +654,7 @@ impl VoiceState {
         self.outgoing.clear();
         chat.take_frames(&mut self.outgoing);
         if let Some(link) = link {
-            for frame in self
-                .outgoing
-                .drain(..)
-                .filter(|_| self.focused && !self.server_blocked)
-            {
+            for frame in self.outgoing.drain(..).filter(|_| transmit_allowed) {
                 // The connection may be closing; a lost frame is a gap in
                 // someone's ears, nothing more.
                 let sequence = self.sequence_base.wrapping_add(frame.sequence);
@@ -969,6 +978,35 @@ mod tests {
         assert!(voice.speaking.is_empty());
         assert_eq!(voice.indicator(), None);
         assert_eq!(voice.indicator_change(), None, "nothing shown, nothing new");
+    }
+
+    #[test]
+    fn background_voice_requires_activation_and_a_permitted_session() {
+        let mut voice = VoiceState::new(&Settings::default());
+        voice.set_session(Some(1));
+        voice.active = true;
+        voice.set_talking(true);
+        voice.set_focused(false);
+        assert!(!voice.talking);
+        assert!(!voice.transmit_allowed());
+
+        voice.apply_settings(&settings(&[("$pref::Voice::Mode", "1")]));
+        assert!(voice.transmit_allowed());
+        voice.set_server_muted(&BTreeSet::from([1]), 1);
+        assert!(!voice.transmit_allowed());
+        voice.set_server_muted(&BTreeSet::new(), 1);
+        assert!(voice.transmit_allowed());
+
+        voice.apply_settings(&settings(&[("$pref::Voice::Mode", "2")]));
+        assert!(!voice.transmit_allowed());
+        voice.apply_settings(&settings(&[
+            ("$pref::Voice::Mode", "1"),
+            ("$pref::Voice::Enabled", "0"),
+        ]));
+        assert!(!voice.transmit_allowed());
+        voice.apply_settings(&settings(&[("$pref::Voice::Mode", "1")]));
+        voice.set_session(None);
+        assert!(!voice.transmit_allowed());
     }
 
     #[test]
