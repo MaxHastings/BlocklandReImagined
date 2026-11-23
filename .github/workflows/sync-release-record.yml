@@ -1,0 +1,33 @@
+name: sync-release-record
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published, released, edited, unpublished, deleted]
+
+concurrency:
+  group: sync-release-record
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+  checks: read
+
+jobs:
+  sync:
+    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Sync the latest release to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python3 tools/sync_release_record.py

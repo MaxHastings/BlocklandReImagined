@@ -48,4 +48,7 @@ jobs:
             gh workflow run release.yml --ref "$BRI_VERSION" -f version="$BRI_VERSION" -f publish=true
             exit 0
           fi
-          exit "$code"
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          gh workflow run sync-release-record.yml --ref main

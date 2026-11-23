@@ -231,10 +231,19 @@ Other ways in, for a release built without the PC:
 The workflows refuse a version that already has a published release. A draft
 left by a failed publish is reused.
 
-After publication, independently check the public tag/source commit, all three
-assets and `SHA256SUMS`, then update [STATUS.md](STATUS.md) with the verified
-release. Record the exact gate/CI/build and archive-verification evidence in a
-new progress entry. Preserve unresolved player reports and validation limits.
+After publication, the **sync-release-record** workflow reads GitHub's latest
+public release and updates the generated block in [STATUS.md](STATUS.md) on
+`main`. It resolves the release tag to its commit, stages only the status
+change, runs the required CI check and advances `main` with that checked
+commit. If `main` advances or the latest release changes while CI runs, it
+refreshes the record and checks the new commit. Both publishing workflows queue
+the sync with the repository's Actions token. A release published directly on
+GitHub also triggers it. To retry or reconcile, run **sync-release-record**
+from `main` in Actions.
+
+Independently check the public tag/source commit, all three assets and
+`SHA256SUMS`. Record the exact gate/CI/build and archive-verification evidence
+in a new progress entry. Preserve unresolved player reports and validation limits.
 
 Re-attaching one platform to an existing release: run `mac-release-asset.yml`
 or `linux-release-asset.yml` with the release tag, the release commit and
