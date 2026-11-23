@@ -27,3 +27,16 @@ that a truncated binary is rejected. The existing body scale, deterministic
 sample map and Playground assertions remain active. Validation targets
 include an empty Windows content root, the declared v20 reference, and the
 Windows/Linux PR checks. The original PR remains the contributor reference.
+
+Local evidence before platform CI
+- Using the declared read-only v20 reference, compared 124 rebuilt models
+  against the existing same-source detail tables. Every name, threshold
+  and range matched, including all ten levels on the Kitchen palms and oak.
+  The independent geometry pass reported only the known BLB fragment and
+  the unsupported DTS v18 editor marker.
+- The focused Windows command was
+  `cargo test --locked -p bri-addon-import --lib --test import --test installed --test sample_map -p bri-sim --test playground`.
+  The first run found an additive-material assertion still parsing model
+  bytes as JSON. The assertion now reads through the model codec and still
+  checks both blend modes. All focused targets passed, including the
+  body height, sample-map and 19 Playground regressions.
