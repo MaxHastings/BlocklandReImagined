@@ -1,9 +1,27 @@
 //! Rendering the scene each frame.
 use super::*;
 use bri_console::Clamp;
+use bri_render::{
+    scene::{GpuInstances, ShadowCasters},
+    terrain_scene::GpuTerrain,
+};
 
 /// Half the size, in units, of the box a held or dropped item takes its zone and room light from.
 const ITEM_LIGHT_REACH: f32 = 0.5;
+
+fn map_shadow_geometry<'a>(
+    lighting: u8,
+    map: Option<&'a GpuScene>,
+    terrain: &'a [GpuTerrain],
+) -> (Option<&'a GpuScene>, Vec<(&'a GpuScene, &'a GpuInstances)>) {
+    let map = map.filter(|_| lighting != 0);
+    let terrain = if lighting == 3 {
+        terrain.iter().flat_map(GpuTerrain::draws).collect()
+    } else {
+        Vec::new()
+    };
+    (map, terrain)
+}
 
 impl App {
     pub(super) fn render_frame(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -998,11 +1016,22 @@ impl App {
             .as_ref()
             .map(|p| p.face_views())
             .unwrap_or_default();
+        let shadow_reach = {
+            let (map, terrain) = map_shadow_geometry(
+                effective.lighting,
+                self.gpu.gpu_scene.as_ref(),
+                &self.gpu.gpu_terrain,
+            );
+            renderer.shadow_reach(ShadowCasters {
+                scenes: map.as_slice(),
+                instances: &terrain,
+            })
+        };
         let elsewhere = crate::culling::Elsewhere::new(
             reflecting_planes
                 .into_iter()
                 .chain(probe_faces.iter().map(|f| f.view_projection)),
-            renderer.shadow_reach(),
+            shadow_reach,
         );
         let others_see = casts || reflecting || !probe_faces.is_empty();
         let mut bodies_drawn = BTreeSet::new();
@@ -1782,10 +1811,18 @@ impl App {
                 bodies_drawn.contains(&owner) && (owner != view.owner || third_person)
             }),
         );
-        use bri_render::scene::ShadowCasters;
+        let (map, terrain_map) = map_shadow_geometry(
+            effective.lighting,
+            self.gpu.gpu_scene.as_ref(),
+            &self.gpu.gpu_terrain,
+        );
+        let map_casters = ShadowCasters {
+            scenes: map.as_slice(),
+            instances: &terrain_map,
+        };
         // Every view's shadow casters: mirror and window planes draw their
         // own sun shadows from them.
-        let (bodies, cast_models, blockers, blocking, map, terrain_map) = {
+        let (bodies, cast_models, blockers, blocking) = {
             // Players, vehicles and items (dropped and held) cast, like v20's
             // projected shape shadows; bricks only with the BrickShadows pref,
             // and bricks that do not cast still stop shadows passing through
@@ -1826,24 +1863,7 @@ impl App {
             }
             models.extend(self.addons.package_models.draws());
             models.extend(self.addons.package_models.own_draws());
-            // In the Unified modes the map's own walls shade objects from
-            // the sun too (the map layer), so they are sunlit exactly where
-            // the walls beside them are.
-            let map: Vec<&GpuScene> = if effective.lighting != 0 {
-                self.gpu.gpu_scene.iter().collect()
-            } else {
-                Vec::new()
-            };
-            let terrain_map: Vec<_> = if effective.lighting == 3 {
-                self.gpu
-                    .gpu_terrain
-                    .iter()
-                    .flat_map(|t| t.draws())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            (bodies, models, blockers, blocking, map, terrain_map)
+            (bodies, models, blockers, blocking)
         };
         let sky_exposure = |encoder: &mut wgpu::CommandEncoder, view: usize| {
             let sky_scenes: Vec<_> = self
@@ -1881,10 +1901,7 @@ impl App {
                     scenes: &blockers,
                     instances: &blocking,
                 },
-                ShadowCasters {
-                    scenes: &map,
-                    instances: &terrain_map,
-                },
+                map_casters,
             );
         };
         let _recording = crate::frame_trace::span("record passes");
