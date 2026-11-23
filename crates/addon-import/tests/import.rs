@@ -1637,14 +1637,9 @@ datablock ShapeBaseImageData(blendGunImage) { shapeFile = "./gun.dts"; item = bl
     let file = presentation["models"]["add-ons/weapon_blend/gun.dts"]["file"]
         .as_str()
         .unwrap();
-    let shape: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(out.join("assets").join(file)).unwrap()).unwrap();
-    let blends: Vec<_> = shape["materials"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|m| m["blend"].as_str().unwrap().to_owned())
-        .collect();
+    let shape =
+        bri_gltf::read_model(&std::fs::read(out.join("assets").join(file)).unwrap()).unwrap();
+    let blends: Vec<_> = shape.materials.iter().map(|m| m.blend.as_str()).collect();
     assert_eq!(blends, ["opaque", "additive"]);
     let notes = serde_json::to_string(&report.assets).unwrap();
     assert!(

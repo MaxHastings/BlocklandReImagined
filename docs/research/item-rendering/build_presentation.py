@@ -200,12 +200,20 @@ def main():
         evidence['source_sha256'] = source_hash
         bounds_evidence[key] = evidence
         data = read(file)
-        shape = json.loads(data)
+        if data.startswith(b'glTF'):
+            _, version, length, chunk_size, chunk_type = struct.unpack_from('<5I', data)
+            if (version, length, chunk_type) != (2, len(data), 0x4e4f534a) or chunk_size > length - 20:
+                raise ValueError(f'Invalid compiled GLB {file}')
+            shape = json.loads(data[20:20 + chunk_size])
+            extension = 'glb'
+        else:
+            shape = json.loads(data)
+            extension = 'json'
         native_hash = digest(data)
-        target = f'models/{native_hash}.json'
+        target = f'models/{native_hash}.{extension}'
         files[target] = data
         bindings = []
-        for material in shape['materials']:
+        for material in shape.get('materials', []):
             reference = str(pathlib.PurePosixPath(path).parent / material['name'])
             bindings.append(texture(reference))
         manifest['models'][key] = dict(file=target, sha256=native_hash, source=path,

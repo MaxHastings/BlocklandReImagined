@@ -6,11 +6,11 @@
 //! authors) as `KHR_lights_punctual` lights with `bri_` custom properties.
 //! The scene is the map as the game places it (after the floor lift), so
 //! an exported, edited and reimported map lines up with the original.
-use super::write::Gltf;
 use anyhow::{Context, Result, ensure};
 use bri_content::interior::Interior;
 use bri_content::scene::{Kind, Node, Scene};
 use bri_content::shape::Shape;
+use bri_gltf::Gltf;
 use glam::{Mat4, Vec3};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -314,7 +314,7 @@ pub fn export_map(root: &Path, wanted: &str) -> Result<(Vec<u8>, ExportReport)> 
             }
             Kind::StaticModel | Kind::DatablockModel if node.asset.is_some() => {
                 let id = node.asset.as_deref().unwrap_or_default();
-                let shape: Shape = match asset_file(id).and_then(|f| read(root, &f)).and_then(|b| Ok(serde_json::from_slice(&b)?)) {
+                let shape: Shape = match asset_file(id).and_then(|f| read(root, &f)).and_then(|b| bri_gltf::read_model(&b)) {
                     Ok(shape) => shape,
                     Err(e) => {
                         report.warnings.push(format!("model `{}` left out: {e:#}", node.name));

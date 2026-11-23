@@ -419,7 +419,7 @@ fn imports_write_a_package_the_runtime_reads() {
     for f in [
         "package.json",
         "assets/content.json",
-        "assets/big_figure.shape.json",
+        "assets/big_figure.glb",
         "assets/skin_tone.png",
         "assets/boots.png",
         "assets/archetypes/big_figure.json",
@@ -1862,7 +1862,7 @@ fn a_map_brings_its_own_sun_sky_and_water() {
 /// plain surface stays as it was.
 #[test]
 fn metal_and_glow_come_from_the_material() {
-    let doc = super::read::Document::from_bytes(
+    let doc = super::Document::from_bytes(
         serde_json::to_string(&json!({
             "asset": { "version": "2.0" },
             "materials": [
@@ -2056,7 +2056,7 @@ fn a_map_brings_its_own_heightmap_terrain() {
 /// the shape material, and an extension nothing maps is refused by name.
 #[test]
 fn a_cutout_keeps_its_cutoff_and_sidedness_and_unmapped_extensions_are_refused() {
-    let doc = super::read::Document::from_bytes(
+    let doc = super::Document::from_bytes(
         serde_json::to_string(&json!({
             "asset": { "version": "2.0" },
             "materials": [
@@ -2167,4 +2167,30 @@ fn map_data_splits_the_world_mesh_by_zone_and_lists_the_zone_graph() {
     )
     .unwrap();
     assert!(import(&opts).is_err());
+}
+
+#[test]
+fn compiled_shape_keeps_every_detail_and_the_exact_model_state() -> anyhow::Result<()> {
+    let doc = Document::from_bytes(&character(true).glb, None)?;
+    let opts = Options::new("source.glb", "unused", Kind::Body);
+    let mut shape = convert(&doc, None, &opts, "detail-fixture", "")?.shape;
+    let full = shape.details[0].clone();
+    for (name, threshold) in [("near", 120.0), ("middle", 60.0), ("far", 5.0)] {
+        shape.details.push(bri_content::shape::Detail {
+            name: name.into(),
+            pixel_threshold: threshold,
+            ..full.clone()
+        });
+    }
+    shape.objects[0].name = "body_2".into();
+    shape.objects[0].visibility = 0.5;
+    let glb = bri_gltf::encode_model(&shape)?;
+    assert_eq!(glb, bri_gltf::encode_model(&shape)?);
+    let restored = bri_gltf::read_model(&glb)?;
+    assert_eq!(
+        serde_json::to_value(restored)?,
+        serde_json::to_value(shape)?
+    );
+    assert!(bri_gltf::read_model(&glb[..glb.len() - 4]).is_err());
+    Ok(())
 }

@@ -14,7 +14,7 @@
     "jet_force": 0.0
    },
    "flight": null,
-   "model": "models/buggy.shape.json",
+   "model": "models/buggy.glb",
    "seats": [
     {
      "node": "mount0",
@@ -124,7 +124,7 @@
      },
      "steering": 1.0,
      "powered": true,
-     "model": "models/tire.shape.json",
+     "model": "models/tire.glb",
      "model_rotation": [
       0.0,
       0.0,
@@ -157,7 +157,7 @@
      },
      "steering": 1.0,
      "powered": true,
-     "model": "models/tire.shape.json",
+     "model": "models/tire.glb",
      "model_rotation": [
       0.0,
       0.0,
@@ -190,7 +190,7 @@
      },
      "steering": -0.35,
      "powered": true,
-     "model": "models/tire.shape.json",
+     "model": "models/tire.glb",
      "model_rotation": [
       0.0,
       0.0,
@@ -223,7 +223,7 @@
      },
      "steering": -0.35,
      "powered": true,
-     "model": "models/tire.shape.json",
+     "model": "models/tire.glb",
      "model_rotation": [
       0.0,
       0.0,
@@ -443,17 +443,17 @@
  "assets": [
   {
    "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/buggy.dts",
-   "path": "models/buggy.shape.json",
-   "sha256": "08f66443f5d2f62454683d050c0a68587691a5d9e08da0cf071a92386e3fb1fd",
+   "path": "models/buggy.glb",
+   "sha256": "aa7ce483faaa2d527ae864eff2f3861ba95b3a308b149183786da4e16ecc2aaa",
    "kind": "model",
-   "source_sha256": "08f66443f5d2f62454683d050c0a68587691a5d9e08da0cf071a92386e3fb1fd"
+   "source_sha256": "aa7ce483faaa2d527ae864eff2f3861ba95b3a308b149183786da4e16ecc2aaa"
   },
   {
    "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/tire.dts",
-   "path": "models/tire.shape.json",
-   "sha256": "3b2a1fb563875ab97be93e0b3f43d3acda9d848381e709e7f3e297a08ce070f7",
+   "path": "models/tire.glb",
+   "sha256": "16340e87236e2ced8b83401e72ddc3f27c2eed49cbdcf9540ad48494c9112f79",
    "kind": "model",
-   "source_sha256": "3b2a1fb563875ab97be93e0b3f43d3acda9d848381e709e7f3e297a08ce070f7"
+   "source_sha256": "16340e87236e2ced8b83401e72ddc3f27c2eed49cbdcf9540ad48494c9112f79"
   },
   {
    "virtual_path": "Add-Ons/Vehicle_PlaygroundBuggy/buggy_paint.png",

@@ -198,7 +198,7 @@ impl Pack {
                 .iter()
                 .find(|a| &a.path == model)
                 .with_context(|| format!("Vehicle {} weapon model is missing", d.id))?;
-            let shape: Shape = serde_json::from_slice(&read(root, asset, 32 << 20)?)?;
+            let shape: Shape = bri_gltf::read_model(&read(root, asset, 32 << 20)?)?;
             shape.validate()?;
             let Some(clip) = look_clip(&clips, &shape) else {
                 continue;
@@ -273,7 +273,7 @@ mod tests {
             assert_eq!(weapon.look_muzzle.len(), MUZZLE_SAMPLES, "{id}");
             let model = d.attachment_model.as_ref().unwrap_or(&d.model);
             let asset = pack.assets.iter().find(|a| &a.path == model).unwrap();
-            let shape: Shape = serde_json::from_slice(&read(&root, asset, 32 << 20)?)?;
+            let shape: Shape = bri_gltf::read_model(&read(&root, asset, 32 << 20)?)?;
             let clip = look_clip(&clips, &shape).unwrap();
             let hinge = shape
                 .nodes

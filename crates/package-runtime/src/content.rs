@@ -68,7 +68,7 @@ pub enum Kind {
     /// clients receive the module with the host's archetype table, so they
     /// predict with exactly the bytes the host runs.
     Controller,
-    /// A player body: a native shape (`.shape.json`) an archetype names as
+    /// A player body: a compiled model an archetype names as
     /// its `model`, its textures listed in `assets/content.json`. Client
     /// side: every player draws it, so an Add-On with a player type and its
     /// body is shared and joiners download both.

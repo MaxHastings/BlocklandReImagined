@@ -407,7 +407,12 @@ impl Package {
                 // Drawn by clients (`bri-client` `AvatarAssets::load_bodies`);
                 // checked here so a broken one is named before anyone joins.
                 Kind::Body => {
-                    parse::<bri_content::shape::Shape>(asset, &id, |s| s.validate(), out);
+                    if let Err(error) = bri_gltf::read_model(&asset.bytes) {
+                        out.push(
+                            Diagnostic::error("content.body", format!("{error:#}"))
+                                .at(location(&id, &asset.file)),
+                        );
+                    }
                 }
                 // Loaded by the map catalog and map loaders; checked here so
                 // a broken one is named before anyone picks it.

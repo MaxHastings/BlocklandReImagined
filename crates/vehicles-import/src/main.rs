@@ -103,12 +103,11 @@ fn main() -> Result<()> {
         let Some(file) = r["output"].as_str() else {
             continue;
         };
-        if file.ends_with(".shape.json") || file.ends_with(".clips.json") {
+        if bri_gltf::is_model_file(file) || file.ends_with(".clips.json") {
             let bytes = fs::read(maps.join(file))?;
             let path = format!("models/{file}");
-            if file.ends_with(".shape.json") {
-                let shape: Shape = serde_json::from_slice(&bytes)?;
-                shape.validate()?;
+            if bri_gltf::is_model_file(file) {
+                let shape: Shape = bri_gltf::read_model(&bytes)?;
                 models.insert(v.to_lowercase(), (path.clone(), shape));
             }
             assets.push(Asset {

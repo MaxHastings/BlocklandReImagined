@@ -911,8 +911,8 @@ pub fn convert(root: &Path, core: &Path, core_damage_types: &Path, out: &Path) -
                     let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
                     texture_references.push((format!("{parent}/{}", material.name), path.clone()));
                 }
-                let file = format!("shapes/{}.json", &r.sha256[..24]);
-                std::fs::write(out.join(&file), serde_json::to_vec(&shape)?)?;
+                let file = format!("shapes/{}.glb", &r.sha256[..24]);
+                std::fs::write(out.join(&file), bri_gltf::encode_model(&shape)?)?;
                 r.native_file = Some(file);
                 r.diagnostics = provenance.warnings;
             }

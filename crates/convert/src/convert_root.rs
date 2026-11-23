@@ -155,7 +155,7 @@ fn convert(source: String, virtual_path: String, input: Result<Vec<u8>>, output:
             let (shape, source) = crate::shape::read_dts(&data, id)?;
             (
                 "shape",
-                serde_json::to_vec(&shape)?,
+                bri_gltf::encode_model(&shape)?,
                 serde_json::to_vec(&source)?,
                 source.warnings,
             )
@@ -176,7 +176,11 @@ fn convert(source: String, virtual_path: String, input: Result<Vec<u8>>, output:
                 source.warnings,
             )
         };
-        let filename = format!("{key}.{kind}.json");
+        let filename = if kind == "shape" {
+            format!("{key}.glb")
+        } else {
+            format!("{key}.{kind}.json")
+        };
         std::fs::write(output.join(&filename), native)?;
         std::fs::write(output.join(format!("{key}.source.json")), provenance)?;
         record.warnings = warnings;

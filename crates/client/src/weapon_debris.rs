@@ -268,8 +268,7 @@ impl WeaponDebrisAssets {
                 "debris model checksum mismatch: {}",
                 resource.id
             );
-            let shape: Shape = serde_json::from_slice(&bytes)?;
-            shape.validate()?;
+            let shape: Shape = bri_gltf::read_model(&bytes)?;
             vertex_budget += shape
                 .meshes
                 .iter()

@@ -1,7 +1,7 @@
 """Write the Steel Ball Add-On's generated art and its vehicle entry.
 
 Outputs, under packages/showcase/steel-ball-kit/assets/:
-  models/steel-ball.shape.json  a smooth UV sphere with a bare-steel metal
+  models/steel-ball.glb         a smooth UV sphere with a bare-steel metal
                                 material (the engine's physically based
                                 metal: live reflections, GGX highlights)
   textures/steel.png            the steel's tint: faint warm and cool
@@ -15,8 +15,7 @@ Outputs, under packages/showcase/steel-ball-kit/assets/:
                                 all three by their SHA-256
 
 Everything here is original and generated; run it again after changing the
-numbers below. Only the Python standard library is used, and the output is
-the same on every run.
+numbers below. The model compiler writes deterministic GLB assets.
 """
 import hashlib
 import json
@@ -25,6 +24,8 @@ import random
 import struct
 import zlib
 from pathlib import Path
+
+from compile_model import compile_model
 
 KIT = Path(__file__).resolve().parent.parent / 'packages' / 'showcase' / 'steel-ball-kit' / 'assets'
 RADIUS = 1.25
@@ -205,8 +206,8 @@ def write(path, data):
 
 
 def main():
-    model_bytes = (json.dumps(sphere(), separators=(',', ':')) + '\n').encode()
-    model_sha = write(KIT / 'models' / 'steel-ball.shape.json', model_bytes)
+    model_bytes = compile_model(sphere())
+    model_sha = write(KIT / 'models' / 'steel-ball.glb', model_bytes)
     texture_sha = write(KIT / 'textures' / 'steel.png', png(64, 64, steel))
     texels = detail_maps(DETAIL_SIZE)
     detail = png(DETAIL_SIZE, DETAIL_SIZE,
@@ -223,7 +224,7 @@ def main():
         'family': 'Ball',
         'energy': {'maximum': 0.0, 'minimum_jet': 0.0, 'drain_per_32ms': 0.0, 'recharge_per_32ms': 0.0, 'jet_force': 0.0},
         'flight': None,
-        'model': 'models/steel-ball.shape.json',
+        'model': 'models/steel-ball.glb',
         'seats': [], 'wheels': [], 'weapon': None,
         'attachment_model': None, 'attachment_collision_hulls': [], 'attachment_mount': None,
         'attachment_fallback_seat': None,
@@ -268,7 +269,7 @@ def main():
         'schema_version': 7,
         'definitions': [definition],
         'assets': [
-            {'virtual_path': 'Add-Ons/Vehicle_SteelBall/steel-ball.dts', 'path': 'models/steel-ball.shape.json',
+            {'virtual_path': 'Add-Ons/Vehicle_SteelBall/steel-ball.dts', 'path': 'models/steel-ball.glb',
              'sha256': model_sha, 'kind': 'model', 'source_sha256': model_sha},
             {'virtual_path': 'Add-Ons/Vehicle_SteelBall/steel.png', 'path': 'textures/steel.png',
              'sha256': texture_sha, 'kind': 'texture', 'source_sha256': texture_sha},
