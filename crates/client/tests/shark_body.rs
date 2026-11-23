@@ -42,8 +42,7 @@ fn converted_shark_body_loads_its_textures_and_finite_scaled_geometry() -> Resul
             .with_context(|| format!("missing {id}"))?;
         Ok(dir.join(entry["file"].as_str().context("asset file")?))
     };
-    let shape: bri_content::shape::Shape = serde_json::from_slice(&std::fs::read(file(MODEL)?)?)?;
-    shape.validate()?;
+    let shape = bri_gltf::read_model(&std::fs::read(file(MODEL)?)?)?;
     ensure!(
         shape.nodes.len() == 12 && shape.objects.len() == 6,
         "converted Shark rig identity changed"

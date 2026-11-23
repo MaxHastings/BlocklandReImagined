@@ -23,6 +23,7 @@ gpu = ["dep:bri-render", "dep:bytemuck", "dep:wgpu"]
 [dev-dependencies]
 bri-package = { path = "../package" }
 bri-content = { path = "../content" }
+bri-gltf = { path = "../gltf" }
 pollster.workspace = true
 bri-physics = { path = "../physics" }
 rapier3d.workspace = true

@@ -652,6 +652,7 @@ dependencies = [
  "anyhow",
  "bri-console",
  "bri-content",
+ "bri-gltf",
  "bri-package",
  "bri-physics",
  "bri-render",
