@@ -59,6 +59,35 @@ fn json(report: &Report) -> serde_json::Value {
 }
 
 #[test]
+fn legacy_brick_names_match_the_same_saved_name_as_utf8() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/Weapon_Synthetic_Blaster/bricks/pad.blb");
+    for (encoding, name) in [
+        ("cp1252", &b"45\xb0 \x93Ramp\x94"[..]),
+        ("utf8", "45° “Ramp”".as_bytes()),
+    ] {
+        let out = fresh(encoding);
+        let input = out.with_file_name("Brick_Encoded_Ramp");
+        std::fs::create_dir(&input).unwrap();
+        std::fs::copy(&fixture, input.join("pad.blb")).unwrap();
+        let mut script = b"datablock fxDTSBrickData(brickEncodedRampData) {\r\n brickFile = \"./pad.blb\";\r\n uiName = \"".to_vec();
+        script.extend_from_slice(name);
+        script.extend_from_slice(b"\";\r\n};\r\n");
+        std::fs::write(input.join("server.cs"), script).unwrap();
+        import(&Options {
+            input,
+            out: out.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+        let bytes = std::fs::read(out.join("assets/brick-catalog/stock-catalog.json")).unwrap();
+        let catalog: bri_content::brick::Catalog = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(catalog.bricks.len(), 1);
+        assert_eq!(catalog.bricks[0].display_name, "45° “Ramp”");
+    }
+}
+
+#[test]
 fn synthetic_addon_imports_with_report() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Weapon_Synthetic_Blaster");

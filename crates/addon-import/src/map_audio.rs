@@ -2,6 +2,7 @@
 //! No source script execution, runtime Torque dependency, or map-name policy.
 use anyhow::{Context, Result, bail, ensure};
 use bri_content::scene::{Node, Scene};
+use bri_content::text::decode_utf8_or_windows_1252;
 use bri_convert::effect_script::Declarations;
 use serde_json::{Value, json};
 use std::{
@@ -443,7 +444,7 @@ pub fn export(
         .filter(|f| f.path.to_ascii_lowercase().ends_with(".cs"))
     {
         if let Err(error) = declarations.read_classes(
-            &String::from_utf8_lossy(&file.bytes),
+            &decode_utf8_or_windows_1252(&file.bytes),
             &file.path,
             &["AudioProfile"],
         ) {

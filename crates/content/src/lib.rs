@@ -34,6 +34,7 @@ pub mod surface;
 pub mod terrain_field;
 pub mod terrain_mesh;
 pub mod testing;
+pub mod text;
 pub mod tutorial;
 pub mod uv_affine;
 pub mod vertex_lighting;
