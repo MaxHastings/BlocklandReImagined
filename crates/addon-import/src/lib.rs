@@ -27,6 +27,7 @@ mod vehicle_script;
 mod weapon_fx;
 
 use anyhow::{Context, Result, ensure};
+use bri_content::text::decode_utf8_or_windows_1252;
 use bri_convert::tscript::{self, Datablock, Script};
 use reference::Reference;
 use report::*;
@@ -559,7 +560,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         .files
         .iter()
         .filter(|(key, _)| key.ends_with(".cs"))
-        .flat_map(|(_, f)| reference::required_addons(&String::from_utf8_lossy(&f.bytes)))
+        .flat_map(|(_, f)| reference::required_addons(&decode_utf8_or_windows_1252(&f.bytes)))
         .collect();
     // One it requires that the reference lacks is looked for beside it.
     if let Some(folder) = opts.input.parent() {
@@ -837,8 +838,7 @@ fn source_info(src: &source::Source) -> SourceInfo {
             "Unlicense",
         ];
         info.licence_spdx = info.licence_files.iter().find_map(|m| {
-            let text = String::from_utf8_lossy(&src.get(&format!("{}/{m}", src.dir()))?.bytes)
-                .into_owned();
+            let text = decode_utf8_or_windows_1252(&src.get(&format!("{}/{m}", src.dir()))?.bytes);
             SPDX.iter()
                 .find(|id| text.contains(**id))
                 .map(|id| (*id).to_owned())
@@ -847,11 +847,12 @@ fn source_info(src: &source::Source) -> SourceInfo {
     info
 }
 
-/// A script or text file as the importer reads it: UTF-8 (lossily) with
-/// Unix line endings, so a copy saved on Windows, or checked out there with
-/// `core.autocrlf`, imports exactly as it does elsewhere.
+/// A script or text file as the importer reads it: legacy-decoded (UTF-8, or
+/// CP1252 for pre-UTF-8 Add-Ons) with Unix line endings, so a copy saved on
+/// Windows, or checked out there with `core.autocrlf`, imports exactly as it
+/// does elsewhere.
 pub(crate) fn script_text(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let text = decode_utf8_or_windows_1252(bytes);
     if text.contains('\r') {
         text.replace("\r\n", "\n").replace('\r', "\n")
     } else {
@@ -945,8 +946,8 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
         .values()
         .filter(|f| reachable.contains(&f.path.to_ascii_lowercase()))
         .map(|f| {
-            let text =
-                tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase();
+            let text = tscript::without_comments(&decode_utf8_or_windows_1252(&f.bytes))
+                .to_ascii_lowercase();
             regex::Regex::new(r"\bexec\s*\(")
                 .expect("pattern")
                 .find_iter(&text)
@@ -974,7 +975,9 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
         .files
         .values()
         .filter(|f| kind_of(&f.path) == "script")
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .map(|f| {
+            tscript::without_comments(&decode_utf8_or_windows_1252(&f.bytes)).to_ascii_lowercase()
+        })
         .collect::<Vec<_>>()
         .join("\n");
     for f in cx.src.files.values() {
@@ -3746,7 +3749,9 @@ fn sounds_and_rest(cx: &mut Ctx) {
         .files
         .values()
         .filter(|f| kind_of(&f.path) == "script")
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .map(|f| {
+            tscript::without_comments(&decode_utf8_or_windows_1252(&f.bytes)).to_ascii_lowercase()
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let mentions = |name: &str| {
@@ -4144,7 +4149,7 @@ fn load_path(
         .files
         .values()
         .find(|f| f.path.eq_ignore_ascii_case(script))
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)))?;
+        .map(|f| tscript::without_comments(&decode_utf8_or_windows_1252(&f.bytes)))?;
     let assigned =
         regex::RegexBuilder::new(&format!(r#"%{}\s*=\s*"([^"]*)"\s*;"#, regex::escape(&c[1])))
             .case_insensitive(true)
@@ -4236,7 +4241,7 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
             };
             if cx.src.get(&s.path).is_some_and(|f| {
                 required_if_present(
-                    &String::from_utf8_lossy(&f.bytes),
+                    &decode_utf8_or_windows_1252(&f.bytes),
                     c.line,
                     &c.callee,
                     &addon,

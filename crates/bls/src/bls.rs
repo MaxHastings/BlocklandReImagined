@@ -146,23 +146,6 @@ impl std::fmt::Display for Skipped {
         Ok(())
     }
 }
-/// Windows-1252, the code page v20 wrote its text in, for 0x80..0xA0.
-/// The five bytes it leaves undefined keep their Latin-1 control code.
-const CP1252_HIGH: [char; 32] = [
-    '\u{20ac}', '\u{0081}', '\u{201a}', '\u{0192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}',
-    '\u{02c6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{008d}', '\u{017d}', '\u{008f}',
-    '\u{0090}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}',
-    '\u{02dc}', '\u{2122}', '\u{0161}', '\u{203a}', '\u{0153}', '\u{009d}', '\u{017e}', '\u{0178}',
-];
-fn windows_1252(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|&b| match b {
-            0x80..0xa0 => CP1252_HIGH[usize::from(b - 0x80)],
-            _ => char::from(b),
-        })
-        .collect()
-}
 /// Torque's `getWord` of a number: an empty or unreadable word is 0.
 fn integer(word: Option<&&str>) -> i64 {
     word.and_then(|w| w.trim().parse::<f64>().ok())
@@ -239,7 +222,7 @@ fn read_with_header(
         // Without 0x80..0xA0 the two code pages agree; the stock saves'
         // degree signs keep the name Latin-1 their conversions carry.
         Err(_) => (
-            std::borrow::Cow::Owned(windows_1252(bytes)),
+            std::borrow::Cow::Owned(bri_content::text::decode_windows_1252(bytes)),
             if bytes.iter().any(|b| (0x80..0xa0).contains(b)) {
                 "windows-1252"
             } else {
