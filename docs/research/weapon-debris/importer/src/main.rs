@@ -88,8 +88,8 @@ fn convert(
     let source_sha256 = sha(&bytes);
     let (shape, provenance) = bri_convert::shape::read_dts(&bytes, id.to_owned())?;
     shape.validate()?;
-    let file = format!("models/{id}.json");
-    let native = serde_json::to_vec(&shape)?;
+    let file = format!("models/{id}.glb");
+    let native = bri_gltf::encode_model(&shape)?;
     let native_sha256 = sha(&native);
     fs::write(out.join(&file), native)?;
     fs::write(

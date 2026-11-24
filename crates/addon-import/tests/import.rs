@@ -5,6 +5,7 @@
 use bri_addon_import::{Options, import, report::Report};
 use bri_weapons::*;
 use glam::Vec3;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 fn fresh(name: &str) -> PathBuf {
@@ -56,6 +57,35 @@ fn fire(package: &Path, item: &str) -> Vec<String> {
 
 fn json(report: &Report) -> serde_json::Value {
     serde_json::to_value(report).unwrap()
+}
+
+#[test]
+fn legacy_brick_names_match_the_same_saved_name_as_utf8() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/Weapon_Synthetic_Blaster/bricks/pad.blb");
+    for (encoding, name) in [
+        ("cp1252", &b"45\xb0 \x93Ramp\x94"[..]),
+        ("utf8", "45° “Ramp”".as_bytes()),
+    ] {
+        let out = fresh(encoding);
+        let input = out.with_file_name("Brick_Encoded_Ramp");
+        std::fs::create_dir(&input).unwrap();
+        std::fs::copy(&fixture, input.join("pad.blb")).unwrap();
+        let mut script = b"datablock fxDTSBrickData(brickEncodedRampData) {\r\n brickFile = \"./pad.blb\";\r\n uiName = \"".to_vec();
+        script.extend_from_slice(name);
+        script.extend_from_slice(b"\";\r\n};\r\n");
+        std::fs::write(input.join("server.cs"), script).unwrap();
+        import(&Options {
+            input,
+            out: out.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+        let bytes = std::fs::read(out.join("assets/brick-catalog/stock-catalog.json")).unwrap();
+        let catalog: bri_content::brick::Catalog = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(catalog.bricks.len(), 1);
+        assert_eq!(catalog.bricks[0].display_name, "45° “Ramp”");
+    }
 }
 
 #[test]
@@ -585,11 +615,17 @@ fn real_community_samples() {
         .find(|b| b.function == "holeZombieInfect")
         .unwrap();
     assert!(infect.blockers.iter().any(|b| b.contains("eval")));
-    assert!(
-        zombie
-            .datablocks
-            .iter()
-            .any(|d| d.recognised_as == "bot" && d.status == "recognised_only")
+    let bots = bri_sim::bot_kind::BotPack::from_json(
+        &std::fs::read(out.join("assets/bots.json")).unwrap(),
+    )
+    .unwrap();
+    let [zombie_kind] = &bots.bots[..] else {
+        panic!("expected one imported zombie kind, got {:?}", bots.bots);
+    };
+    assert_eq!(zombie_kind.id, "bot_zombie:bot/zombieholebot");
+    assert_eq!(
+        zombie_kind.body.as_deref(),
+        Some("bot_zombie:archetype/zombieholebot")
     );
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
 }
@@ -1608,14 +1644,9 @@ datablock ShapeBaseImageData(blendGunImage) { shapeFile = "./gun.dts"; item = bl
     let file = presentation["models"]["add-ons/weapon_blend/gun.dts"]["file"]
         .as_str()
         .unwrap();
-    let shape: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(out.join("assets").join(file)).unwrap()).unwrap();
-    let blends: Vec<_> = shape["materials"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|m| m["blend"].as_str().unwrap().to_owned())
-        .collect();
+    let shape =
+        bri_gltf::read_model(&std::fs::read(out.join("assets").join(file)).unwrap()).unwrap();
+    let blends: Vec<_> = shape.materials.iter().map(|m| m.blend.as_str()).collect();
     assert_eq!(blends, ["opaque", "additive"]);
     let notes = serde_json::to_string(&report.assets).unwrap();
     assert!(
@@ -1755,6 +1786,87 @@ datablock ShapeBaseImageData(pathGunImage) { shapeFile = $PG::ModelPath @ "gun.d
     let model = &presentation["models"]["add-ons/weapon_pathglobal/models/gun.dts"];
     assert_ne!(model["source"], "placeholder", "{model}");
     assert!(!model.is_null(), "{}", presentation["models"]);
+    assert_eq!(model["file"], "models/gun.glb");
+    let asset = report
+        .assets
+        .iter()
+        .find(|asset| asset.source.ends_with("/models/gun.dts"))
+        .unwrap();
+    assert_eq!(asset.output.as_deref(), Some("assets/models/gun.glb"));
+    assert_eq!(
+        asset.id.as_deref(),
+        Some("weapon_pathglobal:asset/models/gun.dts")
+    );
+}
+
+#[test]
+fn readable_asset_paths_survive_reimport_and_avoid_file_and_directory_collisions() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("Test_Readable.zip");
+    let members = [
+        "Panel.png",
+        "textures/panel.png",
+        "textures/Panel.png/detail.png",
+        "textures/Con.png",
+    ];
+    let run = |output: &str, edited: u8| {
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&source).unwrap());
+        for (index, member) in members.iter().enumerate() {
+            zip.start_file(*member, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            let mut image = std::io::Cursor::new(Vec::new());
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([index as u8, edited, 0, 255]))
+                .write_to(&mut image, image::ImageFormat::Png)
+                .unwrap();
+            zip.write_all(&image.into_inner()).unwrap();
+        }
+        zip.finish().unwrap();
+        let out = root.path().join(output);
+        let report = import(&Options {
+            input: source.clone(),
+            out: out.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(out.join("assets/content.json")).unwrap())
+                .unwrap();
+        members.map(|member| {
+            let source = format!("Add-Ons/Test_Readable/{member}");
+            let asset = report
+                .assets
+                .iter()
+                .find(|asset| asset.source == source)
+                .unwrap();
+            let file = asset.output.as_ref().unwrap();
+            let id = asset.id.as_ref().unwrap();
+            assert!(bri_package::path::problem(file).is_none(), "{file}");
+            assert_eq!(
+                manifest["content"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["id"] == id.as_str())
+                    .unwrap()["file"],
+                file.as_str()
+            );
+            let bytes = std::fs::read(out.join(file)).unwrap();
+            assert_eq!(bri_addon_import::source::hash(&bytes), asset.sha256);
+            (file.clone(), id.clone(), asset.sha256.clone())
+        })
+    };
+    let first = run("first", 12);
+    let second = run("second", 34);
+    assert_eq!(first[0].0, "assets/textures/panel.png");
+    assert!(first[1].0.starts_with("assets/textures/panel-"));
+    assert!(first[2].0.starts_with("assets/textures/detail-"));
+    assert_eq!(first[3].0, "assets/textures/_con.png");
+    for ((old_file, old_id, old_sha), (new_file, new_id, new_sha)) in first.into_iter().zip(second)
+    {
+        assert_eq!(old_file, new_file);
+        assert_eq!(old_id, new_id);
+        assert_ne!(old_sha, new_sha);
+    }
 }
 
 /// Each item a player can pick gets one coverage level, the worst of what

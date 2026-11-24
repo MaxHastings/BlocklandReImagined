@@ -346,10 +346,12 @@ impl AvatarAssets {
                 .with_context(|| format!("Undeclared vehicle asset {path}"))
         };
         let model = asset(&definition.model)?;
-        let shape: bri_content::shape::Shape = serde_json::from_slice(
-            &crate::items::checked_read(&root, &model.path, &model.sha256, 32 << 20)?,
-        )?;
-        shape.validate()?;
+        let shape: bri_content::shape::Shape = bri_gltf::read_model(&crate::items::checked_read(
+            &root,
+            &model.path,
+            &model.sha256,
+            32 << 20,
+        )?)?;
         let mut sequences = BTreeMap::new();
         for (key, clips) in &pack.animation_aliases {
             let Some(alias) = key.strip_prefix(&format!("{HORSE}::")) else {
@@ -496,10 +498,9 @@ impl AvatarAssets {
             None => file(model)?,
         };
         let root = dir.canonicalize()?;
-        let shape: bri_content::shape::Shape = serde_json::from_slice(
+        let shape: bri_content::shape::Shape = bri_gltf::read_model(
             &crate::materials::read_resource(&root, &shape_file, 32 << 20)?,
         )?;
-        shape.validate()?;
         let package = model.split(':').next().unwrap_or_default();
         let mut images = BTreeMap::new();
         for material in &shape.materials {
@@ -3253,7 +3254,7 @@ fn link_animation_libraries(
 ) -> Result<()> {
     for id in bri_package::packages::animation_library_ids(dir, model) {
         let (lib_dir, file) = bri_package::packages::animation_library_file(root, packages, &id)?;
-        let shape: bri_content::shape::Shape = serde_json::from_slice(
+        let shape: bri_content::shape::Shape = bri_gltf::read_model(
             &crate::materials::read_resource(&lib_dir, &file, LIBRARY_LIMIT)?,
         )?;
         let bones: std::collections::BTreeSet<&str> = body

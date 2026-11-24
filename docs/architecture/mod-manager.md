@@ -16,7 +16,7 @@ kind of thing: "Import Add-On" converts it into an Add-On
 
 | Expectation | Mechanism (engine) | Player sees | State |
 |---|---|---|---|
-| One screen listing what is installed, on/off | `bri_package::library`: `packages.json` = on, `packages-disabled.json` = off, unlisted manifests = discovered (off) | Start Game → Add-Ons (as in v20, not the main menu): grouped list, Enabled box, Defaults | **built** |
+| One screen listing what is installed, on/off | `bri_package::library`: `packages.json` = on, `packages-disabled.json` = off, unlisted manifests = discovered (off) | Start Game → Add-Ons: category and individual checkboxes, search, and Defaults | **built** |
 | Know what each one is | Manifest `name`, `description`, `authors`, `license`, `provenance`, `provides` | Details: what it adds, credits, source | **built** |
 | Know where it runs | `packages.json` `side` | "Only on the server you host", "Everyone in the game", "Just you" | **built** |
 | Know what it may do | Manifest `capabilities` (checked by the package runtime) | "Allowed to: change the world's bricks, send chat messages" | **built** |
@@ -56,6 +56,10 @@ The engine owns the mechanism; the screen only shows it.
   atomically (temp file and rename; the disabled list first, so a failure
   between the two leaves a package listed twice and treated as on, never
   lost), then rescans.
+- A category box acts on eligible installed members, including members hidden
+  by search. The client resolves current category membership, stages ordinary
+  dependency plans together and writes one selection. Earlier successful
+  requests keep their exclusive roles. A mixed box requests enabling.
 - The manifest is read leniently for display only (`PackageInfo`). Checking a
   manifest is the package runtime's job; one the library cannot read at all
   is `library.manifest`.

@@ -935,7 +935,7 @@ fn lit_by_nodes(
         let Some(file) = bundle["assets"][id].as_str() else {
             continue;
         };
-        let shape: bri_content::shape::Shape = bri_content::strict::from_slice(&read(root, file)?)?;
+        let shape: bri_content::shape::Shape = bri_gltf::read_model(&read(root, file)?)?;
         if shape
             .materials
             .iter()
@@ -1120,13 +1120,12 @@ fn load_static_shape(
         .asset
         .as_deref()
         .context("Static model has no native asset")?;
-    let shape: bri_content::shape::Shape = bri_content::strict::from_slice(&read(
+    let shape: bri_content::shape::Shape = bri_gltf::read_model(&read(
         root,
         bundle["assets"][id]
             .as_str()
             .context("Static model asset missing")?,
     )?)?;
-    shape.validate()?;
     let detail = shape
         .details
         .iter()

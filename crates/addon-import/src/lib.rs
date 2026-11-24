@@ -8,6 +8,7 @@
 //! the source function, as behaviour an agent must build natively.
 //! Findings: `docs/audits/spike-addon-import.md`.
 use bri_console::Clamp;
+mod asset_paths;
 pub mod behaviour;
 pub mod coverage;
 pub mod gltf;
@@ -27,6 +28,7 @@ mod vehicle_script;
 mod weapon_fx;
 
 use anyhow::{Context, Result, ensure};
+use bri_content::text::decode_utf8_or_windows_1252;
 use bri_convert::tscript::{self, Datablock, Script};
 use reference::Reference;
 use report::*;
@@ -213,6 +215,7 @@ struct Ctx<'a> {
     shapes: BTreeMap<String, (String, bri_content::shape::Shape)>,
     /// Lower virtual path to package-relative output file.
     outputs: BTreeMap<String, String>,
+    asset_paths: asset_paths::AssetPaths,
     provides: Vec<serde_json::Value>,
     /// The projectiles of the Add-Ons this one depends on, by the ids their
     /// packages give them, as ports read them ([`ports::Import::dependencies`]).
@@ -559,7 +562,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         .files
         .iter()
         .filter(|(key, _)| key.ends_with(".cs"))
-        .flat_map(|(_, f)| reference::required_addons(&String::from_utf8_lossy(&f.bytes)))
+        .flat_map(|(_, f)| reference::required_addons(&decode_utf8_or_windows_1252(&f.bytes)))
         .collect();
     // One it requires that the reference lacks is looked for beside it.
     if let Some(folder) = opts.input.parent() {
@@ -590,6 +593,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         uses: BTreeMap::new(),
         shapes: BTreeMap::new(),
         outputs: BTreeMap::new(),
+        asset_paths: asset_paths::AssetPaths::default(),
         provides: vec![],
         dependency_projectiles: BTreeMap::new(),
         ported: BTreeMap::new(),
@@ -837,8 +841,7 @@ fn source_info(src: &source::Source) -> SourceInfo {
             "Unlicense",
         ];
         info.licence_spdx = info.licence_files.iter().find_map(|m| {
-            let text = String::from_utf8_lossy(&src.get(&format!("{}/{m}", src.dir()))?.bytes)
-                .into_owned();
+            let text = decode_utf8_or_windows_1252(&src.get(&format!("{}/{m}", src.dir()))?.bytes);
             SPDX.iter()
                 .find(|id| text.contains(**id))
                 .map(|id| (*id).to_owned())
@@ -847,11 +850,12 @@ fn source_info(src: &source::Source) -> SourceInfo {
     info
 }
 
-/// A script or text file as the importer reads it: UTF-8 (lossily) with
-/// Unix line endings, so a copy saved on Windows, or checked out there with
-/// `core.autocrlf`, imports exactly as it does elsewhere.
+/// A script or text file as the importer reads it: legacy-decoded (UTF-8, or
+/// CP1252 for pre-UTF-8 Add-Ons) with Unix line endings, so a copy saved on
+/// Windows, or checked out there with `core.autocrlf`, imports exactly as it
+/// does elsewhere.
 pub(crate) fn script_text(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let text = decode_utf8_or_windows_1252(bytes);
     if text.contains('\r') {
         text.replace("\r\n", "\n").replace('\r', "\n")
     } else {
@@ -945,8 +949,8 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
         .values()
         .filter(|f| reachable.contains(&f.path.to_ascii_lowercase()))
         .map(|f| {
-            let text =
-                tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase();
+            let text = tscript::without_comments(&decode_utf8_or_windows_1252(&f.bytes))
+                .to_ascii_lowercase();
             regex::Regex::new(r"\bexec\s*\(")
                 .expect("pattern")
                 .find_iter(&text)
@@ -974,7 +978,9 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
         .files
         .values()
         .filter(|f| kind_of(&f.path) == "script")
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .map(|f| {
+            tscript::without_comments(&decode_utf8_or_windows_1252(&f.bytes)).to_ascii_lowercase()
+        })
         .collect::<Vec<_>>()
         .join("\n");
     for f in cx.src.files.values() {
@@ -1592,7 +1598,6 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
     let files: Vec<_> = cx.src.files.values().cloned().collect();
     for f in files {
         let member = rel_member(cx, &f.path);
-        let digest = hash(&f.bytes);
         match kind_of(&f.path) {
             "text" if member.eq_ignore_ascii_case("colorSet.txt") => {
                 // A colorset is data read by the host chooser, not a script.
@@ -1613,8 +1618,8 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
             "shape" => {
                 match bri_convert::shape::read_dts(&f.bytes, content_id(&cx.ns, "shape", &member)) {
                     Ok((shape, provenance)) => {
-                        let rel = format!("models/{}.shape.json", &digest[..24]);
-                        cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&shape)?)?;
+                        let rel = cx.asset_paths.member("models", &member, "glb");
+                        cx.write(&format!("assets/{rel}"), &bri_gltf::encode_model(&shape)?)?;
                         let id = cx.id("asset", &member, &f.path, &format!("assets/{rel}"));
                         cx.shapes
                             .insert(f.path.to_ascii_lowercase(), (rel.clone(), shape));
@@ -1654,7 +1659,7 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
                 } else {
                     "sounds"
                 };
-                let rel = format!("{dir}/{}.{ext}", &digest[..24]);
+                let rel = cx.asset_paths.member(dir, &member, &ext);
                 cx.write(&format!("assets/{rel}"), &f.bytes)?;
                 let id = cx.id("asset", &member, &f.path, &format!("assets/{rel}"));
                 cx.outputs.insert(f.path.to_ascii_lowercase(), rel.clone());
@@ -1672,7 +1677,7 @@ fn convert_files(cx: &mut Ctx) -> Result<()> {
                 match bri_convert::brick::read(&f.bytes, id.clone()) {
                     Ok((brick, provenance)) => {
                         let native = serde_json::to_vec(&brick)?;
-                        let rel = format!("bricks/{}.brick.json", &hash(&native)[..24]);
+                        let rel = cx.asset_paths.brick(&member);
                         cx.write(&format!("assets/{rel}"), &native)?;
                         let id =
                             cx.id("brick_geometry", &member, &f.path, &format!("assets/{rel}"));
@@ -2359,8 +2364,8 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         .collect();
     if !missing.is_empty() {
         let shape = placeholder();
-        let shape_bytes = serde_json::to_vec(&shape)?;
-        let shape_rel = format!("models/{}.shape.json", &hash(&shape_bytes)[..24]);
+        let shape_bytes = bri_gltf::encode_model(&shape)?;
+        let shape_rel = "generated/missing-model.glb";
         cx.write(&format!("assets/{shape_rel}"), &shape_bytes)?;
         flat_texture(cx, &mut textures, Flat::White)?;
         for key in missing {
@@ -2369,7 +2374,7 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
                 source: None,
                 detail: "not in this Add-On or did not convert; presented as a placeholder cube"
                     .into(),
-                resolution: Some(shape_rel.clone()),
+                resolution: Some(shape_rel.into()),
             });
             models.insert(
                 key,
@@ -2474,16 +2479,15 @@ fn flat_texture(
     textures: &mut serde_json::Map<String, serde_json::Value>,
     flat: Flat,
 ) -> Result<String> {
-    let (key, alpha) = match flat {
-        Flat::White => ("placeholder:white", 255),
-        Flat::Clear => ("placeholder:clear", 0),
+    let (key, rel, alpha) = match flat {
+        Flat::White => ("placeholder:white", "generated/white.png", 255),
+        Flat::Clear => ("placeholder:clear", "generated/clear.png", 0),
     };
     if !textures.contains_key(key) {
         let mut png = vec![];
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, alpha]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .expect("in-memory PNG");
-        let rel = format!("textures/{}.png", &hash(&png)[..24]);
         cx.write(&format!("assets/{rel}"), &png)?;
         textures.insert(
             key.into(),
@@ -3275,12 +3279,14 @@ fn borrow_brick(cx: &mut Ctx, path: &str, bytes: &[u8]) -> String {
     if cx.borrowed.contains_key(&id) {
         return id;
     }
-    let fingerprint = hash(format!("{id}\0{}", hash(bytes)).as_bytes());
-    let rel = format!("bricks/{}.brick.json", &fingerprint[..24]);
-    let written = bri_convert::brick::read(bytes, id.clone())
-        .and_then(|(brick, _)| cx.write(&format!("assets/{rel}"), &serde_json::to_vec(&brick)?));
+    let written = bri_convert::brick::read(bytes, id.clone()).and_then(|(brick, _)| {
+        let bytes = serde_json::to_vec(&brick)?;
+        let rel = cx.asset_paths.brick(path);
+        cx.write(&format!("assets/{rel}"), &bytes)?;
+        Ok(rel)
+    });
     match written {
-        Ok(()) => {
+        Ok(rel) => {
             cx.id("brick_geometry", path, path, &format!("assets/{rel}"));
             cx.borrowed.insert(id.clone(), rel);
             id
@@ -3301,9 +3307,7 @@ fn borrow_native_brick(cx: &mut Ctx, path: &str, mut native: reference::NativeBr
     if cx.borrowed.contains_key(&id) {
         return id;
     }
-    let fingerprint =
-        hash(format!("{id}\0{}\0{}", native.source_sha256, native.native_sha256).as_bytes());
-    let rel = format!("bricks/{}.brick.json", &fingerprint[..24]);
+    let rel = cx.asset_paths.brick(path);
     native.mesh.id = id.clone();
     let written = serde_json::to_vec(&native.mesh)
         .map_err(anyhow::Error::from)
@@ -3415,8 +3419,10 @@ fn loadable_bricks(cx: &mut Ctx, catalog: bri_content::brick::Catalog) -> Result
                         .unwrap_or("png")
                         .to_ascii_lowercase();
                     let digest = hash(&f.bytes);
-                    let name = format!("icons/{}.{ext}", &digest[..24]);
-                    cx.write(&format!("assets/brick-catalog/{name}"), &f.bytes)?;
+                    let member = rel_member(cx, &f.path);
+                    let output = cx.asset_paths.member("brick-catalog/icons", &member, &ext);
+                    cx.write(&format!("assets/{output}"), &f.bytes)?;
+                    let name = output.strip_prefix("brick-catalog/").expect("catalog icon");
                     icons.insert(
                         icon,
                         json!({ "file": name, "sha256": digest, "width": width, "height": height, "source": f.path }),
@@ -3746,7 +3752,9 @@ fn sounds_and_rest(cx: &mut Ctx) {
         .files
         .values()
         .filter(|f| kind_of(&f.path) == "script")
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .map(|f| {
+            tscript::without_comments(&decode_utf8_or_windows_1252(&f.bytes)).to_ascii_lowercase()
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let mentions = |name: &str| {
@@ -4144,7 +4152,7 @@ fn load_path(
         .files
         .values()
         .find(|f| f.path.eq_ignore_ascii_case(script))
-        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)))?;
+        .map(|f| tscript::without_comments(&decode_utf8_or_windows_1252(&f.bytes)))?;
     let assigned =
         regex::RegexBuilder::new(&format!(r#"%{}\s*=\s*"([^"]*)"\s*;"#, regex::escape(&c[1])))
             .case_insensitive(true)
@@ -4236,7 +4244,7 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
             };
             if cx.src.get(&s.path).is_some_and(|f| {
                 required_if_present(
-                    &String::from_utf8_lossy(&f.bytes),
+                    &decode_utf8_or_windows_1252(&f.bytes),
                     c.line,
                     &c.callee,
                     &addon,

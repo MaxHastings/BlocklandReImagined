@@ -193,6 +193,13 @@ impl Plan {
     }
 }
 
+/// Accepted choices (including implied choices) and requests that could
+/// not be applied. The order of requests determines priority among conflicts.
+pub struct BatchChange {
+    pub accepted: Vec<String>,
+    pub refused: Vec<Diagnostic>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Library {
     root: PathBuf,
@@ -745,7 +752,26 @@ impl Library {
                     .at(id.to_string()),
                 );
             } else {
-                plan.also = self.dependents(id);
+                let dependents = self.dependents(id);
+                if let Some(required) = dependents
+                    .iter()
+                    .filter_map(|id| self.get(id))
+                    .find(|entry| entry.required)
+                {
+                    plan.refused.push(
+                        Diagnostic::error(
+                            "library.required",
+                            format!(
+                                "{} is needed by the base game ({})",
+                                target.name(),
+                                required.name()
+                            ),
+                        )
+                        .at(id.to_string()),
+                    );
+                } else {
+                    plan.also = dependents;
+                }
             }
             return plan;
         }
@@ -882,25 +908,59 @@ impl Library {
                     .join("\n")
             );
         }
-        let changing: BTreeSet<&str> = plan
+        let ids: Vec<&str> = plan
             .also
             .iter()
             .map(String::as_str)
             .chain([plan.id.as_str()])
             .collect();
+        self.apply_selection(&ids, plan.enable)
+    }
+
+    /// Apply several ordinary choices with one list update. A refusal
+    /// leaves the candidate selection untouched. Later requests see the
+    /// dependencies and exclusive roles already chosen by earlier ones.
+    pub fn apply_batch(&mut self, ids: &[String], enabled: bool) -> Result<BatchChange> {
+        let mut staged = self.clone();
+        let mut accepted = Vec::new();
+        let mut refused = Vec::new();
+        let mut seen = BTreeSet::new();
+        for id in ids {
+            let plan = staged.plan(id, enabled);
+            if !plan.allowed() {
+                refused.extend(plan.refused);
+                continue;
+            }
+            for selected in plan.also.into_iter().chain([plan.id]) {
+                if !seen.insert(selected.clone()) {
+                    continue;
+                }
+                if let Some(entry) = staged.entries.iter_mut().find(|e| e.id() == selected) {
+                    entry.enabled = enabled;
+                }
+                accepted.push(selected);
+            }
+        }
+        if !accepted.is_empty() {
+            let chosen = accepted.iter().map(String::as_str).collect::<Vec<_>>();
+            self.apply_selection(&chosen, enabled)?;
+        }
+        Ok(BatchChange { accepted, refused })
+    }
+
+    fn apply_selection(&mut self, ids: &[&str], enabled: bool) -> Result<()> {
+        let changing: BTreeSet<&str> = ids.iter().copied().collect();
         let mut on: Vec<PackageEntry> = self
             .entries
             .iter()
-            .filter(|e| e.enabled && (plan.enable || !changing.contains(e.id())))
+            .filter(|e| e.enabled && (enabled || !changing.contains(e.id())))
             .map(|e| e.package.clone())
             .collect();
-        if plan.enable {
+        if enabled {
             // After everything already on, each package after the ones it
             // depends on: dependencies, the package, then its companions.
-            let mut waiting: Vec<&LibraryEntry> = plan
-                .also
+            let mut waiting: Vec<&LibraryEntry> = ids
                 .iter()
-                .chain([&plan.id])
                 .filter_map(|id| self.get(id))
                 .filter(|e| !e.enabled)
                 .collect();

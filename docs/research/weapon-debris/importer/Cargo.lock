@@ -113,6 +113,7 @@ dependencies = [
  "bri-console",
  "bri-content",
  "bri-events",
+ "bri-gltf",
  "bri-world",
  "glam",
  "image",
@@ -142,11 +143,24 @@ name = "bri-files"
 version = "0.1.0"
 
 [[package]]
+name = "bri-gltf"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bri-content",
+ "glam",
+ "image",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bri-weapon-debris-import"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-convert",
+ "bri-gltf",
  "image",
  "serde",
  "serde_json",

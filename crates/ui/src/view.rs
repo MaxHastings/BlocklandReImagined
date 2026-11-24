@@ -71,6 +71,8 @@ pub struct NodeState {
     pub value: Value,
     /// Popup/list items: (text, id). List text uses `\t` to separate columns.
     pub items: Vec<(String, i64)>,
+    /// List section headers. Ordinary rows in a grouped list are indented.
+    pub section_rows: Vec<i64>,
     /// List items (ids) drawn in the warning colour: a row that needs the
     /// player's attention.
     pub flagged: Vec<i64>,
@@ -180,10 +182,12 @@ pub fn check_cell(on: bool, active: bool) -> &'static str {
     }
 }
 
+pub const MIXED_CHECK_CELL: &str = "[~]";
+
 /// The check box a [`check_cell`] stands for: (ticked, can change).
 fn parse_check_cell(text: &str) -> Option<(bool, bool)> {
     Some(match text {
-        "[ ]" => (false, true),
+        "[ ]" | MIXED_CHECK_CELL => (false, true),
         "[x]" => (true, true),
         "[-]" => (false, false),
         "[#]" => (true, false),
@@ -468,6 +472,7 @@ impl View {
                 tint: None,
                 value: initial_value(c),
                 items: Vec::new(),
+                section_rows: Vec::new(),
                 popup_groups: HashMap::new(),
                 popup_aliases: HashMap::new(),
                 flagged: Vec::new(),
@@ -1953,9 +1958,12 @@ impl View {
             .get(n.ctrl.field("checkProfile").unwrap_or("GuiCheckBoxProfile"));
         let sel = self.selected(id);
         for (i, (text, item)) in n.state.items.iter().enumerate() {
-            let row = Rect::new(r.x, r.y + i as i32 * rh, r.w, rh);
+            let inset = self.list_row_inset(id, *item);
+            let row = Rect::new(r.x + inset, r.y + i as i32 * rh, (r.w - inset).max(0), rh);
             if Some(*item) == sel {
                 dl.fill(row, style.fill_color_hl.unwrap_or([128, 128, 255, 255]));
+            } else if n.state.section_rows.contains(item) {
+                dl.fill(row, [218, 225, 236, 255]);
             }
             if let Some(Some(key)) = n.state.row_icons.get(i) {
                 let side = (rh - 2) as f32;
@@ -1972,8 +1980,8 @@ impl View {
                 if x >= 9999 {
                     continue;
                 }
-                let next = cols.get(c + 1).copied().unwrap_or(r.w);
-                let cell = Rect::new(r.x + x + 2, row.y, (next - x - 2).max(0), rh);
+                let next = cols.get(c + 1).copied().unwrap_or(row.w);
+                let cell = Rect::new(row.x + x + 2, row.y, (next - x - 2).max(0), rh);
                 if Some(c) == check
                     && let Some((on, active)) = parse_check_cell(field)
                     && let Some(bmp) = check_style.and_then(|s| s.bitmap.as_deref())
@@ -1989,6 +1997,14 @@ impl View {
                         let size = (src[2] as i32).min(src[3] as i32).min(rh);
                         let at = Rect::new(cell.x, row.y + (rh - size) / 2, size, size);
                         self.piece(dl, bmp, src, at);
+                        if field == MIXED_CHECK_CELL && size > 6 {
+                            dl.fill(
+                                Rect::new(at.x + 3, at.y + (size - 2) / 2, size - 6, 2),
+                                check_style
+                                    .and_then(|s| s.font_color)
+                                    .unwrap_or(geom::BLACK),
+                            );
+                        }
                         continue;
                     }
                 }
@@ -2012,6 +2028,15 @@ impl View {
                     dl.pop_clip();
                 }
             }
+        }
+    }
+
+    fn list_row_inset(&self, id: NodeId, item: i64) -> i32 {
+        let sections = &self.nodes[id].state.section_rows;
+        if sections.is_empty() || sections.contains(&item) {
+            0
+        } else {
+            10
         }
     }
 
@@ -2761,9 +2786,10 @@ impl View {
                     // is never half of a double-click.
                     let check = self.list_check_column(t).filter(|&c| {
                         let cols = self.list_columns(t);
+                        let inset = self.list_row_inset(t, item);
                         let from = cols.get(c).copied().unwrap_or(0);
-                        let to = cols.get(c + 1).copied().unwrap_or(r.w);
-                        (from..to).contains(&(x - r.x))
+                        let to = cols.get(c + 1).copied().unwrap_or(r.w - inset);
+                        (from..to).contains(&(x - r.x - inset))
                             && text.split('\t').nth(c).and_then(parse_check_cell).is_some()
                     });
                     if check.is_some() {

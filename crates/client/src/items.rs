@@ -1024,8 +1024,7 @@ impl ItemAssets {
                     input_bytes + bytes.len() <= 256 * 1024 * 1024,
                     "Item aggregate input budget exceeded"
                 );
-                let mut shape: Shape = serde_json::from_slice(&bytes)?;
-                shape.validate()?;
+                let mut shape: Shape = bri_gltf::read_model(&bytes)?;
                 shape.expand_live_frames();
                 let vertices = shape
                     .meshes
@@ -1728,7 +1727,7 @@ fn present_gaps(
     let names = names.chain(pack.images.values().map(|i| &i.model));
     for name in names.chain(pack.projectiles.values().map(|p| &p.model)) {
         let lower = name.replace('\\', "/").to_ascii_lowercase();
-        if !lower.ends_with(OWN_MODEL) || own.contains_key(&lower) {
+        if !bri_gltf::is_model_file(&lower) || own.contains_key(&lower) {
             continue;
         }
         let key = own_model(dir, abs, name, manifest, added, faults);
@@ -2250,12 +2249,11 @@ const ICON_SIDE: u32 = 512;
 const OVERLAY_BYTES: u64 = 4 * 1024 * 1024;
 const OVERLAY_SIDE: u32 = 2048;
 /// An Add-On's own item model names a native model file (`bri_content::shape`).
-const OWN_MODEL: &str = ".shape.json";
 /// Largest Add-On model file, and model texture file and side.
 const OWN_MODEL_BYTES: u64 = 8 * 1024 * 1024;
 const OWN_TEXTURE_BYTES: u64 = 4 * 1024 * 1024;
 const OWN_TEXTURE_SIDE: u32 = 1024;
-/// An Add-On's own item model: `<name>.shape.json`, relative to the folder
+/// An Add-On's own compiled item model, relative to the folder
 /// holding `weapons.json`, a native model whose materials each name a PNG
 /// beside it (`wood` draws `wood.png`), as vehicle models' do. It is keyed
 /// under the Add-On (`<dir>/<name>`), so two Add-Ons' models never collide,
@@ -2281,8 +2279,7 @@ fn own_model(
             "model {file} must be a path inside the Add-On"
         );
         let bytes = crate::materials::read_resource(abs, &file, OWN_MODEL_BYTES)?;
-        let shape: Shape = serde_json::from_slice(&bytes)?;
-        shape.validate()?;
+        let shape: Shape = bri_gltf::read_model(&bytes)?;
         let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         for p in shape.meshes.iter().flatten().flat_map(|m| &m.positions) {
             lo = lo.min(Vec3::from(*p));
@@ -2954,13 +2951,12 @@ mod add_on_icon_tests {
             "a handle and a head across it: {resource:?}"
         );
         let origin = &added.origin[&format!("model:{key}")];
-        let shape: Shape = serde_json::from_slice(&checked_read(
+        let shape: Shape = bri_gltf::read_model(&checked_read(
             origin,
             &resource.file,
             &resource.sha256,
             OWN_MODEL_BYTES,
         )?)?;
-        shape.validate()?;
         assert!(
             shape.nodes.iter().any(|n| n.name == "mountPoint"),
             "held at its grip"
@@ -3847,9 +3843,8 @@ mod metal_tests {
     #[test]
     fn the_steel_ball_model_is_bare_metal_with_linear_detail() -> Result<()> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packages/showcase/steel-ball-kit/assets/models/steel-ball.shape.json");
-        let shape: Shape = serde_json::from_slice(&std::fs::read(path)?)?;
-        shape.validate()?;
+            .join("../../packages/showcase/steel-ball-kit/assets/models/steel-ball.glb");
+        let shape: Shape = bri_gltf::read_model(&std::fs::read(path)?)?;
         let (steel, detail) = (image("steel"), image("steel-detail"));
         let pose = bri_content::animation::sample(&shape, None, 0.0)?;
         let scene = native_shape_scene(

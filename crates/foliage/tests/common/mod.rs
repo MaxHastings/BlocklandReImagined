@@ -198,7 +198,7 @@ pub fn original_world() -> PhysicsWorld {
                     w.insert_collider(c, None);
                 }
                 bri_content::scene::Kind::StaticModel => {
-                    let shape: bri_content::shape::Shape = serde_json::from_slice(&data).unwrap();
+                    let shape = bri_gltf::read_model(&data).unwrap();
                     for c in bri_physics::content::static_shape_colliders(&shape, t).unwrap() {
                         w.insert_collider(c.user_data(3), None);
                     }

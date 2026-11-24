@@ -20,7 +20,7 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `weapons` | everyone | weapons ([Weapons](weapons.md)) | `packages/samples/sample-bubble-blaster` |
 | `bricks`, `vehicles` | everyone | written by Import Add-On ([Old v20 Add-Ons and new bricks](old-addons.md)), or a `vehicles.json` you write (fields below) | `packages/showcase/steel-ball-kit` |
 | `bots` | everyone | bots a Vehicle Spawn brick can hold: name and how they play (fields below) | `packages/blockhead_bot` |
-| `body` | everyone | a player body: a native shape (`.shape.json`) an `archetype` names as its `model`, its PNGs listed in `assets/content.json`. Carried with its archetype, it makes the Add-On everyone's, so joiners download the body and see it ([glTF models](gltf-models.md)) | `crates/client/tests/add_on_join.rs` |
+| `body` | everyone | a player body: a compiled model (`.glb`) an `archetype` names as its `model`, its PNGs listed in `assets/content.json`. Carried with its archetype, it makes the Add-On everyone's, so joiners download the body and see it ([glTF models](gltf-models.md)) | `crates/client/tests/add_on_join.rs` |
 | `map` | everyone | a map in Start Game: a native map bundle's `bundle.json` holding one map, `<id>:map/<name>`, with its scene, models, textures, spawn points and lights beside it ([Making maps](maps.md)) | `packages/samples/sample-map` |
 | `texture`, `block` | everyone | a PNG for block faces or HUD atlases (4096 px per edge, 4M pixels total, 4 MiB encoded); textures or flipbooks per face with named states. Textures share a 64 MiB decoded RGBA budget per Add-On | `crates/sim/tests/blocks.rs` |
 
@@ -643,7 +643,7 @@ no seats cannot be mounted. These fields exist for Add-Ons:
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).
 
-**Bare metal.** A package model's material (`*.shape.json`) may carry
+**Bare metal.** A package model's material may carry
 `"metal": { "color", "roughness", "detail", "detail_scale",
 "detail_strength" }`: the game then draws it as physically based metal that
 reflects the world around it (a reflection probe placed at the nearest

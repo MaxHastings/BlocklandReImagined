@@ -86,7 +86,7 @@ fn main() -> Result<()> {
                 materials.insert(material);
             }
         }
-        let file = store(&serde_json::to_vec(&shape)?, "shape.json")?;
+        let file = store(&bri_gltf::encode_model(&shape)?, "glb")?;
         shapes.insert(id.to_string(), file);
     }
     let mut textures = BTreeMap::new();

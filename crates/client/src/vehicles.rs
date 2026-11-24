@@ -329,8 +329,7 @@ impl VehicleAssets {
                 32 << 20,
             )
             .and_then(|bytes| {
-                let mut shape: Shape = serde_json::from_slice(&bytes)?;
-                shape.validate()?;
+                let mut shape: Shape = bri_gltf::read_model(&bytes)?;
                 shape.expand_live_frames();
                 Ok(shape)
             });
@@ -3337,7 +3336,7 @@ pub(crate) mod tests {
             .clone();
         let model_path = dir.path().join(&car_model);
         let mut shape: bri_content::shape::Shape =
-            serde_json::from_slice(&std::fs::read(&model_path)?)?;
+            bri_gltf::read_model(&std::fs::read(&model_path)?)?;
         for name in ["lens", "tail"] {
             shape.meshes.push(shape.meshes[0].clone());
             shape.objects.push(bri_content::shape::Object {

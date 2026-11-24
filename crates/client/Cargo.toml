@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+bri-gltf.workspace = true
 mimalloc.workspace = true
 imbl.workspace = true
 bri-files.workspace = true

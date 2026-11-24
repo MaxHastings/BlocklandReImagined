@@ -161,11 +161,12 @@ crate: 20 ms mono Opus frames, targeting 24 kbit/s (at most 256 bytes including 
   Host moderation follows the verified principal through rename/reconnect for
   the server session; disconnected owner IDs are removed. Local mutes belong
   to the current connection and cannot affect an unrelated server.
-- Microphones default to push-to-talk. A disabled server, main-menu preview,
-  lost focus or host mute cannot transmit. Explicitly selected missing devices
-  never fall back to another input. Startup/teardown do not wait on a driver on
-  the game thread; missing/failed devices retry. Master volume and background
-  mute include received voice.
+- Microphones default to push-to-talk, which releases the key on focus loss.
+  Voice Activation can send speech in an active voice session while the game
+  is unfocused or minimized. A disabled server, main-menu preview or host mute
+  prevents transmission. Explicitly selected missing devices never fall back
+  to another input. Device startup and teardown stay off the game thread.
+  Master volume and background mute apply to received voice.
 - Capacity is bounded, not a bandwidth guarantee. At an average 60-byte Opus
   payload, all 32 talking at once requires about 4.2 MB/s host application egress
   before QUIC/IP overhead; ordinary conversations cost much less. Real Internet

@@ -55,7 +55,7 @@ fn library_clips(
         let (lib_dir, file) =
             bri_package::packages::animation_library_file(content_root, packages, &id)?;
         let shape: bri_content::shape::Shape =
-            serde_json::from_slice(&bounded_bytes(&contained(&lib_dir, &file)?, LIBRARY_LIMIT)?)
+            bri_gltf::read_model(&bounded_bytes(&contained(&lib_dir, &file)?, LIBRARY_LIMIT)?)
                 .with_context(|| format!("animation library {id}"))?;
         for clip in &shape.animations {
             clip.validate()
@@ -140,8 +140,7 @@ pub fn body_pose_assets(
                       bind_only: bool|
      -> Result<Option<AnimationAsset>> {
         let bytes = bounded_bytes(&contained(root, file)?, 32 << 20)?;
-        let shape: bri_content::shape::Shape = serde_json::from_slice(&bytes)?;
-        shape.validate()?;
+        let shape: bri_content::shape::Shape = bri_gltf::read_model(&bytes)?;
         if shape.animations.is_empty() && !bind_only {
             return Ok(None);
         }
@@ -208,7 +207,7 @@ pub fn body_pose_assets(
                 else {
                     continue;
                 };
-                if !file.ends_with(".shape.json")
+                if !bri_gltf::is_model_file(file)
                     || assets.contains_key(id)
                     || selected.contains(id)
                     || libraries.contains(&id.to_ascii_lowercase())
@@ -313,7 +312,7 @@ pub fn body_pose_assets(
             };
             let Some(file) = value["model"]
                 .as_str()
-                .filter(|f| f.ends_with(".shape.json") && *f == image.model)
+                .filter(|f| bri_gltf::is_model_file(f) && *f == image.model)
             else {
                 continue;
             };
@@ -592,8 +591,7 @@ fn body_rig(dir: &Path, model: &str, file: Option<&str>) -> Result<bri_content::
         }
     };
     let shape: bri_content::shape::Shape =
-        serde_json::from_slice(&bounded_bytes(&contained(dir, file)?, 32 << 20)?)?;
-    shape.validate()?;
+        bri_gltf::read_model(&bounded_bytes(&contained(dir, file)?, 32 << 20)?)?;
     let sequences = shape
         .animations
         .iter()
@@ -1496,7 +1494,7 @@ fn item_choices(
 /// (`bri_weapons::muzzle::barrel`), as clients draw it: from the base
 /// presentation (`presentation.json` and its model files), each Add-On's
 /// own presentation, and Add-On images whose model is their own
-/// `*.shape.json`. An image none of these describe is left out and fires
+/// compiled model file. An image none of these describe is left out and fires
 /// from the hand itself.
 pub fn image_barrels(
     presentation_root: &Path,
@@ -1509,7 +1507,8 @@ pub fn image_barrels(
         serde_json::from_slice(&bounded_bytes(&path, 32 << 20).ok()?).ok()
     };
     let shape = |root: &Path, file: &str| -> Option<bri_content::shape::Shape> {
-        serde_json::from_value(read(root, file)?).ok()
+        let path = contained(root, file).ok()?;
+        bri_gltf::read_model(&bounded_bytes(&path, 32 << 20).ok()?).ok()
     };
     let triple = |v: &Value| -> [f32; 3] {
         let a = |i: usize| v.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
@@ -1548,7 +1547,7 @@ pub fn image_barrels(
         };
         for (id, image) in pack["images"].as_object().into_iter().flatten() {
             let model = image["model"].as_str().unwrap_or_default();
-            if out.contains_key(id) || !model.ends_with(".shape.json") {
+            if out.contains_key(id) || !bri_gltf::is_model_file(model) {
                 continue;
             }
             let barrel = bri_weapons::muzzle::barrel(

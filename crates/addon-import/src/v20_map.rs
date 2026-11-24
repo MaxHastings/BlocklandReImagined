@@ -8,6 +8,7 @@
 //! links, or copies across drives) when `--v20` names one, for the
 //! textures, skies and models a map borrows from the base game.
 use anyhow::{Context, Result, ensure};
+use bri_content::text::decode_utf8_or_windows_1252;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -89,7 +90,7 @@ fn borrowed(input: &Path, stem: &str) -> Result<Vec<String>> {
     }
     let mut names = std::collections::BTreeSet::new();
     for text in missions {
-        let text = String::from_utf8_lossy(&text).replace('\\', "/");
+        let text = decode_utf8_or_windows_1252(&text).replace('\\', "/");
         let lower = text.to_ascii_lowercase();
         // `add-ons/Name/...` and the mission's mod-root form `~/Name/...`.
         let starts = lower
@@ -542,7 +543,7 @@ fn foliage(root: &Path, mission: &str, map_id: &str, scene: &Value, dir: &Path) 
             "new fxfoliagereplicator("
         };
         let nth = seen.entry(class.into()).or_default();
-        let line = String::from_utf8_lossy(&text)
+        let line = decode_utf8_or_windows_1252(&text)
             .lines()
             .enumerate()
             .filter(|(_, l)| l.to_ascii_lowercase().contains(class))
@@ -708,7 +709,8 @@ fn scripts(root: &Path, stem: &str) -> Result<Vec<(String, String)>> {
                         .strip_prefix(&folder)?
                         .to_string_lossy()
                         .replace('\\', "/");
-                    let text = String::from_utf8_lossy(&std::fs::read(&path)?).into_owned();
+                    let bytes = std::fs::read(&path)?;
+                    let text = decode_utf8_or_windows_1252(&bytes).into_owned();
                     out.push((format!("Add-Ons/{stem}/{relative}"), text));
                 }
             }
@@ -723,7 +725,7 @@ fn scripts(root: &Path, stem: &str) -> Result<Vec<(String, String)>> {
                 std::io::Read::read_to_end(&mut entry, &mut bytes)?;
                 out.push((
                     format!("Add-Ons/{stem}/{name}"),
-                    String::from_utf8_lossy(&bytes).into_owned(),
+                    decode_utf8_or_windows_1252(&bytes).into_owned(),
                 ));
             }
         }

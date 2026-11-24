@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use bri_content::{
     avatar::{Rig, Source},
-    shape::{ClipSet, Shape},
+    shape::ClipSet,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -37,13 +37,13 @@ struct Record {
     source_sha256: String,
     output: Option<String>,
 }
-fn asset<T: serde::de::DeserializeOwned>(
+fn asset(
     root: &Path,
     manifest: &Manifest,
     name: &str,
     alias: &str,
     line: usize,
-) -> Result<(T, Source)> {
+) -> Result<(Vec<u8>, Source)> {
     let records: Vec<_> = manifest
         .records
         .iter()
@@ -75,7 +75,7 @@ fn asset<T: serde::de::DeserializeOwned>(
         native_sha256: hash(&bytes),
         constructor_line: line,
     };
-    Ok((serde_json::from_slice(&bytes)?, source))
+    Ok((bytes, source))
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -105,16 +105,17 @@ fn main() -> Result<()> {
     let constructor =
         bri_convert::avatar::constructor(std::str::from_utf8(&script_bytes)?, "mDts")?;
     let manifest: Manifest = serde_json::from_slice(&read(&native.join("manifest.json"))?)?;
-    let (shape, source): (Shape, _) = asset(
+    let (shape_bytes, source) = asset(
         &native,
         &manifest,
         &constructor.shape.0,
         "base",
         constructor.shape.1,
     )?;
-    let mut rig = Rig { schema_version: 1, id: "v20/avatar/blockhead".into(), shape, sequences: BTreeMap::new(), sources: vec![source], omissions: vec!["Material/face/decal bindings, customization, gameplay state selection and runtime rendering remain separate integration work".into()] };
+    let mut rig = Rig { schema_version: 1, id: "v20/avatar/blockhead".into(), shape: bri_gltf::read_model(&shape_bytes)?, sequences: BTreeMap::new(), sources: vec![source], omissions: vec!["Material/face/decal bindings, customization, gameplay state selection and runtime rendering remain separate integration work".into()] };
     for (path, alias, line) in constructor.sequences {
-        let (mut clips, source): (ClipSet, _) = asset(&native, &manifest, &path, &alias, line)?;
+        let (clip_bytes, source) = asset(&native, &manifest, &path, &alias, line)?;
+        let mut clips: ClipSet = serde_json::from_slice(&clip_bytes)?;
         ensure!(
             clips.schema_version == 1 && clips.animations.len() == 1,
             "Expected one source clip: {path}"

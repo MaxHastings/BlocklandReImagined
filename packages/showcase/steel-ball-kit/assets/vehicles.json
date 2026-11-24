@@ -14,7 +14,7 @@
         "jet_force": 0.0
       },
       "flight": null,
-      "model": "models/steel-ball.shape.json",
+      "model": "models/steel-ball.glb",
       "seats": [],
       "wheels": [],
       "weapon": null,
@@ -156,10 +156,10 @@
   "assets": [
     {
       "virtual_path": "Add-Ons/Vehicle_SteelBall/steel-ball.dts",
-      "path": "models/steel-ball.shape.json",
-      "sha256": "bacc0621438e88cc575cf5203a957735aa5b49c658f67327d923ed4f83c0fcb9",
+      "path": "models/steel-ball.glb",
+      "sha256": "204bef4353e302991e6aea83d05b7a3f7e74729fe3c871cb9b5b75cb476f71af",
       "kind": "model",
-      "source_sha256": "bacc0621438e88cc575cf5203a957735aa5b49c658f67327d923ed4f83c0fcb9"
+      "source_sha256": "204bef4353e302991e6aea83d05b7a3f7e74729fe3c871cb9b5b75cb476f71af"
     },
     {
       "virtual_path": "Add-Ons/Vehicle_SteelBall/steel.png",

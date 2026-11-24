@@ -106,7 +106,7 @@ fn main() -> Result<()> {
                     !file.contains(['/', '\\', ':']),
                     "Invalid collision output path"
                 );
-                let shape = serde_json::from_slice(&std::fs::read(content.join(file))?)?;
+                let shape = bri_gltf::read_model(&std::fs::read(content.join(file))?)?;
                 collision_bodies.push(
                     bri_convert::collision::bake(entry.id.clone(), &brick, Some(&shape))
                         .with_context(|| format!("Collision for {}", entry.id))?,

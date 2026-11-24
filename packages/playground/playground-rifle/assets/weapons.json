@@ -5,13 +5,13 @@
     "playground-rifle:weapon/carbine": {
       "ui_name": "Pulse Carbine",
       "image": "playground-rifle:image/carbine",
-      "model": "models/carbine.shape.json"
+      "model": "models/carbine.glb"
     }
   },
   "images": {
     "playground-rifle:image/carbine": {
       "projectile": "playground-rifle:projectile/pulse",
-      "model": "models/carbine.shape.json",
+      "model": "models/carbine.glb",
       "arm_ready": true,
       "correct_muzzle": true,
       "magazine": {

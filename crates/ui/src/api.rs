@@ -1066,6 +1066,12 @@ pub enum UiAction {
         id: String,
         enabled: bool,
     },
+    /// Apply the installed Add-Ons in one category. The host resolves current
+    /// membership, dependencies and restrictions before returning the list.
+    SetAddOnCategoryEnabled {
+        category: String,
+        enabled: bool,
+    },
     /// Load the Add-Ons the lists now name (bricks, weapons, maps, game
     /// modes), if they changed. The Add-Ons screen sends it as it closes,
     /// so a run of clicks costs one load.
@@ -1185,6 +1191,9 @@ pub struct AddOnRow {
     pub enabled: bool,
     /// Base game: shown on and cannot be turned off.
     pub locked: bool,
+    /// Current package rules prevent changing this row with a category box.
+    #[serde(default)]
+    pub category_blocked: bool,
     /// Where it runs, in words ("Server only: players never download it").
     pub runs: String,
     pub description: String,
@@ -1221,6 +1230,12 @@ pub struct AddOnRow {
     /// which keeps the copy it loaded: the change applies to the next game.
     #[serde(default)]
     pub changed_in_game: bool,
+}
+
+impl AddOnRow {
+    pub fn can_toggle_in_category(&self) -> bool {
+        !self.locked && !self.importable && !self.importing && !self.category_blocked
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

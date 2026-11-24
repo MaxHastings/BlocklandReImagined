@@ -327,7 +327,7 @@ fn check_in(folder: &Path, scope: Option<&Path>) -> Report {
             &pack,
             &format!("{}/assets/weapons.json", manifest.id),
         ));
-        // The Add-On's own models (`*.shape.json` beside weapons.json) and
+        // The Add-On's own models (model files beside weapons.json) and
         // the PNG each of their materials names.
         let assets = parent.join(dir).join("assets");
         let models: std::collections::BTreeSet<&str> = pack
@@ -337,7 +337,7 @@ fn check_in(folder: &Path, scope: Option<&Path>) -> Report {
             .chain(pack.images.values().map(|i| i.model.as_str()))
             .chain(pack.projectiles.values().map(|p| p.model.as_str()))
             .collect();
-        let own = |m: &str| m.to_ascii_lowercase().ends_with(".shape.json");
+        let own = |m: &str| bri_gltf::is_model_file(m);
         for model in models.iter().filter(|m| own(m)) {
             if let Some(problem) = own_model_problem(&assets, model) {
                 diagnostics.push(
@@ -846,7 +846,7 @@ fn map_problems(bundle: &Path, id: &str, at: &str) -> Vec<Diagnostic> {
         };
         let shape = file(model_file)
             .and_then(|p| std::fs::read(p).ok())
-            .and_then(|b| serde_json::from_slice::<bri_content::shape::Shape>(&b).ok());
+            .and_then(|b| bri_gltf::read_model(&b).ok());
         let Some(shape) = shape else {
             out.push(
                 Diagnostic::error(

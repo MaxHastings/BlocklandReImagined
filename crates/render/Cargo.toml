@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+bri-gltf.workspace = true
 bri-console = { path = "../console" }
 bri-content = { path = "../content" }
 serde.workspace = true

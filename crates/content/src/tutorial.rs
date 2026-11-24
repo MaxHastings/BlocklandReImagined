@@ -118,7 +118,7 @@ impl PackIndex {
                 && self
                     .shapes
                     .values()
-                    .all(|f| plain_file(f, &[".shape.json"])),
+                    .all(|f| plain_file(f, &[".glb", ".shape.json"])),
             "The tutorial pack needs exactly the four target shapes"
         );
         ensure!(
