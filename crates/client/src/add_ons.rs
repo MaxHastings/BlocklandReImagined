@@ -418,7 +418,7 @@ fn reads() -> String {
 /// (not to the schemas): a conversion made before one is out of date. Bump
 /// it with any such fix, or players keep the old conversion (a zombie
 /// converted before it stopped using guns kept its gun).
-const IMPORTER_REVISION: u32 = 3;
+const IMPORTER_REVISION: u32 = 4;
 
 /// Progress of [`start_sync`]: a notice for the Add-Ons screen, the last
 /// one with `finished`.

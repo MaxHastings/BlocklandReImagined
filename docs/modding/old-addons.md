@@ -13,6 +13,13 @@ is imported as `proprietary`; for your own work, set `license` in the new
 cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example --installed content
 ```
 
+Converted models, textures, sounds and brick geometry get readable paths in
+the package. For example, `models/Gun.dts` becomes `assets/models/gun.glb`.
+The importer uses portable lowercase names and adds a source-derived suffix
+when paths collide. The import report records the original name and generated
+path. Editing a source file keeps its output path across reimports when the
+source paths are the same.
+
 `--installed` names the game's content folder. An Add-On builds on the base
 game: a dirt brick declared `brick1x1DirtData : brick1x1Data` inherits the
 stock 1x1's icon and fields, an image names `weaponSwitchSound`. The

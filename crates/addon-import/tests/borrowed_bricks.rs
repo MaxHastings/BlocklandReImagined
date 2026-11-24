@@ -210,22 +210,32 @@ fn a_declared_dependency_can_lend_its_installed_native_brick_geometry() {
     mesh.quads[0].vertices[0].position[0] += 0.001;
     mesh.validate().unwrap();
     std::fs::write(&path, serde_json::to_vec(&mesh).unwrap()).unwrap();
+    let changed_out = root.join("changed");
     let changed = import(&Options {
         input: borrower.clone(),
-        out: root.join("changed"),
+        out: changed_out.clone(),
         installed: Some(content.clone()),
         ..Default::default()
     })
     .unwrap();
+    let changed_geometry = changed
+        .assets
+        .iter()
+        .find(|a| a.kind == "brick_geometry")
+        .unwrap();
+    assert_eq!(changed_geometry.output, first_output);
+    assert_ne!(changed_geometry.notes, geometry.notes);
+    let path_in_output = first_output.as_ref().unwrap();
+    let first_bytes = std::fs::read(out.join(path_in_output)).unwrap();
+    let changed_bytes = std::fs::read(changed_out.join(path_in_output)).unwrap();
     assert_ne!(
-        changed
-            .assets
-            .iter()
-            .find(|a| a.kind == "brick_geometry")
-            .unwrap()
-            .output,
-        first_output,
-        "native changes invalidate the borrowed output fingerprint"
+        first_bytes, changed_bytes,
+        "reimport must copy the updated mesh"
+    );
+    let copied: bri_content::brick::Brick = serde_json::from_slice(&changed_bytes).unwrap();
+    assert_eq!(
+        copied.quads[0].vertices[0].position,
+        mesh.quads[0].vertices[0].position
     );
     // An installed file claiming a different identity is not a usable source.
     mesh.id = "other:brick_geometry/forged".into();
