@@ -8,8 +8,9 @@ Players should start with the [tester guide](TESTER-GUIDE.md), [features](FEATUR
 ## Release state
 
 <!-- latest-release:start -->
-Published release [v0.4.6 Alpha](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.6),
-published 2026-11-23T22:36:19Z from `93cf9b02565d3a1c4641b93f0a4ad1b90b1c889e`.
+Published release [v0.4.6](https://github.com/MaxHastings/BlocklandReImagined/releases/tag/v0.4.6)
+on 2026-11-23T22:36:19Z from [`93cf9b02565d3a1c4641b93f0a4ad1b90b1c889e`](https://github.com/MaxHastings/BlocklandReImagined/commit/93cf9b02565d3a1c4641b93f0a4ad1b90b1c889e).
+[Release checksums](https://github.com/MaxHastings/BlocklandReImagined/releases/download/v0.4.6/SHA256SUMS).
 <!-- latest-release:end -->
 
 Interactive playtest acceptance and the full alpha contract remain open.
