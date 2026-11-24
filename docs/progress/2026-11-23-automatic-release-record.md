@@ -17,3 +17,10 @@ and `python tools/check_docs.py`. The release tests cover exact tag resolution,
 checksums links, an unchanged second sync and preservation of editorial text.
 The [release process](../release-builds.md) documents the workflow and its
 manual rerun entry point.
+
+The first hosted sync verified the generated commit through `check`, but
+GitHub rejected the push because branch protection does not count the job
+from a manually dispatched run. The sync now verifies the successful
+`check` job on the exact SHA and records that result as a commit status
+linking to the job.
+[First hosted run](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/45289654844).

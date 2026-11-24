@@ -13,6 +13,7 @@ permissions:
   contents: write
   actions: write
   checks: read
+  statuses: write
 
 jobs:
   sync:

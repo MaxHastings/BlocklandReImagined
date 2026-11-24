@@ -234,7 +234,8 @@ left by a failed publish is reused.
 After publication, the **sync-release-record** workflow reads GitHub's latest
 public release and updates the generated block in [STATUS.md](STATUS.md) on
 `main`. It resolves the release tag to its commit, stages only the status
-change, runs the required CI check and advances `main` with that checked
+change, runs the required CI check and records its verified result as a commit
+status for branch protection. It then advances `main` with that checked
 commit. If `main` advances or the latest release changes while CI runs, it
 refreshes the record and checks the new commit. Both publishing workflows queue
 the sync with the repository's Actions token. A release published directly on
