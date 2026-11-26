@@ -37,6 +37,65 @@ type Opened = (
     ShaderCompiler,
 );
 
+/// A failure of the native event loop, with how long the loop ran before
+/// failing. That separates a startup failure (the window never got going; on
+/// Linux the X11 fallback may retry another backend) from a mid-session loss
+/// of the display connection, where re-executing the game would only discard
+/// the running session.
+#[derive(Debug)]
+pub struct LoopFailure {
+    pub source: anyhow::Error,
+    /// How long the event loop ran before failing.
+    pub ran_for: Duration,
+}
+
+impl LoopFailure {
+    /// The window never got going; retrying another backend is reasonable.
+    pub fn is_startup_failure(&self) -> bool {
+        self.ran_for <= STARTUP_FAILURE_LIMIT
+    }
+}
+
+/// A failure this soon after entering the event loop still counts as startup:
+/// by then the window has been up and presenting, so a later failure means
+/// the game was running.
+const STARTUP_FAILURE_LIMIT: Duration = Duration::from_secs(5);
+
+impl std::fmt::Display for LoopFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use winit::error::EventLoopError;
+        let lost = self.source.chain().any(|cause| {
+            matches!(
+                cause.downcast_ref::<EventLoopError>(),
+                Some(EventLoopError::ExitFailure(_))
+            )
+        });
+        if self.is_startup_failure() {
+            write!(f, "the native event loop failed at startup")?;
+        } else if lost {
+            // The player sees this in the failure dialog; name what happened.
+            write!(
+                f,
+                "the connection to the display server was lost after {:.0}s",
+                self.ran_for.as_secs_f32()
+            )?;
+        } else {
+            write!(
+                f,
+                "the native event loop ended after {:.0}s",
+                self.ran_for.as_secs_f32()
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for LoopFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 /// The GPU opened on a worker thread while the game loads its content, so
 /// the two waits overlap instead of adding up. It picks the adapter before
 /// the window exists; [`Graphics::new`] checks that adapter can present to
@@ -802,12 +861,26 @@ pub fn run(config: PlatformConfig) -> Result<()> {
         left_handler: None,
     };
     crate::winit_log::install();
+    // How long the loop ran before failing decides whether a failure is
+    // startup (retry another backend) or mid-session (the game was running).
+    let started = Instant::now();
     let event_loop = EventLoop::new().context("creating the native event loop")?;
-    event_loop
+    if let Err(error) = event_loop
         .run_app(&mut runner)
-        .context("running the native event loop")?;
+        .context("running the native event loop")
+    {
+        return Err(LoopFailure {
+            source: error,
+            ran_for: started.elapsed(),
+        }
+        .into());
+    }
     if let Some(e) = runner.error {
-        return Err(e);
+        return Err(LoopFailure {
+            source: e,
+            ran_for: started.elapsed(),
+        }
+        .into());
     }
     Ok(())
 }
@@ -2433,6 +2506,41 @@ fn pixel_wheel_steps(acc: &mut f64, delta: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loop_failure_is_startup_only_while_the_window_cannot_have_gone() {
+        let failure = |ran_for| LoopFailure {
+            source: anyhow::anyhow!("gone"),
+            ran_for,
+        };
+        assert!(failure(Duration::ZERO).is_startup_failure());
+        assert!(failure(STARTUP_FAILURE_LIMIT).is_startup_failure());
+        assert!(!failure(STARTUP_FAILURE_LIMIT + Duration::from_millis(1)).is_startup_failure());
+    }
+
+    #[test]
+    fn a_lost_display_connection_is_named_for_the_player() {
+        let error = anyhow::Error::new(LoopFailure {
+            source: anyhow::Error::new(winit::error::EventLoopError::ExitFailure(1)),
+            ran_for: Duration::from_secs(42),
+        });
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("the connection to the display server was lost after 42s"),
+            "{text}"
+        );
+        // The winit detail stays in the chain for developers.
+        assert!(text.contains("Exit Failure: 1"), "{text}");
+    }
+
+    #[test]
+    fn a_startup_failure_keeps_its_plain_wording() {
+        let error = anyhow::Error::new(LoopFailure {
+            source: anyhow::Error::new(winit::error::EventLoopError::ExitFailure(1)),
+            ran_for: Duration::from_secs(2),
+        });
+        assert!(format!("{error:#}").contains("the native event loop failed at startup"));
+    }
 
     #[test]
     fn a_refused_copy_keeps_the_text_in_the_field() {

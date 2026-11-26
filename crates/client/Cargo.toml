@@ -65,6 +65,13 @@ bri-client-sandbox = { path = "../client-sandbox" }
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 libloading = "0.8"
+# winit_log.rs: a dying display connection is reported by the Wayland stack
+# (wayland-backend and its libwayland C layer) through the `log` crate.
+# Building wayland-backend with its `log` feature routes those errors to our
+# logger — and this run's session log — instead of eprintln, which a game
+# started from a file manager never shows. `log` backs that bridge.
+log = { version = "0.4", features = ["std"] }
+wayland-backend = { version = "0.3", features = ["log"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 arboard = { version = "3", default-features = false }

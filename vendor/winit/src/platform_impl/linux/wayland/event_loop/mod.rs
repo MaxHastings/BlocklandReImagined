@@ -17,6 +17,7 @@ use rustix::event::{PollFd, PollFlags};
 use rustix::pipe::{self, PipeFlags};
 use sctk::reexports::calloop::Error as CalloopError;
 use sctk::reexports::calloop_wayland_source::WaylandSource;
+use sctk::reexports::client::backend as wayland_backend_client;
 use sctk::reexports::client::{globals, Connection, QueueHandle};
 use tracing::warn;
 
@@ -43,6 +44,19 @@ use super::window::state::FrameCallbackState;
 use super::{logical_to_physical_rounded, DeviceId, WaylandError, WindowId};
 
 type WaylandDispatcher = calloop::Dispatcher<'static, WaylandSource<WinitState>, WinitState>;
+
+/// BRI patch (BRI-PATCH.md): a full kernel send buffer makes `wl_display_flush`
+/// fail with EAGAIN while the compositor has not drained the socket yet.
+/// libwayland keeps the unsent data and retries it on the next flush, so this
+/// is transient — upstream winit still exited the whole loop over it.
+fn is_transient_flush_error(error: &wayland_backend_client::WaylandError) -> bool {
+    match error {
+        wayland_backend_client::WaylandError::Io(io_error) => {
+            io_error.kind() == std::io::ErrorKind::WouldBlock
+        }
+        _ => false,
+    }
+}
 
 /// The Wayland event loop.
 pub struct EventLoop<T: 'static> {
@@ -281,9 +295,22 @@ impl<T: 'static> EventLoop<T> {
             //
             // Checking for flush error is essential to perform an exit with error, since
             // once we have a protocol error, we could get stuck retrying...
-            if self.connection.flush().is_err() {
-                self.set_exit_code(1);
-                return;
+            //
+            // BRI patch: a full kernel send buffer (EAGAIN/WouldBlock) is not such
+            // an error. The compositor has simply not drained the socket yet;
+            // libwayland keeps the unsent data and retries it on the next flush.
+            // Upstream exits the loop on any flush failure, which closes a running
+            // game over a momentary compositor stall with no logged reason (EAGAIN
+            // is never logged by design) — see BRI-PATCH.md. Only permanent errors
+            // end the loop here; they are logged first so the session log names them.
+            match self.connection.flush() {
+                Err(error) if is_transient_flush_error(&error) => {}
+                Err(error) => {
+                    tracing::error!("Wayland connection flush failed: {error}");
+                    self.set_exit_code(1);
+                    return;
+                }
+                Ok(()) => {}
             }
 
             if let Err(error) = self.loop_dispatch(timeout) {

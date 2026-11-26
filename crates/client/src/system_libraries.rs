@@ -122,8 +122,11 @@ const X11_RELAUNCH: &str = "BRI_X11_RELAUNCH";
 
 /// winit has no X11 fallback once its Wayland connection fails, which it
 /// reports as `ExitFailure(1)` (NVIDIA on CachyOS failed this way right
-/// after the first frame). When that happened and an X server (XWayland) is
-/// available, runs the game again on X11 and returns its exit code.
+/// after the first frame). When that happened at startup and an X server
+/// (XWayland) is available, runs the game again on X11 and returns its exit
+/// code. A failure after the game had been running means the display
+/// connection was lost mid-session: re-executing would discard the session,
+/// so it is reported instead.
 pub fn relaunch_on_x11(error: &anyhow::Error) -> Option<i32> {
     use winit::error::EventLoopError;
     let failed = error.chain().any(|cause| {
@@ -132,6 +135,13 @@ pub fn relaunch_on_x11(error: &anyhow::Error) -> Option<i32> {
             Some(EventLoopError::ExitFailure(_))
         )
     });
+    // Only a startup failure may retry another backend; by the time the loop
+    // has run longer than `STARTUP_FAILURE_LIMIT` the game was playing.
+    if let Some(failure) = error.downcast_ref::<crate::platform::LoopFailure>()
+        && !failure.is_startup_failure()
+    {
+        return None;
+    }
     let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     if !failed || !wayland_session() || !set("DISPLAY") || set(X11_RELAUNCH) {
         return None;
@@ -178,5 +188,18 @@ mod tests {
     #[test]
     fn a_library_that_does_not_exist_does_not_load() {
         assert!(!loads("libbri-no-such-library.so.0"));
+    }
+
+    /// A mid-session connection loss must not re-exec the game. The boundary
+    /// check rejects it before any environment is consulted, so this holds in
+    /// whatever session the test runs in (and never spawns a process).
+    #[test]
+    fn a_mid_session_connection_loss_is_never_relaunched() {
+        use crate::platform::LoopFailure;
+        let error = anyhow::Error::new(LoopFailure {
+            source: anyhow::Error::new(winit::error::EventLoopError::ExitFailure(1)),
+            ran_for: std::time::Duration::from_secs(42),
+        });
+        assert!(relaunch_on_x11(&error).is_none());
     }
 }
