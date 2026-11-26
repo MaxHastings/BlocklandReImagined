@@ -134,6 +134,12 @@ pub fn install(program: &str, candidates: &[PathBuf]) -> io::Result<Capture> {
     })
 }
 
+/// This run's session log file, when [`install`] succeeded; `None` for tools
+/// that never installed capture.
+pub fn session_log_path() -> Option<PathBuf> {
+    STATE.get().map(|state| state.session_log.clone())
+}
+
 /// Deliver everything written to stderr so far to the session log and the
 /// terminal, and stop teeing. Call it as the program's last step; the panic
 /// hook calls it when the main thread panics.
