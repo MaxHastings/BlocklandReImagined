@@ -5,7 +5,6 @@
 //! report names the error instead of "Exit Failure: 1".
 
 use std::fmt::{self, Write as _};
-#[cfg(target_os = "linux")]
 use std::io::Write as _;
 use tracing_core::field::{Field, Visit};
 use tracing_core::span::{Attributes, Id, Record};
@@ -40,11 +39,7 @@ impl Subscriber for ConsoleLog {
     fn event(&self, event: &Event<'_>) {
         let mut line = format!("{}:", event.metadata().target());
         event.record(&mut Fields(&mut line));
-        if *event.metadata().level() == Level::ERROR {
-            bri_console::error(line);
-        } else {
-            bri_console::warn(line);
-        }
+        report_display_line(*event.metadata().level() == Level::ERROR, line);
     }
     fn enter(&self, _: &Id) {}
     fn exit(&self, _: &Id) {}
@@ -109,7 +104,6 @@ fn is_display_record(level: log::Level, target: &str) -> bool {
 /// this run's session log: by the time a player looks for the reason, the
 /// window is gone, and stderr was lost when the game started from a file
 /// manager. The prefixed form matches what `bri_console` writes to stderr.
-#[cfg(target_os = "linux")]
 fn report_display_line(is_error: bool, line: String) {
     if is_error {
         bri_console::error(&line);
@@ -127,7 +121,6 @@ fn report_display_line(is_error: bool, line: String) {
 }
 
 /// Append one line; a missing or unwritable file only loses this diagnostic.
-#[cfg(target_os = "linux")]
 fn append_to_file(path: &std::path::Path, line: &str) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -173,6 +166,17 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "Error: wayland_backend: Connection reset by peer\nWarning: winit: something\n"
+        );
+    }
+
+    #[test]
+    fn a_fatal_display_line_reaches_the_console_log() {
+        report_display_line(true, "wayland_backend: the connection died".into());
+        let lines = bri_console::log::lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.text == "wayland_backend: the connection died")
         );
     }
 }
